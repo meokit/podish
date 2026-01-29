@@ -30,8 +30,10 @@ endif()
 
 # Source files
 file(GLOB_RECURSE SOURCES "src/*.cpp")
+list(FILTER SOURCES EXCLUDE REGEX "src/main.cpp")
 
-add_executable(x86emu ${SOURCES})
+
+add_library(x86emu SHARED ${SOURCES})
 
 target_include_directories(x86emu PRIVATE src ${simde_SOURCE_DIR})
 

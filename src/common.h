@@ -48,6 +48,11 @@ struct alignas(64) Context {
     // FS and GS are often used for TLS (Thread Local Storage).
     // The emulator allows the caller to set these bases.
     uint32_t seg_base[6]; 
+
+    // System Environment (Pointers to Managers)
+    // We store these here so handlers can access memory/hooks via the Context pointer.
+    void* mmu;   // Type-erased or forward-declared SoftMMU*
+    void* hooks; // Type-erased or forward-declared HookManager*
 };
 
 } // namespace x86emu
