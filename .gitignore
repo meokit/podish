@@ -1,0 +1,9 @@
+build/
+.DS_Store
+analyze/redis-*/
+analyze/instructions.db
+*.o
+*.a
+.vscode/
+.idea/
+cmake-build-debug/
