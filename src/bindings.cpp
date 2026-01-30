@@ -57,12 +57,12 @@ EmuState* X86_Create() {
         g_SignalRegistered = true;
     }
     EmuState* state = new EmuState();
+    // Zero entire context first
+    std::memset(&state->ctx, 0, sizeof(state->ctx));
+    
     // Link pointers
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
-    // Defaults
-    state->ctx.eip = 0;
-    std::memset(&state->ctx.regs, 0, sizeof(state->ctx.regs));
     
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status);
@@ -188,6 +188,7 @@ void X86_EmuStop(EmuState* state) {
 
 // Step (Placeholder for now)
 int X86_Step(EmuState* state) {
+    state->status = EmuStatus::Running;
     // Basic Fetch-Decode-Execute Loop Mock
     // 1. Fetch (Read at EIP)
     uint8_t buf[16];
@@ -199,6 +200,7 @@ int X86_Step(EmuState* state) {
     // 2. Decode
     DecodedOp op;
     DecodeInstruction(buf, &op);
+    op.meta.flags.is_last = 1; // Critical for DispatchWrapper
     
     // 3. Increment EIP (Handled by DispatchWrapper)
     // state->ctx.eip += op.length;
@@ -207,7 +209,12 @@ int X86_Step(EmuState* state) {
     if (op.handler_index < 1024) {
         HandlerFunc h = g_Handlers[op.handler_index];
         if (h) {
+             uint32_t old_eip = state->ctx.eip;
              h(state, &op);
+             // If handler didn't jump (overwriting EIP), advance by instruction length
+             if (state->ctx.eip == old_eip) {
+                 state->ctx.eip += op.length;
+             }
         } else {
              // Nullptr -> Invalid/Unimplemented
              OpNotImplemented(state, &op);

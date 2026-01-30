@@ -823,6 +823,677 @@ void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
 }
 
 // ------------------------------------------------------------------------------------------------
+// FPU Helpers
+// ------------------------------------------------------------------------------------------------
+
+void FpuPush(EmuState* state, const float80* val) {
+    state->ctx.fpu_top = (state->ctx.fpu_top - 1) & 7;
+
+    // Use memcpy
+    std::memcpy(&state->ctx.fpu_regs[state->ctx.fpu_top], val, sizeof(float80));
+    
+    state->ctx.fpu_tw &= ~(3 << (state->ctx.fpu_top * 2)); // Mark valid (00)
+}
+
+float80 FpuPop(EmuState* state) {
+    float80 val;
+    std::memcpy(&val, &state->ctx.fpu_regs[state->ctx.fpu_top], sizeof(float80));
+    state->ctx.fpu_tw |= (3 << (state->ctx.fpu_top * 2)); // Mark empty
+    state->ctx.fpu_top = (state->ctx.fpu_top + 1) & 7;
+    return val;
+}
+
+float80& FpuTop(EmuState* state, int index) {
+    return state->ctx.fpu_regs[(state->ctx.fpu_top + index) & 7];
+}
+
+// ------------------------------------------------------------------------------------------------
+// Integer Instructions (Group 3, 4, IMUL)
+// ------------------------------------------------------------------------------------------------
+
+void OpImul_GvEv(EmuState* state, DecodedOp* op) {
+    // 0F AF: IMUL r32, r/m32
+    int32_t val1 = (int32_t)GetReg(state, (op->modrm >> 3) & 7);
+    int32_t val2 = (int32_t)ReadModRM32(state, op);
+    
+    int64_t res = (int64_t)val1 * (int64_t)val2;
+    uint32_t res32 = (uint32_t)res;
+    SetReg(state, (op->modrm >> 3) & 7, res32);
+    
+    // Set OF/CF if result truncated
+    if (res != (int64_t)(int32_t)res) {
+        state->ctx.eflags |= (OF_MASK | CF_MASK);
+    } else {
+        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+    }
+}
+
+void OpImul_GvEvIz(EmuState* state, DecodedOp* op) {
+    // 69: IMUL r32, r/m32, imm32
+    // 6B: IMUL r32, r/m32, imm8
+    int32_t val1 = (int32_t)ReadModRM32(state, op);
+    int32_t val2 = (int32_t)op->imm;
+    
+    if ((op->handler_index & 0xFF) == 0x6B) {
+        val2 = (int32_t)(int8_t)val2;
+    }
+    
+    int64_t res = (int64_t)val1 * (int64_t)val2;
+    uint32_t res32 = (uint32_t)res;
+    SetReg(state, (op->modrm >> 3) & 7, res32);
+    
+    if (res != (int64_t)(int32_t)res) {
+        state->ctx.eflags |= (OF_MASK | CF_MASK);
+    } else {
+        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+    }
+}
+
+template<typename T>
+void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    switch (subop) {
+        case 0: // TEST imm
+        case 1: // TEST imm
+        {
+            AluAnd(state, val, (T)op->imm);
+            break;
+        }
+        case 2: // NOT
+            if constexpr (sizeof(T) == 1) WriteModRM8(state, op, ~val);
+            else if constexpr (sizeof(T) == 2) WriteModRM16(state, op, ~val);
+            else WriteModRM32(state, op, ~val);
+            break;
+        case 3: // NEG
+        {
+            T res = AluSub(state, (T)0, val);
+            if (val != 0) state->ctx.eflags |= CF_MASK;
+            else state->ctx.eflags &= ~CF_MASK;
+            
+            if constexpr (sizeof(T) == 1) WriteModRM8(state, op, res);
+            else if constexpr (sizeof(T) == 2) WriteModRM16(state, op, res);
+            else WriteModRM32(state, op, res);
+            break;
+        }
+        case 4: // MUL (Unsigned)
+        {
+            if constexpr (sizeof(T) == 1) { // Byte: AX = AL * r/m8
+                uint8_t al = GetReg8(state, EAX);
+                uint16_t res = (uint16_t)al * (uint16_t)val;
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                *rax = (*rax & 0xFFFF0000) | res;
+                
+                if ((res & 0xFF00) != 0) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            } else if constexpr (sizeof(T) == 2) { // Word: DX:AX = AX * r/m16
+                uint16_t ax = (uint16_t)(GetReg(state, EAX) & 0xFFFF);
+                uint32_t res = (uint32_t)ax * (uint32_t)val;
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                uint32_t* rdx = GetRegPtr(state, EDX);
+                *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
+                *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
+                
+                if ((res >> 16) != 0) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            } else { // Dword: EDX:EAX = EAX * r/m32
+                uint32_t eax = GetReg(state, EAX);
+                uint64_t res = (uint64_t)eax * (uint64_t)val;
+                SetReg(state, EAX, (uint32_t)res);
+                SetReg(state, EDX, (uint32_t)(res >> 32));
+                
+                if ((res >> 32) != 0) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            }
+            break;
+        }
+        case 5: // IMUL (Signed)
+        {
+            if constexpr (sizeof(T) == 1) { // AX = AL * r/m8
+                int8_t al = (int8_t)GetReg8(state, EAX);
+                int16_t res = (int16_t)al * (int16_t)(int8_t)val;
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                *rax = (*rax & 0xFFFF0000) | (uint16_t)res;
+                
+                if (res != (int16_t)(int8_t)res) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            } else if constexpr (sizeof(T) == 2) { // Word: DX:AX = AX * r/m16
+                int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
+                int32_t res = (int32_t)ax * (int32_t)(int16_t)val;
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                uint32_t* rdx = GetRegPtr(state, EDX);
+                *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
+                *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
+                
+                if (res != (int32_t)(int16_t)res) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            } else { // Dword: EDX:EAX = EAX * r/m32
+                int32_t eax = (int32_t)GetReg(state, EAX);
+                int64_t res = (int64_t)eax * (int64_t)(int32_t)val;
+                SetReg(state, EAX, (uint32_t)res);
+                SetReg(state, EDX, (uint32_t)(res >> 32));
+                
+                if (res != (int64_t)(int32_t)res) state->ctx.eflags |= (OF_MASK | CF_MASK);
+                else state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            }
+            break;
+        }
+        case 6: // DIV (Unsigned)
+        {
+            if constexpr (sizeof(T) == 1) { // AX / r/m8
+                 uint16_t ax = (uint16_t)GetReg(state, EAX) & 0xFFFF;
+                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 uint16_t q = ax / val;
+                 uint16_t r = ax % val;
+                 
+                 uint32_t* rax = GetRegPtr(state, EAX);
+                 *rax = (*rax & 0xFFFF0000) | (r << 8) | (q & 0xFF);
+            } else if constexpr (sizeof(T) == 2) { // DX:AX / r/m16
+                 uint32_t dx_ax = ((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF);
+                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 uint32_t q = dx_ax / val;
+                 uint32_t r = dx_ax % val;
+                 
+                 if (q > 0xFFFF) { /* Overflow */ }
+                 
+                 uint32_t* rax = GetRegPtr(state, EAX);
+                 uint32_t* rdx = GetRegPtr(state, EDX);
+                 *rax = (*rax & 0xFFFF0000) | (q & 0xFFFF);
+                 *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
+            } else { // EDX:EAX / r/m32
+                 uint64_t edx_eax = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 uint64_t q = edx_eax / val;
+                 uint64_t r = edx_eax % val;
+                 SetReg(state, EAX, (uint32_t)q);
+                 SetReg(state, EDX, (uint32_t)r);
+            }
+            break;
+        }
+        case 7: // IDIV (Signed)
+        {
+            if constexpr (sizeof(T) == 1) { // AX / r/m8
+                int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
+                int8_t v = (int8_t)val;
+                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                int16_t q = ax / v;
+                int16_t r = ax % v;
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                *rax = (*rax & 0xFFFF0000) | ((uint8_t)r << 8) | ((uint8_t)q);
+            } else if constexpr (sizeof(T) == 2) { // DX:AX / r/m16
+                int32_t dx_ax = (int32_t)(((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF));
+                int16_t v = (int16_t)val;
+                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                int32_t q = dx_ax / v;
+                int32_t r = dx_ax % v;
+                
+                if (q > 32767 || q < -32768) { /* Overflow */ }
+                
+                uint32_t* rax = GetRegPtr(state, EAX);
+                uint32_t* rdx = GetRegPtr(state, EDX);
+                *rax = (*rax & 0xFFFF0000) | (q & 0xFFFF);
+                *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
+            } else { // EDX:EAX / r/m32
+                int64_t edx_eax = ((int64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                int32_t v = (int32_t)val;
+                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                int64_t q = edx_eax / v;
+                int64_t r = edx_eax % v;
+                
+                SetReg(state, EAX, (uint32_t)q);
+                SetReg(state, EDX, (uint32_t)r);
+            }
+            break;
+        }
+        default: OpNotImplemented(state, op);
+    }
+}
+
+void OpGroup3_Ev(EmuState* state, DecodedOp* op) {
+    // F6 (Byte) or F7 (Dword)
+    bool is_byte = (op->handler_index == 0xF6);
+    if (is_byte) {
+        uint8_t val = ReadModRM8(state, op);
+        Helper_Group3<uint8_t>(state, op, val);
+    } else {
+        if (op->prefixes.flags.opsize) {
+            uint16_t val = ReadModRM16(state, op);
+            Helper_Group3<uint16_t>(state, op, val);
+        } else {
+            uint32_t val = ReadModRM32(state, op);
+            Helper_Group3<uint32_t>(state, op, val);
+        }
+    }
+}
+
+void OpGroup4_Eb(EmuState* state, DecodedOp* op) {
+    // FE: Group 4 (Byte)
+    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t val = ReadModRM8(state, op);
+    uint32_t old_cf = state->ctx.eflags & CF_MASK;
+    
+    switch (subop) {
+        case 0: // INC
+        {
+            uint8_t res = AluAdd(state, val, (uint8_t)1);
+            state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            WriteModRM8(state, op, res);
+            break;
+        }
+        case 1: // DEC
+        {
+            uint8_t res = AluSub(state, val, (uint8_t)1);
+            state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            WriteModRM8(state, op, res);
+            break;
+        }
+        default: OpNotImplemented(state, op);
+    }
+
+}
+
+// ------------------------------------------------------------------------------------------------
+// FPU Instructions
+// ------------------------------------------------------------------------------------------------
+
+// Helper to read float32 from memory and convert to float80
+float80 ReadF32(EmuState* state, DecodedOp* op) {
+    uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+    return f80_from_double((double)*(float*)&val);
+}
+
+// Helper to read float64 from memory and convert to float80
+float80 ReadF64(EmuState* state, DecodedOp* op) {
+    uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+    return f80_from_double(*(double*)&val);
+}
+
+void OpFpu_D8(EmuState* state, DecodedOp* op) {
+    // D8: FPU Arith m32
+    uint8_t subop = (op->modrm >> 3) & 7;
+    float80 val = ReadF32(state, op);
+    float80& st0 = FpuTop(state, 0);
+    
+    switch (subop) {
+        case 0: st0 = f80_add(st0, val); break; // FADD
+        case 1: st0 = f80_mul(st0, val); break; // FMUL
+        case 2: // FCOM
+            // Update FPU Status Word (C0, C2, C3)
+            // Unordered/LT/EQ?
+            // Simplified:
+            if (f80_lt(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100; // C0=1
+            else if (f80_eq(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000; // C3=1
+            else state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500); // Greater
+            break;
+        case 3: // FCOMP (Compare and Pop)
+            if (f80_lt(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+            else if (f80_eq(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+            else state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+            FpuPop(state);
+            break;
+        case 4: st0 = f80_sub(st0, val); break; // FSUB
+        case 5: st0 = f80_sub(val, st0); break; // FSUBR
+        case 6: st0 = f80_div(st0, val); break; // FDIV
+        case 7: st0 = f80_div(val, st0); break; // FDIVR
+        default: OpNotImplemented(state, op);
+    }
+}
+
+void OpFpu_D9(EmuState* state, DecodedOp* op) {
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+        // D9 C0-FF: FPU Instructions with Regs
+        // Map 0xD9C0 -> index
+        uint8_t index = op->modrm & 0x3F; // C0-FF -> 00-3F? No.
+        uint8_t op_byte = op->modrm;
+        
+        if (op_byte == 0xC0) { // FLD ST(0) (DUP) -> D9 C0
+            float80 t = FpuTop(state, 0);
+            FpuPush(state, &t);
+        } else if (op_byte == 0xC9) { // FXCH ST(1)
+             float80 t = FpuTop(state, 0);
+             FpuTop(state, 0) = FpuTop(state, 1);
+             FpuTop(state, 1) = t;
+        } else if ((op_byte & 0xF8) == 0xC8) { // FXCH ST(i)
+             int idx = op_byte & 7;
+             float80 t = FpuTop(state, 0);
+             FpuTop(state, 0) = FpuTop(state, idx);
+             FpuTop(state, idx) = t;
+        } else if (op_byte == 0xD0) { // FNOP
+        } else if (op_byte == 0xE0) { // FCHS
+             FpuTop(state, 0) = f80_neg(FpuTop(state, 0));
+        } else if (op_byte == 0xE1) { // FABS
+             FpuTop(state, 0) = f80_abs(FpuTop(state, 0));
+        } else if (op_byte == 0xE8) { // FLD1
+             float80 t = ConstF80_One(); FpuPush(state, &t);
+        } else if (op_byte == 0xE9) { // FLDL2T
+             float80 t = ConstF80_L2T(); FpuPush(state, &t);
+        } else if (op_byte == 0xEA) { // FLDL2E
+             float80 t = ConstF80_L2E(); FpuPush(state, &t);
+        } else if (op_byte == 0xEB) { // FLDPI
+             float80 t = ConstF80_Pi(); FpuPush(state, &t);
+        } else if (op_byte == 0xEC) { // FLDLG2
+             float80 t = ConstF80_LG2(); FpuPush(state, &t);
+        } else if (op_byte == 0xED) { // FLDLN2
+             float80 t = ConstF80_LN2(); FpuPush(state, &t);
+        } else if (op_byte == 0xEE) { // FLDZ
+             float80 t = ConstF80_Zero(); FpuPush(state, &t);
+        } else {
+            OpNotImplemented(state, op);
+        }
+    } else {
+        // Memory Access
+        uint32_t addr = ComputeEAD(state, op);
+        switch (subop) {
+            case 0: // FLD m32
+            {
+                float80 t = ReadF32(state, op);
+                FpuPush(state, &t);
+                break;
+            }
+            case 2: // FST m32
+            {
+                float80 val = FpuTop(state, 0);
+                double d = f80_to_double(val);
+                float f = (float)d;
+                state->mmu.write<uint32_t>(addr, *(uint32_t*)&f);
+                break;
+            }
+            case 3: // FSTP m32
+            {
+                float80 val = FpuPop(state);
+                double d = f80_to_double(val);
+                float f = (float)d;
+                state->mmu.write<uint32_t>(addr, *(uint32_t*)&f);
+                break;
+            }
+            case 5: // FLDCW m16
+                state->ctx.fpu_cw = state->mmu.read<uint16_t>(addr);
+                break;
+            case 7: // FNSTCW m16
+                state->mmu.write<uint16_t>(addr, state->ctx.fpu_cw);
+                break;
+            default: OpNotImplemented(state, op);
+        }
+    }
+}
+
+void OpFpu_DA(EmuState* state, DecodedOp* op) {
+    // DA: Int Arith m32
+    uint8_t subop = (op->modrm >> 3) & 7;
+    int32_t val32 = (int32_t)state->mmu.read<uint32_t>(ComputeEAD(state, op));
+    float80 val = f80_from_int(val32);
+    float80& st0 = FpuTop(state, 0);
+    
+    switch (subop) {
+        case 0: st0 = f80_add(st0, val); break; // FIADD
+        case 1: st0 = f80_mul(st0, val); break; // FIMUL
+        case 4: st0 = f80_sub(st0, val); break; // FISUB
+        case 5: st0 = f80_sub(val, st0); break; // FISUBR
+        case 6: st0 = f80_div(st0, val); break; // FIDIV
+        case 7: st0 = f80_div(val, st0); break; // FIDIVR
+        default: OpNotImplemented(state, op);
+    }
+}
+
+void OpFpu_DB(EmuState* state, DecodedOp* op) {
+    // DB: FILD/FIST
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+         // FCMOV, etc?
+         // DB E8-EF: FUCOMI ST(i)
+         // DB F0-F7: FUCOMI ST(i) ?? P?
+         if ((op->modrm & 0xF8) == 0xE8) { // FUCOMI
+             // Compare ST0 with ST(i) and set EFLAGS
+             int idx = op->modrm & 7;
+             float80 st0 = FpuTop(state, 0);
+             float80 sti = FpuTop(state, idx);
+             
+             // Set EFLAGS (ZF, PF, CF)
+             // Unordered: ZF=1, PF=1, CF=1
+             // LT: CF=1
+             // EQ: ZF=1
+             
+             state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK);
+             if (f80_uncomparable(st0, sti)) {
+                  state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+             } else if (f80_eq(st0, sti)) {
+                  state->ctx.eflags |= ZF_MASK;
+             } else if (f80_lt(st0, sti)) {
+                  state->ctx.eflags |= CF_MASK;
+             }
+         } else if ((op->modrm & 0xF8) == 0xF0) { // FCOMI (Same as FUCOMI basically but treats NAN diff? Using same for now)
+             // Wait, DB F0 is FCOMI? No DB F0 is 'FCOMI ST, ST(i)'?
+             // Actually DB E8+i is FUCOMI.
+             // DB F0+i is ... FCOMI? documentation varies.
+             // Let's assume unimplemented unless test hits it.
+             // But wait, test case uses FUCOMI (DB E8).
+             // And FUCOMPI (DF E9).
+             OpNotImplemented(state, op);
+         } else {
+             OpNotImplemented(state, op);
+         }
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        switch (subop) {
+            case 0: // FILD m32
+            {
+                int32_t val = (int32_t)state->mmu.read<uint32_t>(addr);
+                float80 t = f80_from_int(val);
+                FpuPush(state, &t);
+                break;
+            }
+            case 2: // FIST m32
+            {
+                int32_t val = (int32_t)f80_to_int(FpuTop(state, 0));
+                state->mmu.write<uint32_t>(addr, (uint32_t)val);
+                break;
+            }
+            case 3: // FISTP m32
+            {
+                int32_t val = (int32_t)f80_to_int(FpuPop(state));
+                state->mmu.write<uint32_t>(addr, (uint32_t)val);
+                break;
+            }
+            case 5: // FLD m80
+            {
+                // Read 10 bytes
+                uint64_t low = state->mmu.read<uint64_t>(addr);
+                uint16_t high = state->mmu.read<uint16_t>(addr + 8);
+                float80 f;
+                f.signif = low;
+                f.signExp = high;
+                FpuPush(state, &f);
+                break;
+            }
+            case 7: // FSTP m80
+            {
+                float80 f = FpuPop(state);
+                state->mmu.write<uint64_t>(addr, f.signif);
+                state->mmu.write<uint16_t>(addr + 8, f.signExp);
+                break;
+            }
+            default: OpNotImplemented(state, op);
+        }
+    }
+}
+
+void OpFpu_DC(EmuState* state, DecodedOp* op) {
+    // DC: FPU Arith m64 (double)
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+         // FADD ST(i), ST0 etc.
+         // DC C0+i: FADD ST(i), ST0
+         int idx = op->modrm & 7;
+         float80& dest = FpuTop(state, idx);
+         float80 src = FpuTop(state, 0);
+         
+         switch(subop) {
+             case 0: dest = f80_add(dest, src); break; // FADD
+             case 1: dest = f80_mul(dest, src); break; // FMUL
+             case 4: dest = f80_sub(dest, src); break; // FSUB (dest - src)
+             case 5: dest = f80_sub(src, dest); break; // FSUBR (src - dest)
+             case 6: dest = f80_div(dest, src); break; // FDIV
+             case 7: dest = f80_div(src, dest); break; // FDIVR
+             default: OpNotImplemented(state, op);
+         }
+    } else {
+        float80 val = ReadF64(state, op);
+        float80& st0 = FpuTop(state, 0);
+        switch (subop) {
+            case 0: st0 = f80_add(st0, val); break; // FADD
+            case 1: st0 = f80_mul(st0, val); break; // FMUL
+            case 4: st0 = f80_sub(st0, val); break; // FSUB
+            case 5: st0 = f80_sub(val, st0); break; // FSUBR
+            case 6: st0 = f80_div(st0, val); break; // FDIV
+            case 7: st0 = f80_div(val, st0); break; // FDIVR
+            default: OpNotImplemented(state, op);
+        }
+    }
+}
+
+void OpFpu_DD(EmuState* state, DecodedOp* op) {
+    // DD: Load/Store m64
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+        // DD D0+i: FST ST(i) (Store ST0 to STi)
+        // DD D8+i: FSTP ST(i)
+        if (subop == 2) { // FST ST(i)
+             FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
+        } else if (subop == 3) { // FSTP ST(i)
+             FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
+             FpuPop(state);
+        } else {
+             OpNotImplemented(state, op);
+        }
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        switch (subop) {
+            case 0: // FLD m64
+            {
+                float80 t = ReadF64(state, op);
+                FpuPush(state, &t);
+                break;
+            }
+            case 2: // FST m64
+            {
+                double d = f80_to_double(FpuTop(state, 0));
+                state->mmu.write<uint64_t>(addr, *(uint64_t*)&d);
+                break;
+            }
+            case 3: // FSTP m64
+            {
+                double d = f80_to_double(FpuPop(state));
+                state->mmu.write<uint64_t>(addr, *(uint64_t*)&d);
+                break;
+            }
+            default: OpNotImplemented(state, op);
+        }
+    }
+}
+
+void OpFpu_DE(EmuState* state, DecodedOp* op) {
+    // DE: Arith (Pop)
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+        // DE C0-F7
+        // DE C1: FADDP ST(1), ST0 (Add ST0 to ST1 and Pop)
+        int idx = op->modrm & 7;
+        float80& dest = FpuTop(state, idx);
+        float80 src = FpuTop(state, 0);
+        
+        switch(subop) {
+             case 0: dest = f80_add(dest, src); break; // FADDP
+             case 1: dest = f80_mul(dest, src); break; // FMULP
+             case 4: dest = f80_sub(src, dest); break; // FSUBRP (dest = src - dest)
+             case 5: dest = f80_sub(dest, src); break; // FSUBP (dest = dest - src)
+             case 6: dest = f80_div(src, dest); break; // FDIVRP (dest = src / dest)
+             case 7: dest = f80_div(dest, src); break; // FDIVP (dest = dest / src)
+             default: OpNotImplemented(state, op);
+        }
+        FpuPop(state);
+    } else {
+        // Memory ops (FIADD m16 etc.) -- Not needed for test_redis_002 presumably?
+        // Let's implement basics
+        OpNotImplemented(state, op);
+    }
+}
+
+void OpFpu_DF(EmuState* state, DecodedOp* op) {
+    // DF: m16 Int / Misc
+    uint8_t subop = (op->modrm >> 3) & 7;
+    
+    if ((op->modrm >> 6) == 3) {
+        // DF E0 status
+        // DF E8+i: FUCOMIP ST(i) (Unordered Compare ST0 with STi, set flags, pop)
+        if ((op->modrm & 0xF8) == 0xE8) { // FUCOMIP
+             int idx = op->modrm & 7;
+             float80 st0 = FpuTop(state, 0);
+             float80 sti = FpuTop(state, idx);
+             
+             state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK);
+             if (f80_uncomparable(st0, sti)) {
+                  state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+             } else if (f80_eq(st0, sti)) {
+                  state->ctx.eflags |= ZF_MASK;
+             } else if (f80_lt(st0, sti)) {
+                  state->ctx.eflags |= CF_MASK;
+             }
+             FpuPop(state);
+        } else {
+             OpNotImplemented(state, op);
+        }
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        switch(subop) {
+            case 0: // FILD m16
+            {
+                int16_t val = (int16_t)state->mmu.read<uint16_t>(addr);
+                float80 t = f80_from_int(val);
+                FpuPush(state, &t);
+                break;
+            }
+            case 2: // FIST m16
+            {
+                int16_t val = (int16_t)f80_to_int(FpuTop(state, 0));
+                state->mmu.write<uint16_t>(addr, (uint16_t)val);
+                break;
+            }
+            case 3: // FISTP m16
+            {
+                int16_t val = (int16_t)f80_to_int(FpuPop(state));
+                state->mmu.write<uint16_t>(addr, (uint16_t)val);
+                break;
+            }
+            case 5: // FILD m64
+            {
+                int64_t val = (int64_t)state->mmu.read<uint64_t>(addr);
+                float80 t = f80_from_int(val);
+                FpuPush(state, &t);
+                break;
+            }
+            case 7: // FISTP m64
+            {
+                int64_t val = f80_to_int(FpuPop(state));
+                state->mmu.write<uint64_t>(addr, (uint64_t)val);
+                break;
+            }
+            default: OpNotImplemented(state, op);
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
 // Bit Instructions
 // ------------------------------------------------------------------------------------------------
 
@@ -1030,9 +1701,9 @@ void OpJcc_Rel(EmuState* state, DecodedOp* op) {
 
 void OpCall_Rel(EmuState* state, DecodedOp* op) {
     // E8: CALL rel32
-    // Push Return Address (Current EIP, which is Next Insn due to DispatchWrapper)
+    // Push Return Address (Current EIP is already advanced to Next Insn by Wrapper/Step)
     Push32(state, state->ctx.eip);
-    // Jump
+    // Jump relative to Next Insn
     state->ctx.eip += op->imm;
 }
 
@@ -1049,7 +1720,21 @@ void OpRet(EmuState* state, DecodedOp* op) {
 template<LogicFunc Target>
 ATTR_PRESERVE_NONE
 void DispatchWrapper(EmuState* state, DecodedOp* op) {
-    state->ctx.eip += op->length;
+    uint32_t next_ip = state->ctx.eip + op->length;
+    
+    // We pass next_ip or use it?
+    // Some instructions like CALL need next_ip as return address.
+    // If we advance BEFORE, then CALL can just use ctx.eip.
+    // But if we advance BEFORE, and instruction is JMP, ctx.eip is overwritten.
+    
+    // Standard non-control flow: advance eip.
+    // Control flow: handler overwrites eip.
+    
+    // To handle both: save current eip, call target, and if eip is still saved_eip, advance it?
+    // No, handler doesn't know next_ip easily.
+    
+    // Let's ADVANCE it now. If handler jumps, it will overwrite it.
+    state->ctx.eip = next_ip;
     Target(state, op);
     
     // Tail Call Dispatch
@@ -1062,6 +1747,192 @@ void DispatchWrapper(EmuState* state, DecodedOp* op) {
 // ------------------------------------------------------------------------------------------------
 // Initialization
 // ------------------------------------------------------------------------------------------------
+
+// ------------------------------------------------------------------------------------------------
+// SSE / SSE2 Instructions
+// ------------------------------------------------------------------------------------------------
+
+void OpDiv_Sse(EmuState* state, DecodedOp* op) {
+    // 5E: DIVPS (0F), DIVSS (F3), DIVPD (66), DIVSD (F2)
+    uint32_t addr = 0;
+    if (op->modrm < 0xC0) addr = ComputeEAD(state, op);
+    
+    if (op->prefixes.flags.repne) { // F2: DIVSD (Scalar Double)
+         double b;
+         if (op->modrm >= 0xC0) {
+             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+         } else {
+             b = state->mmu.read<double>(addr);
+         }
+         // DIVSD xmm1, xmm2/m64
+         // DEST[63:0] = DEST[63:0] / SRC[63:0]
+         // DEST[127:64] Unmodified
+         ((double*)&state->ctx.xmm[(op->modrm >> 3) & 7])[0] /= b;
+    } else if (op->prefixes.flags.rep) { // F3: DIVSS (Scalar Single)
+         float b;
+         if (op->modrm >= 0xC0) {
+             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+         } else {
+             b = state->mmu.read<float>(addr);
+         }
+         // DIVSS xmm1, xmm2/m32
+         ((float*)&state->ctx.xmm[(op->modrm >> 3) & 7])[0] /= b;
+    } else {
+        OpNotImplemented(state, op);
+    }
+}
+
+void OpCvt_2C(EmuState* state, DecodedOp* op) {
+    // 2C: CVTTSD2SI (F2), CVTTSS2SI (F3)
+    uint32_t addr = 0;
+    if (op->modrm < 0xC0) addr = ComputeEAD(state, op);
+    int32_t res = 0;
+    
+    if (op->prefixes.flags.repne) { // F2: CVTTSD2SI (Double -> Int32)
+         double b;
+         if (op->modrm >= 0xC0) b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+         else b = state->mmu.read<double>(addr);
+         // Truncate
+         res = (int32_t)b;
+    } else if (op->prefixes.flags.rep) { // F3: CVTTSS2SI (Single -> Int32)
+         float b;
+         if (op->modrm >= 0xC0) b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+         else b = state->mmu.read<float>(addr);
+         res = (int32_t)b;
+    } else {
+        OpNotImplemented(state, op);
+        return;
+    }
+    SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Group 9 (0F C7)
+// ------------------------------------------------------------------------------------------------
+
+void OpGroup9(EmuState* state, DecodedOp* op) {
+    uint8_t sub = (op->modrm >> 3) & 7;
+    if (sub == 1) {
+        // CMPXCHG8B m64
+        // Compare EDX:EAX with m64.
+        // If equal, ZF=1 and m64 = ECX:EBX.
+        // Else, ZF=0 and EDX:EAX = m64.
+        
+        uint32_t addr = ComputeEAD(state, op);
+        uint64_t mem_val = state->mmu.read<uint64_t>(addr);
+        
+        uint32_t eax = GetReg(state, EAX);
+        uint32_t edx = GetReg(state, EDX);
+        uint64_t edx_eax = ((uint64_t)edx << 32) | eax;
+        
+        if (mem_val == edx_eax) {
+            state->ctx.eflags |= ZF_MASK;
+            
+            uint32_t ebx = GetReg(state, EBX);
+            uint32_t ecx = GetReg(state, ECX);
+            uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
+            
+            state->mmu.write<uint64_t>(addr, ecx_ebx);
+        } else {
+            state->ctx.eflags &= ~ZF_MASK;
+            
+            SetReg(state, EAX, (uint32_t)mem_val);
+            SetReg(state, EDX, (uint32_t)(mem_val >> 32));
+        }
+    } else {
+        OpNotImplemented(state, op);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// SSE / SSE2 Additional
+// ------------------------------------------------------------------------------------------------
+
+void OpMovAp_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)
+    // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
+    // 66 Prefix: MOVAPD (Double) - Same bitwise movement usually, but alignment might differ on real HW.
+    // For specialized emulation, we treat them as 128-bit moves.
+    
+    // Check Direction:
+    // 28: Load (Gv, Ev) -> Reg = ModRM
+    // 29: Store (Ev, Gv) -> ModRM = Reg
+    
+    // Note: Handler index will separate 28/29.
+    
+    uint8_t opcode = op->handler_index & 0xFF; // 28 or 29
+    
+    if (opcode == 0x28) { // Load
+        __m128 val = ReadModRM128(state, op);
+        uint8_t reg = (op->modrm >> 3) & 7;
+        state->ctx.xmm[reg] = val;
+    } else { // Store 0x29
+        uint8_t reg = (op->modrm >> 3) & 7;
+        __m128 val = state->ctx.xmm[reg];
+        // WriteModRM128 logic inline
+        if (op->modrm >= 0xC0) {
+            state->ctx.xmm[op->modrm & 7] = val;
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            // MOVAPS/MOVAPD require alignment check?
+            // Ignoring for SoftMMU unless strict mode.
+            // Using generic write128 helper if available or manual.
+            if (op->modrm < 0xC0) {
+                 // Check alignment?
+                 // if ((addr & 15) != 0) { Fault(#GP); return; }
+            }
+            state->mmu.write<uint64_t>(addr, ((uint64_t*)&val)[0]);
+            state->mmu.write<uint64_t>(addr+8, ((uint64_t*)&val)[1]);
+        }
+    }
+}
+
+void OpMaxMin_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 5F: MAX (PD/SD/PS/SS)
+    // 0F 5D: MIN (PD/SD/PS/SS)
+    // Prefix determines type:
+    // None: PS (Packed Single)
+    // 66:   PD (Packed Double)
+    // F3:   SS (Scalar Single)
+    // F2:   SD (Scalar Double)
+    
+    bool is_min = (op->handler_index & 0xFF) == 0x5D;
+    uint8_t reg_idx = (op->modrm >> 3) & 7;
+    
+    if (op->prefixes.flags.repne) { // F2: Scalar Double
+        double b;
+        if (op->modrm >= 0xC0) b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+        else b = state->mmu.read<double>(ComputeEAD(state, op));
+        
+        double* dest = (double*)&state->ctx.xmm[reg_idx]; // [0]
+        if (is_min) *dest = (*dest < b) ? *dest : b;
+        else        *dest = (*dest > b) ? *dest : b;
+        // High 64 bits unmodified
+        
+    } else if (op->prefixes.flags.rep) { // F3: Scalar Single
+        float b;
+        if (op->modrm >= 0xC0) b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+        else b = state->mmu.read<float>(ComputeEAD(state, op));
+        
+        float* dest = (float*)&state->ctx.xmm[reg_idx]; // [0]
+        if (is_min) *dest = (*dest < b) ? *dest : b;
+        else        *dest = (*dest > b) ? *dest : b;
+        // High 96 bits unmodified
+        
+    } else if (op->prefixes.flags.opsize) { // 66: Packed Double
+        __m128 val = ReadModRM128(state, op);
+        simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
+        simde__m128d b = simde_mm_castps_pd(val);
+        simde__m128d res = is_min ? simde_mm_min_pd(a, b) : simde_mm_max_pd(a, b);
+        state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
+        
+    } else { // None: Packed Single
+        __m128 val = ReadModRM128(state, op);
+        __m128 a = state->ctx.xmm[reg_idx];
+        // Using SIMDe directly on __m128 (aliased to simde__m128)
+        state->ctx.xmm[reg_idx] = is_min ? simde_mm_min_ps(a, val) : simde_mm_max_ps(a, val);
+    }
+}
 
 // Initialize Loop
 HandlerFunc g_Handlers[1024] = {0};
@@ -1193,6 +2064,35 @@ struct HandlerInit {
         g_Handlers[0x15A] = DispatchWrapper<OpCvt_5A>;
         g_Handlers[0x15B] = DispatchWrapper<OpCvt_5B>;
         g_Handlers[0x1E6] = DispatchWrapper<OpCvt_E6>;
+
+        // Batch 002 (Integer)
+        g_Handlers[0x69] = DispatchWrapper<OpImul_GvEvIz>;
+        g_Handlers[0x6B] = DispatchWrapper<OpImul_GvEvIz>;
+        g_Handlers[0x1AF] = DispatchWrapper<OpImul_GvEv>;
+        g_Handlers[0xF6] = DispatchWrapper<OpGroup3_Ev>;
+        g_Handlers[0xF7] = DispatchWrapper<OpGroup3_Ev>;
+        g_Handlers[0xFE] = DispatchWrapper<OpGroup4_Eb>;
+        
+        // Batch 002 (FPU)
+        g_Handlers[0xD8] = DispatchWrapper<OpFpu_D8>;
+        g_Handlers[0xD9] = DispatchWrapper<OpFpu_D9>;
+        g_Handlers[0xDA] = DispatchWrapper<OpFpu_DA>;
+        g_Handlers[0xDB] = DispatchWrapper<OpFpu_DB>;
+        g_Handlers[0xDC] = DispatchWrapper<OpFpu_DC>;
+        g_Handlers[0xDD] = DispatchWrapper<OpFpu_DD>;
+        g_Handlers[0xDE] = DispatchWrapper<OpFpu_DE>;
+        g_Handlers[0xDF] = DispatchWrapper<OpFpu_DF>;
+        
+        // SSE New
+        g_Handlers[0x12C] = DispatchWrapper<OpCvt_2C>;
+        g_Handlers[0x15E] = DispatchWrapper<OpDiv_Sse>;
+        
+        // Batch 003
+        g_Handlers[0x1C7] = DispatchWrapper<OpGroup9>;
+        g_Handlers[0x128] = DispatchWrapper<OpMovAp_Sse>;
+        g_Handlers[0x129] = DispatchWrapper<OpMovAp_Sse>;
+        g_Handlers[0x15F] = DispatchWrapper<OpMaxMin_Sse>;
+        g_Handlers[0x15D] = DispatchWrapper<OpMaxMin_Sse>;
     }
 };
 

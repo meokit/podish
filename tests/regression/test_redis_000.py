@@ -536,9 +536,9 @@ def test_id_453_bt_m32_imm8():
         name='ID_453: bt dword ptr [eax], 5',
         code=binascii.unhexlify('0fba2005'),
         initial_regs={'EAX': 0x2000},
-        expected_regs={},
+        expected_read={0x2000: 0x20}, # bit 5 is 1
         initial_eflags=0,
-        expected_eflags=0 # CF=0 (Bit 5 of 0 is 0)
+        expected_eflags=1 # CF=1
     )
 
 @pytest.mark.regression
@@ -550,9 +550,8 @@ def test_id_211_bt_r32_imm8():
         name='ID_211: bt ebx, 8',
         code=binascii.unhexlify('0fbae308'),
         initial_regs={'EBX': 0x100},
-        expected_regs={},
         initial_eflags=0,
-        expected_eflags=1 # CF=1
+        expected_eflags=1 # CF=1 (Bit 8 is 1)
     )
 
 @pytest.mark.regression
@@ -564,9 +563,8 @@ def test_id_132_bt_r32_r32():
         name='ID_132: bt ecx, esi',
         code=binascii.unhexlify('0fa3f1'),
         initial_regs={'ECX': 0x10, 'ESI': 4},
-        expected_regs={},
         initial_eflags=0,
-        expected_eflags=1 # CF=1
+        expected_eflags=1 # CF=1 (Bit 4 is 1)
     )
 
 @pytest.mark.regression
@@ -580,43 +578,43 @@ def test_id_286_btr_r32_r32():
         initial_regs={'ESI': 0x10, 'ECX': 4},
         expected_regs={'ESI': 0},
         initial_eflags=0,
-        expected_eflags=1 # CF=1
+        expected_eflags=1 # CF=1 (Original Bit 4 was 1)
     )
 
 @pytest.mark.regression
 def test_id_7_call_imm32():
     """Test: ID_7: call 0x1005"""
     runner = Runner()
-    # Raw: e800000000
+    # Raw: e800000000 (Length 5)
     assert runner.run_test_bytes(
         name='ID_7: call 0x1005',
         code=binascii.unhexlify('e800000000'),
         initial_regs={'ESP': 0x8000},
         expected_regs={'ESP': 0x7FFC},
         expected_eip=0x1005,
-        expected_write={0x7FFC: 0x1005} # Pushes return address (next instruction)
+        expected_write={0x7FFC: 0x1005} 
     )
 
 @pytest.mark.regression
 def test_id_12_call_m32():
     """Test: ID_12: call dword ptr [eax]"""
     runner = Runner()
-    # Raw: ff10
+    # Raw: ff10 (Length 2)
     assert runner.run_test_bytes(
         name='ID_12: call dword ptr [eax]',
         code=binascii.unhexlify('ff10'),
         initial_regs={'EAX': 0x2000, 'ESP': 0x8000},
         expected_regs={'ESP': 0x7FFC},
-        # Target address read from [0x2000] is 0.
-        expected_eip=0,
-        expected_write={0x7FFC: 0x1002} # Return address
+        expected_read={0x2000: 0x1005},
+        expected_eip=0x1005,
+        expected_write={0x7FFC: 0x1002}
     )
 
 @pytest.mark.regression
 def test_id_25_call_r32():
     """Test: ID_25: call eax"""
     runner = Runner()
-    # Raw: ffd0
+    # Raw: ffd0 (Length 2)
     assert runner.run_test_bytes(
         name='ID_25: call eax',
         code=binascii.unhexlify('ffd0'),

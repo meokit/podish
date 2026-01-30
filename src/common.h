@@ -6,6 +6,7 @@
 // This definition allows us to use _mm_add_ps etc. on non-x86 hardware.
 #define SIMDE_ENABLE_NATIVE_ALIASES
 #include <simde/x86/sse2.h>
+#include "float80.h"
 
 namespace x86emu {
 
@@ -47,6 +48,13 @@ struct alignas(64) Context {
     // SSE/SSE2 Registers
     alignas(16) __m128 xmm[8];
     uint32_t mxcsr;
+
+// FPU Registers (80-bit Extended Precision)
+    alignas(16) float80 fpu_regs[8];
+    uint16_t fpu_sw = 0;
+    uint16_t fpu_cw = 0; // Default to 0 to match Unicorn (was 0x037F)
+    uint16_t fpu_tw = 0xFFFF; // Empty
+    int fpu_top = 0;
 
     // Segment Base Addresses
     // For user-mode simulation:

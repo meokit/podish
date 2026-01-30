@@ -1,101 +1,105 @@
-# /// script
-# dependencies = []
-# ///
-
-import ctypes
+import cppyy
 import os
 import sys
-import struct
-import subprocess
 import tempfile
+import subprocess
+import ctypes
 
+# Check for Unicorn
+UNICORN_AVAILABLE = False
 try:
     from unicorn import *
     from unicorn.x86_const import *
     UNICORN_AVAILABLE = True
 except ImportError:
-    UNICORN_AVAILABLE = False
-    print("[-] Unicorn Engine not installed. Verification disabled.")
+    pass
 
 # Configurations
-LIB_PATH = os.path.join(os.path.dirname(__file__), "../build/libx86emu.dylib") 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BUILD_PATH = os.path.join(PROJECT_ROOT, "build")
+SRC_PATH = os.path.join(PROJECT_ROOT, "src")
+SIMDE_PATH = os.path.join(BUILD_PATH, "_deps/simde-src")
+LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.dylib") # Adjust extension if linux/windows
 
-# Ctypes Structures
-class Context(ctypes.Structure):
-    _fields_ = [
-        ("regs", ctypes.c_uint32 * 8),  # 0
-        ("eip", ctypes.c_uint32),       # 32
-        ("eflags", ctypes.c_uint32),    # 36
-        ("pad0", ctypes.c_uint8 * 8),   # 40 -> 48 (Align xmm to 16)
-        ("xmm", ctypes.c_uint8 * 128),  # 48 -> 176
-        ("mxcsr", ctypes.c_uint32),     # 176
-        ("seg_base", ctypes.c_uint32 * 6), # 180 -> 204
-        ("pad1", ctypes.c_uint8 * 4),   # 204 -> 208 (Align pointer to 8)
-        ("mmu", ctypes.c_void_p),       # 208 -> 216
-        ("hooks", ctypes.c_void_p),     # 216 -> 224
-        ("pad2", ctypes.c_uint8 * 32),  # 224 -> 256 (Alignas 64)
-    ]
+if not os.path.exists(LIB_PATH):
+    # Try finding it
+    if os.path.exists(os.path.join(BUILD_PATH, "libx86emu.so")):
+        LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.so")
+    elif os.path.exists(os.path.join(BUILD_PATH, "libx86emu.dll")):
+        LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.dll")
+
+# Load Library and Includes
+cppyy.add_include_path(SRC_PATH)
+cppyy.add_include_path(SIMDE_PATH)
+
+# Pre-include some standard headers to avoid issues
+cppyy.c_include("stdint.h")
+
+# Load our headers
+# Note: We need to include common.h first because it defines SIMDE alias
+cppyy.include("common.h")
+cppyy.include("state.h")
+cppyy.include("bindings.h")
+
+# Load the shared library
+cppyy.load_library(LIB_PATH)
+
+# Helper to handle bytes -> uint8_t* conversion
+cppyy.cppdef("""
+void Py_MemWrite(x86emu::EmuState* state, uint32_t addr, const char* data, uint32_t size) {
+    X86_MemWrite(state, addr, (const uint8_t*)data, size);
+}
+
+void Py_WriteXmm(x86emu::Context* ctx, int idx, const char* data) {
+    std::memcpy(&ctx->xmm[idx], data, 16);
+}
+
+unsigned long long Py_GetXmmAddr(x86emu::Context* ctx, int idx) {
+    return (unsigned long long)&ctx->xmm[idx];
+}
+""")
 
 class X86Emu:
     def __init__(self):
-        self.lib = ctypes.CDLL(LIB_PATH)
-        
-        # Set Argument Types
-        self.lib.X86_Create.restype = ctypes.c_void_p
-        self.lib.X86_Create.argtypes = []
-        
-        self.lib.X86_GetContext.restype = ctypes.POINTER(Context)
-        self.lib.X86_GetContext.argtypes = [ctypes.c_void_p]
-        
-        self.lib.X86_MemMap.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint8]
-        self.lib.X86_MemWrite.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32]
-        self.lib.X86_Decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_void_p]
-        self.lib.X86_SetFaultCallback.argtypes = [ctypes.c_void_p, ctypes.c_void_p] # state, function_pointer
-        self.lib.X86_Step.restype = ctypes.c_int
-        self.lib.X86_Step.argtypes = [ctypes.c_void_p]
-        self.lib.X86_Run.argtypes = [ctypes.c_void_p]
-        self.lib.X86_EmuStop.argtypes = [ctypes.c_void_p]
-        self.lib.X86_Destroy.argtypes = [ctypes.c_void_p]
+        # Create State
+        self.state = cppyy.gbl.X86_Create()
+        self.ctx = cppyy.gbl.X86_GetContext(self.state)
+        self._cb = None # Keep reference to callback
+        self._mem_hook = None
 
-        # Memory Hook Binding
-        self.lib.X86_SetMemHook.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        
-        # print("  [DEBUG] Calling X86_Create...")
-        self.state = self.lib.X86_Create()
-        # print(f"  [DEBUG] State Ptr: {self.state}")
-        
-        # print("  [DEBUG] Calling X86_GetContext...")
-        self.ctx = self.lib.X86_GetContext(self.state).contents
-        # print("  [DEBUG] Context Accessed.")
-        
     def __del__(self):
-        if hasattr(self, 'lib'):
-            self.lib.X86_Destroy(self.state)
+        if hasattr(self, 'state') and self.state:
+            cppyy.gbl.X86_Destroy(self.state)
             
     def mem_map(self, addr, size, perms):
-        self.lib.X86_MemMap(self.state, addr, size, perms)
+        cppyy.gbl.X86_MemMap(self.state, addr, size, perms)
         
     def mem_write(self, addr, data):
-        buf = (ctypes.c_uint8 * len(data))(*data)
-        self.lib.X86_MemWrite(self.state, addr, buf, len(data))
+        # data is bytes/list. X86_MemWrite expects uint8_t*
+        if isinstance(data, (bytes, bytearray)):
+            # bytes maps to const char*
+            cppyy.gbl.Py_MemWrite(self.state, addr, data, len(data))
+        else:
+            # list of ints
+            b = bytes(data)
+            cppyy.gbl.Py_MemWrite(self.state, addr, b, len(b))
         
     def step(self):
-        return self.lib.X86_Step(self.state)
+        return cppyy.gbl.X86_Step(self.state)
         
     def run(self):
-        self.lib.X86_Run(self.state)
+        cppyy.gbl.X86_Run(self.state)
 
     def stop(self):
-        self.lib.X86_EmuStop(self.state)
+        cppyy.gbl.X86_EmuStop(self.state)
 
     def set_fault_callback(self, cb):
-        self._cb_ref = ctypes.CFUNCTYPE(None, ctypes.c_uint32, ctypes.c_int)(cb)
-        self.lib.X86_SetFaultCallback(self.state, self._cb_ref)
+        self._cb = cb
+        cppyy.gbl.X86_SetFaultCallback(self.state, cb)
 
     def set_mem_hook(self, cb):
-        # void(*)(uint32_t addr, uint32_t size, int is_write, uint64_t val)
-        self._mem_hook_ref = ctypes.CFUNCTYPE(None, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint64)(cb)
-        self.lib.X86_SetMemHook(self.state, self._mem_hook_ref)
+        self._mem_hook = cb
+        cppyy.gbl.X86_SetMemHook(self.state, cb)
 
 class Runner:
     def __init__(self):
@@ -269,8 +273,8 @@ class Runner:
                             v_bytes = v.to_bytes(16, 'little')
                         else:
                             v_bytes = bytes(v)
-                        for b_idx, b in enumerate(v_bytes):
-                            sim.ctx.xmm[idx * 16 + b_idx] = b
+                        
+                        cppyy.gbl.Py_WriteXmm(sim.ctx, idx, v_bytes)
                 else:
                     idx = self._get_sim_reg_idx(r)
                     if idx != -1: sim.ctx.regs[idx] = v
@@ -298,12 +302,25 @@ class Runner:
 
         # Step Loop
         MAX_STEPS = 50
+        CODE_START = 0x1000
+        CODE_END = CODE_START + len(code)
+        
         for _ in range(MAX_STEPS):
+            # Check if EIP is within code range BEFORE executing? 
+            # Unicorn stops when EIP reaches end.
+            if sim.ctx.eip >= CODE_END:
+                break
+                
             status = sim.step()
+            
             if status == 1: # Stopped
                 break
             elif status == 2: # Fault
                 # print("  [Sim] Fault Detected!")
+                break
+                
+            # Also check after step if we jumped out
+            if sim.ctx.eip < CODE_START or sim.ctx.eip >= CODE_END:
                 break
         
         # Compare Results
@@ -330,7 +347,10 @@ class Runner:
         # 2. Compare XMM
         for i in range(8):
             r = f'XMM{i}'
-            sim_val = bytes(sim.ctx.xmm[i*16 : (i+1)*16])
+            # Use helper to get address
+            addr = cppyy.gbl.Py_GetXmmAddr(sim.ctx, i)
+            # print(f"[DEBUG] XMM{i} Addr: 0x{addr:x}")
+            sim_val = ctypes.string_at(addr, 16)
             if expected_regs and r in expected_regs:
                 exp_v = expected_regs[r]
                 if isinstance(exp_v, int):
@@ -387,6 +407,11 @@ class Runner:
                         break
                 if not found:
                      fail_reason += f"  Expected Write at 0x{addr:x} with value 0x{val:x} not found in trace.\n"
+                     # Dump actual writes near addr
+                     fail_reason += "  Actual writes in trace:\n"
+                     for op_t, t_addr, t_val, t_size in self.sim_trace:
+                         if op_t == 'W':
+                             fail_reason += f"    Host Write: Addr=0x{t_addr:x} Val=0x{t_val:x} Size={t_size}\n"
                      passed = False
 
         if passed:

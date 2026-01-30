@@ -103,7 +103,10 @@ public:
         }
         
         if (mem_hook) {
-            mem_hook(mem_hook_opaque, addr, sizeof(T), 0, (uint64_t)val);
+            uint64_t hook_val = 0;
+            if constexpr (sizeof(T) <= 8) std::memcpy(&hook_val, &val, sizeof(T));
+            else std::memcpy(&hook_val, &val, 8);
+            mem_hook(mem_hook_opaque, addr, sizeof(T), 0, hook_val);
         }
         return val;
     }
@@ -114,7 +117,10 @@ public:
         // printf("[MMU] Write PADDR=0x%08X Size=%lu\n", addr, sizeof(T));
         
         if (mem_hook) {
-            mem_hook(mem_hook_opaque, addr, sizeof(T), 1, (uint64_t)val);
+            uint64_t hook_val = 0;
+            if constexpr (sizeof(T) <= 8) std::memcpy(&hook_val, &val, sizeof(T));
+            else std::memcpy(&hook_val, &val, 8);
+            mem_hook(mem_hook_opaque, addr, sizeof(T), 1, hook_val);
         }
         
         uint8_t* ptr = translate(addr);

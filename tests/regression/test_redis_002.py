@@ -12,8 +12,8 @@ def test_id_422_cvttsd2si_r32_m64():
     assert runner.run_test_bytes(
         name='ID_422: cvttsd2si ecx, qword ptr [ebp - 0x28]',
         code=binascii.unhexlify('f20f2c4dd8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FD8: 0x4041800000000000}  # 35.0 (double)
     )
 
 @pytest.mark.regression
@@ -24,7 +24,7 @@ def test_id_382_cvttsd2si_r32_r128():
     assert runner.run_test_bytes(
         name='ID_382: cvttsd2si eax, xmm1',
         code=binascii.unhexlify('f20f2cc1'),
-        initial_regs={},
+        initial_regs={'XMM1': 0x4041800000000000}, # 35.0 (double)
         expected_regs={}
     )
 
@@ -36,7 +36,7 @@ def test_id_458_cvttss2si_r32_r128():
     assert runner.run_test_bytes(
         name='ID_458: cvttss2si ebx, xmm0',
         code=binascii.unhexlify('f30f2cd8'),
-        initial_regs={},
+        initial_regs={'XMM0': 0x420c0000}, # 35.0 (float)
         expected_regs={}
     )
 
@@ -48,7 +48,7 @@ def test_id_496_cwde_no_operands():
     assert runner.run_test_bytes(
         name='ID_496: cwde ',
         code=binascii.unhexlify('98'),
-        initial_regs={},
+        initial_regs={'EAX': 0x00008080}, # AX = 0x8080 (-32640)
         expected_regs={}
     )
 
@@ -60,8 +60,9 @@ def test_id_437_dec_m16():
     assert runner.run_test_bytes(
         name='ID_437: dec word ptr [esi + 0x18]',
         code=binascii.unhexlify('66ff4e18'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2000},
+        expected_read={0x2018: 0x100},
+        expected_write={0x2018: 0xFF}
     )
 
 @pytest.mark.regression
@@ -72,8 +73,9 @@ def test_id_134_dec_m32():
     assert runner.run_test_bytes(
         name='ID_134: dec dword ptr [edi + 0x86c]',
         code=binascii.unhexlify('ff8f6c080000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDI': 0x2000},
+        expected_read={0x286C: 0x100},
+        expected_write={0x286C: 0xFF}
     )
 
 @pytest.mark.regression
@@ -84,8 +86,9 @@ def test_id_67_dec_r32():
     assert runner.run_test_bytes(
         name='ID_67: dec edi',
         code=binascii.unhexlify('4f'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDI': 0x1},
+        expected_regs={'EDI': 0x0},
+        expected_eflags=0x46 # ZF=1, PF=1, AF=0 (aligned), SF=0, OF=0. (0x40 is ZF, 0x4 is PF, 0x2 is 1?) 
     )
 
 @pytest.mark.regression
@@ -96,8 +99,9 @@ def test_id_287_dec_r8():
     assert runner.run_test_bytes(
         name='ID_287: dec cl',
         code=binascii.unhexlify('fec9'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0}, # CL=0
+        expected_regs={'ECX': 0xFF}, # CL=0xFF (-1)
+        expected_eflags=0x94 # SF=1, PF=1, AF=1. (Got 0x94 in verification)
     )
 
 @pytest.mark.regression
@@ -108,8 +112,9 @@ def test_id_324_div_m32():
     assert runner.run_test_bytes(
         name='ID_324: div dword ptr [ebp - 0x10]',
         code=binascii.unhexlify('f775f0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 100, 'EDX': 0, 'EBP': 0x8000},
+        expected_read={0x7FF0: 10},
+        expected_regs={'EAX': 10} # 100 / 10 = 10
     )
 
 @pytest.mark.regression
@@ -120,8 +125,8 @@ def test_id_323_div_r32():
     assert runner.run_test_bytes(
         name='ID_323: div esi',
         code=binascii.unhexlify('f7f6'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 100, 'EDX': 0, 'ESI': 10},
+        expected_regs={'EAX': 10}
     )
 
 @pytest.mark.regression
@@ -132,7 +137,11 @@ def test_id_389_divpd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_389: divpd xmm6, xmm4',
         code=binascii.unhexlify('660f5ef4'),
-        initial_regs={},
+        # 20.0, 40.0 / 2.0, 4.0
+        initial_regs={
+            'XMM6': binascii.unhexlify('00000000000034400000000000004440'),
+            'XMM4': binascii.unhexlify('00000000000000400000000000001040')
+        },
         expected_regs={}
     )
 
@@ -144,7 +153,11 @@ def test_id_477_divps_r128_r128():
     assert runner.run_test_bytes(
         name='ID_477: divps xmm1, xmm0',
         code=binascii.unhexlify('0f5ec8'),
-        initial_regs={},
+        # 20.0, 40.0, 60.0, 80.0 / 2.0, 4.0, 5.0, 8.0
+        initial_regs={
+            'XMM1': binascii.unhexlify('0000a04100002042000070420000a042'),
+            'XMM0': binascii.unhexlify('00000040000080400000a04000000041')
+        },
         expected_regs={}
     )
 
@@ -156,7 +169,8 @@ def test_id_312_divsd_r128_m64():
     assert runner.run_test_bytes(
         name='ID_312: divsd xmm0, qword ptr [ebp - 0x38]',
         code=binascii.unhexlify('f20f5e45c8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000, 'XMM0': binascii.unhexlify('00000000000034400000000000000000')}, # 20.0
+        expected_read={0x7FC8: 0x4000000000000000}, # 2.0
         expected_regs={}
     )
 
@@ -168,7 +182,10 @@ def test_id_248_divsd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_248: divsd xmm0, xmm2',
         code=binascii.unhexlify('f20f5ec2'),
-        initial_regs={},
+        initial_regs={
+            'XMM0': binascii.unhexlify('00000000000034400000000000000000'), # 20.0
+            'XMM2': binascii.unhexlify('00000000000000400000000000000000')  # 2.0
+        },
         expected_regs={}
     )
 
@@ -180,7 +197,8 @@ def test_id_408_divss_r128_m32():
     assert runner.run_test_bytes(
         name='ID_408: divss xmm0, dword ptr [ebp - 0x10]',
         code=binascii.unhexlify('f30f5e45f0'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000, 'XMM0': 0x41a00000}, # 20.0
+        expected_read={0x7FF0: 0x40000000}, # 2.0
         expected_regs={}
     )
 
@@ -192,7 +210,7 @@ def test_id_404_divss_r128_r128():
     assert runner.run_test_bytes(
         name='ID_404: divss xmm2, xmm1',
         code=binascii.unhexlify('f30f5ed1'),
-        initial_regs={},
+        initial_regs={'XMM2': 0x41a00000, 'XMM1': 0x40000000}, # 20.0 / 2.0
         expected_regs={}
     )
 
@@ -204,7 +222,8 @@ def test_id_424_fadd_m32():
     assert runner.run_test_bytes(
         name='ID_424: fadd dword ptr [ebx + eax*4]',
         code=binascii.unhexlify('d8848300000000'),
-        initial_regs={},
+        initial_regs={'EAX': 0, 'EBX': 0x2000},
+        expected_read={0x2000: 0x3F800000}, # 1.0
         expected_regs={}
     )
 
@@ -216,7 +235,7 @@ def test_id_335_faddp_r80():
     assert runner.run_test_bytes(
         name='ID_335: faddp st(1)',
         code=binascii.unhexlify('dec1'),
-        initial_regs={},
+        initial_regs={}, # Assume FPU stack handled by Unicorn defaults
         expected_regs={}
     )
 
@@ -228,7 +247,8 @@ def test_id_474_fild_m32():
     assert runner.run_test_bytes(
         name='ID_474: fild dword ptr [ebp - 8]',
         code=binascii.unhexlify('db45f8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FF8: 100},
         expected_regs={}
     )
 
@@ -240,7 +260,8 @@ def test_id_311_fild_m64():
     assert runner.run_test_bytes(
         name='ID_311: fild qword ptr [ebp - 0x48]',
         code=binascii.unhexlify('df6db8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FB8: 1000},
         expected_regs={}
     )
 
@@ -252,7 +273,8 @@ def test_id_254_fistp_m64():
     assert runner.run_test_bytes(
         name='ID_254: fistp qword ptr [ebp - 0x48]',
         code=binascii.unhexlify('df7db8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_write={0x7FB8: 0}, # Expect something written. Unicorn will verify value.
         expected_regs={}
     )
 
@@ -264,7 +286,8 @@ def test_id_482_fld_m32():
     assert runner.run_test_bytes(
         name='ID_482: fld dword ptr [ebp - 0x14]',
         code=binascii.unhexlify('d945ec'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FEC: 0x3F800000}, # 1.0
         expected_regs={}
     )
 
@@ -276,7 +299,8 @@ def test_id_251_fld_m64():
     assert runner.run_test_bytes(
         name='ID_251: fld qword ptr [ebp - 0x48]',
         code=binascii.unhexlify('dd45b8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FB8: 0x3FF0000000000000}, # 1.0 (double)
         expected_regs={}
     )
 
@@ -288,7 +312,9 @@ def test_id_334_fld_m80():
     assert runner.run_test_bytes(
         name='ID_334: fld xword ptr [ebp - 0x40]',
         code=binascii.unhexlify('db6dc0'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FC0: 0}, # unicorn will read 10 bytes. We set 0/defaults. 
+        # Note: Writing 80-bit float in python is tricky, assume memory initialized to 0 is fine for load.
         expected_regs={}
     )
 
@@ -312,7 +338,8 @@ def test_id_253_fldcw_m16():
     assert runner.run_test_bytes(
         name='ID_253: fldcw word ptr [ebp - 0x3a]',
         code=binascii.unhexlify('d96dc6'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FC6: 0x037F}, # Default CW
         expected_regs={}
     )
 
@@ -336,7 +363,8 @@ def test_id_483_fmul_m32():
     assert runner.run_test_bytes(
         name='ID_483: fmul dword ptr [ebx]',
         code=binascii.unhexlify('d88b00000000'),
-        initial_regs={},
+        initial_regs={'EBX': 0x2000},
+        expected_read={0x2000: 0x40000000}, # 2.0
         expected_regs={}
     )
 
@@ -348,7 +376,8 @@ def test_id_252_fnstcw_m16():
     assert runner.run_test_bytes(
         name='ID_252: fnstcw word ptr [ebp - 0x2a]',
         code=binascii.unhexlify('d97dd6'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_write={0x7FD6: 0},
         expected_regs={}
     )
 
@@ -360,7 +389,8 @@ def test_id_402_fstp_m32():
     assert runner.run_test_bytes(
         name='ID_402: fstp dword ptr [ebp - 0x30]',
         code=binascii.unhexlify('d95dd0'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_write={0x7FD0: 0},
         expected_regs={}
     )
 
@@ -372,7 +402,8 @@ def test_id_242_fstp_m64():
     assert runner.run_test_bytes(
         name='ID_242: fstp qword ptr [ebp - 0x80]',
         code=binascii.unhexlify('dd5d80'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_write={0x7F80: 0},
         expected_regs={}
     )
 
@@ -384,7 +415,8 @@ def test_id_337_fstp_m80():
     assert runner.run_test_bytes(
         name='ID_337: fstp xword ptr [ebp - 0x28]',
         code=binascii.unhexlify('db7dd8'),
-        initial_regs={},
+        initial_regs={'EBP': 0x8000},
+        expected_write={0x7FD8: 0},
         expected_regs={}
     )
 
@@ -408,8 +440,12 @@ def test_id_470_fucomi_r80():
     assert runner.run_test_bytes(
         name='ID_470: fucomi st(0)',
         code=binascii.unhexlify('dbe8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ST0': 1.0, 'ST1': 1.0}, # Need helper to set ST regs? 
+        # Runner doesn't support setting ST regs easily directly via initial_regs dictionary for FPU stack...
+        # But wait, FUCOMI compares ST0 and ST(i).
+        # If we default, ST0 and ST1 are likely 0.0.
+        # 0.0 == 0.0 -> ZF=1, PF=0, CF=0.
+        expected_eflags=0x40 # ZF=1 (bit 6)
     )
 
 @pytest.mark.regression
@@ -444,8 +480,9 @@ def test_id_255_idiv_m32():
     assert runner.run_test_bytes(
         name='ID_255: idiv dword ptr [esi + 0x20]',
         code=binascii.unhexlify('f77e20'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0xFFFFFFFC, 'EDX': 0xFFFFFFFF, 'ESI': 0x2000}, # -4
+        expected_read={0x2020: 0xFFFFFFFE}, # -2
+        expected_regs={'EAX': 2} # -4 / -2 = 2
     )
 
 @pytest.mark.regression
@@ -456,8 +493,9 @@ def test_id_487_idiv_r16():
     assert runner.run_test_bytes(
         name='ID_487: idiv cx',
         code=binascii.unhexlify('66f7f9'),
-        initial_regs={},
-        expected_regs={}
+        # AX=-10 (0xFFF6), DX=0xFFFF (-1). DX:AX = -10. CX = -2 (0xFFFE). Res=5.
+        initial_regs={'EAX': 0xFFF6, 'EDX': 0xFFFF, 'ECX': 0xFFFE},
+        expected_regs={'EAX': 5}
     )
 
 @pytest.mark.regression
@@ -468,8 +506,8 @@ def test_id_257_idiv_r32():
     assert runner.run_test_bytes(
         name='ID_257: idiv esi',
         code=binascii.unhexlify('f7fe'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0xFFFFFFF6, 'EDX': 0xFFFFFFFF, 'ESI': 0xFFFFFFFE}, # -10 / -2
+        expected_regs={'EAX': 5}
     )
 
 @pytest.mark.regression
@@ -480,8 +518,9 @@ def test_id_200_imul_m32():
     assert runner.run_test_bytes(
         name='ID_200: imul dword ptr [ebx + 0xee4]',
         code=binascii.unhexlify('f7abe40e0000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x10, 'EBX': 0x2000},
+        expected_read={0x2EE4: 0x10},
+        expected_regs={'EAX': 0x100, 'EDX': 0}
     )
 
 @pytest.mark.regression
@@ -492,8 +531,8 @@ def test_id_198_imul_r32():
     assert runner.run_test_bytes(
         name='ID_198: imul ecx',
         code=binascii.unhexlify('f7e9'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x5, 'ECX': 0x5},
+        expected_regs={'EAX': 0x19, 'EDX': 0}
     )
 
 @pytest.mark.regression
@@ -504,8 +543,9 @@ def test_id_339_imul_r32_m32():
     assert runner.run_test_bytes(
         name='ID_339: imul eax, dword ptr [ebp - 0x14]',
         code=binascii.unhexlify('0faf45ec'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2, 'EBP': 0x8000},
+        expected_read={0x7FEC: 0x4},
+        expected_regs={'EAX': 0x8}
     )
 
 @pytest.mark.regression
@@ -516,8 +556,9 @@ def test_id_172_imul_r32_m32_imm32():
     assert runner.run_test_bytes(
         name='ID_172: imul eax, dword ptr [ebp + 0xc], 0x68',
         code=binascii.unhexlify('6b450c68'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x800C: 0x2},
+        expected_regs={'EAX': 0xD0} # 2 * 0x68 (104) = 208 (0xD0)
     )
 
 @pytest.mark.regression
@@ -528,8 +569,9 @@ def test_id_201_imul_r32_r32():
     assert runner.run_test_bytes(
         name='ID_201: imul ebx, eax',
         code=binascii.unhexlify('0fafd8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x10, 'EBX': 0x10},
+        expected_regs={'EBX': 0x100},
+        expected_eflags=0 # 0x100 fits in 32-bit. OF=0, CF=0.
     )
 
 @pytest.mark.regression
@@ -540,8 +582,8 @@ def test_id_49_imul_r32_r32_imm32():
     assert runner.run_test_bytes(
         name='ID_49: imul ecx, esi, 0x58',
         code=binascii.unhexlify('6bce58'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0xA},
+        expected_regs={'ECX': 0x370} # 10 * 88 = 880
     )
 
 @pytest.mark.regression
@@ -552,8 +594,9 @@ def test_id_416_inc_m16():
     assert runner.run_test_bytes(
         name='ID_416: inc word ptr [ecx + 0x10]',
         code=binascii.unhexlify('66ff4110'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0x2000},
+        expected_read={0x2010: 0xFF},
+        expected_write={0x2010: 0x100}
     )
 
 @pytest.mark.regression
@@ -564,8 +607,9 @@ def test_id_164_inc_m32():
     assert runner.run_test_bytes(
         name='ID_164: inc dword ptr [ebp - 0x3c]',
         code=binascii.unhexlify('ff45c4'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8000},
+        expected_read={0x7FC4: 0},
+        expected_write={0x7FC4: 1}
     )
 
 @pytest.mark.regression
@@ -576,8 +620,9 @@ def test_id_447_inc_m8():
     assert runner.run_test_bytes(
         name='ID_447: inc byte ptr [esi - 3]',
         code=binascii.unhexlify('fe46fd'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2003},
+        expected_read={0x2000: 0x7F},
+        expected_write={0x2000: 0x80}
     )
 
 @pytest.mark.regression
@@ -588,8 +633,8 @@ def test_id_47_inc_r32():
     assert runner.run_test_bytes(
         name='ID_47: inc esi',
         code=binascii.unhexlify('46'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0},
+        expected_regs={'ESI': 1}
     )
 
 @pytest.mark.regression
@@ -600,7 +645,7 @@ def test_id_216_inc_r8():
     assert runner.run_test_bytes(
         name='ID_216: inc ah',
         code=binascii.unhexlify('fec4'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x1000}, # AH=0x10
+        expected_regs={'EAX': 0x1100}
     )
 
