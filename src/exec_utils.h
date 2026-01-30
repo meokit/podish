@@ -123,7 +123,40 @@ inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val) {
         uint32_t addr = ComputeEAD(state, op);
         state->mmu.write<uint32_t>(addr, val);
     }
+}
 
+inline void WriteModRM8(EmuState* state, const DecodedOp* op, uint8_t val) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    if (mod == 3) {
+        // Register (AL, CL, DL, BL, AH, CH, DH, BH)
+        uint32_t* rptr = GetRegPtr(state, rm & 3);
+        uint32_t curr = *rptr;
+        if (rm < 4) {
+            curr = (curr & 0xFFFFFF00) | val;
+        } else {
+            curr = (curr & 0xFFFF00FF) | (val << 8);
+        }
+        *rptr = curr;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint8_t>(addr, val);
+    }
+}
+
+inline void WriteModRM16(EmuState* state, const DecodedOp* op, uint16_t val) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    if (mod == 3) {
+        // Register (AX, CX, DX, BX, SP, BP, SI, DI)
+        uint32_t* rptr = GetRegPtr(state, rm);
+        *rptr = (*rptr & 0xFFFF0000) | val;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint16_t>(addr, val);
+    }
 }
 
 inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op) {
@@ -258,7 +291,82 @@ inline T AluSub(EmuState* state, T dest, T src) {
     return res;
 }
 
+template<typename T>
+inline T AluAdc(EmuState* state, T dest, T src) {
+    uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
+    
+    using UT = std::make_unsigned_t<T>;
+    UT udest = (UT)dest;
+    UT usrc = (UT)src;
+    
+    // Use wider type to check for carry
+    unsigned long long wdest = udest;
+    unsigned long long wsrc = usrc;
+    unsigned long long wres = wdest + wsrc + cf_in;
+    
+    T res = (T)wres;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    // CF
+    if (wres >> (sizeof(T)*8)) flags |= CF_MASK;
+    
+    // OF: Signed Overflow
+    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+    bool s1 = (dest & sign_mask);
+    bool s2 = (src & sign_mask);
+    bool sr = (res & sign_mask);
+    
+    if (s1 == s2 && s1 != sr) flags |= OF_MASK;
+    
+    // AF
+    if (((dest & 0xF) + (src & 0xF) + cf_in) > 0xF) flags |= AF_MASK;
+    
+    state->ctx.eflags = flags;
+    return res;
+}
 
+template<typename T>
+inline T AluSbb(EmuState* state, T dest, T src) {
+    uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
+    
+    using UT = std::make_unsigned_t<T>;
+    UT udest = (UT)dest;
+    UT usrc = (UT)src;
+    
+    unsigned long long wdest = udest;
+    unsigned long long wsrc = usrc;
+    unsigned long long wres = wdest - wsrc - cf_in;
+    
+    T res = (T)wres;
+
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    // CF: Borrow
+    if (wdest < (wsrc + cf_in)) flags |= CF_MASK;
+    
+    // OF: Signed Overflow
+    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+    bool s1 = (dest & sign_mask);
+    bool s2 = (src & sign_mask);
+    bool sr = (res & sign_mask);
+    
+    if (s1 != s2 && s1 != sr) flags |= OF_MASK;
+    
+    // AF: Borrow from bit 3
+    if ((dest & 0xF) < ((src & 0xF) + cf_in)) flags |= AF_MASK;
+    
+    state->ctx.eflags = flags;
+    return res;
+}
 
 template<typename T>
 inline T AluAnd(EmuState* state, T dest, T src) {

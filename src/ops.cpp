@@ -245,6 +245,14 @@ void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
             res = AluOr(state, dest, src);
             WriteModRM32(state, op, res);
             break;
+        case 2: // ADC
+            res = AluAdc(state, dest, src);
+            WriteModRM32(state, op, res);
+            break;
+        case 3: // SBB
+            res = AluSbb(state, dest, src);
+            WriteModRM32(state, op, res);
+            break;
         case 4: // AND
             res = AluAnd(state, dest, src);
             WriteModRM32(state, op, res);
@@ -458,6 +466,252 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
 }
 
 // ------------------------------------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------------------------------------
+
+uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
+    uint32_t val = GetReg(state, reg_idx & 3);
+    if (reg_idx < 4) return val & 0xFF;
+    else return (val >> 8) & 0xFF;
+}
+
+// ------------------------------------------------------------------------------------------------
+// ADC
+// ------------------------------------------------------------------------------------------------
+
+void OpAdc_EbGb(EmuState* state, DecodedOp* op) {
+    // 10: ADC r/m8, r8
+    uint8_t dest = ReadModRM8(state, op);
+    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t res = AluAdc(state, dest, src);
+    WriteModRM8(state, op, res);
+}
+
+void OpAdc_EvGv(EmuState* state, DecodedOp* op) {
+    // 11: ADC r/m32, r32
+    uint32_t dest = ReadModRM32(state, op);
+    uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+    uint32_t res = AluAdc(state, dest, src);
+    WriteModRM32(state, op, res);
+}
+
+void OpAdc_GbEb(EmuState* state, DecodedOp* op) {
+    // 12: ADC r8, r/m8
+    uint8_t src = ReadModRM8(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t dest = GetReg8(state, reg);
+    uint8_t res = AluAdc(state, dest, src);
+    
+    // Write back to reg8
+    uint32_t* rptr = GetRegPtr(state, reg & 3);
+    if (reg < 4) *rptr = (*rptr & 0xFFFFFF00) | res;
+    else *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+}
+
+void OpAdc_GvEv(EmuState* state, DecodedOp* op) {
+    // 13: ADC r32, r/m32
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t dest = GetReg(state, reg);
+    uint32_t res = AluAdc(state, dest, src);
+    SetReg(state, reg, res);
+}
+
+// ------------------------------------------------------------------------------------------------
+// ADD Byte
+// ------------------------------------------------------------------------------------------------
+
+void OpAdd_EbGb(EmuState* state, DecodedOp* op) {
+    // 00: ADD r/m8, r8
+    uint8_t dest = ReadModRM8(state, op);
+    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t res = AluAdd(state, dest, src);
+    WriteModRM8(state, op, res);
+}
+
+void OpAdd_GbEb(EmuState* state, DecodedOp* op) {
+    // 02: ADD r8, r/m8
+    uint8_t src = ReadModRM8(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t dest = GetReg8(state, reg);
+    uint8_t res = AluAdd(state, dest, src);
+    
+    uint32_t* rptr = GetRegPtr(state, reg & 3);
+    if (reg < 4) *rptr = (*rptr & 0xFFFFFF00) | res;
+    else *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+}
+
+void OpAdd_GvEv(EmuState* state, DecodedOp* op) {
+    // 03: ADD r32, r/m32
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t dest = GetReg(state, reg);
+    uint32_t res = AluAdd(state, dest, src);
+    SetReg(state, reg, res);
+}
+
+// ------------------------------------------------------------------------------------------------
+// AND Byte
+// ------------------------------------------------------------------------------------------------
+
+void OpAnd_EbGb(EmuState* state, DecodedOp* op) {
+    // 20: AND r/m8, r8
+    uint8_t dest = ReadModRM8(state, op);
+    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t res = AluAnd(state, dest, src);
+    WriteModRM8(state, op, res);
+}
+
+void OpAnd_GbEb(EmuState* state, DecodedOp* op) {
+    // 22: AND r8, r/m8
+    uint8_t src = ReadModRM8(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t dest = GetReg8(state, reg);
+    uint8_t res = AluAnd(state, dest, src);
+    
+    uint32_t* rptr = GetRegPtr(state, reg & 3);
+    if (reg < 4) *rptr = (*rptr & 0xFFFFFF00) | res;
+    else *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+}
+
+void OpAnd_GvEv(EmuState* state, DecodedOp* op) {
+    // 23: AND r32, r/m32
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t dest = GetReg(state, reg);
+    uint32_t res = AluAnd(state, dest, src);
+    SetReg(state, reg, res);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Group 1 Byte
+// ------------------------------------------------------------------------------------------------
+
+void OpGroup1_EbIb(EmuState* state, DecodedOp* op) {
+    // 80: Arith r/m8, imm8
+    uint8_t dest = ReadModRM8(state, op);
+    uint8_t src = (uint8_t)op->imm;
+    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t res = 0;
+    
+    switch (subop) {
+        case 0: res = AluAdd(state, dest, src); WriteModRM8(state, op, res); break;
+        case 1: res = AluOr(state, dest, src);  WriteModRM8(state, op, res); break;
+        case 2: res = AluAdc(state, dest, src); WriteModRM8(state, op, res); break;
+        case 3: res = AluSbb(state, dest, src); WriteModRM8(state, op, res); break;
+        case 4: res = AluAnd(state, dest, src); WriteModRM8(state, op, res); break;
+        case 5: res = AluSub(state, dest, src); WriteModRM8(state, op, res); break;
+        case 6: res = AluXor(state, dest, src); WriteModRM8(state, op, res); break;
+        case 7: AluSub(state, dest, src); break; // CMP
+        default: OpNotImplemented(state, op); break;
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Bit Instructions
+// ------------------------------------------------------------------------------------------------
+
+void OpBt_EvGv(EmuState* state, DecodedOp* op) {
+    // 0F A3: BT r/m32, r32
+    uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    uint8_t bit_val = 0;
+    if (mod == 3) {
+        uint32_t base = GetReg(state, rm);
+        offset &= 31;
+        bit_val = (base >> offset) & 1;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        int32_t signed_offset = (int32_t)offset;
+        addr += (signed_offset >> 3);
+        uint8_t bit_idx = signed_offset & 7;
+        bit_val = (state->mmu.read<uint8_t>(addr) >> bit_idx) & 1;
+    }
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
+    // 0F B3: BTR r/m32, r32
+    uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    uint8_t bit_val = 0;
+    if (mod == 3) {
+        uint32_t base = GetReg(state, rm);
+        uint32_t mask = 1 << (offset & 31);
+        bit_val = (base & mask) ? 1 : 0;
+        SetReg(state, rm, base & ~mask);
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        int32_t signed_offset = (int32_t)offset;
+        addr += (signed_offset >> 3);
+        uint8_t bit_idx = signed_offset & 7;
+        
+        uint8_t byte = state->mmu.read<uint8_t>(addr);
+        bit_val = (byte >> bit_idx) & 1;
+        state->mmu.write<uint8_t>(addr, byte & ~(1 << bit_idx));
+    }
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBt_EvIb(EmuState* state, DecodedOp* op) {
+    // 0F BA /4: BT r/m32, imm8
+    uint8_t offset = op->imm & 31; // imm8 modulo 32
+    // For imm8, it treats operand as 32-bit (or 16-bit), bit index is modulo width.
+    // It does NOT do the memory offset thing.
+    
+    uint32_t base = ReadModRM32(state, op);
+    uint8_t bit_val = (base >> offset) & 1;
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBsr_GvEv(EmuState* state, DecodedOp* op) {
+    // 0F BD: BSR r32, r/m32
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (src == 0) {
+        state->ctx.eflags |= ZF_MASK;
+        // Dest undefined. Keep it?
+    } else {
+        state->ctx.eflags &= ~ZF_MASK;
+        // Find MSB
+        // __builtin_clz(src) returns leading zeros.
+        // 31 - clz = index.
+        int idx = 31 - __builtin_clz(src);
+        SetReg(state, reg, idx);
+    }
+}
+
+void OpBswap_Reg(EmuState* state, DecodedOp* op) {
+    // 0F C8+rd: BSWAP r32
+    uint8_t reg = op->handler_index & 7;
+    uint32_t val = GetReg(state, reg);
+    uint32_t res = __builtin_bswap32(val);
+    SetReg(state, reg, res);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Misc
+// ------------------------------------------------------------------------------------------------
+
+void OpCdq(EmuState* state, DecodedOp* op) {
+    // 99: CDQ
+    uint32_t eax = GetReg(state, EAX);
+    uint32_t edx = ((int32_t)eax < 0) ? 0xFFFFFFFF : 0;
+    SetReg(state, EDX, edx);
+}
+
+// ------------------------------------------------------------------------------------------------
 // Stack & LEA
 // ------------------------------------------------------------------------------------------------
 
@@ -637,16 +891,33 @@ struct HandlerInit {
         }
 
         // 7. Arithmetic & Logic
+        g_Handlers[0x00] = DispatchWrapper<OpAdd_EbGb>;
         g_Handlers[0x01] = DispatchWrapper<OpAdd_EvGv>;
+        g_Handlers[0x02] = DispatchWrapper<OpAdd_GbEb>;
+        g_Handlers[0x03] = DispatchWrapper<OpAdd_GvEv>;
+        
         g_Handlers[0x09] = DispatchWrapper<OpOr_EvGv>;
+        
+        g_Handlers[0x10] = DispatchWrapper<OpAdc_EbGb>;
+        g_Handlers[0x11] = DispatchWrapper<OpAdc_EvGv>;
+        g_Handlers[0x12] = DispatchWrapper<OpAdc_GbEb>;
+        g_Handlers[0x13] = DispatchWrapper<OpAdc_GvEv>;
+        
+        g_Handlers[0x20] = DispatchWrapper<OpAnd_EbGb>;
         g_Handlers[0x21] = DispatchWrapper<OpAnd_EvGv>;
+        g_Handlers[0x22] = DispatchWrapper<OpAnd_GbEb>;
+        g_Handlers[0x23] = DispatchWrapper<OpAnd_GvEv>;
+
         g_Handlers[0x29] = DispatchWrapper<OpSub_EvGv>;
         g_Handlers[0x31] = DispatchWrapper<OpXor_EvGv>;
         g_Handlers[0x39] = DispatchWrapper<OpCmp_EvGv>;
         g_Handlers[0x85] = DispatchWrapper<OpTest_EvGv>;
         
+        g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb>;
         g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz>;
         g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz>;
+        
+        g_Handlers[0x99] = DispatchWrapper<OpCdq>;
         
         // Group 2 (Shift/Rotate)
         g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb>;
@@ -666,10 +937,18 @@ struct HandlerInit {
         }
         
         // Map 1 (0F xx) -> Index 0x100 + xx
+        g_Handlers[0x1A3] = DispatchWrapper<OpBt_EvGv>;
+        g_Handlers[0x1B3] = DispatchWrapper<OpBtr_EvGv>;
         g_Handlers[0x1B6] = DispatchWrapper<OpMovzx_Byte>;
         g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
+        g_Handlers[0x1BA] = DispatchWrapper<OpBt_EvIb>;
+        g_Handlers[0x1BD] = DispatchWrapper<OpBsr_GvEv>;
         g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
         g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
+        
+        for (int i=0; i<8; ++i) {
+            g_Handlers[0x1C8+i] = DispatchWrapper<OpBswap_Reg>;
+        }
     }
 };
 
