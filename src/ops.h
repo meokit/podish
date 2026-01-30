@@ -20,6 +20,8 @@ void OpSub_EvGv(EmuState* state, DecodedOp* op); // 29
 void OpXor_EvGv(EmuState* state, DecodedOp* op); // 31
 void OpCmp_EvGv(EmuState* state, DecodedOp* op); // 39
 void OpTest_EvGv(EmuState* state, DecodedOp* op); // 85 (TEST r/m, r)
+void OpCwde(EmuState* state, DecodedOp* op); // 98 (CBW/CWDE)
+void OpCdq(EmuState* state, DecodedOp* op); // 99 (CWD/CDQ)
 
 void OpInc_Reg(EmuState* state, DecodedOp* op); // 40-47
 void OpDec_Reg(EmuState* state, DecodedOp* op); // 48-4F
@@ -51,6 +53,22 @@ void OpCall_Rel(EmuState* state, DecodedOp* op); // E8
 void OpRet(EmuState* state, DecodedOp* op); // C3
 // 0F C0/C1
 void OpXadd_Rm_R(EmuState* state, DecodedOp* op);
+// SSE/SSE2 Unified Handlers
+void OpAdd_Sse(EmuState* state, DecodedOp* op); // 0F 58 (ADDPS, ADDPD, ADDSS, ADDSD)
+void OpMul_Sse(EmuState* state, DecodedOp* op); // 0F 59 (MULPS, MULPD, MULSS, MULSD)
+void OpSub_Sse(EmuState* state, DecodedOp* op); // 0F 5C (SUBPS, SUBPD, SUBSS, SUBSD)
+void OpDiv_Sse(EmuState* state, DecodedOp* op); // 0F 5E (DIVPS, DIVPD, DIVSS, DIVSD)
+void OpAnd_Sse(EmuState* state, DecodedOp* op); // 0F 54 (ANDPS, ANDPD)
+void OpAndn_Sse(EmuState* state, DecodedOp* op); // 0F 55 (ANDNPS, ANDNPD)
+
+// SSE Moves
+void OpMov_Sse_Load(EmuState* state, DecodedOp* op); // 0F 10 (MOVUPS, MOVUPD, MOVSS, MOVSD)
+void OpMov_Sse_Store(EmuState* state, DecodedOp* op); // 0F 11 (MOVUPS, MOVUPD, MOVSS, MOVSD)
+void OpMovd_Load(EmuState* state, DecodedOp* op); // 0F 6E (MOVD xmm, r/m32)
+void OpMovd_Store(EmuState* state, DecodedOp* op); // 0F 7E (MOVD r/m32, xmm)
+void OpMovq_Load(EmuState* state, DecodedOp* op); // 0F 6F (MOVQ xmm, xmm/m64)
+void OpMovq_Store(EmuState* state, DecodedOp* op); // 0F 7F (MOVQ xmm/m64, xmm)
+
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
 

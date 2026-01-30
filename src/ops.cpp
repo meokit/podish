@@ -1599,6 +1599,22 @@ void OpBswap_Reg(EmuState* state, DecodedOp* op) {
 // Misc
 // ------------------------------------------------------------------------------------------------
 
+void OpCwde(EmuState* state, DecodedOp* op) {
+    // 98: CBW (AL->AX) / CWDE (AX->EAX)
+    if (op->prefixes.flags.opsize) {
+        // CBW: MOVSX AX, AL
+        int8_t val = (int8_t)GetReg(state, EAX);
+        uint32_t current = GetReg(state, EAX);
+        // Preserve high 16 bits
+        uint32_t res = (current & 0xFFFF0000) | (uint16_t)(int16_t)val;
+        SetReg(state, EAX, res);
+    } else {
+        // CWDE: MOVSX EAX, AX
+        int16_t val = (int16_t)GetReg(state, EAX);
+        SetReg(state, EAX, (uint32_t)(int32_t)val);
+    }
+}
+
 void OpCdq(EmuState* state, DecodedOp* op) {
     // 99: CDQ
     uint32_t eax = GetReg(state, EAX);
@@ -1735,32 +1751,45 @@ void OpRet(EmuState* state, DecodedOp* op) {
 // ------------------------------------------------------------------------------------------------
 
 void OpDiv_Sse(EmuState* state, DecodedOp* op) {
-    // 5E: DIVPS (0F), DIVSS (F3), DIVPD (66), DIVSD (F2)
-    uint32_t addr = 0;
-    if (op->modrm < 0xC0) addr = ComputeEAD(state, op);
+    // 0F 5E: DIVPS/DIVPD/DIVSS/DIVSD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
     
-    if (op->prefixes.flags.repne) { // F2: DIVSD (Scalar Double)
-         double b;
-         if (op->modrm >= 0xC0) {
-             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
-         } else {
-             b = state->mmu.read<double>(addr);
-         }
-         // DIVSD xmm1, xmm2/m64
-         // DEST[63:0] = DEST[63:0] / SRC[63:0]
-         // DEST[127:64] Unmodified
-         ((double*)&state->ctx.xmm[(op->modrm >> 3) & 7])[0] /= b;
-    } else if (op->prefixes.flags.rep) { // F3: DIVSS (Scalar Single)
-         float b;
-         if (op->modrm >= 0xC0) {
-             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
-         } else {
-             b = state->mmu.read<float>(addr);
-         }
-         // DIVSS xmm1, xmm2/m32
-         ((float*)&state->ctx.xmm[(op->modrm >> 3) & 7])[0] /= b;
-    } else {
-        OpUd2(state, op);
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val;
+    
+    if (op->prefixes.flags.opsize) { // 66: DIVPD
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_div_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.repne) { // F2: DIVSD
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t mem_val = state->mmu.read<uint64_t>(addr);
+            double d_val;
+            std::memcpy(&d_val, &mem_val, 8);
+            src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_div_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.rep) { // F3: DIVSS
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t mem_val = state->mmu.read<uint32_t>(addr);
+            float f_val;
+            std::memcpy(&f_val, &mem_val, 4);
+            src_val = simde_mm_set_ss(f_val);
+        }
+        state->ctx.xmm[reg] = simde_mm_div_ss(dst_val, src_val);
+    } else { // None: DIVPS
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_div_ps(dst_val, src_val);
     }
 }
 
@@ -2007,6 +2036,325 @@ void OpXadd_Rm_R(EmuState* state, DecodedOp* op) {
     }
 }
 
+// SSE Handlers
+void OpAdd_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 58: ADDPS/ADDPD/ADDSS/ADDSD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
+    
+    // Dest is always Register
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val;
+    
+    if (op->prefixes.flags.opsize) { // 66: ADDPD (Packed Double)
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_add_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.repne) { // F2: ADDSD (Scalar Double)
+        // Src is 64-bit (Mem) or 128-bit (Reg)
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t mem_val = state->mmu.read<uint64_t>(addr);
+            double d_val;
+            std::memcpy(&d_val, &mem_val, 8);
+            src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_add_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.rep) { // F3: ADDSS (Scalar Single)
+        // Src is 32-bit (Mem) or 128-bit (Reg)
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t mem_val = state->mmu.read<uint32_t>(addr);
+            float f_val;
+            std::memcpy(&f_val, &mem_val, 4);
+            src_val = simde_mm_set_ss(f_val);
+        }
+        state->ctx.xmm[reg] = simde_mm_add_ss(dst_val, src_val);
+    } else { // None: ADDPS (Packed Single)
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_add_ps(dst_val, src_val);
+    }
+}
+
+void OpMul_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 59: MULPS/MULPD/MULSS/MULSD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
+    
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val;
+    
+    if (op->prefixes.flags.opsize) { // 66: MULPD
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_mul_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.repne) { // F2: MULSD
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t mem_val = state->mmu.read<uint64_t>(addr);
+            double d_val;
+            std::memcpy(&d_val, &mem_val, 8);
+            src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_mul_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.rep) { // F3: MULSS
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t mem_val = state->mmu.read<uint32_t>(addr);
+            float f_val;
+            std::memcpy(&f_val, &mem_val, 4);
+            src_val = simde_mm_set_ss(f_val);
+        }
+        state->ctx.xmm[reg] = simde_mm_mul_ss(dst_val, src_val);
+    } else { // None: MULPS
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_mul_ps(dst_val, src_val);
+    }
+}
+
+void OpSub_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 5C: SUBPS/SUBPD/SUBSS/SUBSD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
+    
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val;
+    
+    if (op->prefixes.flags.opsize) { // 66: SUBPD
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_sub_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.repne) { // F2: SUBSD
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t mem_val = state->mmu.read<uint64_t>(addr);
+            double d_val;
+            std::memcpy(&d_val, &mem_val, 8);
+            src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_sub_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.rep) { // F3: SUBSS
+        if ((op->modrm >> 6) == 3) {
+            src_val = state->ctx.xmm[rm];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t mem_val = state->mmu.read<uint32_t>(addr);
+            float f_val;
+            std::memcpy(&f_val, &mem_val, 4);
+            src_val = simde_mm_set_ss(f_val);
+        }
+        state->ctx.xmm[reg] = simde_mm_sub_ss(dst_val, src_val);
+    } else { // None: SUBPS
+        src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_sub_ps(dst_val, src_val);
+    }
+}
+
+
+void OpAnd_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 54: ANDPS/ANDPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val = ReadModRM128(state, op);
+    
+    if (op->prefixes.flags.opsize) { // 66: ANDPD
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_and_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else { // None (or F2/F3 ignored): ANDPS
+        state->ctx.xmm[reg] = simde_mm_and_ps(dst_val, src_val);
+    }
+}
+
+void OpAndn_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 55: ANDNPS/ANDNPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val = ReadModRM128(state, op);
+    
+    if (op->prefixes.flags.opsize) { // 66: ANDNPD
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_andnot_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else { // None: ANDNPS
+        state->ctx.xmm[reg] = simde_mm_andnot_ps(dst_val, src_val);
+    }
+}
+
+// SSE Moves
+void OpMov_Sse_Load(EmuState* state, DecodedOp* op) {
+    // 0F 10: MOVUPS/MOVUPD/MOVSS/MOVSD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
+    __m128 dst_val = state->ctx.xmm[reg];
+    
+    if (op->prefixes.flags.repne) { // F2: MOVSD (Load Scalar Double)
+        // Dest[63:0] = Src[63:0], Dest[127:64] Unchanged
+        __m128 src_val;
+        if ((op->modrm >> 6) == 3) {
+             // Reg->Reg: Move low double
+             src_val = state->ctx.xmm[rm];
+        } else {
+             // Mem->Reg: Load double
+             uint32_t addr = ComputeEAD(state, op);
+             double val = state->mmu.read<double>(addr);
+             src_val = simde_mm_castpd_ps(simde_mm_set_sd(val));
+        }
+        // Use move_sd logic: dest, src -> dest_low replaced by src_low
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_move_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else if (op->prefixes.flags.rep) { // F3: MOVSS (Load Scalar Single)
+        // Dest[31:0] = Src[31:0], Dest[127:32] Unchanged
+        __m128 src_val;
+        if ((op->modrm >> 6) == 3) {
+             src_val = state->ctx.xmm[rm];
+        } else {
+             uint32_t addr = ComputeEAD(state, op);
+             float val = state->mmu.read<float>(addr);
+             src_val = simde_mm_set_ss(val);
+        }
+        state->ctx.xmm[reg] = simde_mm_move_ss(dst_val, src_val);
+    } else { // (None: MOVUPS) or (66: MOVUPD) -> Load 128
+        // For Load from Mem, we just read 128
+        __m128 src_val = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = src_val;
+    }
+}
+
+void OpMov_Sse_Store(EmuState* state, DecodedOp* op) {
+    // 0F 11: MOVUPS/MOVUPD/MOVSS/MOVSD
+    // Op is Store ModRM (Dest) from Reg (Src)
+    uint8_t reg = (op->modrm >> 3) & 7; // This is SRC Reg
+    __m128 src_val = state->ctx.xmm[reg];
+    
+    // Check Dest (ModRM)
+    // If Dest is Reg, behavior varies slightly?
+    // MOVUPS/D/SS/SD xmm/m, xmm
+    
+    if (op->prefixes.flags.repne) { // F2: MOVSD
+        if ((op->modrm >> 6) == 3) {
+            // Reg->Reg: Copy low 64 bits, upper unchanged
+             uint8_t dst_reg = op->modrm & 7;
+             state->ctx.xmm[dst_reg] = simde_mm_castpd_ps(
+                 simde_mm_move_sd(simde_mm_castps_pd(state->ctx.xmm[dst_reg]), simde_mm_castps_pd(src_val))
+             );
+        } else {
+            // Reg->Mem: Store 64 bits
+            uint32_t addr = ComputeEAD(state, op);
+            double val;
+            simde_mm_store_sd(&val, simde_mm_castps_pd(src_val));
+            state->mmu.write<double>(addr, val);
+        }
+    } else if (op->prefixes.flags.rep) { // F3: MOVSS
+        if ((op->modrm >> 6) == 3) {
+            // Reg->Reg: Copy low 32 bits
+             uint8_t dst_reg = op->modrm & 7;
+             state->ctx.xmm[dst_reg] = simde_mm_move_ss(state->ctx.xmm[dst_reg], src_val);
+        } else {
+            // Reg->Mem: Store 32 bits
+            uint32_t addr = ComputeEAD(state, op);
+            float val;
+            simde_mm_store_ss(&val, src_val);
+            state->mmu.write<float>(addr, val);
+        }
+    } else { // MOVUPS/MOVUPD
+        // Store 128
+        WriteModRM128(state, op, src_val);
+    }
+}
+
+void OpMovd_Load(EmuState* state, DecodedOp* op) {
+    // 0F 6E: MOVD xmm, r/m32
+    // Zero extend to 128
+    uint32_t val = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    // xmm[reg] = (int)val, rest 0
+    state->ctx.xmm[reg] = simde_mm_cvtsi32_si128((int)val); 
+    // cast to ps is implicit via union? No, simde_mm_cvtsi32_si128 returns __m128i
+    // Need cast for type safety if we use strictly typed logic, checking binding...
+    // In simde/common.h, types might be compatible or require cast.
+    // Let's use generic cast
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cvtsi32_si128((int)val));
+}
+
+void OpMovd_Store(EmuState* state, DecodedOp* op) {
+    // 0F 7E: MOVD r/m32, xmm
+    // F3 0F 7E: MOVQ xmm, xmm/m64 (Load!)
+    if (op->prefixes.flags.rep) {
+        OpMovq_Load(state, op);
+        return;
+    }
+    
+    // Store low 32 bits of XMM to r/m32
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 val = state->ctx.xmm[reg];
+    int32_t i_val = simde_mm_cvtsi128_si32(simde_mm_castps_si128(val));
+    WriteModRM32(state, op, (uint32_t)i_val);
+}
+
+void OpMovq_Load(EmuState* state, DecodedOp* op) {
+    // 0F 6F: MOVQ xmm, xmm/m64
+    // F3 0F 7E: MOVQ xmm, xmm/m64 (Rep Prefix!)
+    // Load 64 bits, zero extend to 128
+    uint64_t val;
+    if ((op->modrm >> 6) == 3) {
+        // Reg->Reg (xmm->xmm low 64)
+         uint8_t rm = op->modrm & 7;
+         // Read low 64
+         val = ((uint64_t*)&state->ctx.xmm[rm])[0];
+    } else {
+         uint32_t addr = ComputeEAD(state, op);
+         val = state->mmu.read<uint64_t>(addr);
+    }
+    uint8_t reg = (op->modrm >> 3) & 7;
+    // Set 64 bits low, 0 high.
+    // simde_mm_cvtsi64_si128 (x64 only?)
+    // Manual set?
+    uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
+    ptr[0] = val;
+    ptr[1] = 0;
+}
+
+void OpMovq_Store(EmuState* state, DecodedOp* op) {
+    // 0F 7F: MOVQ xmm/m64, xmm
+    // Store low 64 bits of XMM to ModRM
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
+    
+    if ((op->modrm >> 6) == 3) {
+         uint8_t dst_reg = op->modrm & 7;
+         // Store low 64, zero high 64 of dest? 
+         // MOVQ xmm1, xmm2 clears upper 64 bits of Dest.
+         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[dst_reg];
+         ptr[0] = val;
+         ptr[1] = 0;
+    } else {
+         uint32_t addr = ComputeEAD(state, op);
+         state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+
 struct HandlerInit {
     HandlerInit() {
         // 1. Clear All
@@ -2084,6 +2432,7 @@ struct HandlerInit {
         g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz>;
         g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz>;
         
+        g_Handlers[0x98] = DispatchWrapper<OpCwde>;
         g_Handlers[0x99] = DispatchWrapper<OpCdq>;
         
         // Group 2 (Shift/Rotate)
@@ -2165,6 +2514,27 @@ struct HandlerInit {
         g_Handlers[0x129] = DispatchWrapper<OpMovAp_Sse>;
         g_Handlers[0x15F] = DispatchWrapper<OpMaxMin_Sse>;
         g_Handlers[0x15D] = DispatchWrapper<OpMaxMin_Sse>;
+        
+        // Add / And / Andn
+        g_Handlers[0x158] = DispatchWrapper<OpAdd_Sse>;
+        g_Handlers[0x159] = DispatchWrapper<OpMul_Sse>;
+        g_Handlers[0x15C] = DispatchWrapper<OpSub_Sse>;
+        g_Handlers[0x154] = DispatchWrapper<OpAnd_Sse>;
+        g_Handlers[0x155] = DispatchWrapper<OpAndn_Sse>;
+        
+        // Moves
+        g_Handlers[0x110] = DispatchWrapper<OpMov_Sse_Load>;
+        g_Handlers[0x111] = DispatchWrapper<OpMov_Sse_Store>;
+        g_Handlers[0x16E] = DispatchWrapper<OpMovd_Load>;
+        g_Handlers[0x17E] = DispatchWrapper<OpMovd_Store>; // 0F 7E (MOVD Store) or (MOVQ Load via F3/66?)
+        // Note: 0F 7E with F3 is MOVQ Load. My dispatch wrapper ignores prefix for index.
+        // I need to update OpMovd_Store to handle F3 prefix for MOVQ logic?
+        // Or route 0x17E to a Unified Movd/Movq handler?
+        // For now, let's stick to simple MOVD Store (0F 7E none).
+        // Standard MOVD is 0F 7E.
+        
+        g_Handlers[0x16F] = DispatchWrapper<OpMovq_Load>; // 0F 6F
+        g_Handlers[0x17F] = DispatchWrapper<OpMovq_Store>; // 0F 7F
         
         // XADD
         g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;

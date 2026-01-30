@@ -33,7 +33,6 @@ class SoftMMU {
 public:
     SoftMMU() {
         // Initialize directory to null
-        printf("[MMU] Constructing. Addressing Page Directory %p\n", (void*)page_directory.data());
         page_directory.fill(nullptr);
     }
 
@@ -51,7 +50,6 @@ public:
 
     // Allocate/Map a region
     void mmap(uint32_t addr, uint32_t size, uint8_t perms) {
-        printf("[MMU] mmap 0x%x size 0x%x\n", addr, size);
         // Align to page boundaries
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end = (addr + size + PAGE_MASK) & ~PAGE_MASK;
