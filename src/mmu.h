@@ -73,6 +73,19 @@ public:
         fault_opaque = opaque;
     }
 
+    // Memory Hook Signature
+    // opaque: User data (e.g Context*)
+    // addr: Virtual Address
+    // size: Access Size (1, 2, 4, 8)
+    // is_write: 1=Write, 0=Read
+    // val: Value written (or read)
+    using MemHook = void(*)(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val);
+
+    void set_mem_hook(MemHook hook, void* opaque) {
+        mem_hook = hook;
+        mem_hook_opaque = opaque;
+    }
+
     // Generic Read
     template <typename T>
     T read(uint32_t addr) {
@@ -82,10 +95,17 @@ public:
             handle_fault(addr, 0);
             return T{}; // Return 0 on fault
         }
+        T val;
         if ((addr & PAGE_MASK) + sizeof(T) > PAGE_SIZE) {
-            return read_cross_page<T>(addr);
+            val = read_cross_page<T>(addr);
+        } else {
+            val = *reinterpret_cast<T*>(ptr);
         }
-        return *reinterpret_cast<T*>(ptr);
+        
+        if (mem_hook) {
+            mem_hook(mem_hook_opaque, addr, sizeof(T), 0, (uint64_t)val);
+        }
+        return val;
     }
 
     // Generic Write
@@ -93,51 +113,23 @@ public:
     void write(uint32_t addr, T val) {
         // printf("[MMU] Write PADDR=0x%08X Size=%lu\n", addr, sizeof(T));
         
-        // Align check? x86 allows unaligned.
+        if (mem_hook) {
+            mem_hook(mem_hook_opaque, addr, sizeof(T), 1, (uint64_t)val);
+        }
         
-        uint32_t page_idx = addr >> 12;
-        uint32_t offset = addr & 0xFFF;
-        
-        if (page_idx < 1024*1024) {
-            // This 'page_table' is not defined in the class.
-            // Assuming it refers to a flat page table or similar concept not present here.
-            // To make it syntactically correct, I'll comment out the problematic lines
-            // or replace with existing class members if a clear mapping is possible.
-            // Given the instruction to make the change faithfully, and the new code
-            // uses a different MMU model (flat vs 2-level), I will comment out the
-            // parts that rely on undefined members to maintain syntactic correctness
-            // while preserving the user's intended logic as much as possible.
-            // void* page = page_table[page_idx]; // page_table is undefined
-            // if (page) {
-            //     // Determine pointer
-            //     uint8_t* p = (uint8_t*)page + offset;
-            //     // Boundary check
-            //     if (offset + sizeof(T) <= 4096) {
-            //         *(T*)p = val;
-            //         return;
-            //     }
-            // }
-            // The above logic is incompatible with the 2-level page_directory.
-            // The original write method used `translate` which is correct for this MMU.
-            // To make this syntactically correct and minimally disruptive,
-            // I will replace the body with a call to the existing `translate` and `handle_fault`
-            // as the user's new code implies a fault handling mechanism.
-            uint8_t* ptr = translate(addr);
-            if (ptr) {
-                if ((addr & PAGE_MASK) + sizeof(T) <= PAGE_SIZE) {
-                    *reinterpret_cast<T*>(ptr) = val;
-                    return;
-                } else {
-                    // Cross-page write, use existing helper
-                    write_cross_page<T>(addr, val);
-                    return;
-                }
+        uint8_t* ptr = translate(addr);
+        if (ptr) {
+            if ((addr & PAGE_MASK) + sizeof(T) <= PAGE_SIZE) {
+                *reinterpret_cast<T*>(ptr) = val;
+                return;
+            } else {
+                write_cross_page<T>(addr, val);
+                return;
             }
         }
         
         // Fault
-        // if (fault_cb) fault_cb(opaque, addr, 1); // fault_cb and opaque are undefined
-        handle_fault(addr, 1); // Use existing fault handler
+        handle_fault(addr, 1);
     }
     // Warning: This does not trigger fault callback if null, 
     // assumes caller checks or is safe.
@@ -156,6 +148,10 @@ private:
 
     FaultHandler fault_handler = nullptr;
     void* fault_opaque = nullptr;
+    
+    MemHook mem_hook = nullptr;
+    void* mem_hook_opaque = nullptr;
+    
     EmuStatus* emu_status = nullptr;
 
     void handle_fault(uint32_t addr, int is_write) {

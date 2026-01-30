@@ -7,3 +7,5 @@ analyze/instructions.db
 .vscode/
 .idea/
 cmake-build-debug/
+__pycache__/
+*.pyc

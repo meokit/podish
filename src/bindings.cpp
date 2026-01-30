@@ -88,6 +88,20 @@ void X86_SetFaultCallback(EmuState* state, PyFaultHandler handler) {
     state->mmu.set_fault_callback(BridgeToPython, state);
 }
 
+using PyMemHook = void(*)(uint32_t addr, uint32_t size, int is_write, uint64_t val);
+PyMemHook global_mem_hook = nullptr;
+
+void BridgeMemHook(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val) {
+    if (global_mem_hook) {
+        global_mem_hook(addr, size, is_write, val);
+    }
+}
+
+void X86_SetMemHook(EmuState* state, PyMemHook hook) {
+    global_mem_hook = hook;
+    state->mmu.set_mem_hook(BridgeMemHook, state);
+}
+
 // Decode Binding
 void X86_Decode(const uint8_t* bytes, DecodedOp* op_out) {
     if (!bytes || !op_out) return;
@@ -173,21 +187,21 @@ void X86_EmuStop(EmuState* state) {
 }
 
 // Step (Placeholder for now)
-void X86_Step(EmuState* state) {
+int X86_Step(EmuState* state) {
     // Basic Fetch-Decode-Execute Loop Mock
     // 1. Fetch (Read at EIP)
     uint8_t buf[16];
     for (int i=0; i<16; ++i) {
         buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i);
     }
-    printf("[Sim] Fetch done.\n");
+    // printf("[Sim] Fetch done.\n");
     
     // 2. Decode
     DecodedOp op;
     DecodeInstruction(buf, &op);
     
-    // 3. Increment EIP (Before Execute to allow jumps to overwrite)
-    state->ctx.eip += op.length;
+    // 3. Increment EIP (Handled by DispatchWrapper)
+    // state->ctx.eip += op.length;
 
     // 4. Execute
     if (op.handler_index < 1024) {
@@ -201,8 +215,8 @@ void X86_Step(EmuState* state) {
     } else {
         OpNotImplemented(state, &op);
     }
-
-
+    
+    return (int)state->status;
 }
 
 } // extern "C"

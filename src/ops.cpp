@@ -1,5 +1,4 @@
 #include "ops.h"
-#include "ops.h"
 #include "state.h"
 #include "exec_utils.h"
 #include <cstdio>
@@ -123,7 +122,6 @@ void OpAnd_EvGv(EmuState* state, DecodedOp* op) {
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t src = GetReg(state, reg);
     
-    uint32_t res = AluAnd(state, dest, src);
     uint32_t res = AluAnd(state, dest, src);
     WriteModRM32(state, op, res);
 }
