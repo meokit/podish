@@ -101,6 +101,12 @@ class X86Emu:
         self._mem_hook = cb
         cppyy.gbl.X86_SetMemHook(self.state, cb)
 
+    def set_intr_hook(self, vector, cb):
+        if not hasattr(self, '_intr_hooks'):
+            self._intr_hooks = {}
+        self._intr_hooks[vector] = cb
+        cppyy.gbl.X86_SetInterruptHook(self.state, vector, cb)
+
 class Runner:
     def __init__(self):
         self.sim_trace = []

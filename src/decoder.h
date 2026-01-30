@@ -15,12 +15,13 @@ namespace x86emu {
 
 struct EmuState;
 struct DecodedOp;
-
 // Logic Function (Standard ABI, implementation)
 using LogicFunc = void(*)(EmuState* state, DecodedOp* op);
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = void(ATTR_PRESERVE_NONE *)(EmuState* state, DecodedOp* op);
+
+
 
 struct DecodedOp {
     // Immediate and Displacement
@@ -29,9 +30,6 @@ struct DecodedOp {
     
     // Handler Information
     uint16_t handler_index;
-    
-    // Direct Handler Pointer for Tail Call
-    HandlerFunc handler;
     
     // Prefixes
     union {

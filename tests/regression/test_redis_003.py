@@ -13,7 +13,8 @@ def test_id_70_ja_imm32():
         name='ID_70: ja 0x103f',
         code=binascii.unhexlify('773d'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=0, # CF=0, ZF=0 (JA condition met)
+        expected_eip=0x103f # 0x1002 + 0x3d
     )
 
 @pytest.mark.regression
@@ -25,7 +26,8 @@ def test_id_113_jae_imm32():
         name='ID_113: jae 0x1401',
         code=binascii.unhexlify('0f83fb030000'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=0, # CF=0 (JAE condition met)
+        expected_eip=0x1401 # 0x1006 + 0x3fb
     )
 
 @pytest.mark.regression
@@ -37,7 +39,8 @@ def test_id_76_jb_imm32():
         name='ID_76: jb 0x104e',
         code=binascii.unhexlify('724c'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=1, # CF=1 (JB condition met)
+        expected_eip=0x104e # 0x1002 + 0x4c
     )
 
 @pytest.mark.regression
@@ -49,7 +52,8 @@ def test_id_181_jbe_imm32():
         name='ID_181: jbe 0x1231',
         code=binascii.unhexlify('0f862b020000'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=1, # CF=1 (JBE condition met)
+        expected_eip=0x1231 # 0x1006 + 0x22b
     )
 
 @pytest.mark.regression
@@ -61,7 +65,8 @@ def test_id_14_je_imm32():
         name='ID_14: je 0x1179',
         code=binascii.unhexlify('0f8473010000'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=0x40, # ZF=1 (JE condition met)
+        expected_eip=0x1179 # 0x1006 + 0x173
     )
 
 @pytest.mark.regression
@@ -145,7 +150,8 @@ def test_id_18_jne_imm32():
         name='ID_18: jne 0x1069',
         code=binascii.unhexlify('7567'),
         initial_regs={},
-        expected_regs={}
+        initial_eflags=0, # ZF=0 (JNE condition met)
+        expected_eip=0x1069 # 0x1002 + 0x67
     )
 
 @pytest.mark.regression
@@ -228,8 +234,8 @@ def test_id_21_lea_r32_m32():
     assert runner.run_test_bytes(
         name='ID_21: lea eax, [ebx]',
         code=binascii.unhexlify('8d8300000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x2000},
+        expected_regs={'EAX': 0x2000}
     )
 
 @pytest.mark.regression
@@ -240,8 +246,12 @@ def test_id_367_lock_add_m32_r32():
     assert runner.run_test_bytes(
         name='ID_367: lock add dword ptr [ebx], eax',
         code=binascii.unhexlify('f0018300000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x2000, 'EAX': 0x1},
+        expected_read={0x2000: 0}, # Mem init 0 (default)
+        expected_write={0x2000: 1}, # 0 + 1 = 1
+        expected_regs={'EAX': 0x1},
+        initial_eflags=0,
+        expected_eflags=0 # ZF=0 (Result 1 != 0)
     )
 
 @pytest.mark.regression
@@ -252,8 +262,11 @@ def test_id_454_lock_cmpxchg8b_m64():
     assert runner.run_test_bytes(
         name='ID_454: lock cmpxchg8b qword ptr [esi + 0x748]',
         code=binascii.unhexlify('f00fc78e48070000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2000, 'EAX': 0, 'EDX': 0, 'EBX': 2, 'ECX': 0},
+        expected_read={0x2748: 0},
+        expected_write={0x2748: 2},
+        initial_eflags=0,
+        expected_eflags=0x40 # ZF=1 (Match)
     )
 
 @pytest.mark.regression
@@ -264,8 +277,11 @@ def test_id_412_lock_dec_m32():
     assert runner.run_test_bytes(
         name='ID_412: lock dec dword ptr [ebx + 0x44]',
         code=binascii.unhexlify('f0ff8b44000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x2000},
+        expected_read={0x2044: 1},
+        expected_write={0x2044: 0},
+        initial_eflags=0,
+        expected_eflags=0x44 # ZF=1, PF=1
     )
 
 @pytest.mark.regression
@@ -276,8 +292,11 @@ def test_id_407_lock_inc_m32():
     assert runner.run_test_bytes(
         name='ID_407: lock inc dword ptr [ebx + 0x44]',
         code=binascii.unhexlify('f0ff8344000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x2000},
+        expected_read={0x2044: 0},
+        expected_write={0x2044: 1},
+        initial_eflags=0x40, # ZF=1
+        expected_eflags=0 # ZF=0
     )
 
 @pytest.mark.regression
@@ -288,8 +307,11 @@ def test_id_488_lock_or_m32_imm32():
     assert runner.run_test_bytes(
         name='ID_488: lock or dword ptr [esp], 0',
         code=binascii.unhexlify('f0830c2400'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESP': 0x2000},
+        expected_read={0x2000: 0x5A5A5A5A},
+        expected_write={0x2000: 0x5A5A5A5A}, # No change
+        initial_eflags=0,
+        expected_eflags=0x4 # PF=1
     )
 
 @pytest.mark.regression
@@ -300,8 +322,11 @@ def test_id_369_lock_sub_m32_r32():
     assert runner.run_test_bytes(
         name='ID_369: lock sub dword ptr [ebx], eax',
         code=binascii.unhexlify('f0298300000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x2000, 'EAX': 1},
+        expected_read={0x2000: 1},
+        expected_write={0x2000: 0},
+        initial_eflags=0,
+        expected_eflags=0x44 # ZF=1, PF=1
     )
 
 @pytest.mark.regression
@@ -312,8 +337,12 @@ def test_id_411_lock_xadd_m32_r32():
     assert runner.run_test_bytes(
         name='ID_411: lock xadd dword ptr [ecx + 0x4c], eax',
         code=binascii.unhexlify('f00fc1814c000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0x2000, 'EAX': 2},
+        expected_read={0x204c: 1},
+        expected_write={0x204c: 3},
+        expected_regs={'EAX': 1},
+        initial_eflags=0,
+        expected_eflags=0x4 # PF=1 (Result 3 has even parity)
     )
 
 @pytest.mark.regression

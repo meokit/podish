@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cmath>
 #include <simde/x86/sse.h>
+#include "dispatch.h"
 
 namespace x86emu {
 
@@ -14,14 +15,22 @@ uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
     else return (val >> 8) & 0xFF;
 }
 
+void OpUd2(EmuState* state, DecodedOp* op) {
+    // #UD is a Fault, so EIP should point to the faulting instruction.
+    // DispatchWrapper already advanced EIP, so we must restore it.
+    state->ctx.eip -= op->length;
+    
+    if (!state->hooks.on_invalid_opcode(state)) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 6; // #UD
+    }
+}
+
 void OpNop(EmuState* state, DecodedOp* op) {
     // No Operation
 }
 
-void OpNotImplemented(EmuState* state, DecodedOp* op) {
-    // Log failure
-    fprintf(stderr, "[Sim] Opcode Not Implemented (Idx: %04X)\n", op->handler_index);
-}
+
 
 void OpMov_EvGv(EmuState* state, DecodedOp* op) {
     // MOV r/m32, r32 (0x89)
@@ -280,10 +289,10 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
             else         res = AluRor<uint32_t>(state, dest, count);
             break;
         case 2: // RCL
-            OpNotImplemented(state, op);
+            OpUd2(state, op);
             return;
         case 3: // RCR
-            OpNotImplemented(state, op);
+            OpUd2(state, op);
             return;
         case 4: // SHL/SAL
             if (is_byte) res = AluShl<uint8_t>(state, (uint8_t)dest, count);
@@ -298,7 +307,7 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
             else         res = AluSar<uint32_t>(state, dest, count);
             break;
         default:
-            OpNotImplemented(state, op);
+            OpUd2(state, op);
             return;
     }
     
@@ -408,7 +417,7 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
              Push32(state, dest);
              break;
         default:
-             OpNotImplemented(state, op);
+             OpUd2(state, op);
              break;
     }
 }
@@ -537,7 +546,7 @@ void OpCvt_2A(EmuState* state, DecodedOp* op) {
         // F3: CVTSI2SS
         *dest_ptr = simde_mm_cvtsi32_ss(*dest_ptr, val);
     } else {
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
     }
 }
 
@@ -652,7 +661,7 @@ void OpCvt_E6(EmuState* state, DecodedOp* op) {
         simde__m128i res = simde_mm_cvtpd_epi32(src_pd);
         *dest_ptr = simde_mm_castsi128_ps(res);
     } else {
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
     }
 }
 
@@ -782,7 +791,7 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src) {
         case 5: res = AluSub(state, dest, src); break;
         case 6: res = AluXor(state, dest, src); break;
         case 7: AluSub(state, dest, src); return; // CMP (No writeback)
-        default: OpNotImplemented(state, op); return;
+        default: OpUd2(state, op); return;
     }
     
     if constexpr (sizeof(T) == 1) {
@@ -1050,7 +1059,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
             }
             break;
         }
-        default: OpNotImplemented(state, op);
+        default: OpUd2(state, op);
     }
 }
 
@@ -1092,7 +1101,7 @@ void OpGroup4_Eb(EmuState* state, DecodedOp* op) {
             WriteModRM8(state, op, res);
             break;
         }
-        default: OpNotImplemented(state, op);
+        default: OpUd2(state, op);
     }
 
 }
@@ -1140,7 +1149,7 @@ void OpFpu_D8(EmuState* state, DecodedOp* op) {
         case 5: st0 = f80_sub(val, st0); break; // FSUBR
         case 6: st0 = f80_div(st0, val); break; // FDIV
         case 7: st0 = f80_div(val, st0); break; // FDIVR
-        default: OpNotImplemented(state, op);
+        default: OpUd2(state, op);
     }
 }
 
@@ -1185,7 +1194,7 @@ void OpFpu_D9(EmuState* state, DecodedOp* op) {
         } else if (op_byte == 0xEE) { // FLDZ
              float80 t = ConstF80_Zero(); FpuPush(state, &t);
         } else {
-            OpNotImplemented(state, op);
+            OpUd2(state, op);
         }
     } else {
         // Memory Access
@@ -1219,7 +1228,7 @@ void OpFpu_D9(EmuState* state, DecodedOp* op) {
             case 7: // FNSTCW m16
                 state->mmu.write<uint16_t>(addr, state->ctx.fpu_cw);
                 break;
-            default: OpNotImplemented(state, op);
+            default: OpUd2(state, op);
         }
     }
 }
@@ -1238,7 +1247,7 @@ void OpFpu_DA(EmuState* state, DecodedOp* op) {
         case 5: st0 = f80_sub(val, st0); break; // FISUBR
         case 6: st0 = f80_div(st0, val); break; // FIDIV
         case 7: st0 = f80_div(val, st0); break; // FIDIVR
-        default: OpNotImplemented(state, op);
+        default: OpUd2(state, op);
     }
 }
 
@@ -1276,9 +1285,9 @@ void OpFpu_DB(EmuState* state, DecodedOp* op) {
              // Let's assume unimplemented unless test hits it.
              // But wait, test case uses FUCOMI (DB E8).
              // And FUCOMPI (DF E9).
-             OpNotImplemented(state, op);
+             OpUd2(state, op);
          } else {
-             OpNotImplemented(state, op);
+             OpUd2(state, op);
          }
     } else {
         uint32_t addr = ComputeEAD(state, op);
@@ -1320,7 +1329,7 @@ void OpFpu_DB(EmuState* state, DecodedOp* op) {
                 state->mmu.write<uint16_t>(addr + 8, f.signExp);
                 break;
             }
-            default: OpNotImplemented(state, op);
+            default: OpUd2(state, op);
         }
     }
 }
@@ -1343,7 +1352,7 @@ void OpFpu_DC(EmuState* state, DecodedOp* op) {
              case 5: dest = f80_sub(src, dest); break; // FSUBR (src - dest)
              case 6: dest = f80_div(dest, src); break; // FDIV
              case 7: dest = f80_div(src, dest); break; // FDIVR
-             default: OpNotImplemented(state, op);
+             default: OpUd2(state, op);
          }
     } else {
         float80 val = ReadF64(state, op);
@@ -1355,7 +1364,7 @@ void OpFpu_DC(EmuState* state, DecodedOp* op) {
             case 5: st0 = f80_sub(val, st0); break; // FSUBR
             case 6: st0 = f80_div(st0, val); break; // FDIV
             case 7: st0 = f80_div(val, st0); break; // FDIVR
-            default: OpNotImplemented(state, op);
+            default: OpUd2(state, op);
         }
     }
 }
@@ -1373,7 +1382,7 @@ void OpFpu_DD(EmuState* state, DecodedOp* op) {
              FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
              FpuPop(state);
         } else {
-             OpNotImplemented(state, op);
+             OpUd2(state, op);
         }
     } else {
         uint32_t addr = ComputeEAD(state, op);
@@ -1396,7 +1405,7 @@ void OpFpu_DD(EmuState* state, DecodedOp* op) {
                 state->mmu.write<uint64_t>(addr, *(uint64_t*)&d);
                 break;
             }
-            default: OpNotImplemented(state, op);
+            default: OpUd2(state, op);
         }
     }
 }
@@ -1419,13 +1428,13 @@ void OpFpu_DE(EmuState* state, DecodedOp* op) {
              case 5: dest = f80_sub(dest, src); break; // FSUBP (dest = dest - src)
              case 6: dest = f80_div(src, dest); break; // FDIVRP (dest = src / dest)
              case 7: dest = f80_div(dest, src); break; // FDIVP (dest = dest / src)
-             default: OpNotImplemented(state, op);
+             default: OpUd2(state, op);
         }
         FpuPop(state);
     } else {
         // Memory ops (FIADD m16 etc.) -- Not needed for test_redis_002 presumably?
         // Let's implement basics
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
     }
 }
 
@@ -1451,7 +1460,7 @@ void OpFpu_DF(EmuState* state, DecodedOp* op) {
              }
              FpuPop(state);
         } else {
-             OpNotImplemented(state, op);
+             OpUd2(state, op);
         }
     } else {
         uint32_t addr = ComputeEAD(state, op);
@@ -1488,7 +1497,7 @@ void OpFpu_DF(EmuState* state, DecodedOp* op) {
                 state->mmu.write<uint64_t>(addr, (uint64_t)val);
                 break;
             }
-            default: OpNotImplemented(state, op);
+            default: OpUd2(state, op);
         }
     }
 }
@@ -1713,36 +1722,9 @@ void OpRet(EmuState* state, DecodedOp* op) {
     state->ctx.eip = ret_eip;
 }
 
-// ------------------------------------------------------------------------------------------------
-// Dispatch Wrapper
-// ------------------------------------------------------------------------------------------------
 
-template<LogicFunc Target>
-ATTR_PRESERVE_NONE
-void DispatchWrapper(EmuState* state, DecodedOp* op) {
-    uint32_t next_ip = state->ctx.eip + op->length;
-    
-    // We pass next_ip or use it?
-    // Some instructions like CALL need next_ip as return address.
-    // If we advance BEFORE, then CALL can just use ctx.eip.
-    // But if we advance BEFORE, and instruction is JMP, ctx.eip is overwritten.
-    
-    // Standard non-control flow: advance eip.
-    // Control flow: handler overwrites eip.
-    
-    // To handle both: save current eip, call target, and if eip is still saved_eip, advance it?
-    // No, handler doesn't know next_ip easily.
-    
-    // Let's ADVANCE it now. If handler jumps, it will overwrite it.
-    state->ctx.eip = next_ip;
-    Target(state, op);
-    
-    // Tail Call Dispatch
-    if (!op->meta.flags.is_last && state->status == EmuStatus::Running) {
-        DecodedOp* next = op + 1;
-        ATTR_MUSTTAIL return next->handler(state, next);
-    }
-}
+
+
 
 // ------------------------------------------------------------------------------------------------
 // Initialization
@@ -1778,7 +1760,7 @@ void OpDiv_Sse(EmuState* state, DecodedOp* op) {
          // DIVSS xmm1, xmm2/m32
          ((float*)&state->ctx.xmm[(op->modrm >> 3) & 7])[0] /= b;
     } else {
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
     }
 }
 
@@ -1800,7 +1782,7 @@ void OpCvt_2C(EmuState* state, DecodedOp* op) {
          else b = state->mmu.read<float>(addr);
          res = (int32_t)b;
     } else {
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
         return;
     }
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
@@ -1840,7 +1822,7 @@ void OpGroup9(EmuState* state, DecodedOp* op) {
             SetReg(state, EDX, (uint32_t)(mem_val >> 32));
         }
     } else {
-        OpNotImplemented(state, op);
+        OpUd2(state, op);
     }
 }
 
@@ -1937,12 +1919,98 @@ void OpMaxMin_Sse(EmuState* state, DecodedOp* op) {
 // Initialize Loop
 HandlerFunc g_Handlers[1024] = {0};
 
+void OpXadd_Rm_R(EmuState* state, DecodedOp* op) {
+    // XADD r/m, r: Exchange and Add
+    
+    uint32_t width = 4;
+    if (op->handler_index == 0x1C0) { // 0F C0 -> Byte
+        width = 1;
+    } else { // 0F C1
+        if (op->prefixes.flags.opsize) width = 2;
+        else width = 4;
+    }
+    
+    // ---------------------------------------------------------
+    // 1. Read Dest (E: R/M)
+    // ---------------------------------------------------------
+    uint32_t dest_val = 0;
+    if (width == 1) dest_val = ReadModRM8(state, op);
+    else if (width == 2) dest_val = ReadModRM16(state, op);
+    else dest_val = ReadModRM32(state, op);
+    
+    // ---------------------------------------------------------
+    // 2. Read Src (G: Reg)
+    // ---------------------------------------------------------
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t src_val = 0;
+    if (width == 1) src_val = GetReg8(state, reg);
+    else if (width == 2) src_val = GetReg(state, reg) & 0xFFFF;
+    else src_val = GetReg(state, reg);
+    
+    // ---------------------------------------------------------
+    // 3. ALU Add
+    // ---------------------------------------------------------
+    uint32_t res = 0;
+    if (width == 1) res = AluAdd(state, (uint8_t)dest_val, (uint8_t)src_val);
+    else if (width == 2) res = AluAdd(state, (uint16_t)dest_val, (uint16_t)src_val);
+    else res = AluAdd(state, (uint32_t)dest_val, (uint32_t)src_val);
+    
+    // ---------------------------------------------------------
+    // 4. Write Old Dest to Src (Reg)
+    // ---------------------------------------------------------
+    if (width == 1) {
+        uint32_t* rptr = GetRegPtr(state, reg & 3);
+        uint32_t curr = *rptr;
+        if (reg < 4) curr = (curr & 0xFFFFFF00) | (dest_val & 0xFF);
+        else curr = (curr & 0xFFFF00FF) | ((dest_val & 0xFF) << 8);
+        *rptr = curr;
+    } else if (width == 2) {
+        uint32_t* rptr = GetRegPtr(state, reg);
+        uint32_t curr = *rptr;
+        curr = (curr & 0xFFFF0000) | (dest_val & 0xFFFF);
+        *rptr = curr;
+    } else {
+        SetReg(state, reg, dest_val);
+    }
+    
+    // ---------------------------------------------------------
+    // 5. Write Result to Dest (E: R/M)
+    // ---------------------------------------------------------
+    // Since WriteModRM8 might not exist or be exported, use manual logic
+    // But Wait, OpMov_EvGv uses WriteModRM32.
+    // Ops like OpMovzx don't write.
+    // Let's rely on manual write using ComputeEAD if memory.
+    
+    if (op->modrm >= 0xC0) {
+        // Register Check
+        uint8_t rm = op->modrm & 7;
+        if (width == 1) {
+             uint32_t* rptr = GetRegPtr(state, rm & 3);
+             uint32_t curr = *rptr;
+             if (rm < 4) curr = (curr & 0xFFFFFF00) | (res & 0xFF);
+             else curr = (curr & 0xFFFF00FF) | ((res & 0xFF) << 8);
+             *rptr = curr;
+        } else if (width == 2) {
+             uint32_t* rptr = GetRegPtr(state, rm);
+             uint32_t curr = *rptr;
+             curr = (curr & 0xFFFF0000) | (res & 0xFFFF);
+             *rptr = curr;
+        } else {
+             SetReg(state, rm, res);
+        }
+    } else {
+        // Memory
+        uint32_t addr = ComputeEAD(state, op);
+        if (width == 1) state->mmu.write<uint8_t>(addr, (uint8_t)res);
+        else if (width == 2) state->mmu.write<uint16_t>(addr, (uint16_t)res);
+        else state->mmu.write<uint32_t>(addr, res);
+    }
+}
+
 struct HandlerInit {
     HandlerInit() {
-        // 0. Default all to Not Implemented
-        for(int i=0; i<1024; ++i) {
-            g_Handlers[i] = DispatchWrapper<OpNotImplemented>;
-        }
+        // 1. Clear All
+        for (int i=0; i<1024; ++i) g_Handlers[i] = nullptr;
         
         // 1. Set NOP
         g_Handlers[0x90] = DispatchWrapper<OpNop>;
@@ -1981,6 +2049,8 @@ struct HandlerInit {
         g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel>; // JMP rel8
         g_Handlers[0xE8] = DispatchWrapper<OpCall_Rel>; // CALL rel32
         g_Handlers[0xC3] = DispatchWrapper<OpRet>;      // RET
+        g_Handlers[0xCD] = DispatchWrapper<OpInt>;      // INT imm8
+        g_Handlers[0xCC] = DispatchWrapper<OpInt3>;     // INT3
         
         for (int i=0; i<16; ++i) {
             g_Handlers[0x70+i] = DispatchWrapper<OpJcc_Rel>; // Jcc rel8
@@ -2035,6 +2105,8 @@ struct HandlerInit {
         
         // Map 1 (0F xx) -> Index 0x100 + xx
         g_Handlers[0x1A3] = DispatchWrapper<OpBt_EvGv>;
+        // UD2 (0F 0B) -> #UD
+        g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
         g_Handlers[0x1B3] = DispatchWrapper<OpBtr_EvGv>;
         g_Handlers[0x1B6] = DispatchWrapper<OpMovzx_Byte>;
         g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
@@ -2093,9 +2165,44 @@ struct HandlerInit {
         g_Handlers[0x129] = DispatchWrapper<OpMovAp_Sse>;
         g_Handlers[0x15F] = DispatchWrapper<OpMaxMin_Sse>;
         g_Handlers[0x15D] = DispatchWrapper<OpMaxMin_Sse>;
+        
+        // XADD
+        g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;
+        g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Rm_R>;
     }
 };
 
 static HandlerInit _init;
 
+} // namespace x86emu
+
+namespace x86emu {
+void OpInt(EmuState* state, DecodedOp* op) {
+    // CD ib: INT imm8
+    // Note: Decoder puts imm8 in op->imm
+    uint8_t vector = (uint8_t)op->imm;
+    // printf("[Sim] OpInt: Vector %02X\n", vector);
+    if (!state->hooks.on_interrupt(state, vector)) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = vector; // Fault with vector
+        // NOTE: Real hardware might GPF if IDT descriptor is bad, 
+        // but for us "Unhandled Interrupt" is a Fault.
+    }
+}
+
+void OpInt3(EmuState* state, DecodedOp* op) {
+    // CC: INT3 (Vector 3, Breakpoint)
+    if (!state->hooks.on_interrupt(state, 3)) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 3;
+    }
+}
+
+void OpDecodeFault(EmuState* state, DecodedOp* op) {
+    // Trigger Decode Fault #UD
+    if (!state->hooks.on_decode_fault(state)) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 6;
+    }
+}
 } // namespace x86emu

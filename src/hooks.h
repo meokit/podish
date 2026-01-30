@@ -1,50 +1,44 @@
 #pragma once
 
 #include <functional>
-#include <map>
+#include <array>
 #include <string>
 #include "common.h"
 
 namespace x86emu {
 
-// Handler type for hooks
-// Returns true if execution should continue, false if it should abort/trap
-using HookHandler = std::function<bool(Context* ctx)>;
+struct EmuState; // Forward decl
+
+// Handler types
+// Return true to continue, false to Fault
+using InterruptHook = std::function<bool(EmuState* state, uint8_t vector)>;
 
 class HookManager {
 public:
-    // Register a hook for a specific interrupt vector (e.g. 0x80 for Linux Syscalls)
-    void register_interrupt(uint8_t vector, HookHandler handler) {
-        interrupt_hooks[vector] = handler;
+    void set_interrupt_hook(uint8_t vector, InterruptHook handler) {
+        handlers_[vector] = handler;
     }
 
-    // Register a generic instruction hook (e.g. for UD2 or specific EIP)
-    void register_eip_hook(uint32_t eip, HookHandler handler) {
-        eip_hooks[eip] = handler;
-    }
-
-    bool handle_interrupt(Context* ctx, uint8_t vector) {
-        if (interrupt_hooks.contains(vector)) {
-            return interrupt_hooks[vector](ctx);
+    // Trigger an interrupt. Returns true if handled, false if emulator should fault.
+    bool on_interrupt(EmuState* state, uint8_t vector) {
+        if (handlers_[vector]) {
+            return handlers_[vector](state, vector);
         }
-        // Default: Log unhandled interrupt
-        // In a real mock, we might just ignore or print warning
-        return true; 
+        return false; // No hook -> Unhandled Interrupt -> Fault
     }
 
-    bool check_eip_hook(Context* ctx) {
-        if (eip_hooks.contains(ctx->eip)) {
-            return eip_hooks[ctx->eip](ctx);
-        }
-        return true;
+    // Standard #UD (Undefined Opcode) - Vector 6
+    bool on_invalid_opcode(EmuState* state) {
+        return on_interrupt(state, 6);
+    }
+
+    // Decode Fault -> #UD - Vector 6
+    bool on_decode_fault(EmuState* state) {
+        return on_interrupt(state, 6);
     }
 
 private:
-    std::map<uint8_t, HookHandler> interrupt_hooks;
-    std::map<uint32_t, HookHandler> eip_hooks;
+    std::array<InterruptHook, 256> handlers_;
 };
-
-// Global hook manager instance (or part of the Emulator class later)
-// For now, standalone.
 
 } // namespace x86emu

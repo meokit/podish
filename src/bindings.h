@@ -20,6 +20,11 @@ extern "C" {
     void X86_MemWrite(x86emu::EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
     void X86_MemRead(x86emu::EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
     
+    // Interrupt Hook: int hook(uint32_t vector) -> return 1 (handled), 0 (fault)
+    using PyInterruptHook = int(*)(uint32_t vector);
+    void X86_SetInterruptHook(x86emu::EmuState* state, uint8_t vector, PyInterruptHook hook);
+
+    
     void X86_Run(x86emu::EmuState* state);
     void X86_EmuStop(x86emu::EmuState* state);
     int X86_Step(x86emu::EmuState* state);

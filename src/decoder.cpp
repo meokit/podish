@@ -4,6 +4,7 @@
 #include "decoder_lut.h"
 #include "state.h"
 #include "ops.h" // For g_Handlers
+#include "dispatch.h"
 
 namespace x86emu {
 
@@ -206,16 +207,19 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, BasicBlock* block) {
         
         DecodedOp op;
         if (!DecodeInstruction(buf, &op)) {
-            // Decode error, stop block here (it will likely fault at execution)
-            break;
+            // Decode error: Insert Fault Op
+            std::memset(&op, 0, sizeof(op));
+            op.length = 1; // Consume 1 byte
+            op.length = 1; // Consume 1 byte
+            op.handler_index = 0x10B; // UD2
+            block->ops.push_back(op);
+            block->end_eip = current_eip + 1;
+            return true; // Return true to execute what we have (including the fault)
         }
         
-        // Link Handler
-        if (op.handler_index < 1024) {
-            op.handler = g_Handlers[op.handler_index];
-        } else {
-            op.handler = nullptr; // Or OpNotImplemented
-        }
+        // Link Handler - No longer needed, done at dispatch time
+        // if (op.handler_index < 1024) ...
+
         
         // Add to block
         block->ops.push_back(op);

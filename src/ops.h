@@ -8,7 +8,9 @@ namespace x86emu {
 
 // Initial Handlers
 void OpNop(EmuState* state, DecodedOp* op);
-void OpNotImplemented(EmuState* state, DecodedOp* op);
+void OpUd2(EmuState* state, DecodedOp* op);
+
+void OpDecodeFault(EmuState* state, DecodedOp* op);
 
 // Arithmetic & Logic
 void OpAdd_EvGv(EmuState* state, DecodedOp* op); // 01
@@ -41,11 +43,14 @@ void OpPop_Reg(EmuState* state, DecodedOp* op);
 
 // Control
 void OpHlt(EmuState* state, DecodedOp* op);
+void OpInt(EmuState* state, DecodedOp* op); // CD
+void OpInt3(EmuState* state, DecodedOp* op); // CC
 void OpJmp_Rel(EmuState* state, DecodedOp* op); // E9
 void OpJcc_Rel(EmuState* state, DecodedOp* op); // 0F 8x
 void OpCall_Rel(EmuState* state, DecodedOp* op); // E8
 void OpRet(EmuState* state, DecodedOp* op); // C3
-
+// 0F C0/C1
+void OpXadd_Rm_R(EmuState* state, DecodedOp* op);
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
 
