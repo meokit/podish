@@ -262,10 +262,41 @@ class Runner:
         # 2. Setup Our Simulator
         sim = X86Emu()
         
-        # Map Memory
+        # Map Memory - base regions
         sim.mem_map(0x1000, 0x1000, 7) # Code (RWX)
         sim.mem_map(0x2000, 0x1000, 3) # Data (RW)
         sim.mem_map(0x7000, 0x2000, 3) # Stack (RW)
+        
+        # Map additional memory for expected_read and expected_write addresses
+        # to avoid MMU segfaults during tests
+        addresses_to_map = set()
+        if expected_read:
+            for addr, val in expected_read.items():
+                # For 128-bit values, we need to map addr and addr+8
+                if val > 0xFFFFFFFFFFFFFFFF:
+                    addresses_to_map.add(addr)
+                    addresses_to_map.add(addr + 8)
+                else:
+                    addresses_to_map.add(addr)
+        if expected_write:
+            for addr, val in expected_write.items():
+                # For 128-bit values, we need to map addr and addr+8
+                if val > 0xFFFFFFFFFFFFFFFF:
+                    addresses_to_map.add(addr)
+                    addresses_to_map.add(addr + 8)
+                else:
+                    addresses_to_map.add(addr)
+        
+        # Map pages containing these addresses (align to 4KB pages)
+        mapped_pages = set()
+        for addr in addresses_to_map:
+            page_base = (addr // 0x1000) * 0x1000
+            if page_base not in mapped_pages and page_base not in [0x1000, 0x2000, 0x7000, 0x8000]:
+                try:
+                    sim.mem_map(page_base, 0x1000, 3)  # RW
+                    mapped_pages.add(page_base)
+                except:
+                    pass  # Already mapped
         
         # Write Code
         # Reuse padded_code from above if available, else recreate
@@ -311,6 +342,9 @@ class Runner:
                 byte_len = (val.bit_length() + 7) // 8
                 if byte_len == 0: byte_len = 4
                 elif byte_len < 4: byte_len = 4
+                # For 128-bit values, force to 16 bytes
+                elif val > 0xFFFFFFFFFFFFFFFF:
+                    byte_len = 16
                 sim.mem_write(addr, val.to_bytes(byte_len, 'little'))
 
         # Set segment bases (defaults to 0 for flat model)
@@ -462,10 +496,25 @@ class Runner:
         if expected_read:
             for addr, val in expected_read.items():
                 found = False
-                for op, t_addr, t_val, t_size in self.sim_trace:
-                    if op == 'R' and t_addr == addr and t_val == val:
-                        found = True
-                        break
+                # Check if val is a 128-bit value (> 64-bit max)
+                if val > 0xFFFFFFFFFFFFFFFF:
+                    # For 128-bit values, check if we have two consecutive 64-bit reads
+                    low64 = val & 0xFFFFFFFFFFFFFFFF
+                    high64 = (val >> 64) & 0xFFFFFFFFFFFFFFFF
+                    found_low = False
+                    found_high = False
+                    for op, t_addr, t_val, t_size in self.sim_trace:
+                        if op == 'R' and t_addr == addr and t_val == low64 and t_size == 8:
+                            found_low = True
+                        if op == 'R' and t_addr == addr + 8 and t_val == high64 and t_size == 8:
+                            found_high = True
+                    found = found_low and found_high
+                else:
+                    # For smaller values, do exact match
+                    for op, t_addr, t_val, t_size in self.sim_trace:
+                        if op == 'R' and t_addr == addr and t_val == val:
+                            found = True
+                            break
                 if not found:
                      fail_reason += f"  Expected Read at 0x{addr:x} with value 0x{val:x} not found in trace.\n"
                      passed = False
@@ -473,10 +522,25 @@ class Runner:
         if expected_write:
             for addr, val in expected_write.items():
                 found = False
-                for op, t_addr, t_val, t_size in self.sim_trace:
-                    if op == 'W' and t_addr == addr and t_val == val:
-                        found = True
-                        break
+                # Check if val is a 128-bit value (> 64-bit max)
+                if val > 0xFFFFFFFFFFFFFFFF:
+                    # For 128-bit values, check if we have two consecutive 64-bit writes
+                    low64 = val & 0xFFFFFFFFFFFFFFFF
+                    high64 = (val >> 64) & 0xFFFFFFFFFFFFFFFF
+                    found_low = False
+                    found_high = False
+                    for op, t_addr, t_val, t_size in self.sim_trace:
+                        if op == 'W' and t_addr == addr and t_val == low64 and t_size == 8:
+                            found_low = True
+                        if op == 'W' and t_addr == addr + 8 and t_val == high64 and t_size == 8:
+                            found_high = True
+                    found = found_low and found_high
+                else:
+                    # For smaller values, do exact match
+                    for op, t_addr, t_val, t_size in self.sim_trace:
+                        if op == 'W' and t_addr == addr and t_val == val:
+                            found = True
+                            break
                 if not found:
                      fail_reason += f"  Expected Write at 0x{addr:x} with value 0x{val:x} not found in trace.\n"
                      # Dump actual writes near addr

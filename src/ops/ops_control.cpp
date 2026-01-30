@@ -9,17 +9,34 @@
 namespace x86emu {
 
 void OpJmp_Rel(EmuState* state, DecodedOp* op) {
-    // E9: JMP rel32
-    state->ctx.eip += op->imm;
+    // E9: JMP rel32, EB: JMP rel8
+    int32_t offset;
+    if (op->handler_index == 0xEB) {
+        // 8-bit relative jump
+        offset = (int32_t)(int8_t)(op->imm & 0xFF);
+    } else {
+        // 32-bit relative jump (E9)
+        offset = (int32_t)op->imm;
+    }
+    state->ctx.eip += offset;
 }
 
 void OpJcc_Rel(EmuState* state, DecodedOp* op) {
-    // 0F 8x: Jcc rel32
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     uint8_t cond = op->handler_index & 0xF;
     
     if (CheckCondition(state, cond)) {
-        state->ctx.eip += op->imm;
+        // For 8-bit relative jumps (0x70-0x7F), need to sign-extend
+        // For 32-bit relative jumps (0x180-0x18F), imm is already 32-bit
+        int32_t offset;
+        if (op->handler_index < 0x100) {
+            // 8-bit relative jump (0x7x opcodes)
+            offset = (int32_t)(int8_t)(op->imm & 0xFF);
+        } else {
+            // 32-bit relative jump (0F 8x opcodes)
+            offset = (int32_t)op->imm;
+        }
+        state->ctx.eip += offset;
     }
     // If not taken, EIP is already at next insn (fallthrough).
 }
@@ -29,7 +46,7 @@ void OpCall_Rel(EmuState* state, DecodedOp* op) {
     // Push Return Address (Current EIP is already advanced to Next Insn by Wrapper/Step)
     Push32(state, state->ctx.eip);
     // Jump relative to Next Insn
-    state->ctx.eip += op->imm;
+    state->ctx.eip += (int32_t)op->imm;
 }
 
 void OpRet(EmuState* state, DecodedOp* op) {
