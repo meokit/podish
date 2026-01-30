@@ -60,6 +60,37 @@ void OpMov_EvIz(EmuState* state, DecodedOp* op) {
     WriteModRM32(state, op, op->imm);
 }
 
+void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
+    // A0: MOV AL, moffs8 (Byte)
+    // A1: MOV EAX, moffs32 (Word/Dword)
+    uint32_t offset = op->imm;
+    uint32_t linear = offset + GetSegmentBase(state, op);
+    
+    if ((op->handler_index & 1) == 0) { // A0
+        uint8_t val = state->mmu.read<uint8_t>(linear);
+        uint32_t* rptr = GetRegPtr(state, EAX);
+        *rptr = (*rptr & 0xFFFFFF00) | val;
+    } else { // A1
+        uint32_t val = state->mmu.read<uint32_t>(linear);
+        SetReg(state, EAX, val);
+    }
+}
+
+void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
+    // A2: MOV moffs8, AL
+    // A3: MOV moffs32, EAX
+    uint32_t offset = op->imm;
+    uint32_t linear = offset + GetSegmentBase(state, op);
+    
+    uint32_t val = GetReg(state, EAX);
+    
+    if ((op->handler_index & 1) == 0) { // A2
+        state->mmu.write<uint8_t>(linear, (uint8_t)val);
+    } else { // A3
+        state->mmu.write<uint32_t>(linear, val);
+    }
+}
+
 void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
     // 0F B6: MOVZX r32, r/m8
     uint8_t val = ReadModRM8(state, op);
@@ -301,7 +332,6 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
          if (mod == 3) {
              // Reg 8
              // Maps: AL, CL, DL, BL, AH, CH, DH, BH
-             uint32_t full = GetReg(state, rm % 4); // This is wrong for high byte regs!
              // Decoding 8-bit regs is complex if REX not present (which it isn't in 32-bit).
              // 0-3: AL, CL, DL, BL
              // 4-7: AH, CH, DH, BH
@@ -574,6 +604,12 @@ struct HandlerInit {
             g_Handlers[0xB8+i] = DispatchWrapper<OpMov_RegImm>;
         }
         g_Handlers[0xC7] = DispatchWrapper<OpMov_EvIz>; // MOV r/m32, imm32
+        
+        // MOV moffs (A0-A3)
+        g_Handlers[0xA0] = DispatchWrapper<OpMov_Moffs_Load>;
+        g_Handlers[0xA1] = DispatchWrapper<OpMov_Moffs_Load>;
+        g_Handlers[0xA2] = DispatchWrapper<OpMov_Moffs_Store>;
+        g_Handlers[0xA3] = DispatchWrapper<OpMov_Moffs_Store>;
         
         // 3. Set LEA
         g_Handlers[0x8D] = DispatchWrapper<OpLea>;

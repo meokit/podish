@@ -31,6 +31,17 @@ inline void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) {
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
+inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
+    uint8_t seg = op->prefixes.flags.segment;
+    // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
+    // Optimization: Only honor FS(5) and GS(6) overrides. 
+    // CS/DS/ES/SS are assumed to be 0 (Flat Model).
+    if (seg == 5 || seg == 6) {
+        return state->ctx.seg_base[seg - 1];
+    }
+    return 0; 
+}
+
 inline uint32_t ComputeEAD(EmuState* state, const DecodedOp* op) {
     // Mod=3 (Register) should be handled by caller before calling ComputeEAD.
     
@@ -75,6 +86,9 @@ inline uint32_t ComputeEAD(EmuState* state, const DecodedOp* op) {
     if (op->meta.flags.has_disp) {
         base += op->disp;
     }
+    
+    // Add Segment Base
+    base += GetSegmentBase(state, op);
     
     return base;
 }
@@ -148,12 +162,17 @@ inline void Push32(EmuState* state, uint32_t val) {
     uint32_t esp = GetReg(state, ESP);
     esp -= 4;
     SetReg(state, ESP, esp);
+    
+    // Optimization: Assume Flat Stack (ignore SS base)
     state->mmu.write<uint32_t>(esp, val);
 }
 
 inline uint32_t Pop32(EmuState* state) {
     uint32_t esp = GetReg(state, ESP);
+    
+    // Optimization: Assume Flat Stack (ignore SS base)
     uint32_t val = state->mmu.read<uint32_t>(esp);
+    
     esp += 4;
     SetReg(state, ESP, esp);
     return val;

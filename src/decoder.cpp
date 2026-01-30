@@ -133,6 +133,13 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     // 4. Immediate
     uint8_t imm_type = kImmType[map][opcode];
     int imm_len = GetImmLength(imm_type, op);
+    
+    // Override for MOV moffs (A0-A3) - Address Size determines Imm Size
+    if (map == 0 && (opcode >= 0xA0 && opcode <= 0xA3)) {
+        if (op->prefixes.flags.addrsize) imm_len = 2;
+        else imm_len = 4;
+    }
+
     if (imm_len > 0) {
         op->meta.flags.has_imm = 1;
         if (imm_len == 1) op->imm = *reinterpret_cast<const uint8_t*>(ptr);
