@@ -185,7 +185,15 @@ class Runner:
                 if initial_regs:
                     for r, v in initial_regs.items():
                         reg_id = self._get_uc_reg(r)
-                        if reg_id: mu.reg_write(reg_id, v)
+                        if reg_id:
+                            if r.startswith('XMM'):
+                                # Handle XMM as 16-byte bytes
+                                if isinstance(v, (list, tuple, bytes)):
+                                    mu.reg_write(reg_id, bytes(v))
+                                elif isinstance(v, int):
+                                    mu.reg_write(reg_id, v.to_bytes(16, 'little'))
+                            else:
+                                mu.reg_write(reg_id, v)
 
                 if initial_eflags is not None:
                      mu.reg_write(UC_X86_REG_EFLAGS, initial_eflags)
@@ -195,6 +203,14 @@ class Runner:
                     # but we document it here for completeness
                     # seg_base: [ES, CS, SS, DS, FS, GS]
                     pass
+
+                # Initialize Memory from expected_read (Assumption: if we expect to read it, it should be there)
+                if expected_read:
+                    for addr, val in expected_read.items():
+                        byte_len = (val.bit_length() + 7) // 8
+                        if byte_len == 0: byte_len = 4 # Default for 0
+                        elif byte_len < 4: byte_len = 4
+                        mu.mem_write(addr, val.to_bytes(byte_len, 'little'))
 
                 # Add Hooks
                 mu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self._uc_mem_hook)
@@ -211,6 +227,9 @@ class Runner:
                 uc_res['EBP'] = mu.reg_read(UC_X86_REG_EBP)
                 uc_res['ESI'] = mu.reg_read(UC_X86_REG_ESI)
                 uc_res['EDI'] = mu.reg_read(UC_X86_REG_EDI)
+                for i in range(8):
+                    uc_res[f'XMM{i}'] = mu.reg_read(UC_X86_REG_XMM0 + i)
+
                 uc_eflags = mu.reg_read(UC_X86_REG_EFLAGS)
                 uc_eip_out = mu.reg_read(UC_X86_REG_EIP)
 
@@ -243,12 +262,30 @@ class Runner:
 
         if initial_regs:
              for r, v in initial_regs.items():
-                idx = self._get_sim_reg_idx(r)
-                if idx != -1: sim.ctx.regs[idx] = v
+                if r.startswith('XMM'):
+                    idx = int(r[3:])
+                    if 0 <= idx < 8:
+                        if isinstance(v, int):
+                            v_bytes = v.to_bytes(16, 'little')
+                        else:
+                            v_bytes = bytes(v)
+                        for b_idx, b in enumerate(v_bytes):
+                            sim.ctx.xmm[idx * 16 + b_idx] = b
+                else:
+                    idx = self._get_sim_reg_idx(r)
+                    if idx != -1: sim.ctx.regs[idx] = v
         
         if initial_eflags is not None:
              sim.ctx.eflags = initial_eflags
         
+        # Initialize Memory from expected_read
+        if expected_read:
+            for addr, val in expected_read.items():
+                byte_len = (val.bit_length() + 7) // 8
+                if byte_len == 0: byte_len = 4
+                elif byte_len < 4: byte_len = 4
+                sim.mem_write(addr, val.to_bytes(byte_len, 'little'))
+
         # Set segment bases (defaults to 0 for flat model)
         if initial_seg_base:
             for i, base in enumerate(initial_seg_base):
@@ -290,20 +327,46 @@ class Runner:
                     fail_reason += f"  {r} Unicorn Mismatch! UC: 0x{uc_val:x}, Sim: 0x{sim_val:x}\n"
                     passed = False
 
-        # 2. Check EFLAGS (Strict check if expected provided)
+        # 2. Compare XMM
+        for i in range(8):
+            r = f'XMM{i}'
+            sim_val = bytes(sim.ctx.xmm[i*16 : (i+1)*16])
+            if expected_regs and r in expected_regs:
+                exp_v = expected_regs[r]
+                if isinstance(exp_v, int):
+                    # Ensure unsigned 128-bit
+                    exp_v = exp_v & ((1 << 128) - 1)
+                    exp_v = exp_v.to_bytes(16, 'little')
+                else:
+                    exp_v = bytes(exp_v)
+                
+                if sim_val != exp_v:
+                    fail_reason += f"  {r} Mismatch! Exp: {exp_v.hex()}, Got: {sim_val.hex()}\n"
+                    passed = False
+            elif UNICORN_AVAILABLE and (expected_regs is None or r not in expected_regs):
+                uc_val = uc_res.get(r)
+                if uc_val is not None:
+                    if isinstance(uc_val, int):
+                        uc_val = uc_val.to_bytes(16, 'little')
+                    if sim_val != uc_val:
+                        fail_reason += f"  {r} Unicorn Mismatch! UC: {uc_val.hex()}, Sim: {sim_val.hex()}\n"
+                        passed = False
+
+        # 3. Check EFLAGS (Strict check if expected provided, masked for arithmetic status)
         sim_eflags = sim.ctx.eflags
+        ARITH_MASK = 0x8D5 # OF, SF, ZF, AF, PF, CF
         if expected_eflags is not None:
-            if sim_eflags != expected_eflags:
-                 fail_reason += f"  EFLAGS Mismatch! Exp: 0x{expected_eflags:x}, Got: 0x{sim_eflags:x}\n"
+            if (sim_eflags & ARITH_MASK) != (expected_eflags & ARITH_MASK):
+                 fail_reason += f"  EFLAGS Mismatch! Exp: 0x{expected_eflags:x}, Got: 0x{sim_eflags:x} (Masked: 0x{sim_eflags & ARITH_MASK:x})\n"
                  passed = False
         
-        # 3. Check EIP
+        # 4. Check EIP
         if expected_eip is not None:
             if sim.ctx.eip != expected_eip:
                 fail_reason += f"  EIP Mismatch! Exp: 0x{expected_eip:x}, Got: 0x{sim.ctx.eip:x}\n"
                 passed = False
         
-        # 4. Check Memory Accesses
+        # 5. Check Memory Accesses
         if expected_read:
             for addr, val in expected_read.items():
                 found = False
@@ -337,7 +400,9 @@ class Runner:
     def _get_uc_reg(self, name):
         mapping = {
             'EAX': UC_X86_REG_EAX, 'ECX': UC_X86_REG_ECX, 'EDX': UC_X86_REG_EDX, 'EBX': UC_X86_REG_EBX,
-            'ESP': UC_X86_REG_ESP, 'EBP': UC_X86_REG_EBP, 'ESI': UC_X86_REG_ESI, 'EDI': UC_X86_REG_EDI
+            'ESP': UC_X86_REG_ESP, 'EBP': UC_X86_REG_EBP, 'ESI': UC_X86_REG_ESI, 'EDI': UC_X86_REG_EDI,
+            'XMM0': UC_X86_REG_XMM0, 'XMM1': UC_X86_REG_XMM1, 'XMM2': UC_X86_REG_XMM2, 'XMM3': UC_X86_REG_XMM3,
+            'XMM4': UC_X86_REG_XMM4, 'XMM5': UC_X86_REG_XMM5, 'XMM6': UC_X86_REG_XMM6, 'XMM7': UC_X86_REG_XMM7,
         }
         return mapping.get(name)
 

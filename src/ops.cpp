@@ -3,8 +3,16 @@
 #include "exec_utils.h"
 #include <cstdio>
 #include <iostream>
+#include <cmath>
+#include <simde/x86/sse.h>
 
 namespace x86emu {
+
+uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
+    uint32_t val = GetReg(state, reg_idx & 3);
+    if (reg_idx < 4) return val & 0xFF;
+    else return (val >> 8) & 0xFF;
+}
 
 void OpNop(EmuState* state, DecodedOp* op) {
     // No Operation
@@ -123,10 +131,6 @@ void OpMovsx_Word(EmuState* state, DecodedOp* op) {
 // Arithmetic
 // ------------------------------------------------------------------------------------------------
 
-// ------------------------------------------------------------------------------------------------
-// Arithmetic & Logic
-// ------------------------------------------------------------------------------------------------
-
 void OpAdd_EvGv(EmuState* state, DecodedOp* op) {
     // 01: ADD r/m32, r32
     uint32_t dest = ReadModRM32(state, op);
@@ -137,16 +141,6 @@ void OpAdd_EvGv(EmuState* state, DecodedOp* op) {
     WriteModRM32(state, op, res);
 }
 
-void OpOr_EvGv(EmuState* state, DecodedOp* op) {
-    // 09: OR r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
-    uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluOr(state, dest, src);
-    WriteModRM32(state, op, res);
-}
-
 void OpAnd_EvGv(EmuState* state, DecodedOp* op) {
     // 21: AND r/m32, r32
     uint32_t dest = ReadModRM32(state, op);
@@ -154,6 +148,16 @@ void OpAnd_EvGv(EmuState* state, DecodedOp* op) {
     uint32_t src = GetReg(state, reg);
     
     uint32_t res = AluAnd(state, dest, src);
+    WriteModRM32(state, op, res);
+}
+
+void OpOr_EvGv(EmuState* state, DecodedOp* op) {
+    // 09: OR r/m32, r32
+    uint32_t dest = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t src = GetReg(state, reg);
+    
+    uint32_t res = AluOr(state, dest, src);
     WriteModRM32(state, op, res);
 }
 
@@ -177,13 +181,49 @@ void OpXor_EvGv(EmuState* state, DecodedOp* op) {
     WriteModRM32(state, op, res);
 }
 
+void OpJmp_Rel(EmuState* state, DecodedOp* op) {
+    // E9: JMP rel32
+    state->ctx.eip += op->imm;
+}
+
 void OpCmp_EvGv(EmuState* state, DecodedOp* op) {
     // 39: CMP r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
-    uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    AluSub(state, dest, src); // Discard result
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
+        AluSub(state, dest, src);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+        AluSub(state, dest, src);
+    }
+}
+
+void OpCmp_EbGb(EmuState* state, DecodedOp* op) {
+    // 38: CMP r/m8, r8
+    uint8_t dest = ReadModRM8(state, op);
+    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    AluSub(state, dest, src);
+}
+
+void OpCmp_GbEb(EmuState* state, DecodedOp* op) {
+    // 3A: CMP r8, r/m8
+    uint8_t dest = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = ReadModRM8(state, op);
+    AluSub(state, dest, src);
+}
+
+void OpCmp_GvEv(EmuState* state, DecodedOp* op) {
+    // 3B: CMP r32, r/m32
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
+        uint16_t src = ReadModRM16(state, op);
+        AluSub(state, dest, src);
+    } else {
+        uint32_t dest = GetReg(state, (op->modrm >> 3) & 7);
+        uint32_t src = ReadModRM32(state, op);
+        AluSub(state, dest, src);
+    }
 }
 
 void OpTest_EvGv(EmuState* state, DecodedOp* op) {
@@ -221,11 +261,9 @@ void OpDec_Reg(EmuState* state, DecodedOp* op) {
     SetReg(state, reg, res);
 }
 
-
-
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
     uint8_t subop = (op->modrm >> 3) & 7;
-    printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count, is_byte);
+    // printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count, is_byte);
     uint32_t res = dest;
     
     // Mask count
@@ -242,11 +280,9 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
             else         res = AluRor<uint32_t>(state, dest, count);
             break;
         case 2: // RCL
-            // TODO: AluRcl
             OpNotImplemented(state, op);
             return;
         case 3: // RCR
-            // TODO: AluRcr
             OpNotImplemented(state, op);
             return;
         case 4: // SHL/SAL
@@ -268,30 +304,9 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
     
     // Write Back
     if (is_byte) {
-         // ReadModRM32 used for read, but it reads 32-bit.
-         // If we wrote back 32-bit with modified byte, we need to preserve high bits?
-         // SoftMMU Write<uint8_t> handles memory. ModRM logic handles reg?
-         // WriteModRM32 handles 32-bit. We need WriteModRM8.
-         // Wait. ops.cpp logic usually does ReadModRM32. 
-         // If Op is Byte sized (determined by opcode bit 0), decoder stores "width" or we infer.
-         // Helper functions should probably be specific.
-         
-         // For now, assume WriteModRM32 can be adapted or we use WriteModRM8 (does it exist?).
-         // It does NOT exist in exec_utils.h.
-         // Let's implement WriteModRM8 inline or use masking.
-         // Actually, let's look at `exec_utils.h`
-         // It only has `WriteModRM32`.
-         // We should add `WriteModRM8` or handle it manually.
-         
          uint8_t mod = (op->modrm >> 6) & 3;
          uint8_t rm = op->modrm & 7;
          if (mod == 3) {
-             // Reg 8
-             // Maps: AL, CL, DL, BL, AH, CH, DH, BH
-             // Decoding 8-bit regs is complex if REX not present (which it isn't in 32-bit).
-             // 0-3: AL, CL, DL, BL
-             // 4-7: AH, CH, DH, BH
-             
              uint32_t* rptr = GetRegPtr(state, rm & 3);
              uint32_t val = *rptr;
              if (rm < 4) {
@@ -302,7 +317,6 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
              *rptr = val;
              
          } else {
-             // Memory 8
              uint32_t addr = ComputeEAD(state, op);
              state->mmu.write<uint8_t>(addr, (uint8_t)res);
          }
@@ -361,10 +375,6 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
     uint8_t subop = (op->modrm >> 3) & 7;
     uint32_t dest = 0;
     
-    // Read dest for INC/DEC/PUSH? 
-    // JMP/CALL use dest as Target Address (pointer).
-    // PUSH uses dest as Value to Push.
-    
     switch (subop) {
         case 0: // INC Ev
             dest = ReadModRM32(state, op);
@@ -385,16 +395,6 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
             }
             break;
         case 2: // CALL Ev (Near Indirect)
-             // Not validating Rank, but simple implementation:
-             // Target is *in* Ev? No. Ev *is* the Target Address?
-             // "CALL r/m32" -> Push EIP, EIP = [r/m32] ?? No.
-             // "CALL r/m32" (FF /2).
-             // Operand is r/m32.
-             // If r/m32 is memory, we read it?
-             // Blink: `LoadModrmMode(kModeNormal)`.
-             // It loads the value from memory/reg.
-             // That value IS the target EIP (Absolute).
-             // Not Relative.
              dest = ReadModRM32(state, op);
              Push32(state, state->ctx.eip);
              state->ctx.eip = dest;
@@ -414,13 +414,246 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Helpers
+// SSE / SSE2
 // ------------------------------------------------------------------------------------------------
 
-uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
-    uint32_t val = GetReg(state, reg_idx & 3);
-    if (reg_idx < 4) return val & 0xFF;
-    else return (val >> 8) & 0xFF;
+// Helpers for Immediate Comparison
+simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred) {
+    switch (pred & 7) {
+        case 0: return simde_mm_cmpeq_pd(a, b);
+        case 1: return simde_mm_cmplt_pd(a, b);
+        case 2: return simde_mm_cmple_pd(a, b);
+        case 3: return simde_mm_cmpunord_pd(a, b);
+        case 4: return simde_mm_cmpneq_pd(a, b);
+        case 5: return simde_mm_cmpnlt_pd(a, b);
+        case 6: return simde_mm_cmpnle_pd(a, b);
+        case 7: return simde_mm_cmpord_pd(a, b);
+    }
+    return a;
+}
+
+simde__m128d Helper_CmpSD(simde__m128d a, simde__m128d b, uint8_t pred) {
+    switch (pred & 7) {
+        case 0: return simde_mm_cmpeq_sd(a, b);
+        case 1: return simde_mm_cmplt_sd(a, b);
+        case 2: return simde_mm_cmple_sd(a, b);
+        case 3: return simde_mm_cmpunord_sd(a, b);
+        case 4: return simde_mm_cmpneq_sd(a, b);
+        case 5: return simde_mm_cmpnlt_sd(a, b);
+        case 6: return simde_mm_cmpnle_sd(a, b);
+        case 7: return simde_mm_cmpord_sd(a, b);
+    }
+    return a;
+}
+
+simde__m128 Helper_CmpPS(simde__m128 a, simde__m128 b, uint8_t pred) {
+    switch (pred & 7) {
+        case 0: return simde_mm_cmpeq_ps(a, b);
+        case 1: return simde_mm_cmplt_ps(a, b);
+        case 2: return simde_mm_cmple_ps(a, b);
+        case 3: return simde_mm_cmpunord_ps(a, b);
+        case 4: return simde_mm_cmpneq_ps(a, b);
+        case 5: return simde_mm_cmpnlt_ps(a, b);
+        case 6: return simde_mm_cmpnle_ps(a, b);
+        case 7: return simde_mm_cmpord_ps(a, b);
+    }
+    return a;
+}
+
+simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred) {
+    switch (pred & 7) {
+        case 0: return simde_mm_cmpeq_ss(a, b);
+        case 1: return simde_mm_cmplt_ss(a, b);
+        case 2: return simde_mm_cmple_ss(a, b);
+        case 3: return simde_mm_cmpunord_ss(a, b);
+        case 4: return simde_mm_cmpneq_ss(a, b);
+        case 5: return simde_mm_cmpnlt_ss(a, b);
+        case 6: return simde_mm_cmpnle_ss(a, b);
+        case 7: return simde_mm_cmpord_ss(a, b);
+    }
+    return a;
+}
+
+void OpCmp_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t pred = (uint8_t)op->imm;
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128* dest_ptr = &state->ctx.xmm[reg];
+    
+    if (op->prefixes.flags.opsize) {
+        // 66 0F C2: CMPPD
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        __m128 src = ReadModRM128(state, op);
+        simde__m128d src_pd = simde_mm_castps_pd(src);
+        
+        simde__m128d res = Helper_CmpPD(dest_pd, src_pd, pred);
+        *dest_ptr = simde_mm_castpd_ps(res);
+        
+    } else if (op->prefixes.flags.repne) {
+        // F2 0F C2: CMPSD
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        simde__m128d src_pd;
+        
+        if ((op->modrm >> 6) == 3) {
+            src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            src_pd = simde_mm_set_sd(*(double*)&val);
+        }
+        
+        simde__m128d res = Helper_CmpSD(dest_pd, src_pd, pred);
+        *dest_ptr = simde_mm_castpd_ps(res);
+        
+    } else if (op->prefixes.flags.rep) {
+        // F3 0F C2: CMPSS
+        __m128 src;
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+            src = simde_mm_set_ss(*(float*)&val);
+        }
+        *dest_ptr = Helper_CmpSS(*dest_ptr, src, pred);
+        
+    } else {
+        // 0F C2: CMPPS
+        __m128 src = ReadModRM128(state, op);
+        *dest_ptr = Helper_CmpPS(*dest_ptr, src, pred);
+    }
+}
+
+void OpCvt_2A(EmuState* state, DecodedOp* op) {
+    // 0F 2A: CVTPI2PS (MMX) / CVTSI2SS (F3) / CVTSI2SD (F2)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128* dest_ptr = &state->ctx.xmm[reg];
+    
+    int32_t val = (int32_t)ReadModRM32(state, op);
+    
+    if (op->prefixes.flags.repne) {
+        // F2: CVTSI2SD
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        simde__m128d res = simde_mm_cvtsi32_sd(dest_pd, val);
+        *dest_ptr = simde_mm_castpd_ps(res);
+    } else if (op->prefixes.flags.rep) {
+        // F3: CVTSI2SS
+        *dest_ptr = simde_mm_cvtsi32_ss(*dest_ptr, val);
+    } else {
+        OpNotImplemented(state, op);
+    }
+}
+
+void OpCvt_5A(EmuState* state, DecodedOp* op) {
+    // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128* dest_ptr = &state->ctx.xmm[reg];
+    
+    if (op->prefixes.flags.opsize) {
+        // 66: CVTPD2PS (xmm/m128 -> xmm)
+        __m128 src = ReadModRM128(state, op);
+        simde__m128d src_pd = simde_mm_castps_pd(src);
+        *dest_ptr = simde_mm_cvtpd_ps(src_pd);
+        
+    } else if (op->prefixes.flags.repne) {
+        // F2: CVTSD2SS (xmm/m64 -> xmm)
+        simde__m128d src_pd;
+        if ((op->modrm >> 6) == 3) {
+            src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            src_pd = simde_mm_set_sd(*(double*)&val);
+        }
+        *dest_ptr = simde_mm_cvtsd_ss(*dest_ptr, src_pd);
+        
+    } else if (op->prefixes.flags.rep) {
+        // F3: CVTSS2SD (xmm/m32 -> xmm)
+        __m128 src;
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+            src = simde_mm_set_ss(*(float*)&val);
+        }
+        
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        simde__m128d res = simde_mm_cvtss_sd(dest_pd, src);
+        *dest_ptr = simde_mm_castpd_ps(res);
+        
+    } else {
+        // 0F: CVTPS2PD (xmm/m64 -> xmm)
+        __m128 src;
+         if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            uint32_t v0 = val & 0xFFFFFFFF;
+            uint32_t v1 = val >> 32;
+            src = simde_mm_set_ps(0.0f, 0.0f, *(float*)&v1, *(float*)&v0); 
+        }
+        simde__m128d res = simde_mm_cvtps_pd(src);
+        *dest_ptr = simde_mm_castpd_ps(res);
+    }
+}
+
+void OpCvt_5B(EmuState* state, DecodedOp* op) {
+    // 0F 5B: CVTDQ2PS / CVTPS2DQ (66) / CVTTPS2DQ (F3)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128* dest_ptr = &state->ctx.xmm[reg];
+    __m128 src = ReadModRM128(state, op);
+    
+    if (op->prefixes.flags.opsize) {
+        // 66: CVTPS2DQ
+        simde__m128i res = simde_mm_cvtps_epi32(src);
+        *dest_ptr = simde_mm_castsi128_ps(res);
+    } else if (op->prefixes.flags.rep) {
+        // F3: CVTTPS2DQ (Truncate)
+        simde__m128i res = simde_mm_cvttps_epi32(src);
+        *dest_ptr = simde_mm_castsi128_ps(res);
+    } else {
+        // 0F: CVTDQ2PS
+        simde__m128i isrc = simde_mm_castps_si128(src);
+        *dest_ptr = simde_mm_cvtepi32_ps(isrc);
+    }
+}
+
+void OpCvt_E6(EmuState* state, DecodedOp* op) {
+    // 0F E6: CVTPD2DQ (F2) / CVTDQ2PD (F3) / CVTTPD2DQ (66)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128* dest_ptr = &state->ctx.xmm[reg];
+    
+    if (op->prefixes.flags.opsize) {
+        // 66: CVTTPD2DQ (Truncate xmm/m128 -> xmm)
+        __m128 src = ReadModRM128(state, op);
+        simde__m128d src_pd = simde_mm_castps_pd(src);
+        
+        simde__m128i res = simde_mm_cvttpd_epi32(src_pd);
+        *dest_ptr = simde_mm_castsi128_ps(res);
+        
+    } else if (op->prefixes.flags.rep) {
+        // F3: CVTDQ2PD (xmm/m64 -> xmm)
+        simde__m128i isrc;
+        if ((op->modrm >> 6) == 3) {
+            // Register: cast float to int
+            __m128 src = state->ctx.xmm[op->modrm & 7];
+            isrc = simde_mm_castps_si128(src);
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+             uint32_t v0 = val & 0xFFFFFFFF;
+             uint32_t v1 = val >> 32;
+             isrc = simde_mm_set_epi32(0, 0, v1, v0);
+        }
+        
+        simde__m128d res = simde_mm_cvtepi32_pd(isrc);
+        *dest_ptr = simde_mm_castpd_ps(res);
+        
+    } else if (op->prefixes.flags.repne) {
+        // F2: CVTPD2DQ (xmm/m128 -> xmm)
+        __m128 src = ReadModRM128(state, op);
+        simde__m128d src_pd = simde_mm_castps_pd(src);
+        
+        simde__m128i res = simde_mm_cvtpd_epi32(src_pd);
+        *dest_ptr = simde_mm_castsi128_ps(res);
+    } else {
+        OpNotImplemented(state, op);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -554,6 +787,8 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src) {
     
     if constexpr (sizeof(T) == 1) {
         WriteModRM8(state, op, (uint8_t)res);
+    } else if constexpr (sizeof(T) == 2) {
+        WriteModRM16(state, op, (uint16_t)res);
     } else {
         WriteModRM32(state, op, (uint32_t)res);
     }
@@ -570,15 +805,21 @@ void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
     // 81: Arith r/m32, imm32
     // 83: Arith r/m32, imm8 (sign-extended)
     
-    uint32_t dest = ReadModRM32(state, op);
-    uint32_t src = op->imm;
-    
-    // Sign-extend if 83
-    if ((op->handler_index & 0xFF) == 0x83) {
-        src = (int32_t)(int8_t)src;
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = (uint16_t)op->imm;
+        if ((op->handler_index & 0xFF) == 0x83) {
+            src = (int16_t)(int8_t)src;
+        }
+        Helper_Group1<uint16_t>(state, op, dest, src);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = op->imm;
+        if ((op->handler_index & 0xFF) == 0x83) {
+            src = (int32_t)(int8_t)src;
+        }
+        Helper_Group1<uint32_t>(state, op, dest, src);
     }
-    
-    Helper_Group1<uint32_t>(state, op, dest, src);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -724,18 +965,6 @@ void OpPop_Reg(EmuState* state, DecodedOp* op) {
 // Control & System
 // ------------------------------------------------------------------------------------------------
 
-void OpHlt(EmuState* state, DecodedOp* op) {
-    // HLT (0xF4)
-    state->status = EmuStatus::Stopped;
-}
-
-void OpJmp_Rel(EmuState* state, DecodedOp* op) {
-    // E9: JMP rel32
-    // E9/EB: JMP rel32/rel8
-    // EIP is already at the next instruction, so we add the offset.
-    state->ctx.eip += op->imm;
-}
-
 bool CheckCondition(EmuState* state, uint8_t cond) {
     uint32_t flags = state->ctx.eflags;
     bool cf = (flags & CF_MASK);
@@ -763,6 +992,29 @@ bool CheckCondition(EmuState* state, uint8_t cond) {
         case 15: return !zf && (sf == of); // JNLE/JG
         default: return false;
     }
+}
+
+void OpCmov_GvEv(EmuState* state, DecodedOp* op) {
+    // 0F 4x: CMOVcc r32, r/m32
+    uint8_t cond = op->handler_index & 0xF;
+    bool pass = CheckCondition(state, cond);
+    printf("CMOV cond=%d pass=%d eflags=%x\n", cond, pass, state->ctx.eflags);
+    if (pass) {
+        if (op->prefixes.flags.opsize) {
+            uint16_t val = ReadModRM16(state, op);
+            uint8_t reg = (op->modrm >> 3) & 7;
+            SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+        } else {
+            uint32_t val = ReadModRM32(state, op);
+            uint8_t reg = (op->modrm >> 3) & 7;
+            SetReg(state, reg, val);
+        }
+    }
+}
+
+void OpHlt(EmuState* state, DecodedOp* op) {
+    // HLT (0xF4)
+    state->status = EmuStatus::Stopped;
 }
 
 void OpJcc_Rel(EmuState* state, DecodedOp* op) {
@@ -923,9 +1175,27 @@ struct HandlerInit {
         for (int i=0; i<8; ++i) {
             g_Handlers[0x1C8+i] = DispatchWrapper<OpBswap_Reg>;
         }
+
+        // New Registrations
+        // CMP
+        g_Handlers[0x38] = DispatchWrapper<OpCmp_EbGb>;
+        g_Handlers[0x3A] = DispatchWrapper<OpCmp_GbEb>;
+        g_Handlers[0x3B] = DispatchWrapper<OpCmp_GvEv>;
+
+        // CMOVcc (0F 4x)
+        for (int i=0; i<16; ++i) {
+            g_Handlers[0x140+i] = DispatchWrapper<OpCmov_GvEv>;
+        }
+
+        // SSE / SSE2
+        g_Handlers[0x1C2] = DispatchWrapper<OpCmp_Sse>;
+        g_Handlers[0x12A] = DispatchWrapper<OpCvt_2A>;
+        g_Handlers[0x15A] = DispatchWrapper<OpCvt_5A>;
+        g_Handlers[0x15B] = DispatchWrapper<OpCvt_5B>;
+        g_Handlers[0x1E6] = DispatchWrapper<OpCvt_E6>;
     }
 };
 
 static HandlerInit _init;
 
-}
+} // namespace x86emu
