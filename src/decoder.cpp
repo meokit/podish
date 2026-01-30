@@ -23,9 +23,7 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
         case 8: return 2;  // Word
         case 9: return 1;  // Byte
         case 10: return osz ? 2 : 4; // v (Word or Dword)
-        case 11: return 3; // uimm0(2) + uimm1(1) ? Special case for ENTER? Check Blink.
-                           // Blink writes: *imm_width = xed_bytes2bits(3).
-                           // This is consistent for `0xC8` (ENTER).
+        case 11: return 3; // uimm0(2) + uimm1(1) (ENTER)
         default: return 0;
     }
 }
@@ -193,19 +191,10 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, BasicBlock* block) {
 
     while (block->ops.size() < MAX_BLOCK_SIZE) {
         // 1. Fetch
-        // We need at least 15 bytes to be safe, but we can't just read 15 bytes if near page end.
-        // Let's read byte by byte or small chunks via MMU.
-        // Actually Decoder expects a buffer.
-        // We can fetch 15 bytes into a temp buf.
+        // Read instruction bytes safely
         uint8_t buf[16];
-        // Read safely
         for (int i=0; i<16; ++i) {
              buf[i] = state->mmu.read<uint8_t>(current_eip + i); 
-             // Note: read might fault but simulator handles faults via callback/check.
-             // If we want to detect fault here, we need mmu to tell us.
-             // Current mmu returns 0 on fault. If 0 is specific opcode (ADD r/m,r), valid.
-             // But if unmapped, we should probably stop.
-             // For now assume mapped.
         }
         
         DecodedOp op;

@@ -32,10 +32,7 @@ inline void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) {
 // ------------------------------------------------------------------------------------------------
 
 inline uint32_t ComputeEAD(EmuState* state, const DecodedOp* op) {
-    // If not ModRM, no EA (or specialized). 
-    // Assuming this is called only if has_modrm.
-    
-    // Mod=3 -> Register (Not memory address). Caller should check mod!=3 before calling this for Mem Access.
+    // Mod=3 (Register) should be handled by caller before calling ComputeEAD.
     
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
@@ -65,10 +62,7 @@ inline uint32_t ComputeEAD(EmuState* state, const DecodedOp* op) {
     } 
     else {
         // No SIB
-        // Special Case: Mod=0, RM=5 -> Disp32 (Already handled by decoder setting Disp, RM=5 ignored as base??)
-        // Decoder logic:
-        // if mod==0 && rm==5: disp_size=4. Base is 0.
-        // else: Base is GetReg(rm).
+        // Mod=0, RM=5 -> Disp32 (Base=0)
         
         if (mod == 0 && rm == 5) {
             base = 0; // Absolute Disp32
@@ -137,4 +131,132 @@ inline uint32_t Pop32(EmuState* state) {
     return val;
 }
 
+// ------------------------------------------------------------------------------------------------
+// ALU Operations & Flags
+// ------------------------------------------------------------------------------------------------
+
+// EFLAGS Masks
+constexpr uint32_t CF_MASK = 0x0001;
+constexpr uint32_t PF_MASK = 0x0004;
+constexpr uint32_t AF_MASK = 0x0010;
+constexpr uint32_t ZF_MASK = 0x0040;
+constexpr uint32_t SF_MASK = 0x0080;
+constexpr uint32_t OF_MASK = 0x0800;
+
+inline uint8_t Parity(uint8_t v) {
+    // Basic parity: even number of 1s -> 1
+    v ^= v >> 4;
+    v &= 0xf;
+    return (0x9669 >> v) & 1;
 }
+
+template<typename T>
+inline T AluAdd(EmuState* state, T dest, T src) {
+    T res = dest + src;
+    
+    // PF, ZF, SF
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    // CF: Unsigned Overflow
+    // res < dest implies overflow for ADD
+    // Or (res < src)
+    if (res < dest) flags |= CF_MASK;
+    
+    // OF: Signed Overflow
+    // (dest^src) >= 0 (same sign) AND (dest^res) < 0 (sign changed)
+    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+    bool s1 = (dest & sign_mask);
+    bool s2 = (src & sign_mask);
+    bool sr = (res & sign_mask);
+    
+    if (s1 == s2 && s1 != sr) flags |= OF_MASK;
+    
+    // AF: Carry from bit 3 to 4
+    if (((dest & 0xF) + (src & 0xF)) > 0xF) flags |= AF_MASK;
+
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluSub(EmuState* state, T dest, T src) {
+    T res = dest - src;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    // CF: Borrow
+    if (dest < src) flags |= CF_MASK;
+    
+    // OF: Signed Overflow
+    // (dest^src) < 0 (diff sign) AND (dest^res) < 0 (sign flipped from dest)
+    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+    bool s1 = (dest & sign_mask);
+    bool s2 = (src & sign_mask);
+    bool sr = (res & sign_mask);
+    
+    if (s1 != s2 && s1 != sr) flags |= OF_MASK;
+    
+    // AF: Borrow from bit 3
+    if ((dest & 0xF) < (src & 0xF)) flags |= AF_MASK;
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+
+
+template<typename T>
+inline T AluAnd(EmuState* state, T dest, T src) {
+    T res = dest & src;
+    
+    // CF=0, OF=0
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    // AF is undefined, let's clear it
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluOr(EmuState* state, T dest, T src) {
+    T res = dest | src;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluXor(EmuState* state, T dest, T src) {
+    T res = dest ^ src;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+}
+

@@ -6,18 +6,39 @@
 
 namespace x86emu {
 
-// Handlers
+// Initial Handlers
 void OpNop(EmuState* state, DecodedOp* op);
 void OpNotImplemented(EmuState* state, DecodedOp* op);
 
-// Basic Instruction Handlers
+// Arithmetic & Logic
+void OpAdd_EvGv(EmuState* state, DecodedOp* op); // 01
+void OpOr_EvGv(EmuState* state, DecodedOp* op); // 09
+void OpAnd_EvGv(EmuState* state, DecodedOp* op); // 21
+void OpXor_EvGv(EmuState* state, DecodedOp* op); // 31
+void OpTest_EvGv(EmuState* state, DecodedOp* op); // 85 (TEST r/m, r)
+
+void OpInc_Reg(EmuState* state, DecodedOp* op); // 40-47
+void OpDec_Reg(EmuState* state, DecodedOp* op); // 48-4F
+
+void OpGroup1_EvIz(EmuState* state, DecodedOp* op); // 81, 83 (Add, Or, And, Sub, Xor, Cmp)
+void OpGroup5_Ev(EmuState* state, DecodedOp* op); // FF (Inc, Dec, Call, Jmp, Push)
+
+// Data Transfer
 void OpMov_EvGv(EmuState* state, DecodedOp* op);
 void OpMov_GvEv(EmuState* state, DecodedOp* op);
+void OpMov_RegImm(EmuState* state, DecodedOp* op); // B8-BF
+void OpMov_EvIz(EmuState* state, DecodedOp* op);   // C7 (Mov r/m32, imm32)
 void OpLea(EmuState* state, DecodedOp* op);
 void OpPush_Reg(EmuState* state, DecodedOp* op);
 void OpPush_Imm(EmuState* state, DecodedOp* op);
 void OpPop_Reg(EmuState* state, DecodedOp* op);
+
+// Control
 void OpHlt(EmuState* state, DecodedOp* op);
+void OpJmp_Rel(EmuState* state, DecodedOp* op); // E9
+void OpJcc_Rel(EmuState* state, DecodedOp* op); // 0F 8x
+void OpCall_Rel(EmuState* state, DecodedOp* op); // E8
+void OpRet(EmuState* state, DecodedOp* op); // C3
 
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];

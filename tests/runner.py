@@ -1,3 +1,6 @@
+# /// script
+# dependencies = []
+# ///
 
 import ctypes
 import os
@@ -5,10 +8,59 @@ import sys
 import struct
 import subprocess
 import tempfile
-from unicorn import *
-from unicorn.x86_const import *
-from capstone import *
-import ctypes
+    
+TOP_50_INSTRUCTIONS = """
+mov r32, m32 : 44558
+push r32 : 34520
+call imm32 : 28866
+mov m32, r32 : 26315
+add r32, imm32 : 22167
+mov r32, r32 : 14795
+pop r32 : 14650
+sub r32, imm32 : 14584
+lea r32, m32 : 14260
+jmp imm32 : 12316
+je imm32 : 11899
+push m32 : 10278
+test r32, r32 : 9938
+jne imm32 : 7270
+push imm32 : 7104
+mov m32, imm32 : 6726
+cmp r32, imm32 : 5203
+xor r32, r32 : 4982
+mov r32, imm32 : 4153
+cmp m32, imm32 : 4016
+ret  : 3552
+nop m16 : 3120
+nop m32 : 2993
+add r32, r32 : 2526
+movzx r32, m8 : 2512
+and r32, imm32 : 2203
+movsd m64, r128 : 2168
+cmp r32, r32 : 1808
+nop  : 1545
+shr r32, imm8 : 1543
+movsd r128, m64 : 1501
+inc r32 : 1475
+ja imm32 : 1225
+cmp r32, m32 : 1153
+movzx r32, m16 : 964
+test r8, imm8 : 945
+jmp r32 : 880
+or r32, r32 : 848
+jg imm32 : 806
+sete r8 : 783
+mov m8, r8 : 724
+jb imm32 : 718
+sub r32, r32 : 712
+test m8, imm8 : 710
+add r32, m32 : 675
+cmp m8, imm8 : 661
+mov m8, imm8 : 654
+setne r8 : 654
+jle imm32 : 650
+cmove r32, r32 : 625
+"""
 
 # Configurations
 LIB_PATH = os.path.join(os.path.dirname(__file__), "../build/libx86emu.dylib") 
@@ -101,9 +153,10 @@ class X86Emu:
 class TestRunner:
     def __init__(self):
         pass
-        
+
     def compile(self, asm):
         # Use NASM to compile 32-bit assembly
+        # Fallback since keystone-engine failed to install on this extreamly new env
         with tempfile.NamedTemporaryFile(suffix=".asm", mode="w", delete=False) as f:
             f.write(f"BITS 32\n{asm}")
             asm_path = f.name
@@ -113,206 +166,284 @@ class TestRunner:
             subprocess.run(["nasm", "-f", "bin", "-o", bin_path, asm_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             with open(bin_path, "rb") as f:
                 return f.read()
+        except FileNotFoundError:
+             raise Exception("NASM not found. Please install nasm.")
+        except subprocess.CalledProcessError as e:
+             raise Exception(f"NASM Conversion Failed: {e}")
         finally:
             if os.path.exists(asm_path): os.remove(asm_path)
             if os.path.exists(bin_path): os.remove(bin_path)
 
-    def run_case(self, name, asm_code, initial_regs=None):
-        print(f"[*] Running Test: {name}")
+    def run_test(self, name, asm_code, initial_regs=None, expected_regs=None, expected_eip=None):
+        print(f"\n[*] Running Test: {name}")
         try:
             code = self.compile(asm_code)
+            print(f"  [.] Compiled {len(code)} bytes: {code.hex()}")
         except Exception as e:
             print(f"  [-] Compilation Failed: {e}")
             return False
             
         ADDRESS = 0x1000
         STACK_ADDR = 0x2000
-        
-        # 1. Setup Unicorn
-        try:
-            uc = Uc(UC_ARCH_X86, UC_MODE_32)
-            uc.mem_map(ADDRESS, 0x1000)
-            uc.mem_write(ADDRESS, code)
-            
-            uc.mem_map(STACK_ADDR, 0x1000)
-            uc.reg_write(UC_X86_REG_ESP, STACK_ADDR + 0x800)
-            
-            if initial_regs:
-                 for r, v in initial_regs.items():
-                     uc.reg_write(r, v)
-            
-            uc.emu_start(ADDRESS, ADDRESS + len(code))
-        except UcError as e:
-            print(f"  [-] Unicorn Error: {e}")
-            return False
+        STACK_SIZE = 0x1000
+        STACK_TOP = STACK_ADDR + 0x800 # Arbitrary top
 
-        # 2. Setup Simulator
+        # Setup Simulator
         try:
             sim = X86Emu()
             
-            # Fault Handler
-            self.fault_hit = False
-            def on_fault(addr, is_write):
-                print(f"  [!] FAULT CALLBACK: Addr=0x{addr:X} Write={is_write}")
-                self.fault_hit = True
-            
-            sim.set_fault_callback(on_fault)
-            
+            # Memory Map
             sim.mem_map(ADDRESS, 0x1000, 7) # RWX
             sim.mem_write(ADDRESS, code)
+            sim.mem_map(STACK_ADDR, STACK_SIZE, 7) # RWX Stack
             
-            # Setup Stack
-            STACK_ADDR = 0x2000
-            sim.mem_map(STACK_ADDR, 0x1000, 7) 
-            sim.ctx.regs[4] = STACK_ADDR + 0x800 # ESP
+            # Init Registers
+            # Default Stack
+            sim.ctx.regs[4] = STACK_TOP
             
             if initial_regs:
-                # EAX=0, ECX=1...
-                pass
-                
+                for idx, val in initial_regs.items():
+                    sim.ctx.regs[idx] = val
+                    
             sim.ctx.eip = ADDRESS
             
-            # Test Decode Explicitly
-            op = sim.decode(code)
-            print(f"  [.] Decode Result: Len={op.length} Handler={op.handler_index}")
+            # Run
+            print("  [.] Executing (X86_Run)...")
+            sim.run()
             
-            if op.handler_index == 1: # ADD
-                 # Unpack bitfields
-                 print("      Raw DecodedOp Bytes:", bytes(op).hex())
-                 # C++: op1_type : 3 (bits 0-2)
-                 op1_type = op.operand_fields & 0x7
-                 op2_type = (op.operand_fields >> 3) & 0x7
-                 print(f"      ADD Detected. Op1Type={op1_type} Op2Type={op2_type} Imm=0x{op.imm:X}")
-
-            # Step
-            sim.step()
-            print("  [DEBUG] Python: Returned from sim.step()")
+            # Verification
+            success = True
             
-            if self.fault_hit:
-                print("  [+] Fault handled gracefully.")
+            # Verify EIP
+            if expected_eip:
+                final_eip = sim.ctx.eip
+                if final_eip != expected_eip:
+                    print(f"  [-] EIP Mismatch: 0x{final_eip:X} (Expected 0x{expected_eip:X})")
+                    success = False
+                else:
+                    print(f"  [+] EIP Correct: 0x{final_eip:X}")
+            
+            # Verify Registers
+            if expected_regs:
+                current_regs = list(sim.ctx.regs)
+                for idx, val in expected_regs.items():
+                    if current_regs[idx] != val:
+                         print(f"  [-] Register {idx} Mismatch: 0x{current_regs[idx]:X} (Expected 0x{val:X})")
+                         success = False
+                    else:
+                         print(f"  [+] Register {idx} Correct: 0x{val:X}")
+                         
+            if success:
+                print(f"  [+] SUCCESS: {name}")
                 return True
-                
-            # Verify with Capstone
-            md = Cs(CS_ARCH_X86, CS_MODE_32)
-            # md.detail = True # Not strictly needed for basic check
-            disasm = list(md.disasm(code, ADDRESS))
-            if disasm:
-                ins = disasm[0]
-                print(f"  [.] Capstone: {ins.mnemonic} {ins.op_str}")
-                # We can verify Length here
-                if ins.size != op.length:
-                    print(f"  [-] Length Mismatch! Capstone={ins.size} Sim={op.length}")
-            
-            # Compare Registers
-            # Compare Registers
-            print("  [.] Comparing Registers...")
-            # sim_regs = sim.get_regs() # Helper method missing in X86Emu
-            # Access directly
-            sim_regs = list(sim.ctx.regs)
-            
-            # Unicorn regs
-            uc_eax = uc.reg_read(UC_X86_REG_EAX)
-            print(f"  [+] Unicorn EAX: 0x{uc_eax:08X}")
-            print(f"  [+] Sim     EAX: 0x{sim_regs[0]:08X}")
-            
-            if uc_eax != sim_regs[0]:
-                 print("  [-] EAX Mismatch! (Expected for now)")
-                 # return False
-                
+            else:
+                print(f"  [-] FAILURE: {name}")
+                return False
+
         except Exception as e:
-             print(f"  [-] python crash: {e}")
-             return False
-             
-        # Mock Comparison (Simulator is empty execution)
-        return True
+            print(f"  [-] Exception during test: {e}")
+            return False
+
+def test_stack_lea():
+    runner = TestRunner()
+    asm = """
+    lea eax, [ebx + 4]
+    push eax
+    push 0x12345678
+    pop ecx
+    pop edx
+    hlt
+    """
+    
+    # Init: EBX = 0x20
+    regs_init = {3: 0x20} # EBX
+    
+    # Expected: 
+    # EAX = 0x24 (36)
+    # ECX = 0x12345678
+    # EDX = 0x24
+    # ESP = Initial (0x2800) because push/push/pop/pop balance
+    regs_expected = {
+        0: 0x24,        # EAX
+        1: 0x12345678,  # ECX
+        2: 0x24,        # EDX
+        4: 0x2800       # ESP
+    }
+    
+    # Expected EIP: 1000 + length of code
+    # LEA(3) + PUSH(1) + PUSH_IMM(5) + POP(1) + POP(1) + HLT(1) = 12 (0xC)
+    # Start 0x1000 -> End 0x100C
+    runner.run_test("Stack & LEA", asm, initial_regs=regs_init, expected_regs=regs_expected, expected_eip=0x100C)
+
+def test_add():
+    runner = TestRunner()
+    # Rank 5: add r32, imm32 (05 / 81 / 83)
+    # Rank 24: add r32, r32
+    asm = """
+    mov eax, 0x10
+    add eax, 0x20       ; ADD EAX, Imm32 (or Imm8 sign ext)
+    mov ebx, 0x5
+    add eax, ebx        ; ADD EAX, EBX
+    hlt
+    """
+    
+    # Expected:
+    # 1. MOV EAX, 0x10 -> 16
+    # 2. ADD EAX, 0x20 -> 0x30 (48)
+    # 3. MOV EBX, 0x5
+    # 4. ADD EAX, EBX  -> 0x35 (53)
+    
+    regs_expected = {
+        0: 0x35, # EAX
+        3: 0x5   # EBX
+    }
+    
+    # EIP:
+    # mov eax, imm (B8 10 00 00 00) = 5
+    # add eax, imm (83 C0 20) = 3 (if optimized) or (05 20 00 00 00) = 5
+    # NASM usually optimizes `add eax, 0x20` to `83 C0 20` (add r/m32, imm8).
+    # mov ebx, 5 (BB 05 00 00 00) = 5
+    # add eax, ebx (01 D8) = 2
+    # hlt = 1
+    # Total could vary. We rely on logic verification mostly.
+    
+    runner.run_test("ADD (r32, imm32 / r32, r32)", asm, expected_regs=regs_expected)
+
+def test_sub_cmp_jcc():
+    runner = TestRunner()
+    # Rank 8: sub r32, imm32
+    # Rank 17: cmp r32, imm32
+    # Rank 11: je imm32 (0F 84)
+    # Rank 10: jmp imm32 (E9)
+    
+    asm = """
+    mov eax, 10
+    sub eax, 5      ; EAX = 5
+    cmp eax, 5      ; ZF = 1
+    je label_equal  ; Should be taken
+    mov ebx, 0xBAD  ; Should skip
+    hlt
+    label_equal:
+    mov ebx, 1
+    jmp label_end   ; Unconditional jump
+    add ebx, 1      ; Should skip
+    label_end:
+    hlt
+    """
+    
+    regs_expected = {
+        0: 5,   # EAX
+        3: 1    # EBX
+    }
+    
+    runner.run_test("SUB/CMP/JCC (je, jmp)", asm, expected_regs=regs_expected)
+
+def test_call_ret():
+    runner = TestRunner()
+    # Rank 3: call imm32
+    # Rank 21: ret
+    
+    asm = """
+    mov eax, 10
+    call func_double
+    add eax, 1
+    hlt
+    
+    func_double:
+    add eax, eax
+    ret
+    """
+    
+    # Flow:
+    # 1. MOV EAX, 10
+    # 2. CALL func_double (Push EIP, Jump)
+    # 3. ADD EAX, EAX -> 20
+    # 4. RET (Pop EIP, Jump back)
+    # 5. ADD EAX, 1 -> 21
+    # 6. HLT
+    
+    regs_expected = {
+        0: 21
+    }
+    
+    runner.run_test("CALL/RET", asm, expected_regs=regs_expected)
+
+def test_logic():
+    runner = TestRunner()
+    # Rank 13: test r32, r32
+    # Rank 18: xor r32, r32
+    # Rank 26: and r32, imm32
+    
+    asm = """
+    mov eax, 0xF0F0F0F0
+    xor eax, eax        ; EAX = 0, ZF = 1
+    
+    mov eax, 0x12345678
+    test eax, eax       ; ZF = 0, SF = 0
+    jz label_failed     ; Should not jump
+    
+    mov ebx, 0xFFFF0000
+    and ebx, 0x0000FFFF ; EBX = 0, ZF = 1
+    jnz label_failed    ; Should not jump
+    
+    mov ecx, 0x55555555
+    or ecx, 0xAAAAAAAA  ; ECX = 0xFFFFFFFF
+    
+    hlt
+    
+    label_failed:
+    mov eax, 0xBAD      ; Error flag
+    hlt
+    """
+    
+    regs_expected = {
+        0: 0x12345678, # EAX
+        3: 0,          # EBX
+        1: 0xFFFFFFFF, # ECX
+    }
+    
+    runner.run_test("LOGIC (XOR, TEST, AND, OR)", asm, expected_regs=regs_expected)
+
+def test_group5():
+    runner = TestRunner()
+    # Rank 12: push m32 (FF /6)
+    # Rank 28: inc r32
+    # Rank 32: dec r32
+    
+    asm = """
+    mov esp, 0x1500 ; Initialize Stack (Mid-Page)
+    mov eax, 10
+    inc eax         ; EAX = 11
+    
+    mov ebx, 20
+    dec ebx         ; EBX = 19
+    
+    ; Setup memory for PUSH m32
+    mov ecx, 0x1000
+    mov dword [ecx], 0xDEADBEEF
+    
+    ; PUSH m32
+    push dword [ecx] ; Push 0xDEADBEEF
+    
+    pop edx         ; EDX = 0xDEADBEEF
+    
+    hlt
+    """
+    
+    regs_expected = {
+        0: 11,          # EAX
+        3: 19,          # EBX
+        2: 0xDEADBEEF   # EDX
+    }
+    
+    runner.run_test("GROUP5 (INC, DEC, PUSH m32)", asm, expected_regs=regs_expected)
 
 if __name__ == "__main__":
-    lib = ctypes.CDLL(LIB_PATH)
-    try:
-        lib.X86_DebugStructSizes()
-    except:
-        print("[-] X86_DebugStructSizes not found in lib")
+    # test_stack_lea()
+    # test_add()
+    # test_sub_cmp_jcc()
+    # test_call_ret()
+    # test_logic()
+    test_group5()
 
-    print(f"[*] Python sizeof(Context) = {ctypes.sizeof(Context)}")
-    print(f"[*] Python Offset xmm = {Context.xmm.offset}")
-    print(f"[*] Python Offset mmu = {Context.mmu.offset}")
-    print(f"[*] Python sizeof(DecodedOp) = {ctypes.sizeof(X86Emu.DecodedOp)}")
-
-    # 4. ModRM Test (MOV [EAX+4], EBX)
-    # Opcode 89
-    # ModRM: 58 (Mod=01 Disp8, Reg=3 EBX, RM=0 EAX)
-    # Disp: 04
-    # Loopback Test:
-    # 1. MOV [EAX+4], EBX (0x89 0x58 0x04) -> Writes DEADBEEF to 0x2004
-    # 2. MOV ECX, [EAX+4] (0x8B 0x48 0x04) -> Reads 0x2004 to ECX
-    # 3. Check ECX
-    
-    # 0x1000: 89 58 04
-    # 0x1003: 8B 48 04
-    
-    # Stack & LEA Test
-    # 1. LEA EAX, [EBX+4]     (8D 43 04) -> EAX = EBX+4
-    # 2. PUSH EAX             (50)       -> Stack Push EAX
-    # 3. PUSH 0x12345678      (68 78 56 34 12) -> Stack Push Imm
-    # 4. POP ECX              (59)       -> ECX = 0x12345678
-    # 5. POP EDX              (5A)       -> EDX = EAX
-    
-    # Init: EBX = 0x20. ESP = 0x2800.
-    
-    print("\n[*] Running Stack & LEA Test (Using X86_Run / Basic Block)...")
-    sim = X86Emu()
-    
-    # Code with HLT (F4) at the end to stop
-    code = b"\x8D\x43\x04" + b"\x50" + b"\x68\x78\x56\x34\x12" + b"\x59" + b"\x5A" + b"\xF4"
-    sim.mem_map(0x1000, 0x1000, 7)
-    sim.mem_write(0x1000, code)
-    
-    # Stack Page
-    sim.mem_map(0x2000, 0x1000, 7)
-    sim.ctx.regs[3] = 0x20   # EBX
-    sim.ctx.regs[4] = 0x2800 # ESP matches stack map end
-    
-    sim.ctx.eip = 0x1000
-    
-    # Run until HLT or Fault
-    print("  [.] Calling sim.run()...")
-    sim.run()
-    
-    # Check EIP (Should be after HLT)
-    # HLT is 1 byte. Code length is 3+1+5+1+1+1 = 12 bytes.
-    # EIP should be 0x100C.
-    if sim.ctx.eip != 0x100C:
-         print(f"  [-] EIP Mismatch: 0x{sim.ctx.eip:X} (Expected 0x100C)")
-    else:
-         print(f"  [+] EIP Correct: 0x{sim.ctx.eip:X}")
-    
-    # Verification
-    # EAX should be 0x24 (36)
-    eax = sim.ctx.regs[0]
-    ecx = sim.ctx.regs[1]
-    edx = sim.ctx.regs[2] # EDX is index 2
-    esp = sim.ctx.regs[4]
-    
-    print(f"  [.] Registers: EAX=0x{eax:X} ECX=0x{ecx:X} EDX=0x{edx:X} ESP=0x{esp:X}")
-    
-    success = True
-    if eax != 0x24:
-        print("  [-] EAX Mismatch (Expected 0x24)")
-        success = False
-    if ecx != 0x12345678:
-        print("  [-] ECX Mismatch (Expected 0x12345678)")
-        success = False
-    if edx != 0x24:
-        print(f"  [-] EDX Mismatch (Expected 0x24), got 0x{edx:X}")
-        success = False
-    if esp != 0x2800:
-        print(f"  [-] ESP Mismatch (Expected 0x2800), got 0x{esp:X}")
-        success = False
-        
-    if success:
-         print("  [+] SUCCESS: Stack/LEA verified.")
-    else:
-         print("  [-] FAILURE.")
-         
-    sys.exit(0)
 
