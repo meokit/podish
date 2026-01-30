@@ -28,6 +28,50 @@ inline void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) {
 }
 
 // ------------------------------------------------------------------------------------------------
+// EFLAGS Masks
+// ------------------------------------------------------------------------------------------------
+
+constexpr uint32_t CF_MASK = 0x0001;
+constexpr uint32_t PF_MASK = 0x0004;
+constexpr uint32_t AF_MASK = 0x0010;
+constexpr uint32_t ZF_MASK = 0x0040;
+constexpr uint32_t SF_MASK = 0x0080;
+constexpr uint32_t OF_MASK = 0x0800;
+
+// ------------------------------------------------------------------------------------------------
+// Condition Checking (for Jcc, CMOVcc)
+// ------------------------------------------------------------------------------------------------
+
+inline bool CheckCondition(EmuState* state, uint8_t cond) {
+    uint32_t flags = state->ctx.eflags;
+    bool cf = (flags & CF_MASK);
+    bool zf = (flags & ZF_MASK);
+    bool sf = (flags & SF_MASK);
+    bool of = (flags & OF_MASK);
+    bool pf = (flags & PF_MASK);
+    
+    switch (cond) {
+        case 0: return of;          // JO
+        case 1: return !of;         // JNO
+        case 2: return cf;          // JB/JNAE
+        case 3: return !cf;         // JNB/JAE
+        case 4: return zf;          // JE/JZ
+        case 5: return !zf;         // JNE/JNZ
+        case 6: return cf || zf;    // JBE/JNA
+        case 7: return !cf && !zf;  // JNBE/JA
+        case 8: return sf;          // JS
+        case 9: return !sf;         // JNS
+        case 10: return pf;         // JP/JPE
+        case 11: return !pf;        // JNP/JPO
+        case 12: return sf != of;   // JL/JNGE
+        case 13: return sf == of;   // JNL/JGE
+        case 14: return zf || (sf != of); // JLE/JNG
+        case 15: return !zf && (sf == of); // JNLE/JG
+        default: return false;
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
@@ -250,14 +294,6 @@ inline uint32_t Pop32(EmuState* state) {
 // ------------------------------------------------------------------------------------------------
 // ALU Operations & Flags
 // ------------------------------------------------------------------------------------------------
-
-// EFLAGS Masks
-constexpr uint32_t CF_MASK = 0x0001;
-constexpr uint32_t PF_MASK = 0x0004;
-constexpr uint32_t AF_MASK = 0x0010;
-constexpr uint32_t ZF_MASK = 0x0040;
-constexpr uint32_t SF_MASK = 0x0080;
-constexpr uint32_t OF_MASK = 0x0800;
 
 inline uint8_t Parity(uint8_t v) {
     // Basic parity: even number of 1s -> 1

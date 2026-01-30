@@ -1,0 +1,190 @@
+// Shifts & Bit Operations
+// Auto-generated from ops.cpp refactoring
+
+#include "../ops.h"
+#include "../state.h"
+#include "../exec_utils.h"
+#include <simde/x86/sse.h>
+
+namespace x86emu {
+
+void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
+    uint8_t subop = (op->modrm >> 3) & 7;
+    // printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count, is_byte);
+    uint32_t res = dest;
+    
+    // Mask count
+    if (count == 0) return; // Nothing
+    
+    // Perform Op
+    switch (subop) {
+        case 0: // ROL
+            if (is_byte) res = AluRol<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluRol<uint32_t>(state, dest, count);
+            break;
+        case 1: // ROR
+            if (is_byte) res = AluRor<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluRor<uint32_t>(state, dest, count);
+            break;
+        case 2: // RCL
+            OpUd2(state, op);
+            return;
+        case 3: // RCR
+            OpUd2(state, op);
+            return;
+        case 4: // SHL/SAL
+            if (is_byte) res = AluShl<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluShl<uint32_t>(state, dest, count);
+            break;
+        case 5: // SHR
+            if (is_byte) res = AluShr<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluShr<uint32_t>(state, dest, count);
+            break;
+        case 7: // SAR
+            if (is_byte) res = AluSar<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluSar<uint32_t>(state, dest, count);
+            break;
+        default:
+            OpUd2(state, op);
+            return;
+    }
+    
+    // Write Back
+    if (is_byte) {
+         uint8_t mod = (op->modrm >> 6) & 3;
+         uint8_t rm = op->modrm & 7;
+         if (mod == 3) {
+             uint32_t* rptr = GetRegPtr(state, rm & 3);
+             uint32_t val = *rptr;
+             if (rm < 4) {
+                 val = (val & 0xFFFFFF00) | (res & 0xFF);
+             } else {
+                 val = (val & 0xFFFF00FF) | ((res & 0xFF) << 8);
+             }
+             *rptr = val;
+             
+         } else {
+             uint32_t addr = ComputeEAD(state, op);
+             state->mmu.write<uint8_t>(addr, (uint8_t)res);
+         }
+    } else {
+        WriteModRM32(state, op, res);
+    }
+}
+
+void OpGroup2_EvIb(EmuState* state, DecodedOp* op) {
+    // C0: r/m8, imm8
+    // C1: r/m32, imm8
+    bool is_byte = (op->handler_index == 0xC0);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint8_t count = (uint8_t)op->imm;
+    Helper_Group2(state, op, dest, count, is_byte);
+}
+
+void OpGroup2_Ev1(EmuState* state, DecodedOp* op) {
+    // D0: r/m8, 1
+    // D1: r/m32, 1
+    bool is_byte = (op->handler_index == 0xD0);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    Helper_Group2(state, op, dest, 1, is_byte);
+}
+
+void OpGroup2_EvCl(EmuState* state, DecodedOp* op) {
+    // D2: r/m8, CL
+    // D3: r/m32, CL
+    bool is_byte = (op->handler_index == 0xD2);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint8_t count = GetReg(state, ECX) & 0xFF;
+    Helper_Group2(state, op, dest, count, is_byte);
+}
+
+void OpBt_EvGv(EmuState* state, DecodedOp* op) {
+    // 0F A3: BT r/m32, r32
+    uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    uint8_t bit_val = 0;
+    if (mod == 3) {
+        uint32_t base = GetReg(state, rm);
+        offset &= 31;
+        bit_val = (base >> offset) & 1;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        int32_t signed_offset = (int32_t)offset;
+        addr += (signed_offset >> 3);
+        uint8_t bit_idx = signed_offset & 7;
+        bit_val = (state->mmu.read<uint8_t>(addr) >> bit_idx) & 1;
+    }
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBt_EvIb(EmuState* state, DecodedOp* op) {
+    // 0F BA /4: BT r/m32, imm8
+    uint8_t offset = op->imm & 31; // imm8 modulo 32
+    // For imm8, it treats operand as 32-bit (or 16-bit), bit index is modulo width.
+    // It does NOT do the memory offset thing.
+    
+    uint32_t base = ReadModRM32(state, op);
+    uint8_t bit_val = (base >> offset) & 1;
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
+    // 0F B3: BTR r/m32, r32
+    uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    uint8_t bit_val = 0;
+    if (mod == 3) {
+        uint32_t base = GetReg(state, rm);
+        uint32_t mask = 1 << (offset & 31);
+        bit_val = (base & mask) ? 1 : 0;
+        SetReg(state, rm, base & ~mask);
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        int32_t signed_offset = (int32_t)offset;
+        addr += (signed_offset >> 3);
+        uint8_t bit_idx = signed_offset & 7;
+        
+        uint8_t byte = state->mmu.read<uint8_t>(addr);
+        bit_val = (byte >> bit_idx) & 1;
+        state->mmu.write<uint8_t>(addr, byte & ~(1 << bit_idx));
+    }
+    
+    if (bit_val) state->ctx.eflags |= CF_MASK;
+    else state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpBsr_GvEv(EmuState* state, DecodedOp* op) {
+    // 0F BD: BSR r32, r/m32
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (src == 0) {
+        state->ctx.eflags |= ZF_MASK;
+        // Dest undefined. Keep it?
+    } else {
+        state->ctx.eflags &= ~ZF_MASK;
+        // Find MSB
+        // __builtin_clz(src) returns leading zeros.
+        // 31 - clz = index.
+        int idx = 31 - __builtin_clz(src);
+        SetReg(state, reg, idx);
+    }
+}
+
+void OpBswap_Reg(EmuState* state, DecodedOp* op) {
+    // 0F C8+rd: BSWAP r32
+    uint8_t reg = op->handler_index & 7;
+    uint32_t val = GetReg(state, reg);
+    uint32_t res = __builtin_bswap32(val);
+    SetReg(state, reg, res);
+}
+
+} // namespace x86emu
