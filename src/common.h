@@ -9,6 +9,12 @@
 
 namespace x86emu {
 
+enum class EmuStatus {
+    Running,
+    Stopped,
+    Fault
+};
+
 // General Purpose Registers (Index mapping)
 enum Reg {
     EAX = 0,

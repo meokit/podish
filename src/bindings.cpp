@@ -18,6 +18,28 @@ void X86_DebugStructSizes() {
     // Debug helper
 }
 
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+#include <cstdlib>
+
+void SignalHandler(int sig) {
+    void* array[20];
+    size_t size;
+
+    // get void*'s for all entries on the stack
+    size = backtrace(array, 20);
+
+    // print out all the frames to stderr
+    fprintf(stderr, "\n[CRASH] Signal %d Caught:\n", sig);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+    
+    // Exit
+    _exit(1);
+}
+
+static bool g_SignalRegistered = false;
+
 // Internal bridge callback
 void BridgeFaultCallback(void* opaque, uint32_t addr, int is_write) {
     // Here opaque is Context*. Or we can pass EmuState*.
@@ -28,6 +50,12 @@ void BridgeFaultCallback(void* opaque, uint32_t addr, int is_write) {
 
 // Create Simulator Instance
 EmuState* X86_Create() {
+    if (!g_SignalRegistered) {
+        signal(SIGSEGV, SignalHandler);
+        signal(SIGILL, SignalHandler);
+        signal(SIGBUS, SignalHandler);
+        g_SignalRegistered = true;
+    }
     EmuState* state = new EmuState();
     // Link pointers
     state->ctx.mmu = &state->mmu;
@@ -35,6 +63,9 @@ EmuState* X86_Create() {
     // Defaults
     state->ctx.eip = 0;
     std::memset(&state->ctx.regs, 0, sizeof(state->ctx.regs));
+    
+    // Link MMU to State Status
+    state->mmu.set_status_ptr(&state->status);
     
     // Setup generic fault printer for now, or allow python to set it
     return state;
@@ -134,6 +165,11 @@ void X86_Run(EmuState* state) {
         // If End of Block (is_last), Wrapper returns here.
         // We look up new EIP in next iteration.
     }
+}
+
+// Stop Execution
+void X86_EmuStop(EmuState* state) {
+    if (state) state->status = EmuStatus::Stopped;
 }
 
 // Step (Placeholder for now)

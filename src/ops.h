@@ -14,7 +14,9 @@ void OpNotImplemented(EmuState* state, DecodedOp* op);
 void OpAdd_EvGv(EmuState* state, DecodedOp* op); // 01
 void OpOr_EvGv(EmuState* state, DecodedOp* op); // 09
 void OpAnd_EvGv(EmuState* state, DecodedOp* op); // 21
+void OpSub_EvGv(EmuState* state, DecodedOp* op); // 29
 void OpXor_EvGv(EmuState* state, DecodedOp* op); // 31
+void OpCmp_EvGv(EmuState* state, DecodedOp* op); // 39
 void OpTest_EvGv(EmuState* state, DecodedOp* op); // 85 (TEST r/m, r)
 
 void OpInc_Reg(EmuState* state, DecodedOp* op); // 40-47
@@ -26,6 +28,10 @@ void OpGroup5_Ev(EmuState* state, DecodedOp* op); // FF (Inc, Dec, Call, Jmp, Pu
 // Data Transfer
 void OpMov_EvGv(EmuState* state, DecodedOp* op);
 void OpMov_GvEv(EmuState* state, DecodedOp* op);
+void OpMovzx_Byte(EmuState* state, DecodedOp* op); // 0F B6
+void OpMovzx_Word(EmuState* state, DecodedOp* op); // 0F B7
+void OpMovsx_Byte(EmuState* state, DecodedOp* op); // 0F BE
+void OpMovsx_Word(EmuState* state, DecodedOp* op); // 0F BF
 void OpMov_RegImm(EmuState* state, DecodedOp* op); // B8-BF
 void OpMov_EvIz(EmuState* state, DecodedOp* op);   // C7 (Mov r/m32, imm32)
 void OpLea(EmuState* state, DecodedOp* op);

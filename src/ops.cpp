@@ -38,9 +38,55 @@ void OpMov_RegImm(EmuState* state, DecodedOp* op) {
     SetReg(state, reg, op->imm);
 }
 
+void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
+    // B0+reg: MOV r8, imm8
+    // Reg coding: 0=AL, 1=CL, 2=DL, 3=BL, 4=AH, 5=CH, 6=DH, 7=BH
+    uint8_t reg = op->handler_index & 7;
+    uint32_t val = op->imm & 0xFF;
+    
+    // Read-Modify-Write 32-bit reg
+    uint32_t* rptr = GetRegPtr(state, reg & 3);
+    uint32_t curr = *rptr;
+    
+    if (reg < 4) {
+        curr = (curr & 0xFFFFFF00) | val;
+    } else {
+        curr = (curr & 0xFFFF00FF) | (val << 8);
+    }
+    *rptr = curr;
+}
+
 void OpMov_EvIz(EmuState* state, DecodedOp* op) {
     // C7: MOV r/m32, imm32
     WriteModRM32(state, op, op->imm);
+}
+
+void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
+    // 0F B6: MOVZX r32, r/m8
+    uint8_t val = ReadModRM8(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    SetReg(state, reg, (uint32_t)val);
+}
+
+void OpMovzx_Word(EmuState* state, DecodedOp* op) {
+    // 0F B7: MOVZX r32, r/m16
+    uint16_t val = ReadModRM16(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    SetReg(state, reg, (uint32_t)val);
+}
+
+void OpMovsx_Byte(EmuState* state, DecodedOp* op) {
+    // 0F BE: MOVSX r32, r/m8
+    uint8_t val = ReadModRM8(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    SetReg(state, reg, (uint32_t)(int32_t)(int8_t)val);
+}
+
+void OpMovsx_Word(EmuState* state, DecodedOp* op) {
+    // 0F BF: MOVSX r32, r/m16
+    uint16_t val = ReadModRM16(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    SetReg(state, reg, (uint32_t)(int32_t)(int16_t)val);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -78,6 +124,17 @@ void OpAnd_EvGv(EmuState* state, DecodedOp* op) {
     uint32_t src = GetReg(state, reg);
     
     uint32_t res = AluAnd(state, dest, src);
+    uint32_t res = AluAnd(state, dest, src);
+    WriteModRM32(state, op, res);
+}
+
+void OpSub_EvGv(EmuState* state, DecodedOp* op) {
+    // 29: SUB r/m32, r32
+    uint32_t dest = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t src = GetReg(state, reg);
+    
+    uint32_t res = AluSub(state, dest, src);
     WriteModRM32(state, op, res);
 }
 
@@ -89,6 +146,15 @@ void OpXor_EvGv(EmuState* state, DecodedOp* op) {
     
     uint32_t res = AluXor(state, dest, src);
     WriteModRM32(state, op, res);
+}
+
+void OpCmp_EvGv(EmuState* state, DecodedOp* op) {
+    // 39: CMP r/m32, r32
+    uint32_t dest = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t src = GetReg(state, reg);
+    
+    AluSub(state, dest, src); // Discard result
 }
 
 void OpTest_EvGv(EmuState* state, DecodedOp* op) {
@@ -170,6 +236,140 @@ void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
              OpNotImplemented(state, op);
              break;
     }
+}
+
+void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
+    uint8_t subop = (op->modrm >> 3) & 7;
+    printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count, is_byte);
+    uint32_t res = dest;
+    
+    // Mask count
+    if (count == 0) return; // Nothing
+    
+    // Perform Op
+    switch (subop) {
+        case 0: // ROL
+            if (is_byte) res = AluRol<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluRol<uint32_t>(state, dest, count);
+            break;
+        case 1: // ROR
+            if (is_byte) res = AluRor<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluRor<uint32_t>(state, dest, count);
+            break;
+        case 2: // RCL
+            // TODO: AluRcl
+            OpNotImplemented(state, op);
+            return;
+        case 3: // RCR
+            // TODO: AluRcr
+            OpNotImplemented(state, op);
+            return;
+        case 4: // SHL/SAL
+            if (is_byte) res = AluShl<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluShl<uint32_t>(state, dest, count);
+            break;
+        case 5: // SHR
+            if (is_byte) res = AluShr<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluShr<uint32_t>(state, dest, count);
+            break;
+        case 7: // SAR
+            if (is_byte) res = AluSar<uint8_t>(state, (uint8_t)dest, count);
+            else         res = AluSar<uint32_t>(state, dest, count);
+            break;
+        default:
+            OpNotImplemented(state, op);
+            return;
+    }
+    
+    // Write Back
+    if (is_byte) {
+         // ReadModRM32 used for read, but it reads 32-bit.
+         // If we wrote back 32-bit with modified byte, we need to preserve high bits?
+         // SoftMMU Write<uint8_t> handles memory. ModRM logic handles reg?
+         // WriteModRM32 handles 32-bit. We need WriteModRM8.
+         // Wait. ops.cpp logic usually does ReadModRM32. 
+         // If Op is Byte sized (determined by opcode bit 0), decoder stores "width" or we infer.
+         // Helper functions should probably be specific.
+         
+         // For now, assume WriteModRM32 can be adapted or we use WriteModRM8 (does it exist?).
+         // It does NOT exist in exec_utils.h.
+         // Let's implement WriteModRM8 inline or use masking.
+         // Actually, let's look at `exec_utils.h`
+         // It only has `WriteModRM32`.
+         // We should add `WriteModRM8` or handle it manually.
+         
+         uint8_t mod = (op->modrm >> 6) & 3;
+         uint8_t rm = op->modrm & 7;
+         if (mod == 3) {
+             // Reg 8
+             // Maps: AL, CL, DL, BL, AH, CH, DH, BH
+             uint32_t full = GetReg(state, rm % 4); // This is wrong for high byte regs!
+             // Decoding 8-bit regs is complex if REX not present (which it isn't in 32-bit).
+             // 0-3: AL, CL, DL, BL
+             // 4-7: AH, CH, DH, BH
+             
+             uint32_t* rptr = GetRegPtr(state, rm & 3);
+             uint32_t val = *rptr;
+             if (rm < 4) {
+                 val = (val & 0xFFFFFF00) | (res & 0xFF);
+             } else {
+                 val = (val & 0xFFFF00FF) | ((res & 0xFF) << 8);
+             }
+             *rptr = val;
+             
+         } else {
+             // Memory 8
+             uint32_t addr = ComputeEAD(state, op);
+             state->mmu.write<uint8_t>(addr, (uint8_t)res);
+         }
+    } else {
+        WriteModRM32(state, op, res);
+    }
+}
+
+// Helper to read operand
+uint32_t ReadModRM(EmuState* state, DecodedOp* op, bool is_byte) {
+    if (is_byte) {
+         // Read 8-bit
+         uint8_t mod = (op->modrm >> 6) & 3;
+         uint8_t rm = op->modrm & 7;
+         if (mod == 3) {
+             uint32_t val = GetReg(state, rm & 3);
+             if (rm < 4) return val & 0xFF;
+             else return (val >> 8) & 0xFF;
+         } else {
+             uint32_t addr = ComputeEAD(state, op);
+             return state->mmu.read<uint8_t>(addr);
+         }
+    } else {
+        return ReadModRM32(state, op);
+    }
+}
+
+void OpGroup2_EvIb(EmuState* state, DecodedOp* op) {
+    // C0: r/m8, imm8
+    // C1: r/m32, imm8
+    bool is_byte = (op->handler_index == 0xC0);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint8_t count = (uint8_t)op->imm;
+    Helper_Group2(state, op, dest, count, is_byte);
+}
+
+void OpGroup2_Ev1(EmuState* state, DecodedOp* op) {
+    // D0: r/m8, 1
+    // D1: r/m32, 1
+    bool is_byte = (op->handler_index == 0xD0);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    Helper_Group2(state, op, dest, 1, is_byte);
+}
+
+void OpGroup2_EvCl(EmuState* state, DecodedOp* op) {
+    // D2: r/m8, CL
+    // D3: r/m32, CL
+    bool is_byte = (op->handler_index == 0xD2);
+    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint8_t count = GetReg(state, ECX) & 0xFF;
+    Helper_Group2(state, op, dest, count, is_byte);
 }
 
 void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
@@ -360,13 +560,21 @@ HandlerFunc g_Handlers[1024] = {0};
 
 struct HandlerInit {
     HandlerInit() {
+        // 0. Default all to Not Implemented
+        for(int i=0; i<1024; ++i) {
+            g_Handlers[i] = DispatchWrapper<OpNotImplemented>;
+        }
+        
         // 1. Set NOP
         g_Handlers[0x90] = DispatchWrapper<OpNop>;
         
         // 2. Set MOV
         g_Handlers[0x89] = DispatchWrapper<OpMov_EvGv>;
         g_Handlers[0x8B] = DispatchWrapper<OpMov_GvEv>;
-        for(int i=0; i<8; ++i) g_Handlers[0xB8+i] = DispatchWrapper<OpMov_RegImm>;
+        for(int i=0; i<8; ++i) {
+            g_Handlers[0xB0+i] = DispatchWrapper<OpMov_RegImm8>;
+            g_Handlers[0xB8+i] = DispatchWrapper<OpMov_RegImm>;
+        }
         g_Handlers[0xC7] = DispatchWrapper<OpMov_EvIz>; // MOV r/m32, imm32
         
         // 3. Set LEA
@@ -398,11 +606,21 @@ struct HandlerInit {
         g_Handlers[0x01] = DispatchWrapper<OpAdd_EvGv>;
         g_Handlers[0x09] = DispatchWrapper<OpOr_EvGv>;
         g_Handlers[0x21] = DispatchWrapper<OpAnd_EvGv>;
+        g_Handlers[0x29] = DispatchWrapper<OpSub_EvGv>;
         g_Handlers[0x31] = DispatchWrapper<OpXor_EvGv>;
+        g_Handlers[0x39] = DispatchWrapper<OpCmp_EvGv>;
         g_Handlers[0x85] = DispatchWrapper<OpTest_EvGv>;
         
         g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz>;
         g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz>;
+        
+        // Group 2 (Shift/Rotate)
+        g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb>;
+        g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb>;
+        g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1>;
+        g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1>;
+        g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl>;
+        g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
         
         // Group 5
         g_Handlers[0xFF] = DispatchWrapper<OpGroup5_Ev>;
@@ -412,6 +630,12 @@ struct HandlerInit {
             g_Handlers[0x40+i] = DispatchWrapper<OpInc_Reg>;
             g_Handlers[0x48+i] = DispatchWrapper<OpDec_Reg>;
         }
+        
+        // Map 1 (0F xx) -> Index 0x100 + xx
+        g_Handlers[0x1B6] = DispatchWrapper<OpMovzx_Byte>;
+        g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
+        g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
+        g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
     }
 };
 

@@ -112,6 +112,34 @@ inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val) {
 
 }
 
+inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    if (mod == 3) {
+        // Register (AL, CL, DL, BL, AH, CH, DH, BH)
+        uint32_t val = GetReg(state, rm & 3);
+        if (rm < 4) return val & 0xFF;
+        else return (val >> 8) & 0xFF;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        return state->mmu.read<uint8_t>(addr);
+    }
+}
+
+inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+    
+    if (mod == 3) {
+        // Register (AX, CX, DX, BX, SP, BP, SI, DI)
+        return GetReg(state, rm) & 0xFFFF;
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        return state->mmu.read<uint16_t>(addr);
+    }
+}
+
 // ------------------------------------------------------------------------------------------------
 // Stack Operations
 // ------------------------------------------------------------------------------------------------
@@ -255,6 +283,149 @@ inline T AluXor(EmuState* state, T dest, T src) {
     if (Parity(res & 0xFF)) flags |= PF_MASK;
     
     state->ctx.eflags = flags;
+    return res;
+}
+
+
+// ------------------------------------------------------------------------------------------------
+// Shift / Rotate
+// ------------------------------------------------------------------------------------------------
+
+template<typename T>
+inline T AluShl(EmuState* state, T dest, uint8_t count) {
+    if (count == 0) return dest;
+    count &= 0x1F;
+    if (count == 0) return dest;
+    
+    // CF: Last bit shifted out is bit (sizeof(T)*8 - count) of original
+    uint32_t width = sizeof(T) * 8;
+    bool cf = (dest >> (width - count)) & 1;
+    
+    T res = dest << count;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (width - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    if (cf) flags |= CF_MASK;
+    
+    // OF: For 1-bit, OF = MSB(Res) ^ CF
+    if (count == 1) {
+        bool msb_res = (res >> (width - 1)) & 1;
+        if (msb_res != cf) flags |= OF_MASK;
+    }
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluShr(EmuState* state, T dest, uint8_t count) {
+    if (count == 0) return dest;
+    count &= 0x1F;
+    if (count == 0) return dest;
+    
+    // CF: Last bit shifted out is bit (count-1)
+    bool cf = (dest >> (count - 1)) & 1;
+    
+    T res = dest >> count;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    if (cf) flags |= CF_MASK;
+    
+    // OF: For 1-bit, OF = MSB(Original)
+    if (count == 1) {
+        if ((dest >> (sizeof(T)*8 - 1)) & 1) flags |= OF_MASK;
+    }
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluSar(EmuState* state, T dest, uint8_t count) {
+    if (count == 0) return dest;
+    count &= 0x1F;
+    if (count == 0) return dest;
+    
+    // Arithmetic Shift
+    using ST = std::make_signed_t<T>;
+    ST sdest = (ST)dest;
+    ST sres = sdest >> count;
+    T res = (T)sres;
+    
+    // CF: Last bit shifted out
+    bool cf = (dest >> (count - 1)) & 1;
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+    if (Parity(res & 0xFF)) flags |= PF_MASK;
+    if (cf) flags |= CF_MASK;
+    
+    // OF: For 1-bit, OF = 0
+    if (count == 1) {
+        // Clear OF (already cleared)
+    }
+    
+    state->ctx.eflags = flags;
+    return res;
+}
+
+template<typename T>
+inline T AluRol(EmuState* state, T dest, uint8_t count) {
+    if (count == 0) return dest;
+    uint32_t width = sizeof(T) * 8;
+    count &= 0x1F;
+    count %= width;
+    if (count == 0) return dest;
+    
+    T res = (dest << count) | (dest >> (width - count));
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK); 
+    // SF/ZF/PF/AF unaffected
+    
+    // CF: LSB of result
+    bool cf = (res & 1);
+    if (cf) flags |= CF_MASK;
+    
+    // OF: For 1-bit, OF = MSB(Res) ^ CF
+    if (count == 1) {
+        bool msb = (res >> (width - 1)) & 1;
+        if (msb != cf) flags |= OF_MASK;
+    }
+    
+    state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
+    return res;
+}
+
+template<typename T>
+inline T AluRor(EmuState* state, T dest, uint8_t count) {
+    if (count == 0) return dest;
+    uint32_t width = sizeof(T) * 8;
+    count &= 0x1F;
+    count %= width;
+    if (count == 0) return dest;
+    
+    T res = (dest >> count) | (dest << (width - count));
+    
+    uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK);
+    
+    // CF: MSB of result
+    bool cf = (res >> (width - 1)) & 1;
+    if (cf) flags |= CF_MASK;
+    
+    // OF: For 1-bit, OF = MSB(Res) ^ MSB-1(Res)
+    if (count == 1) {
+        bool msb = (res >> (width - 1)) & 1;
+        bool smsb = (res >> (width - 2)) & 1;
+        if (msb != smsb) flags |= OF_MASK;
+    }
+    
+    state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
     return res;
 }
 

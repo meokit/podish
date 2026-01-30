@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "common.h"
 #include <array>
 #include <vector>
 #include <cstring>
@@ -145,19 +146,24 @@ public:
         return translate(addr);
     }
 
+    void set_status_ptr(EmuStatus* status) {
+        emu_status = status;
+    }
+
 private:
     using PageTable = std::array<uint8_t*, 1024>; 
     std::array<PageTable*, 1024> page_directory;
 
     FaultHandler fault_handler = nullptr;
     void* fault_opaque = nullptr;
+    EmuStatus* emu_status = nullptr;
 
     void handle_fault(uint32_t addr, int is_write) {
         if (fault_handler) {
             fault_handler(fault_opaque, addr, is_write);
         } else {
             fprintf(stderr, "[MMU] Segfault at 0x%08X (Write=%d) (No Handler)\n", addr, is_write);
-            // Fallback if no handler? Just log.
+            if (emu_status) *emu_status = EmuStatus::Fault;
         }
     }
 

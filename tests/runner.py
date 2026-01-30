@@ -8,7 +8,15 @@ import sys
 import struct
 import subprocess
 import tempfile
-    
+
+try:
+    from unicorn import *
+    from unicorn.x86_const import *
+    UNICORN_AVAILABLE = True
+except ImportError:
+    UNICORN_AVAILABLE = False
+    print("[-] Unicorn Engine not installed. Verification disabled.")
+
 TOP_50_INSTRUCTIONS = """
 mov r32, m32 : 44558
 push r32 : 34520
@@ -98,6 +106,8 @@ class X86Emu:
         self.lib.X86_SetFaultCallback.argtypes = [ctypes.c_void_p, ctypes.c_void_p] # state, function_pointer
         self.lib.X86_Step.argtypes = [ctypes.c_void_p]
         self.lib.X86_Run.argtypes = [ctypes.c_void_p]
+        self.lib.X86_EmuStop.argtypes = [ctypes.c_void_p] # Add binding
+        self.lib.X86_Destroy.argtypes = [ctypes.c_void_p]
         
         print("  [DEBUG] Calling X86_Create...")
         self.state = self.lib.X86_Create()
@@ -124,29 +134,10 @@ class X86Emu:
     def run(self):
         self.lib.X86_Run(self.state)
 
-
-    # Decoder Binding
-    class DecodedOp(ctypes.Structure):
-        _pack_ = 1
-        _fields_ = [
-            ("imm", ctypes.c_uint32),
-            ("disp", ctypes.c_uint32),
-            ("handler_index", ctypes.c_uint16),
-            ("prefixes", ctypes.c_uint16),
-            ("modrm", ctypes.c_uint8),
-            ("sib", ctypes.c_uint8),
-            ("length", ctypes.c_uint8),
-            ("flags", ctypes.c_uint8),
-        ]
-
-    def decode(self, data):
-        buf = (ctypes.c_uint8 * len(data))(*data)
-        op = X86Emu.DecodedOp()
-        self.lib.X86_Decode(buf, ctypes.byref(op))
-        return op
+    def stop(self):
+        self.lib.X86_EmuStop(self.state)
 
     def set_fault_callback(self, cb):
-        # Keep reference to avoid GC
         self._cb_ref = ctypes.CFUNCTYPE(None, ctypes.c_uint32, ctypes.c_int)(cb)
         self.lib.X86_SetFaultCallback(self.state, self._cb_ref)
 
@@ -156,7 +147,6 @@ class TestRunner:
 
     def compile(self, asm):
         # Use NASM to compile 32-bit assembly
-        # Fallback since keystone-engine failed to install on this extreamly new env
         with tempfile.NamedTemporaryFile(suffix=".asm", mode="w", delete=False) as f:
             f.write(f"BITS 32\n{asm}")
             asm_path = f.name
@@ -188,9 +178,61 @@ class TestRunner:
         STACK_SIZE = 0x1000
         STACK_TOP = STACK_ADDR + 0x800 # Arbitrary top
 
+        # Uniocorn Setup (Truth Machine)
+        uc_state = {}
+        if UNICORN_AVAILABLE:
+            try:
+                uc = Uc(UC_ARCH_X86, UC_MODE_32)
+                uc.mem_map(ADDRESS, 0x1000)
+                uc.mem_write(ADDRESS, code)
+                uc.mem_map(STACK_ADDR, STACK_SIZE)
+                
+                # Init Regs
+                uc.reg_write(UC_X86_REG_ESP, STACK_TOP)
+                if initial_regs:
+                    uc_map = {
+                        0: UC_X86_REG_EAX, 1: UC_X86_REG_ECX, 2: UC_X86_REG_EDX, 3: UC_X86_REG_EBX,
+                        4: UC_X86_REG_ESP, 5: UC_X86_REG_EBP, 6: UC_X86_REG_ESI, 7: UC_X86_REG_EDI
+                    }
+                    for idx, val in initial_regs.items():
+                        if idx in uc_map:
+                            uc.reg_write(uc_map[idx], val)
+
+                # Hook HLT (Instr) to Stop
+                def hook_code(uc, address, size, user_data):
+                    # Check for HLT (0xF4)
+                    mem = uc.mem_read(address, 1)
+                    if mem[0] == 0xF4:
+                        uc.emu_stop()
+                        
+                uc.hook_add(UC_HOOK_CODE, hook_code)
+                
+                print("  [.] Executing (Unicorn)...")
+                uc.emu_start(ADDRESS, ADDRESS + len(code) + 100, timeout=100000) # +100 for safety? HLT stops it.
+                
+                # Capture State
+                uc_map_rev = {
+                    0: UC_X86_REG_EAX, 1: UC_X86_REG_ECX, 2: UC_X86_REG_EDX, 3: UC_X86_REG_EBX,
+                    4: UC_X86_REG_ESP, 5: UC_X86_REG_EBP, 6: UC_X86_REG_ESI, 7: UC_X86_REG_EDI
+                }
+                for i in range(8):
+                    uc_state[i] = uc.reg_read(uc_map_rev[i])
+                uc_state['eip'] = uc.reg_read(UC_X86_REG_EIP)
+                
+            except UcError as e:
+                print(f"  [-] Unicorn Error: {e}")
+                # We can continue to test Simulator even if Unicorn fails, but mark it.
+        
         # Setup Simulator
         try:
             sim = X86Emu()
+            
+            # Fault Handler (calling stop)
+            def on_fault(addr, is_write):
+                print(f"[Callback] Fault at 0x{addr:X} (Write={is_write})")
+                sim.stop()
+                
+            sim.set_fault_callback(on_fault)
             
             # Memory Map
             sim.mem_map(ADDRESS, 0x1000, 7) # RWX
@@ -214,18 +256,41 @@ class TestRunner:
             # Verification
             success = True
             
-            # Verify EIP
+            # Verify vs Expected or Unicorn
+            final_eip = sim.ctx.eip
+            current_regs = list(sim.ctx.regs)
+
+            # 1. Check against Unicorn (Truth Machine)
+            if UNICORN_AVAILABLE and uc_state:
+                # Compare Regs
+                for i in range(8):
+                    if current_regs[i] != uc_state[i]:
+                        print(f"  [-] Unicorn Mismatch Reg {i}: Sim=0x{current_regs[i]:X} vs Uc=0x{uc_state[i]:X}")
+                        success = False
+                    # else:
+                    #     print(f"  [+] Reg {i} Matches Unicorn")
+                
+                # Compare EIP - (Note: HLT handling might differ slightly in final EIP?)
+                # If Unicorn stopped AT HLT, EIP points TO HLT.
+                # If Simulator stopped AFTER HLT, EIP points AFTER HLT?
+                # My OpHlt usually sets status=Stopped. DispatchWrapper adds length.
+                # So Sim EIP likely points to Next Instruction.
+                # Unicorn: Hook stops BEFORE execution? Or After?
+                # Check logic.
+                pass
+
+            # 2. Check Explicit Expectations (Backwards Compatibility)
             if expected_eip:
-                final_eip = sim.ctx.eip
                 if final_eip != expected_eip:
+                    # Allow slight divergence if Unicorn matches?
+                    # For now keep explicit check
                     print(f"  [-] EIP Mismatch: 0x{final_eip:X} (Expected 0x{expected_eip:X})")
                     success = False
                 else:
                     print(f"  [+] EIP Correct: 0x{final_eip:X}")
             
-            # Verify Registers
+            # Verify Registers (Explicit)
             if expected_regs:
-                current_regs = list(sim.ctx.regs)
                 for idx, val in expected_regs.items():
                     if current_regs[idx] != val:
                          print(f"  [-] Register {idx} Mismatch: 0x{current_regs[idx]:X} (Expected 0x{val:X})")
@@ -438,6 +503,121 @@ def test_group5():
     
     runner.run_test("GROUP5 (INC, DEC, PUSH m32)", asm, expected_regs=regs_expected)
 
+def test_shift_rotate():
+    runner = TestRunner()
+    # Group 2: Shift/Rotate
+    # SHL r32, 1 (D1 /4)
+    # SHR r32, 1 (D1 /5)
+    # SAR r32, imm8 (C1 /7)
+    # ROL r32, cl (D3 /0)
+    # ROR r32, 1 (D1 /1)
+    
+    asm = """
+    mov eax, 1
+    shl eax, 1      ; EAX = 2 (1 << 1)
+    shl eax, 2      ; EAX = 8 (2 << 2) (using C1 /4 imm8) -> Optimized by NASM to C1 E0 02?
+    
+    mov ebx, 0xFFFFFFFF
+    shr ebx, 1      ; EBX = 0x7FFFFFFF
+    
+    mov ecx, 0xF0F0F0F0
+    sar ecx, 4      ; ECX = 0xFF0F0F0F (Arithmetic Shift)
+    
+    ; Rotate
+    mov edx, 0x80000001
+    rol edx, 1      ; EDX = 0x00000003 (Rotate Left)
+    
+    mov esi, 0x00000003
+    ror esi, 1      ; ESI = 0x80000001 (Rotate Right)
+    
+    ; CL Variant
+    mov edi, 0x1
+    mov ecx, 3      ; CL = 3
+    shl edi, cl     ; EDI = 8 (1 << 3)
+    
+    hlt
+    """
+    
+    regs_expected = {
+        0: 8,           # EAX
+        3: 0x7FFFFFFF,  # EBX
+        1: 0xFF0F0F0F,  # ECX (Overwritten by 3 later?) No.
+        # Wait, ECX is used for CL variant `shl edi, cl`.
+        # `mov ecx, 3` overwrites ECX.
+        # So final ECX should be 3.
+        # But before that logic ran, it was 0xFF0F0F0F.
+        # We check final state.
+        
+        2: 0x00000003,  # EDX
+        6: 0x80000001,  # ESI
+        7: 8,           # EDI
+        1: 3            # ECX
+    }
+    
+    runner.run_test("GROUP 2 (SHL, SHR, SAR, ROL, ROR)", asm, expected_regs=regs_expected)
+
+def test_movzx_movsx():
+    runner = TestRunner()
+    # 0F B6: MOVZX r32, r/m8
+    # 0F B7: MOVZX r32, r/m16
+    # 0F BE: MOVSX r32, r/m8
+    # 0F BF: MOVSX r32, r/m16
+    
+    asm = """
+    mov eax, 0x11223344
+    mov bh, 0x80        ; BH = -128 (starts with 1)
+    
+    ; MOVZX Byte
+    movzx eax, bh       ; EAX = 0x00000080 (Zero Extend)
+    
+    ; MOVSX Byte
+    mov ecx, 0
+    mov cl, 0x80        ; CL = 0x80 (-128)
+    movsx edx, cl       ; EDX = 0xFFFFFF80 (Sign Extend)
+    
+    ; MOVZX Word
+    mov esi, 0x55667788
+    mov ax, 0xFFFF
+    movzx esi, ax       ; ESI = 0x0000FFFF
+    
+    ; MOVSX Word
+    mov edi, 0
+    mov bx, 0x8000      ; BX = -32768
+    movsx edi, bx       ; EDI = 0xFFFF8000
+    
+    hlt
+    """
+    
+    regs_expected = {
+        0: 0x0000FFFF,  # EAX (Overwritten by mov ax, 0xFFFF later)
+        # Logic:
+        # 1. MOV EAX, 0x11223344
+        # 2. MOV BH, 0x80. EAX unaffected? BH is in EBX.
+        # 3. MOVZX EAX, BH. EAX = 0x00000080.
+        # ...
+        # ?. MOV AX, 0xFFFF. EAX low 16 becomes FFFF. Top 16 preserved?
+        # In 32-bit mode, writes to 16-bit regs merge.
+        # So EAX = 0x0000FFFF.
+        # Wait. `movzx` overwrites EAX again?
+        # No, `movzx` writes EAX.
+        # `mov ax, 0xFFFF` writes AX.
+        # Let's trace carefully.
+        
+        # 1. EAX = ...
+        # 3. MOVZX EAX, BH -> EAX = 0x80.
+        # ...
+        # mov ax, 0xFFFF -> EAX = 0x0000FFFF?
+        # If EAX was 0x00000080.
+        # 0x0000. FFFF.
+        # Yes.
+    
+        2: 0xFFFFFF80,  # EDX (MOVSX)
+        6: 0x0000FFFF,  # ESI (MOVZX Word)
+        7: 0xFFFF8000,  # EDI (MOVSX Word)
+    }
+    
+    runner.run_test("MOVZX / MOVSX", asm, expected_regs=regs_expected)
+
 if __name__ == "__main__":
     # test_stack_lea()
     # test_add()
@@ -445,5 +625,7 @@ if __name__ == "__main__":
     # test_call_ret()
     # test_logic()
     test_group5()
+    test_shift_rotate()
+    test_movzx_movsx()
 
 
