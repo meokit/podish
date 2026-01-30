@@ -221,59 +221,7 @@ void OpDec_Reg(EmuState* state, DecodedOp* op) {
     SetReg(state, reg, res);
 }
 
-void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
-    // 81: Arith r/m32, imm32
-    // 83: Arith r/m32, imm8 (sign-extended)
-    
-    uint32_t dest = ReadModRM32(state, op);
-    uint32_t src = op->imm;
-    
-    // Sign-extend if 83
-    if ((op->handler_index & 0xFF) == 0x83) {
-        src = (int32_t)(int8_t)src;
-    }
-    
-    uint8_t subop = (op->modrm >> 3) & 7;
-    uint32_t res = 0;
-    
-    switch (subop) {
-        case 0: // ADD
-            res = AluAdd(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 1: // OR
-            res = AluOr(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 2: // ADC
-            res = AluAdc(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 3: // SBB
-            res = AluSbb(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 4: // AND
-            res = AluAnd(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 5: // SUB
-            res = AluSub(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 6: // XOR
-            res = AluXor(state, dest, src);
-            WriteModRM32(state, op, res);
-            break;
-        case 7: // CMP
-            AluSub(state, dest, src); // Discard result
-            break;
-        default:
-             // TODO: ADC(2), SBB(3)
-             OpNotImplemented(state, op);
-             break;
-    }
-}
+
 
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
     uint8_t subop = (op->modrm >> 3) & 7;
@@ -587,24 +535,50 @@ void OpAnd_GvEv(EmuState* state, DecodedOp* op) {
 // Group 1 Byte
 // ------------------------------------------------------------------------------------------------
 
+template<typename T>
+void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src) {
+    uint8_t subop = (op->modrm >> 3) & 7;
+    T res = 0;
+    
+    switch (subop) {
+        case 0: res = AluAdd(state, dest, src); break;
+        case 1: res = AluOr(state, dest, src);  break;
+        case 2: res = AluAdc(state, dest, src); break;
+        case 3: res = AluSbb(state, dest, src); break;
+        case 4: res = AluAnd(state, dest, src); break;
+        case 5: res = AluSub(state, dest, src); break;
+        case 6: res = AluXor(state, dest, src); break;
+        case 7: AluSub(state, dest, src); return; // CMP (No writeback)
+        default: OpNotImplemented(state, op); return;
+    }
+    
+    if constexpr (sizeof(T) == 1) {
+        WriteModRM8(state, op, (uint8_t)res);
+    } else {
+        WriteModRM32(state, op, (uint32_t)res);
+    }
+}
+
 void OpGroup1_EbIb(EmuState* state, DecodedOp* op) {
     // 80: Arith r/m8, imm8
     uint8_t dest = ReadModRM8(state, op);
     uint8_t src = (uint8_t)op->imm;
-    uint8_t subop = (op->modrm >> 3) & 7;
-    uint8_t res = 0;
+    Helper_Group1<uint8_t>(state, op, dest, src);
+}
+
+void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
+    // 81: Arith r/m32, imm32
+    // 83: Arith r/m32, imm8 (sign-extended)
     
-    switch (subop) {
-        case 0: res = AluAdd(state, dest, src); WriteModRM8(state, op, res); break;
-        case 1: res = AluOr(state, dest, src);  WriteModRM8(state, op, res); break;
-        case 2: res = AluAdc(state, dest, src); WriteModRM8(state, op, res); break;
-        case 3: res = AluSbb(state, dest, src); WriteModRM8(state, op, res); break;
-        case 4: res = AluAnd(state, dest, src); WriteModRM8(state, op, res); break;
-        case 5: res = AluSub(state, dest, src); WriteModRM8(state, op, res); break;
-        case 6: res = AluXor(state, dest, src); WriteModRM8(state, op, res); break;
-        case 7: AluSub(state, dest, src); break; // CMP
-        default: OpNotImplemented(state, op); break;
+    uint32_t dest = ReadModRM32(state, op);
+    uint32_t src = op->imm;
+    
+    // Sign-extend if 83
+    if ((op->handler_index & 0xFF) == 0x83) {
+        src = (int32_t)(int8_t)src;
     }
+    
+    Helper_Group1<uint32_t>(state, op, dest, src);
 }
 
 // ------------------------------------------------------------------------------------------------
