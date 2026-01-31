@@ -18,6 +18,7 @@ void OpRet(EmuState* state, DecodedOp* op);
 void OpRet_Imm16(EmuState* state, DecodedOp* op);
 
 void OpInt(EmuState* state, DecodedOp* op);
+void OpInto(EmuState* state, DecodedOp* op);
 
 void OpInt3(EmuState* state, DecodedOp* op);
 

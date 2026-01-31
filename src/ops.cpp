@@ -208,6 +208,8 @@ struct HandlerInit {
         g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl>;
         g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
         
+        g_Handlers[0xCE] = DispatchWrapper<OpInto>;
+        
         // Group 5
         g_Handlers[0xFF] = DispatchWrapper<OpGroup5_Ev>;
         

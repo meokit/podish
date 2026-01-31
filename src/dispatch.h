@@ -10,6 +10,7 @@ extern HandlerFunc g_Handlers[1024];
 template<LogicFunc Target>
 ATTR_PRESERVE_NONE
 void DispatchWrapper(EmuState* state, DecodedOp* op) {
+    uint32_t original_eip = state->ctx.eip;
     // Advance EIP before execution
     state->ctx.eip += op->length;
     
@@ -18,6 +19,10 @@ void DispatchWrapper(EmuState* state, DecodedOp* op) {
     
     // Stop Chain if Fault/Stopped
     if (state->status != EmuStatus::Running) {
+        // Restore EIP if Fault (Precise Exception)
+        if (state->status == EmuStatus::Fault) {
+            state->ctx.eip = original_eip;
+        }
         return;
     }
     

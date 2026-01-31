@@ -123,6 +123,31 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
     // REP handling
     if (op->prefixes.flags.rep) {
         uint32_t ecx = GetReg(state, ECX);
+        if (ecx == 0) return;
+
+        // Optimization for DF=0 (Forward Copy)
+        if (!df) {
+            uint32_t total_bytes = ecx * sizeof(T);
+            uint32_t esi = GetReg(state, ESI);
+            uint32_t edi = GetReg(state, EDI);
+            uint32_t src_base = GetSegmentBase(state, op);
+            
+            uint32_t copied = state->mmu.copy_block(esi + src_base, edi, total_bytes);
+            
+            // Calculate how many FULL items were processed
+            uint32_t items_processed = copied / sizeof(T);
+            uint32_t bytes_processed = items_processed * sizeof(T);
+            
+            // Update Regs
+            SetReg(state, ESI, esi + bytes_processed);
+            SetReg(state, EDI, edi + bytes_processed);
+            SetReg(state, ECX, ecx - items_processed);
+            
+            // If we stopped early (fault), we leave state consistent at the fault point.
+            return;
+        }
+
+        // Slow path / Reverse path (DF=1)
         while (ecx > 0) {
             uint32_t esi = GetReg(state, ESI);
             uint32_t edi = GetReg(state, EDI);
@@ -132,7 +157,10 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
             uint32_t src_addr = esi + GetSegmentBase(state, op);
             
             T val = state->mmu.read<T>(src_addr);
+            if (state->status != EmuStatus::Running) break;
+            
             state->mmu.write<T>(edi, val);
+            if (state->status != EmuStatus::Running) break;
             
             SetReg(state, ESI, esi + step);
             SetReg(state, EDI, edi + step);

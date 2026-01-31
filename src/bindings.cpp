@@ -70,7 +70,7 @@ EmuState* X86_Create() {
     state->ctx.hooks = &state->hooks;
     
     // Link MMU to State Status
-    state->mmu.set_status_ptr(&state->status);
+    state->mmu.set_status_ptr(&state->status, &state->fault_vector);
     
     // Setup generic fault printer for now, or allow python to set it
     return state;

@@ -135,6 +135,56 @@ public:
         // Fault
         handle_fault(addr, 1);
     }
+    // Block Copy (Page-by-Page)
+    // Returns number of bytes copied.
+    uint32_t copy_block(uint32_t src_addr, uint32_t dst_addr, uint32_t size) {
+        // If hooks are present, fall back to slow byte-wise copy to ensure hooks trigger.
+        if (mem_hook) {
+            for (uint32_t i = 0; i < size; ++i) {
+                uint8_t val = this->read<uint8_t>(src_addr + i);
+                if (emu_status && *emu_status != EmuStatus::Running) return i;
+                this->write<uint8_t>(dst_addr + i, val);
+                if (emu_status && *emu_status != EmuStatus::Running) return i;
+            }
+            return size;
+        }
+
+        uint32_t bytes_done = 0;
+        uint32_t bytes_left = size;
+        uint32_t curr_src = src_addr;
+        uint32_t curr_dst = dst_addr;
+
+        while (bytes_left > 0) {
+            // Calculate chunk size valid for both pages
+            uint32_t src_page_rem = PAGE_SIZE - (curr_src & PAGE_MASK);
+            uint32_t dst_page_rem = PAGE_SIZE - (curr_dst & PAGE_MASK);
+            uint32_t chunk = (bytes_left < src_page_rem) ? bytes_left : src_page_rem;
+            if (dst_page_rem < chunk) chunk = dst_page_rem;
+
+            // Translate
+            uint8_t* p_src = translate(curr_src);
+            if (!p_src) {
+                handle_fault(curr_src, 0); // Read Fault
+                return bytes_done;
+            }
+            
+            uint8_t* p_dst = translate(curr_dst);
+            if (!p_dst) {
+                handle_fault(curr_dst, 1); // Write Fault
+                return bytes_done;
+            }
+
+            // Perform Copy
+            std::memcpy(p_dst, p_src, chunk);
+
+            bytes_done += chunk;
+            bytes_left -= chunk;
+            curr_src += chunk;
+            curr_dst += chunk;
+        }
+        return bytes_done;
+    }
+
     // Warning: This does not trigger fault callback if null, 
     // assumes caller checks or is safe.
     // Decoder normally reads via `read<uint8_t>` or checks bounds.
@@ -142,8 +192,9 @@ public:
         return translate(addr);
     }
 
-    void set_status_ptr(EmuStatus* status) {
+    void set_status_ptr(EmuStatus* status, uint8_t* vector) {
         emu_status = status;
+        emu_fault_vector = vector;
     }
 
 private:
@@ -157,6 +208,7 @@ private:
     void* mem_hook_opaque = nullptr;
     
     EmuStatus* emu_status = nullptr;
+    uint8_t* emu_fault_vector = nullptr;
 
     void handle_fault(uint32_t addr, int is_write) {
         if (fault_handler) {
@@ -164,6 +216,7 @@ private:
         } else {
             fprintf(stderr, "[MMU] Segfault at 0x%08X (Write=%d) (No Handler)\n", addr, is_write);
             if (emu_status) *emu_status = EmuStatus::Fault;
+            if (emu_fault_vector) *emu_fault_vector = 14; // #PF
         }
     }
 

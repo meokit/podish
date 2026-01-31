@@ -87,6 +87,16 @@ void OpInt3(EmuState* state, DecodedOp* op) {
     }
 }
 
+void OpInto(EmuState* state, DecodedOp* op) {
+    // CE: INTO (Interrupt 4 if Overflow Flag set)
+    if (state->ctx.eflags & OF_MASK) {
+        if (!state->hooks.on_interrupt(state, 4)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 4; // #OF
+        }
+    }
+}
+
 void OpHlt(EmuState* state, DecodedOp* op) {
     // HLT (0xF4)
     state->status = EmuStatus::Stopped;
@@ -199,7 +209,6 @@ void OpCli(EmuState* state, DecodedOp* op) {
     state->status = EmuStatus::Fault;
     state->fault_vector = 13; // #GP
 }
-
 
 
 void OpCpuid(EmuState* state, DecodedOp* op) {

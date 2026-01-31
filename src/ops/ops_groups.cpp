@@ -269,9 +269,8 @@ void OpCwde(EmuState* state, DecodedOp* op) {
 }
 
 void OpUd2(EmuState* state, DecodedOp* op) {
-    // #UD is a Fault, so EIP should point to the faulting instruction.
-    // DispatchWrapper already advanced EIP, so we must restore it.
-    state->ctx.eip -= op->length;
+    // #UD is a Fault.
+    // DispatchWrapper will handle EIP rewind if generic Fault status is set.
     
     if (!state->hooks.on_invalid_opcode(state)) {
         state->status = EmuStatus::Fault;

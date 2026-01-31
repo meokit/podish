@@ -135,7 +135,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
         {
             if constexpr (sizeof(T) == 1) { // AX / r/m8
                  uint16_t ax = (uint16_t)GetReg(state, EAX) & 0xFFFF;
-                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 if (val == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                  uint16_t q = ax / val;
                  uint16_t r = ax % val;
                  
@@ -143,7 +149,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
                  *rax = (*rax & 0xFFFF0000) | (r << 8) | (q & 0xFF);
             } else if constexpr (sizeof(T) == 2) { // DX:AX / r/m16
                  uint32_t dx_ax = ((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF);
-                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 if (val == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                  uint32_t q = dx_ax / val;
                  uint32_t r = dx_ax % val;
                  
@@ -155,7 +167,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
                  *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
             } else { // EDX:EAX / r/m32
                  uint64_t edx_eax = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
-                 if (val == 0) { state->status = EmuStatus::Fault; return; }
+                 if (val == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                  uint64_t q = edx_eax / val;
                  uint64_t r = edx_eax % val;
                  SetReg(state, EAX, (uint32_t)q);
@@ -168,7 +186,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
             if constexpr (sizeof(T) == 1) { // AX / r/m8
                 int16_t ax = (int16_t)(GetReg(state, EAX) &  0xFFFF);
                 int8_t v = (int8_t)val;
-                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                if (v == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                 int16_t q = ax / v;
                 int16_t r = ax % v;
                 
@@ -177,7 +201,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
             } else if constexpr (sizeof(T) == 2) { // DX:AX / r/m16
                 int32_t dx_ax = (int32_t)(((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF));
                 int16_t v = (int16_t)val;
-                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                if (v == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                 int32_t q = dx_ax / v;
                 int32_t r = dx_ax % v;
                 
@@ -190,7 +220,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
             } else { // EDX:EAX / r/m32
                 int64_t edx_eax = ((int64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
                 int32_t v = (int32_t)val;
-                if (v == 0) { state->status = EmuStatus::Fault; return; }
+                if (v == 0) { 
+                     if (!state->hooks.on_interrupt(state, 0)) {
+                        state->status = EmuStatus::Fault; 
+                        state->fault_vector = 0; // #DE
+                     }
+                     return; 
+                 }
                 int64_t q = edx_eax / v;
                 int64_t r = edx_eax % v;
                 
