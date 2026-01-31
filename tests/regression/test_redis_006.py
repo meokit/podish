@@ -304,7 +304,8 @@ def test_id_138_sar_r32_imm8():
         initial_regs={'EAX': 0xFFFFFFF8}, # -8
         expected_regs={'EAX': 0xFFFFFFFF}, # -1
         initial_eflags=0,
-        expected_eflags=0x80 | 0x40 | 0x4 | 0x0 # SF=1, ZF=0 (wait, -1 is not 0), PF=1
+        # FIX: Result -1 (0xFFFFFFFF) is not zero, so ZF=0. Comment incorrectly said ZF=0 but code expected 0x40 (ZF=1).
+        expected_eflags=0x80 | 0x4 | 0x0 # SF=1, ZF=0, PF=1
         # Flags for SAR: OF=0 for shift > 1. SF, ZF, PF, CF set.
         # -1 has PF=1. ZF=0. SF=1. CF=0 (last bit shifted out was 1? Wait, -8 is ...1000, 3 shifts: ...1111, CF=0)
     )
@@ -379,7 +380,8 @@ def test_id_195_sbb_r32_imm32():
         initial_regs={'EDX': 0},
         initial_eflags=1,
         expected_regs={'EDX': 0xFFFFFFFF},
-        expected_eflags=0x80 | 0x4 | 0x1 # SF=1, PF=1, CF=1
+        # FIX: SBB 0,0 with CF=1 produces borrow from bit 3 -> AF=1.
+        expected_eflags=0x80 | 0x10 | 0x4 | 0x1 # SF=1, AF=1, PF=1, CF=1
     )
 
 @pytest.mark.regression
@@ -409,7 +411,8 @@ def test_id_41_sbb_r32_r32():
         initial_regs={'ESI': 0x12345678},
         initial_eflags=1,
         expected_regs={'ESI': 0xFFFFFFFF},
-        expected_eflags=0x80 | 0x4 | 0x1 # SF=1, PF=1, CF=1
+        # FIX: SBB X,X with CF=1 produces borrow from bit 3 -> AF=1.
+        expected_eflags=0x80 | 0x10 | 0x4 | 0x1 # SF=1, AF=1, PF=1, CF=1
     )
 
 @pytest.mark.regression
@@ -423,7 +426,8 @@ def test_id_353_sbb_r8_imm8():
         initial_regs={'EAX': 0},
         initial_eflags=1,
         expected_regs={'EAX': 0xFF},
-        expected_eflags=0x80 | 0x4 | 0x1 # SF=1, PF=1, CF=1
+        # FIX: SBB AL,0 with CF=1 produces borrow from bit 3 -> AF=1.
+        expected_eflags=0x80 | 0x10 | 0x4 | 0x1 # SF=1, AF=1, PF=1, CF=1
     )
 
 @pytest.mark.regression

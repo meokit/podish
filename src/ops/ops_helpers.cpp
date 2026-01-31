@@ -27,6 +27,8 @@ uint32_t ReadModRM(EmuState* state, DecodedOp* op, bool is_byte) {
              uint32_t addr = ComputeEAD(state, op);
              return state->mmu.read<uint8_t>(addr);
          }
+    } else if (op->prefixes.flags.opsize) {
+        return ReadModRM16(state, op);
     } else {
         return ReadModRM32(state, op);
     }

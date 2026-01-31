@@ -15,6 +15,7 @@ void OpJcc_Rel(EmuState* state, DecodedOp* op);
 void OpCall_Rel(EmuState* state, DecodedOp* op);
 
 void OpRet(EmuState* state, DecodedOp* op);
+void OpRet_Imm16(EmuState* state, DecodedOp* op);
 
 void OpInt(EmuState* state, DecodedOp* op);
 

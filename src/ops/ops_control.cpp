@@ -55,6 +55,17 @@ void OpRet(EmuState* state, DecodedOp* op) {
     state->ctx.eip = ret_eip;
 }
 
+void OpRet_Imm16(EmuState* state, DecodedOp* op) {
+    // C2: RET imm16
+    uint32_t ret_eip = Pop32(state);
+    state->ctx.eip = ret_eip;
+    
+    // Pop imm16 bytes from stack
+    uint32_t esp = GetReg(state, ESP);
+    esp += (uint16_t)op->imm;
+    SetReg(state, ESP, esp);
+}
+
 void OpInt(EmuState* state, DecodedOp* op) {
     // CD ib: INT imm8
     // Note: Decoder puts imm8 in op->imm

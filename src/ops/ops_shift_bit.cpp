@@ -17,13 +17,17 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
     if (count == 0) return; // Nothing
     
     // Perform Op
+    bool is_opsize = op->prefixes.flags.opsize;
+    
     switch (subop) {
         case 0: // ROL
             if (is_byte) res = AluRol<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize) res = AluRol<uint16_t>(state, (uint16_t)dest, count);
             else         res = AluRol<uint32_t>(state, dest, count);
             break;
         case 1: // ROR
             if (is_byte) res = AluRor<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize) res = AluRor<uint16_t>(state, (uint16_t)dest, count);
             else         res = AluRor<uint32_t>(state, dest, count);
             break;
         case 2: // RCL
@@ -34,14 +38,17 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
             return;
         case 4: // SHL/SAL
             if (is_byte) res = AluShl<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize) res = AluShl<uint16_t>(state, (uint16_t)dest, count);
             else         res = AluShl<uint32_t>(state, dest, count);
             break;
         case 5: // SHR
             if (is_byte) res = AluShr<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize) res = AluShr<uint16_t>(state, (uint16_t)dest, count);
             else         res = AluShr<uint32_t>(state, dest, count);
             break;
         case 7: // SAR
             if (is_byte) res = AluSar<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize) res = AluSar<uint16_t>(state, (uint16_t)dest, count);
             else         res = AluSar<uint32_t>(state, dest, count);
             break;
         default:
@@ -67,6 +74,8 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
              uint32_t addr = ComputeEAD(state, op);
              state->mmu.write<uint8_t>(addr, (uint8_t)res);
          }
+    } else if (is_opsize) {
+        WriteModRM16(state, op, (uint16_t)res);
     } else {
         WriteModRM32(state, op, res);
     }

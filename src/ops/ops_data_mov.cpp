@@ -115,6 +115,98 @@ void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
     }
 }
 
+template<typename T>
+void Helper_Movs(EmuState* state, DecodedOp* op) {
+    bool df = (state->ctx.eflags & 0x400); // DF
+    int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
+    
+    // REP handling
+    if (op->prefixes.flags.rep) {
+        uint32_t ecx = GetReg(state, ECX);
+        while (ecx > 0) {
+            uint32_t esi = GetReg(state, ESI);
+            uint32_t edi = GetReg(state, EDI);
+            
+            // DS:ESI -> ES:EDI
+            // For now assume flat model (DS=0, ES=0)
+            uint32_t src_addr = esi + GetSegmentBase(state, op);
+            
+            T val = state->mmu.read<T>(src_addr);
+            state->mmu.write<T>(edi, val);
+            
+            SetReg(state, ESI, esi + step);
+            SetReg(state, EDI, edi + step);
+            
+            ecx--;
+            SetReg(state, ECX, ecx);
+        }
+    } else {
+        uint32_t esi = GetReg(state, ESI);
+        uint32_t edi = GetReg(state, EDI);
+        uint32_t src_addr = esi + GetSegmentBase(state, op);
+        
+        T val = state->mmu.read<T>(src_addr);
+        state->mmu.write<T>(edi, val);
+        
+        SetReg(state, ESI, esi + step);
+        SetReg(state, EDI, edi + step);
+    }
+}
+
+void OpMovs_Byte(EmuState* state, DecodedOp* op) {
+    Helper_Movs<uint8_t>(state, op);
+}
+
+void OpMovs_Word(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) {
+        Helper_Movs<uint16_t>(state, op);
+    } else {
+        Helper_Movs<uint32_t>(state, op);
+    }
+}
+
+template<typename T>
+void Helper_Stos(EmuState* state, DecodedOp* op) {
+    bool df = (state->ctx.eflags & 0x400); // DF
+    int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
+    
+    // Get Value (AL/AX/EAX)
+    T val;
+    if constexpr (sizeof(T) == 1) val = (T)GetReg(state, EAX); // AL
+    else if constexpr (sizeof(T) == 2) val = (T)(GetReg(state, EAX) & 0xFFFF); // AX
+    else val = (T)GetReg(state, EAX); // EAX
+    
+    if (op->prefixes.flags.rep) {
+        uint32_t ecx = GetReg(state, ECX);
+        while (ecx > 0) {
+            uint32_t edi = GetReg(state, EDI);
+            // Dest ES:EDI
+            state->mmu.write<T>(edi, val);
+            
+            SetReg(state, EDI, edi + step);
+            
+            ecx--;
+            SetReg(state, ECX, ecx);
+        }
+    } else {
+        uint32_t edi = GetReg(state, EDI);
+        state->mmu.write<T>(edi, val);
+        SetReg(state, EDI, edi + step);
+    }
+}
+
+void OpStos_Byte(EmuState* state, DecodedOp* op) {
+    Helper_Stos<uint8_t>(state, op);
+}
+
+void OpStos_Word(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) {
+        Helper_Stos<uint16_t>(state, op);
+    } else {
+        Helper_Stos<uint32_t>(state, op);
+    }
+}
+
 void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
     // 0F B6: MOVZX r32, r/m8
     uint8_t val = ReadModRM8(state, op);

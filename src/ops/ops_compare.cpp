@@ -53,7 +53,14 @@ void OpTest_EvGv(EmuState* state, DecodedOp* op) {
     uint32_t dest = ReadModRM32(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t src = GetReg(state, reg);
-       AluAnd(state, dest, src); // Discard result
+    AluAnd(state, dest, src); // Discard result
+}
+
+void OpSetcc(EmuState* state, DecodedOp* op) {
+    // 0F 9x: SETcc r/m8
+    uint8_t cond = op->handler_index & 0xF;
+    uint8_t val = CheckCondition(state, cond) ? 1 : 0;
+    WriteModRM8(state, op, val);
 }
 
 } // namespace x86emu

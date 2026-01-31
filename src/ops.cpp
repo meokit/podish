@@ -50,6 +50,14 @@ struct HandlerInit {
         g_Handlers[0xA2] = DispatchWrapper<OpMov_Moffs_Store>;
         g_Handlers[0xA3] = DispatchWrapper<OpMov_Moffs_Store>;
         
+        // MOVS (A4-A5)
+        g_Handlers[0xA4] = DispatchWrapper<OpMovs_Byte>;
+        g_Handlers[0xA5] = DispatchWrapper<OpMovs_Word>;
+        
+        // STOS (AA-AB)
+        g_Handlers[0xAA] = DispatchWrapper<OpStos_Byte>;
+        g_Handlers[0xAB] = DispatchWrapper<OpStos_Word>;
+        
         // 3. Set LEA
         g_Handlers[0x8D] = DispatchWrapper<OpLea>;
         
@@ -72,6 +80,7 @@ struct HandlerInit {
         g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel>; // JMP rel8
         g_Handlers[0xE8] = DispatchWrapper<OpCall_Rel>; // CALL rel32
         g_Handlers[0xC3] = DispatchWrapper<OpRet>;      // RET
+        g_Handlers[0xC2] = DispatchWrapper<OpRet_Imm16>; // RET imm16
         g_Handlers[0xCD] = DispatchWrapper<OpInt>;      // INT imm8
         g_Handlers[0xCC] = DispatchWrapper<OpInt3>;     // INT3
         
@@ -209,6 +218,7 @@ struct HandlerInit {
         // CMOVcc (0F 4x)
         for (int i=0; i<16; ++i) {
             g_Handlers[0x140+i] = DispatchWrapper<OpCmov_GvEv>;
+            g_Handlers[0x190+i] = DispatchWrapper<OpSetcc>; // SETcc (0F 9x)
         }
 
         // SSE / SSE2
