@@ -93,7 +93,11 @@ void OpHlt(EmuState* state, DecodedOp* op) {
 }
 
 void OpNop(EmuState* state, DecodedOp* op) {
-    // No Operation
+    // 90: NOP
+    // F3 90: PAUSE (REP NOP)
+    if (op->prefixes.flags.rep) {
+        CPU_RELAX();
+    }
 }
 
 void OpCmov_GvEv(EmuState* state, DecodedOp* op) {
@@ -201,7 +205,7 @@ void OpCli(EmuState* state, DecodedOp* op) {
 void OpCpuid(EmuState* state, DecodedOp* op) {
     // 0F A2: CPUID
     uint32_t leaf = GetReg(state, EAX);
-    uint32_t ecx_in = GetReg(state, ECX);
+    // uint32_t ecx_in = GetReg(state, ECX);
     
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
     

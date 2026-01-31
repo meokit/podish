@@ -49,6 +49,20 @@ def case_lods_rep():
     }
 
 @pytest.mark.i686
+def case_pause():
+    """
+    ; PAUSE is REP NOP (F3 90)
+    ; It should do nothing visible to regs.
+    nop
+    pause
+    nop
+    hlt
+    """
+    return {
+        'expected_regs': {}
+    }
+
+@pytest.mark.i686
 def case_scas_repe():
     """
     ; Scan for 0xCC (Not present in 0x11, 0x11, 0x22)
@@ -376,6 +390,7 @@ def case_cmpxchg():
 # =============================================================================
 
 def test_lods_rep(): run_test(case_lods_rep)
+def test_pause(): run_test(case_pause)
 def test_scas_repe(): run_test(case_scas_repe)
 def test_scas_repne(): run_test(case_scas_repne)
 def test_cmps_repe(): run_test(case_cmps_repe)

@@ -7,6 +7,16 @@
 #define SIMDE_ENABLE_NATIVE_ALIASES
 #include <simde/x86/sse2.h>
 #include "float80.h"
+#include <thread>
+
+#if defined(__x86_64__) || defined(_M_X64)
+    #include <immintrin.h>
+    #define CPU_RELAX() _mm_pause()
+#elif defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64)
+    #define CPU_RELAX() __asm__ __volatile__("yield")
+#else
+    #define CPU_RELAX() std::this_thread::yield()
+#endif
 
 namespace x86emu {
 
