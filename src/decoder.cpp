@@ -185,19 +185,24 @@ static bool IsControlFlow(const DecodedOp* op) {
     return false;
 }
 
-bool DecodeBlock(EmuState* state, uint32_t start_eip, BasicBlock* block) {
+bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block) {
     block->start_eip = start_eip;
     block->ops.clear();
     
     uint32_t current_eip = start_eip;
-    const int MAX_BLOCK_SIZE = 64;
+    uint64_t effective_limit = 64;
+    if (max_insts > 0 && max_insts < 64) effective_limit = max_insts;
     
     // Page boundary check helper
     auto is_page_cross = [](uint32_t start, uint32_t len) {
         return (start & 0xFFFFF000) != ((start + len - 1) & 0xFFFFF000);
     };
 
-    while (block->ops.size() < MAX_BLOCK_SIZE) {
+    while (block->ops.size() < effective_limit) {
+        // 0. Check Limit
+        if (limit_eip != 0 && current_eip >= limit_eip) {
+            break;
+        }
         // 1. Fetch
         // Read instruction bytes safely
         uint8_t buf[16];
@@ -209,17 +214,19 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, BasicBlock* block) {
         if (!DecodeInstruction(buf, &op)) {
             // Decode error: Insert Fault Op
             std::memset(&op, 0, sizeof(op));
-            op.length = 1; // Consume 1 byte
-            op.length = 1; // Consume 1 byte
+            op.length = 0; // Fault: EIP points to instruction
             op.handler_index = 0x10B; // UD2
             block->ops.push_back(op);
+            
+            // Append Sentinel for dispatch safety
+            DecodedOp sentinel;
+            std::memset(&sentinel, 0, sizeof(sentinel));
+            sentinel.handler_index = 1023;
+            block->ops.push_back(sentinel);
+            
             block->end_eip = current_eip + 1;
             return true; // Return true to execute what we have (including the fault)
         }
-        
-        // Link Handler - No longer needed, done at dispatch time
-        // if (op.handler_index < 1024) ...
-
         
         // Add to block
         block->ops.push_back(op);
@@ -241,10 +248,16 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, BasicBlock* block) {
         }
     }
     
-    // Mark Last
+    // Mark Last Real Op
     if (!block->ops.empty()) {
         block->ops.back().meta.flags.is_last = 1;
     }
+    
+    // Append Sentinel Op (1023) to terminate Threaded Dispatch
+    DecodedOp sentinel;
+    std::memset(&sentinel, 0, sizeof(sentinel));
+    sentinel.handler_index = 1023;
+    block->ops.push_back(sentinel);
     
     block->end_eip = current_eip;
     return !block->ops.empty();

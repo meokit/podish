@@ -144,18 +144,32 @@ void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
 
 // Run Code (Block Based)
 extern "C"
-void X86_Run(EmuState* state) {
+void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->status = EmuStatus::Running;
+    uint64_t inst_count = 0;
     
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
+        
+        // 0. Check Exit Conditions
+        if (end_eip != 0 && eip >= end_eip) {
+            state->status = EmuStatus::Stopped;
+            break;
+        }
+        if (max_insts != 0 && inst_count >= max_insts) {
+            state->status = EmuStatus::Stopped;
+            break;
+        }
         
         // 1. Lookup Block
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
             // Decode new block
             BasicBlock block;
-            if (!DecodeBlock(state, eip, &block)) {
+            uint64_t remaining_insts = 0;
+            if (max_insts > 0) remaining_insts = max_insts - inst_count;
+            
+            if (!DecodeBlock(state, eip, end_eip, remaining_insts, &block)) {
                 // Decode failed (invalid instruction or unmapped)
                 printf("[Run] Decode Failed at %08X\n", eip);
                 state->status = EmuStatus::Fault;
@@ -177,6 +191,11 @@ void X86_Run(EmuState* state) {
             if (h) {
                 // Head handler will update EIP and dispatch next
                 h(state, head); 
+                
+                // Approximate instruction count: ops.size() - 1 (Sentinel)
+                if (block.ops.size() > 0)
+                    inst_count += (block.ops.size() - 1);
+                
             } else {
                 // Opcode mapping failed or out of bounds
                 OpUd2(state, head); // Trigger #UD
@@ -184,7 +203,6 @@ void X86_Run(EmuState* state) {
         }
         
         // Loop will continue if status is Running (JMP/RET/End of Block)
-        // If End of Block (is_last), Wrapper returns here.
         // We look up new EIP in next iteration.
     }
 }

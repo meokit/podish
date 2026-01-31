@@ -3,6 +3,13 @@
 
 namespace x86emu {
 
+// Sentinel Handler
+ATTR_PRESERVE_NONE
+void OpExitBlock(EmuState* state, DecodedOp* op) {
+    // End of Threaded Dispatch Chain.
+    // Returns to X86_Run loop.
+}
+
 // Global dispatch table
 // This is initialized by HandlerInit static constructor below
 HandlerFunc g_Handlers[1024] = {nullptr};
@@ -15,6 +22,11 @@ struct HandlerInit {
         
         // 1. Set NOP
         g_Handlers[0x90] = DispatchWrapper<OpNop>;
+        
+        // Sentinel (1023)
+        // Must match DecodeBlock sentinel index
+        extern void OpExitBlock(EmuState* state, DecodedOp* op);
+        g_Handlers[1023] = OpExitBlock;
         
         // 2. Set MOV
         g_Handlers[0x89] = DispatchWrapper<OpMov_EvGv>;

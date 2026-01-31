@@ -25,7 +25,7 @@ extern "C" {
     void X86_SetInterruptHook(x86emu::EmuState* state, uint8_t vector, PyInterruptHook hook);
 
     
-    void X86_Run(x86emu::EmuState* state);
+    void X86_Run(x86emu::EmuState* state, uint32_t end_eip, uint64_t max_insts);
     void X86_EmuStop(x86emu::EmuState* state);
     int X86_Step(x86emu::EmuState* state);
     

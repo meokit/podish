@@ -147,7 +147,9 @@ class UnicornBackend(EmulatorBackend):
                      val_bytes = val.to_bytes(16, 'little')
                  else:
                      val_bytes = bytes(val) # Fallback
-                 self.mu.reg_write(reg_id, val_bytes)
+                 # Unicorn expects integer even for 128-bit registers
+                 val_int = int.from_bytes(val_bytes, 'little')
+                 self.mu.reg_write(reg_id, val_int)
              else:
                  self.mu.reg_write(reg_id, val)
 
@@ -268,30 +270,20 @@ class X86EmuBackend(EmulatorBackend):
         if begin != 0:
             self.ctx.eip = begin
             
-        # Step Loop
-        # We need to implement the loop here instead of in Runner
+        # Use Optimized C++ Loop
         MAX_STEPS = 50 if count == 0 else count
         if count == 0: MAX_STEPS = 50 # Default safe limit
         
-        sim_status = 0
-        self.fault_vector = 0
+        # 0 for exit_condition in C++ means infinite/none.
+        # But we want to enforce a limit for tests (MAX_STEPS).
+        # And 'end' address.
         
-        for _ in range(MAX_STEPS):
-            if self.ctx.eip >= end and end != 0:
-                break
-                
-            sim_status = self.step()
-            
-            if sim_status == 1: # Stopped
-                break
-            elif sim_status == 2: # Fault
-                self.fault_vector = getattr(self.state, 'fault_vector', 0)
-                break
-            
-            # Check range if end is set
-            if end != 0:
-                if self.ctx.eip < begin or self.ctx.eip >= end:
-                    break
+        cppyy.gbl.X86_Run(self.state, end, MAX_STEPS)
+        
+        # Check Status after run
+        # Running -> Stopped or Fault
+        if getattr(self.state, 'status', 0) == 2: # Fault
+             self.fault_vector = getattr(self.state, 'fault_vector', 0)
                     
     def get_fault_info(self):
 
