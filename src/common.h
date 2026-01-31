@@ -44,6 +44,7 @@ struct alignas(64) Context {
     uint32_t regs[8];    // General Purpose Registers
     uint32_t eip;        // Instruction Pointer
     uint32_t eflags;     // EFLAGS Register
+    uint32_t eflags_mask; // Mask for user-modifiable flags (1=modifiable)
     
     // SSE/SSE2 Registers
     alignas(16) __m128 xmm[8];

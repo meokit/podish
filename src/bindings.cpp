@@ -61,6 +61,10 @@ EmuState* X86_Create() {
     // Zero entire context first
     std::memset(&state->ctx, 0, sizeof(state->ctx));
     
+    // Set default EFLAGS and Mask
+    state->ctx.eflags = 0x202; // IF=1, Reserved=1
+    state->ctx.eflags_mask = 0x257FD5; // User-modifiable flags (CF,PF,AF,ZF,SF,TF,DF,OF,NT,RF,AC,ID)
+    
     // Link pointers
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;

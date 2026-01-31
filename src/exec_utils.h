@@ -271,6 +271,21 @@ inline void WriteModRM128(EmuState* state, const DecodedOp* op, __m128 val) {
 // Stack Operations
 // ------------------------------------------------------------------------------------------------
 
+inline void Push16(EmuState* state, uint16_t val) {
+    uint32_t esp = GetReg(state, ESP);
+    esp -= 2;
+    SetReg(state, ESP, esp);
+    state->mmu.write<uint16_t>(esp, val);
+}
+
+inline uint16_t Pop16(EmuState* state) {
+    uint32_t esp = GetReg(state, ESP);
+    uint16_t val = state->mmu.read<uint16_t>(esp);
+    esp += 2;
+    SetReg(state, ESP, esp);
+    return val;
+}
+
 inline void Push32(EmuState* state, uint32_t val) {
     uint32_t esp = GetReg(state, ESP);
     esp -= 4;

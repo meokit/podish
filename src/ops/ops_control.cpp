@@ -89,7 +89,6 @@ void OpCmov_GvEv(EmuState* state, DecodedOp* op) {
     // 0F 4x: CMOVcc r32, r/m32
     uint8_t cond = op->handler_index & 0xF;
     bool pass = CheckCondition(state, cond);
-    printf("CMOV cond=%d pass=%d eflags=%x\n", cond, pass, state->ctx.eflags);
     if (pass) {
         if (op->prefixes.flags.opsize) {
             uint16_t val = ReadModRM16(state, op);
@@ -101,6 +100,89 @@ void OpCmov_GvEv(EmuState* state, DecodedOp* op) {
             SetReg(state, reg, val);
         }
     }
+}
+
+
+
+// ------------------------------------------------------------------------------------------------
+// Flag Operations
+// ------------------------------------------------------------------------------------------------
+
+void OpPushf(EmuState* state, DecodedOp* op) {
+    // 9C: PUSHF/PUSHFD
+    if (op->prefixes.flags.opsize) {
+        // PUSHF (16-bit)
+        Push16(state, (uint16_t)state->ctx.eflags);
+    } else {
+        // PUSHFD (32-bit)
+        // Note: VM and RF flags are usually cleared in image pushed to stack? 
+        // For simple emulation, we push raw.
+        Push32(state, state->ctx.eflags & 0x00FCFFFF); 
+    }
+}
+
+void OpPopf(EmuState* state, DecodedOp* op) {
+    // 9D: POPF/POPFD
+    if (op->prefixes.flags.opsize) {
+        // POPF (16-bit)
+        uint16_t val = Pop16(state);
+        // Only update bits allowed by mask (and within 16-bit range)
+        uint32_t mask = state->ctx.eflags_mask & 0xFFFF;
+        // Also always preserve Reserved Bit 1 (Value 2)
+        uint32_t original = state->ctx.eflags;
+        uint32_t new_flags = (original & ~mask) | (val & mask);
+        new_flags |= 2; // Reserved bit 1 is always 1
+        state->ctx.eflags = new_flags;
+    } else {
+        // POPFD (32-bit)
+        uint32_t val = Pop32(state);
+        uint32_t mask = state->ctx.eflags_mask;
+        uint32_t original = state->ctx.eflags;
+        uint32_t new_flags = (original & ~mask) | (val & mask);
+        new_flags |= 2; // Reserved bit 1 is always 1
+        // Reserved bits 3, 5, 15, 22..31 should strictly be preserved or zeroed depending on CPU model.
+        // But respecting mask is sufficient for user mode emulation.
+        state->ctx.eflags = new_flags;
+    }
+}
+
+void OpStc(EmuState* state, DecodedOp* op) {
+    // F9: STC
+    state->ctx.eflags |= CF_MASK;
+}
+
+void OpClc(EmuState* state, DecodedOp* op) {
+    // F8: CLC
+    state->ctx.eflags &= ~CF_MASK;
+}
+
+void OpCmc(EmuState* state, DecodedOp* op) {
+    // F5: CMC (Complement Carry)
+    state->ctx.eflags ^= CF_MASK;
+}
+
+void OpStd(EmuState* state, DecodedOp* op) {
+    // FD: STD (Set Direction Flag)
+    state->ctx.eflags |= 0x400; // DF Mask
+}
+
+void OpCld(EmuState* state, DecodedOp* op) {
+    // FC: CLD (Clear Direction Flag)
+    state->ctx.eflags &= ~0x400;
+}
+
+void OpSti(EmuState* state, DecodedOp* op) {
+    // FB: STI (Set Interrupt Flag)
+    // Privileged Instruction. In User Mode (CPL=3, IOPL=0), this faults.
+    state->status = EmuStatus::Fault;
+    state->fault_vector = 13; // #GP
+}
+
+void OpCli(EmuState* state, DecodedOp* op) {
+    // FA: CLI (Clear Interrupt Flag)
+    // Privileged Instruction.
+    state->status = EmuStatus::Fault;
+    state->fault_vector = 13; // #GP
 }
 
 } // namespace x86emu
