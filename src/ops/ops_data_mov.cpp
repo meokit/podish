@@ -126,7 +126,8 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
         if (ecx == 0) return;
 
         // Optimization for DF=0 (Forward Copy)
-        if (!df) {
+        // Disable optimization if mem_hook is active to ensure proper trace granularity
+        if (!df && !state->mem_hook) {
             uint32_t total_bytes = ecx * sizeof(T);
             uint32_t esi = GetReg(state, ESI);
             uint32_t edi = GetReg(state, EDI);

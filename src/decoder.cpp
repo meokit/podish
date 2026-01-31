@@ -174,13 +174,9 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
 
 // Helper to check if opcode is Control Flow
 static bool IsControlFlow(const DecodedOp* op) {
-    // Check handler index or opcode?
-    // Handler index 0x89/0x8B are MOV. 0x50.. are PUSH.
-    // We should probably check against known JMP/CALL/RET opcodes or specific handler ranges.
-    // Group 3 Control Flow: CALL(E8/FF), RET(C3/CB), JMP(E9/EB/FF), Jcc(7x/0F8x)
-    // For now, hardcode check or add a flag in DecodedOp/LUT?
-    // A flag in LUT would be cleanest, but for now specific check:
-    
+    // Treat REP prefixes as Control Flow because they might loop (modifying EIP)
+    if (op->prefixes.flags.rep || op->prefixes.flags.repne) return true;
+
     // Low byte of handler_index is opcode.
     uint8_t opcode = op->handler_index & 0xFF;
     uint8_t map = (op->handler_index >> 8) & 0xFF;

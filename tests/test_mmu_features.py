@@ -1,4 +1,3 @@
-
 import pytest
 from tests.runner import X86EmuBackend, Runner
 
@@ -33,8 +32,10 @@ def test_page_fault_unmapped_read_unhandled():
     emu.start(0x1000, 0x1000 + len(code))
     
     # Verify Fault
-    assert emu.state.status == 2, "Status should be Fault"
-    assert emu.fault_vector == 14, "Vector should be #PF (14)"
+    assert emu.get_status() == 2, "Status should be Fault"
+    fault = emu.get_fault_info()
+    assert fault is not None
+    assert fault[0] == 14, "Vector should be #PF (14)"
     
     # Verify EIP matches instruction start (Precise Exception)
     # Start: 0x1000. Next: 0x1005.
@@ -55,8 +56,10 @@ def test_page_fault_unmapped_write_unhandled():
     emu.mem_write(0x1000, code)
     emu.start(0x1000, 0x1000 + len(code))
     
-    assert emu.state.status == 2
-    assert emu.fault_vector == 14
+    assert emu.get_status() == 2
+    fault = emu.get_fault_info()
+    assert fault is not None
+    assert fault[0] == 14
     
     eip = emu.reg_read('EIP')
     assert eip == 0x1000, f"Precision Error: EIP should be 0x1000, got 0x{eip:X}"
@@ -102,7 +105,7 @@ def test_page_fault_handled_callback():
     # And EIP should have ADVANCED (trapped behavior, or just completed instruction garbage).
     
     # Update assertions for current behavior:
-    assert emu.state.status != 2, "Handled fault should not stop emulator with Fault status"
+    assert emu.get_status() != 2, "Handled fault should not stop emulator with Fault status"
     
     # EIP should include opcode length (0x1005) because it "completed"
     eip = emu.reg_read('EIP')
@@ -126,7 +129,7 @@ def test_mmu_copy_block_logic():
     emu.mem_write(0x1000, code)
     emu.start(0x1000, 0x1000 + len(code))
     
-    assert emu.state.status == 1
+    assert emu.get_status() == 1
     assert emu.mem_read(0x3000, 0x100) == b'\xAA' * 0x100
 
 def test_mmu_copy_block_fault_eip():
@@ -155,8 +158,10 @@ def test_mmu_copy_block_fault_eip():
     
     emu.start(0x1000, 0x1000 + len(code))
     
-    assert emu.state.status == 2
-    assert emu.fault_vector == 14
+    assert emu.get_status() == 2
+    fault = emu.get_fault_info()
+    assert fault is not None
+    assert fault[0] == 14
     
     # Check EIP: Should point to REP MOVSB (0x100F)
     eip = emu.reg_read('EIP')

@@ -1,55 +1,59 @@
+#include "bindings.h"
+#include "state.h"
 #include "decoder.h"
 #include "mmu.h"
 #include "hooks.h"
 #include "ops.h"
-#include "state.h"
+#include "dispatch.h"
 #include <cstring>
 #include <cstdio>
-#include "dispatch.h"
-
-// C-Exported Interface for Python ctypes
-extern "C" {
-
-using namespace x86emu;
-
-// EmuState Definition is in state.h
-
-
-void X86_DebugStructSizes() {
-    // Debug helper
-}
-
 #include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
 #include <cstdlib>
 
+using namespace x86emu;
+
+extern "C" {
+
+// ----------------------------------------------------------------------------
+// Internal Bridge Callbacks
+// ----------------------------------------------------------------------------
+
+static void InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
+    EmuState* state = static_cast<EmuState*>(opaque);
+    if (state->fault_handler) {
+        state->fault_handler(state, addr, is_write, state->fault_userdata);
+    } else {
+        // Default behavior if no user handler: Trigger Fault
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 14; // #PF
+    }
+}
+
+static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val) {
+    EmuState* state = static_cast<EmuState*>(opaque);
+    if (state->mem_hook) {
+        state->mem_hook(state, addr, size, is_write, val, state->mem_userdata);
+    }
+}
+
+// Signal Handler for safety
 void SignalHandler(int sig) {
     void* array[20];
     size_t size;
-
-    // get void*'s for all entries on the stack
     size = backtrace(array, 20);
-
-    // print out all the frames to stderr
     fprintf(stderr, "\n[CRASH] Signal %d Caught:\n", sig);
     backtrace_symbols_fd(array, size, STDERR_FILENO);
-    
-    // Exit
     _exit(1);
 }
 
 static bool g_SignalRegistered = false;
 
-// Internal bridge callback
-void BridgeFaultCallback(void* opaque, uint32_t addr, int is_write) {
-    // Here opaque is Context*. Or we can pass EmuState*.
-    // If we want to notify Python, we need a function pointer stored in EmuState.
-    // For now, let's just log or set a simple flag in Context if we had one.
-    printf("[Bindings] Bridge Callback! Fault at 0x%08X Write=%d\n", addr, is_write);
-}
+// ----------------------------------------------------------------------------
+// Creation / Destruction
+// ----------------------------------------------------------------------------
 
-// Create Simulator Instance
 EmuState* X86_Create() {
     if (!g_SignalRegistered) {
         signal(SIGSEGV, SignalHandler);
@@ -63,7 +67,7 @@ EmuState* X86_Create() {
     
     // Set default EFLAGS and Mask
     state->ctx.eflags = 0x202; // IF=1, Reserved=1
-    state->ctx.eflags_mask = 0x240DD5; // User-mode mask: CF,PF,AF,ZF,SF,TF,DF,OF,AC,ID. (Protect IF, IOPL, NT, RF, VM)
+    state->ctx.eflags_mask = 0x240DD5; 
     
     // Link pointers
     state->ctx.mmu = &state->mmu;
@@ -72,78 +76,107 @@ EmuState* X86_Create() {
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
     
-    // Setup generic fault printer for now, or allow python to set it
+    // Set internal bridge callbacks
+    state->mmu.set_fault_callback(InternalFaultBridge, state);
+    state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    
     return state;
 }
 
-// Set Fault Callback
-// py_func: void(*)(uint32_t addr, int is_write)
-using PyFaultHandler = void(*)(uint32_t addr, int is_write);
-PyFaultHandler global_py_callback = nullptr;
-
-void BridgeToPython(void* opaque, uint32_t addr, int is_write) {
-    if (global_py_callback) {
-        global_py_callback(addr, is_write);
-    }
-}
-
-void X86_SetFaultCallback(EmuState* state, PyFaultHandler handler) {
-    printf("[Bindings] Setting Fault Callback %p\n", (void*)handler);
-    global_py_callback = handler;
-    state->mmu.set_fault_callback(BridgeToPython, state);
-}
-
-using PyMemHook = void(*)(uint32_t addr, uint32_t size, int is_write, uint64_t val);
-PyMemHook global_mem_hook = nullptr;
-
-void BridgeMemHook(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val) {
-    if (global_mem_hook) {
-        global_mem_hook(addr, size, is_write, val);
-    }
-}
-
-void X86_SetMemHook(EmuState* state, PyMemHook hook) {
-    global_mem_hook = hook;
-    state->mmu.set_mem_hook(BridgeMemHook, state);
-}
-
-// Decode Binding
-void X86_Decode(const uint8_t* bytes, DecodedOp* op_out) {
-    if (!bytes || !op_out) return;
-    DecodeInstruction(bytes, op_out);
-}
-
-// Destroy Simulator Instance
 void X86_Destroy(EmuState* state) {
     if (state) delete state;
 }
 
-// Access Context
-Context* X86_GetContext(EmuState* state) {
-    return &state->ctx;
+// ----------------------------------------------------------------------------
+// Register Access
+// ----------------------------------------------------------------------------
+
+uint32_t X86_RegRead(EmuState* state, int reg_index) {
+    if (reg_index >= 0 && reg_index < 8) {
+        return state->ctx.regs[reg_index];
+    }
+    return 0;
 }
 
-// Map Memory
+void X86_RegWrite(EmuState* state, int reg_index, uint32_t val) {
+    if (reg_index >= 0 && reg_index < 8) {
+        state->ctx.regs[reg_index] = val;
+    }
+}
+
+uint32_t X86_GetEIP(EmuState* state) {
+    return state->ctx.eip;
+}
+
+void X86_SetEIP(EmuState* state, uint32_t eip) {
+    state->ctx.eip = eip;
+}
+
+uint32_t X86_GetEFLAGS(EmuState* state) {
+    return state->ctx.eflags;
+}
+
+void X86_SetEFLAGS(EmuState* state, uint32_t val) {
+    state->ctx.eflags = val;
+}
+
+// ----------------------------------------------------------------------------
+// XMM Access
+// ----------------------------------------------------------------------------
+
+void X86_ReadXMM(EmuState* state, int idx, uint8_t* val) {
+    if (idx >= 0 && idx < 8 && val) {
+        std::memcpy(val, &state->ctx.xmm[idx], 16);
+    }
+}
+
+void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val) {
+    if (idx >= 0 && idx < 8 && val) {
+        std::memcpy(&state->ctx.xmm[idx], val, 16);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Segment Base Access
+// ----------------------------------------------------------------------------
+
+uint32_t X86_SegBaseRead(EmuState* state, int seg_index) {
+    if (seg_index >= 0 && seg_index < 6) {
+        return state->ctx.seg_base[seg_index];
+    }
+    return 0;
+}
+
+void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
+    if (seg_index >= 0 && seg_index < 6) {
+        state->ctx.seg_base[seg_index] = base;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Memory Access
+// ----------------------------------------------------------------------------
+
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
     state->mmu.mmap(addr, size, perms);
 }
 
-// Write Memory (Bytes)
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         state->mmu.write<uint8_t>(addr + i, data[i]);
     }
 }
 
-// Read Memory (Bytes)
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         val[i] = state->mmu.read<uint8_t>(addr + i);
     }
 }
 
-// Run Code (Block Based)
-extern "C"
+// ----------------------------------------------------------------------------
+// Execution
+// ----------------------------------------------------------------------------
+
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->status = EmuStatus::Running;
     uint64_t inst_count = 0;
@@ -151,7 +184,6 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
         
-        // 0. Check Exit Conditions
         if (end_eip != 0 && eip >= end_eip) {
             state->status = EmuStatus::Stopped;
             break;
@@ -161,27 +193,20 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             break;
         }
         
-        // 1. Lookup Block
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
-            // Decode new block
             BasicBlock block;
             uint64_t remaining_insts = 0;
             if (max_insts > 0) remaining_insts = max_insts - inst_count;
             
             if (!DecodeBlock(state, eip, end_eip, remaining_insts, &block)) {
-                // Decode failed (invalid instruction or unmapped)
-                printf("[Run] Decode Failed at %08X\n", eip);
                 state->status = EmuStatus::Fault;
                 break;
             }
-            // Insert
             auto res = state->block_cache.insert({eip, std::move(block)});
             it = res.first;
         }
         
-        // 2. Execute Block (Threaded Dispatch)
-        // Invokes the first handler, which tail-calls the rest.
         BasicBlock& block = it->second;
         if (!block.ops.empty()) {
             DecodedOp* head = &block.ops[0];
@@ -189,90 +214,95 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             if (head->handler_index < 1024) h = g_Handlers[head->handler_index];
             
             if (h) {
-                // Head handler will update EIP and dispatch next
                 h(state, head); 
-                
-                // Approximate instruction count: ops.size() - 1 (Sentinel)
                 if (block.ops.size() > 0)
                     inst_count += (block.ops.size() - 1);
-                
             } else {
-                // Opcode mapping failed or out of bounds
-                OpUd2(state, head); // Trigger #UD
+                OpUd2(state, head);
             }
         }
-        
-        // Loop will continue if status is Running (JMP/RET/End of Block)
-        // We look up new EIP in next iteration.
     }
 }
 
-// Stop Execution
 void X86_EmuStop(EmuState* state) {
     if (state) state->status = EmuStatus::Stopped;
 }
 
-// Step (Placeholder for now)
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
-    // Basic Fetch-Decode-Execute Loop Mock
-    // 1. Fetch (Read at EIP)
+
     uint8_t buf[16];
     for (int i=0; i<16; ++i) {
         buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i);
+        if (state->status != EmuStatus::Running) return (int)state->status;
     }
-    // printf("[Sim] Fetch done.\n");
     
-    // 2. Decode
     DecodedOp op;
     if (!DecodeInstruction(buf, &op)) {
-        // Decode Failed
-        // printf("[Sim] Decode Failed at %08X\n", state->ctx.eip);
         std::memset(&op, 0, sizeof(op));
         op.length = 1;
-        op.length = 1;
-        op.handler_index = 0x10B; // UD2
+        op.handler_index = 0x10B; 
     }
-    op.meta.flags.is_last = 1; // Critical for DispatchWrapper
-    
-    // 3. Increment EIP (Handled by DispatchWrapper)
-    // state->ctx.eip += op.length;
+    op.meta.flags.is_last = 1; 
 
-    // 4. Execute
     HandlerFunc h = nullptr;
     if (op.handler_index < 1024) {
         h = g_Handlers[op.handler_index];
     }
 
-    // printf("[Sim] Step EIP=%08X Idx=%04X Handler=%p\n", state->ctx.eip, op.handler_index, (void*)h);
-
     if (h) {
          uint32_t old_eip = state->ctx.eip;
          h(state, &op);
-         // If handler didn't jump (overwriting EIP), advance by instruction length
          if (state->ctx.eip == old_eip) {
              state->ctx.eip += op.length;
          }
     } else {
-         // Nullptr -> Invalid/Unimplemented -> Trigger #UD
          if (!state->hooks.on_invalid_opcode(state)) {
              state->status = EmuStatus::Fault;
-             state->fault_vector = 6; // #UD
+             state->fault_vector = 6;
          }
     }
     
     return (int)state->status;
 }
 
+int X86_GetStatus(EmuState* state) {
+    return (int)state->status;
+}
 
-// Interrupt Hook
-using PyInterruptHook = int(*)(uint32_t vector);
+// ----------------------------------------------------------------------------
+// Callbacks
+// ----------------------------------------------------------------------------
 
-void X86_SetInterruptHook(EmuState* state, uint8_t vector, PyInterruptHook hook) {
-    // Register lambda that calls the Python hook
-    // Note: 'hook' is a function pointer (trampoline generated by cppyy)
-    state->hooks.set_interrupt_hook(vector, [hook](EmuState* s, uint8_t v) {
-        return hook((uint32_t)v) != 0;
+void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata) {
+    state->fault_handler = handler;
+    state->fault_userdata = userdata;
+}
+
+void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
+    state->mem_hook = hook;
+    state->mem_userdata = userdata;
+}
+
+void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata) {
+    state->interrupt_handlers[vector] = hook;
+    state->interrupt_userdata[vector] = userdata;
+    
+    state->hooks.set_interrupt_hook(vector, [vector](EmuState* s, uint8_t v) {
+        if (s->interrupt_handlers[vector]) {
+            return s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
+        }
+        return false;
     });
 }
+
+// ----------------------------------------------------------------------------
+// Diagnostics
+// ----------------------------------------------------------------------------
+
+int32_t X86_GetFaultVector(EmuState* state) {
+    if (state->status != EmuStatus::Fault) return -1;
+    return (int32_t)state->fault_vector;
+}
+
 } // extern "C"

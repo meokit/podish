@@ -1,4 +1,3 @@
-
 import pytest
 import sys
 import os
@@ -13,9 +12,7 @@ def x86():
     return X86Emu()
 
 def test_invalid_opcode(x86):
-    # 0xF1 is ICEBP/INT1, often unimplemented or treated as special.
-    # Let's use a truly garbage opcode if possible, or undef.
-    # UD2 is 0F 0B. 
+    # 0x0F 0x0B is UD2
     code = b'\x0F\x0B' 
     x86.mem_map(0x1000, 0x1000, 7)
     x86.mem_write(0x1000, code)
@@ -28,8 +25,7 @@ def test_invalid_opcode(x86):
         return 0 # Fault
         
     x86.set_intr_hook(6, intr_hook)
-    
-    x86.ctx.eip = 0x1000
+    x86.reg_write('EIP', 0x1000)
     
     # Run
     status = x86.step()
@@ -50,13 +46,11 @@ def test_int80(x86):
         return 1 # Handled
     
     x86.set_intr_hook(0x80, intr_hook)
-    
-    x86.ctx.eip = 0x1000
+    x86.reg_write('EIP', 0x1000)
     
     x86.step()
     
     assert hook_vector == 0x80
-    # Should not fault if handled
 
 def test_decode_fault(x86):
     # F0 F0 F0 ... too many prefixes -> Decode Fault -> #UD (6)
@@ -69,12 +63,10 @@ def test_decode_fault(x86):
         nonlocal hook_called
         if vector == 6:
             hook_called = True
-        return 1 # Handle it (suppress fault for test?)
-        # If we return 1, emulator continues? 
-        # But opcode was OpDecodeFault. It calls hook. If hook returns true, it continues.
+        return 1 # Handle it
         
     x86.set_intr_hook(6, intr_hook)
-    x86.ctx.eip = 0x1000
+    x86.reg_write('EIP', 0x1000)
     
     x86.step()
     assert hook_called

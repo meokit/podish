@@ -8,24 +8,34 @@
 
 namespace x86emu {
 
+struct EmuState;
+
+// Callback signatures for internal storage and C bindings
+using FaultHandler = void(*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+using MemHook = void(*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
+using InterruptHandler = int(*)(EmuState* state, uint32_t vector, void* userdata);
+
 struct EmuState {
     Context ctx;
     SoftMMU mmu;
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
     // Simple Block Cache
-    // High performance dense map
     ankerl::unordered_dense::map<uint32_t, BasicBlock> block_cache;
 
     // Fault Info
-    uint8_t fault_vector = 0;
+    uint8_t fault_vector = 0xFF; // 0xFF = No Fault
     uint32_t fault_addr = 0;
-    // We avoid std::string here to keep it POD-like if possible, but Context is struct.
-    // Let's use simple fixed buffer or just rely on external logging for now?
-    // User asked for "fields to record Fault information".
-    // Let's stick to vector/addr. Msg might be tricky with ownership.
-    // Actually, simple static string or status code is better. 
-    // Status is already EmuStatus.
+
+    // Callback Storage
+    FaultHandler fault_handler = nullptr;
+    void* fault_userdata = nullptr;
+
+    MemHook mem_hook = nullptr;
+    void* mem_userdata = nullptr;
+
+    InterruptHandler interrupt_handlers[256] = { nullptr };
+    void* interrupt_userdata[256] = { nullptr };
 };
 
 }

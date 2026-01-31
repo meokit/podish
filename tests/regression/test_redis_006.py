@@ -157,9 +157,9 @@ def test_id_30_ret_no_operands():
         name='ID_30: ret ',
         code=binascii.unhexlify('c3'),
         initial_regs={'ESP': 0x7FFC},
-        expected_read={0x7FFC: 0x2000},
+        expected_read={0x7FFC: 0x1005},
         expected_regs={'ESP': 0x8000},
-        expected_eip=0x2000
+        expected_eip=0x1005
     )
 
 @pytest.mark.regression
@@ -171,9 +171,9 @@ def test_id_443_ret_imm32():
         name='ID_443: ret 4',
         code=binascii.unhexlify('c20400'),
         initial_regs={'ESP': 0x7FFC},
-        expected_read={0x7FFC: 0x2000},
+        expected_read={0x7FFC: 0x1005},
         expected_regs={'ESP': 0x8000 + 4},
-        expected_eip=0x2000
+        expected_eip=0x1005
     )
 
 @pytest.mark.regression

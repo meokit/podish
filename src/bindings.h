@@ -1,34 +1,66 @@
-#pragma once
-#include "state.h"
-#include "decoder.h"
+#ifndef EMU86_BINDINGS_H
+#define EMU86_BINDINGS_H
+
+#ifdef __cplusplus
 #include <cstdint>
+namespace x86emu { struct EmuState; }
+typedef x86emu::EmuState EmuState;
+#else
+#include <stdint.h>
+typedef struct EmuState EmuState;
+#endif
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 
-    x86emu::EmuState* X86_Create();
-    void X86_Destroy(x86emu::EmuState* state);
-    x86emu::Context* X86_GetContext(x86emu::EmuState* state);
-    
+    // Creation / Destruction
+    EmuState* X86_Create();
+    void X86_Destroy(EmuState* state);
+
+    // Register Access
+    uint32_t X86_RegRead(EmuState* state, int reg_index);
+    void X86_RegWrite(EmuState* state, int reg_index, uint32_t val);
+
+    uint32_t X86_GetEIP(EmuState* state);
+    void X86_SetEIP(EmuState* state, uint32_t eip);
+
+    uint32_t X86_GetEFLAGS(EmuState* state);
+    void X86_SetEFLAGS(EmuState* state, uint32_t val);
+
+    // XMM Access (128-bit)
+    void X86_ReadXMM(EmuState* state, int idx, uint8_t* val);
+    void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val);
+
+    // Segment Base Access
+    uint32_t X86_SegBaseRead(EmuState* state, int seg_index);
+    void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
+
+    // Memory Access
+    void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
+    void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
+    void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
+
+    // Execution
+    void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
+    void X86_EmuStop(EmuState* state);
+    int X86_Step(EmuState* state);
+    int X86_GetStatus(EmuState* state);
+
     // Callbacks
-    using PyFaultHandler = void(*)(uint32_t addr, int is_write);
-    using PyMemHook = void(*)(uint32_t addr, uint32_t size, int is_write, uint64_t val);
+    typedef void(*FaultHandler)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+    typedef void(*MemHook)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
+    typedef int(*InterruptHandler)(EmuState* state, uint32_t vector, void* userdata);
 
-    void X86_SetFaultCallback(x86emu::EmuState* state, PyFaultHandler handler);
-    void X86_SetMemHook(x86emu::EmuState* state, PyMemHook hook);
-    
-    void X86_MemMap(x86emu::EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
-    void X86_MemWrite(x86emu::EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
-    void X86_MemRead(x86emu::EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
-    
-    // Interrupt Hook: int hook(uint32_t vector) -> return 1 (handled), 0 (fault)
-    using PyInterruptHook = int(*)(uint32_t vector);
-    void X86_SetInterruptHook(x86emu::EmuState* state, uint8_t vector, PyInterruptHook hook);
+    void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata);
+    void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata);
+    void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata);
 
-    
-    void X86_Run(x86emu::EmuState* state, uint32_t end_eip, uint64_t max_insts);
-    void X86_EmuStop(x86emu::EmuState* state);
-    int X86_Step(x86emu::EmuState* state);
-    
-    void X86_Decode(const uint8_t* bytes, x86emu::DecodedOp* op_out);
+    // Diagnostics
+    int32_t X86_GetFaultVector(EmuState* state);
 
+#ifdef __cplusplus
 }
+#endif
+
+#endif // EMU86_BINDINGS_H

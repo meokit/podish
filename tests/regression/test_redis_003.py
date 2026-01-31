@@ -141,8 +141,8 @@ def test_id_71_jmp_r32():
     assert runner.run_test_bytes(
         name='ID_71: jmp edx',
         code=binascii.unhexlify('ffe2'),
-        initial_regs={'EDX': 0x2000},
-        expected_eip=0x2000
+        initial_regs={'EDX': 0x1005},
+        expected_eip=0x1005
     )
 
 @pytest.mark.regression

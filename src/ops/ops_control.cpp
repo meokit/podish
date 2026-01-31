@@ -70,12 +70,9 @@ void OpInt(EmuState* state, DecodedOp* op) {
     // CD ib: INT imm8
     // Note: Decoder puts imm8 in op->imm
     uint8_t vector = (uint8_t)op->imm;
-    // printf("[Sim] OpInt: Vector %02X\n", vector);
     if (!state->hooks.on_interrupt(state, vector)) {
         state->status = EmuStatus::Fault;
-        state->fault_vector = vector; // Fault with vector
-        // NOTE: Real hardware might GPF if IDT descriptor is bad, 
-        // but for us "Unhandled Interrupt" is a Fault.
+        state->fault_vector = vector;
     }
 }
 

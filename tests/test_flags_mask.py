@@ -18,7 +18,8 @@ def test_eflags_mask_if_protection():
     # Result: 0x202.
     runner.run_test_bytes("test_eflags_mask_if_protection", code, 
         expected_eflags=0x202,
-        check_eflags_mask=0xFFFFFFFF # Strict check including IF
+        check_eflags_mask=0xFFFFFFFF, # Strict check including IF
+        count=2
     )
 
 def test_eflags_mask_allowed_bits():
@@ -32,7 +33,8 @@ def test_eflags_mask_allowed_bits():
     
     runner.run_test_bytes("test_eflags_mask_allowed_bits", code,
         expected_eflags=0xAC7,
-        check_eflags_mask=0xFFFFFFFF
+        check_eflags_mask=0xFFFFFFFF,
+        count=2
     )
 
 def test_std_cld():
@@ -44,7 +46,7 @@ def test_std_cld():
     
     # CLD -> DF=0
     code2 = b'\xFD\xFC' 
-    runner.run_test_bytes("test_cld", code2, expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF)
+    runner.run_test_bytes("test_cld", code2, expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF, count=2)
 
 def test_stc_clc_cmc():
     """Verify Carry Flag operations."""
@@ -53,8 +55,8 @@ def test_stc_clc_cmc():
     runner.run_test_bytes("test_stc", b'\xF9', expected_eflags=0x203, check_eflags_mask=0xFFFFFFFF)
     
     # CLC -> CF=0
-    runner.run_test_bytes("test_clc", b'\xF9\xF8', expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF)
+    runner.run_test_bytes("test_clc", b'\xF9\xF8', expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF, count=2)
     
     # CMC -> Toggle CF
     runner.run_test_bytes("test_cmc_1", b'\xF5', expected_eflags=0x203, check_eflags_mask=0xFFFFFFFF) # 0->1
-    runner.run_test_bytes("test_cmc_2", b'\xF9\xF5', expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF) # 1->0
+    runner.run_test_bytes("test_cmc_2", b'\xF9\xF5', expected_eflags=0x202, check_eflags_mask=0xFFFFFFFF, count=2) # 1->0
