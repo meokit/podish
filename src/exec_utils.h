@@ -313,71 +313,76 @@ inline uint8_t Parity(uint8_t v) {
     // Basic parity: even number of 1s -> 1
     v ^= v >> 4;
     v &= 0xf;
-    return (0x9669 >> v) & 1;
+    uint8_t res = (0x9669 >> v) & 1;
+    return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluAdd(EmuState* state, T dest, T src) {
     T res = dest + src;
     
-    // PF, ZF, SF
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    // CF: Unsigned Overflow
-    // res < dest implies overflow for ADD
-    // Or (res < src)
-    if (res < dest) flags |= CF_MASK;
-    
-    // OF: Signed Overflow
-    // (dest^src) >= 0 (same sign) AND (dest^res) < 0 (sign changed)
-    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
-    bool s1 = (dest & sign_mask);
-    bool s2 = (src & sign_mask);
-    bool sr = (res & sign_mask);
-    
-    if (s1 == s2 && s1 != sr) flags |= OF_MASK;
-    
-    // AF: Carry from bit 3 to 4
-    if (((dest & 0xF) + (src & 0xF)) > 0xF) flags |= AF_MASK;
+    if constexpr (UpdateFlags) {
+        // PF, ZF, SF
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        // CF: Unsigned Overflow
+        // res < dest implies overflow for ADD
+        // Or (res < src)
+        if (res < dest) flags |= CF_MASK;
+        
+        // OF: Signed Overflow
+        // (dest^src) >= 0 (same sign) AND (dest^res) < 0 (sign changed)
+        T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+        bool s1 = (dest & sign_mask);
+        bool s2 = (src & sign_mask);
+        bool sr = (res & sign_mask);
+        
+        if (s1 == s2 && s1 != sr) flags |= OF_MASK;
+        
+        // AF: Carry from bit 3 to 4
+        if (((dest & 0xF) + (src & 0xF)) > 0xF) flags |= AF_MASK;
 
-    state->ctx.eflags = flags;
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluSub(EmuState* state, T dest, T src) {
     T res = dest - src;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    // CF: Borrow
-    if (dest < src) flags |= CF_MASK;
-    
-    // OF: Signed Overflow
-    // (dest^src) < 0 (diff sign) AND (dest^res) < 0 (sign flipped from dest)
-    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
-    bool s1 = (dest & sign_mask);
-    bool s2 = (src & sign_mask);
-    bool sr = (res & sign_mask);
-    
-    if (s1 != s2 && s1 != sr) flags |= OF_MASK;
-    
-    // AF: Borrow from bit 3
-    if ((dest & 0xF) < (src & 0xF)) flags |= AF_MASK;
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        // CF: Borrow
+        if (dest < src) flags |= CF_MASK;
+        
+        // OF: Signed Overflow
+        // (dest^src) < 0 (diff sign) AND (dest^res) < 0 (sign flipped from dest)
+        T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+        bool s1 = (dest & sign_mask);
+        bool s2 = (src & sign_mask);
+        bool sr = (res & sign_mask);
+        
+        if (s1 != s2 && s1 != sr) flags |= OF_MASK;
+        
+        // AF: Borrow from bit 3
+        if ((dest & 0xF) < (src & 0xF)) flags |= AF_MASK;
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluAdc(EmuState* state, T dest, T src) {
     uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
     
@@ -392,31 +397,33 @@ inline T AluAdc(EmuState* state, T dest, T src) {
     
     T res = (T)wres;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    // CF
-    if (wres >> (sizeof(T)*8)) flags |= CF_MASK;
-    
-    // OF: Signed Overflow
-    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
-    bool s1 = (dest & sign_mask);
-    bool s2 = (src & sign_mask);
-    bool sr = (res & sign_mask);
-    
-    if (s1 == s2 && s1 != sr) flags |= OF_MASK;
-    
-    // AF
-    if (((dest & 0xF) + (src & 0xF) + cf_in) > 0xF) flags |= AF_MASK;
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        // CF
+        if (wres >> (sizeof(T)*8)) flags |= CF_MASK;
+        
+        // OF: Signed Overflow
+        T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+        bool s1 = (dest & sign_mask);
+        bool s2 = (src & sign_mask);
+        bool sr = (res & sign_mask);
+        
+        if (s1 == s2 && s1 != sr) flags |= OF_MASK;
+        
+        // AF
+        if (((dest & 0xF) + (src & 0xF) + cf_in) > 0xF) flags |= AF_MASK;
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluSbb(EmuState* state, T dest, T src) {
     uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
     
@@ -430,72 +437,79 @@ inline T AluSbb(EmuState* state, T dest, T src) {
     
     T res = (T)wres;
 
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    // CF: Borrow
-    if (wdest < (wsrc + cf_in)) flags |= CF_MASK;
-    
-    // OF: Signed Overflow
-    T sign_mask = (T)1 << (sizeof(T)*8 - 1);
-    bool s1 = (dest & sign_mask);
-    bool s2 = (src & sign_mask);
-    bool sr = (res & sign_mask);
-    
-    if (s1 != s2 && s1 != sr) flags |= OF_MASK;
-    
-    // AF: Borrow from bit 3
-    if ((dest & 0xF) < ((src & 0xF) + cf_in)) flags |= AF_MASK;
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        // CF: Borrow
+        if (wdest < (wsrc + cf_in)) flags |= CF_MASK;
+        
+        // OF: Signed Overflow
+        T sign_mask = (T)1 << (sizeof(T)*8 - 1);
+        bool s1 = (dest & sign_mask);
+        bool s2 = (src & sign_mask);
+        bool sr = (res & sign_mask);
+        
+        if (s1 != s2 && s1 != sr) flags |= OF_MASK;
+        
+        // AF: Borrow from bit 3
+        if ((dest & 0xF) < ((src & 0xF) + cf_in)) flags |= AF_MASK;
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluAnd(EmuState* state, T dest, T src) {
     T res = dest & src;
     
-    // CF=0, OF=0
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    // AF is undefined, let's clear it
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        // CF=0, OF=0
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        // AF is undefined, let's clear it
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluOr(EmuState* state, T dest, T src) {
     T res = dest | src;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluXor(EmuState* state, T dest, T src) {
     T res = dest ^ src;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    
-    state->ctx.eflags = flags;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        
+        state->ctx.eflags = flags;
+    }
     return res;
 }
 
@@ -504,7 +518,7 @@ inline T AluXor(EmuState* state, T dest, T src) {
 // Shift / Rotate
 // ------------------------------------------------------------------------------------------------
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluShl(EmuState* state, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
@@ -516,23 +530,25 @@ inline T AluShl(EmuState* state, T dest, uint8_t count) {
     
     T res = dest << count;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (width - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    if (cf) flags |= CF_MASK;
-    
-    // OF: For 1-bit, OF = MSB(Res) ^ CF
-    if (count == 1) {
-        bool msb_res = (res >> (width - 1)) & 1;
-        if (msb_res != cf) flags |= OF_MASK;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (width - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (cf) flags |= CF_MASK;
+        
+        // OF: For 1-bit, OF = MSB(Res) ^ CF
+        if (count == 1) {
+            bool msb_res = (res >> (width - 1)) & 1;
+            if (msb_res != cf) flags |= OF_MASK;
+        }
+        
+        state->ctx.eflags = flags;
     }
-    
-    state->ctx.eflags = flags;
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluShr(EmuState* state, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
@@ -543,22 +559,24 @@ inline T AluShr(EmuState* state, T dest, uint8_t count) {
     
     T res = dest >> count;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    if (cf) flags |= CF_MASK;
-    
-    // OF: For 1-bit, OF = MSB(Original)
-    if (count == 1) {
-        if ((dest >> (sizeof(T)*8 - 1)) & 1) flags |= OF_MASK;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (cf) flags |= CF_MASK;
+        
+        // OF: For 1-bit, OF = MSB(Original)
+        if (count == 1) {
+            if ((dest >> (sizeof(T)*8 - 1)) & 1) flags |= OF_MASK;
+        }
+        
+        state->ctx.eflags = flags;
     }
-    
-    state->ctx.eflags = flags;
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluSar(EmuState* state, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
@@ -573,22 +591,24 @@ inline T AluSar(EmuState* state, T dest, uint8_t count) {
     // CF: Last bit shifted out
     bool cf = (dest >> (count - 1)) & 1;
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-    if (res == 0) flags |= ZF_MASK;
-    if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
-    if (Parity(res & 0xFF)) flags |= PF_MASK;
-    if (cf) flags |= CF_MASK;
-    
-    // OF: For 1-bit, OF = 0
-    if (count == 1) {
-        // Clear OF (already cleared)
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        if (res == 0) flags |= ZF_MASK;
+        if ((res >> (sizeof(T)*8 - 1)) & 1) flags |= SF_MASK;
+        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (cf) flags |= CF_MASK;
+        
+        // OF: For 1-bit, OF = 0
+        if (count == 1) {
+            // Clear OF (already cleared)
+        }
+        
+        state->ctx.eflags = flags;
     }
-    
-    state->ctx.eflags = flags;
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluRol(EmuState* state, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
@@ -598,24 +618,26 @@ inline T AluRol(EmuState* state, T dest, uint8_t count) {
     
     T res = (dest << count) | (dest >> (width - count));
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK); 
-    // SF/ZF/PF/AF unaffected
-    
-    // CF: LSB of result
-    bool cf = (res & 1);
-    if (cf) flags |= CF_MASK;
-    
-    // OF: For 1-bit, OF = MSB(Res) ^ CF
-    if (count == 1) {
-        bool msb = (res >> (width - 1)) & 1;
-        if (msb != cf) flags |= OF_MASK;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK); 
+        // SF/ZF/PF/AF unaffected
+        
+        // CF: LSB of result
+        bool cf = (res & 1);
+        if (cf) flags |= CF_MASK;
+        
+        // OF: For 1-bit, OF = MSB(Res) ^ CF
+        if (count == 1) {
+            bool msb = (res >> (width - 1)) & 1;
+            if (msb != cf) flags |= OF_MASK;
+        }
+        
+        state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
     }
-    
-    state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
     return res;
 }
 
-template<typename T>
+template<typename T, bool UpdateFlags = true>
 inline T AluRor(EmuState* state, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
@@ -625,20 +647,22 @@ inline T AluRor(EmuState* state, T dest, uint8_t count) {
     
     T res = (dest >> count) | (dest << (width - count));
     
-    uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK);
-    
-    // CF: MSB of result
-    bool cf = (res >> (width - 1)) & 1;
-    if (cf) flags |= CF_MASK;
-    
-    // OF: For 1-bit, OF = MSB(Res) ^ MSB-1(Res)
-    if (count == 1) {
-        bool msb = (res >> (width - 1)) & 1;
-        bool smsb = (res >> (width - 2)) & 1;
-        if (msb != smsb) flags |= OF_MASK;
+    if constexpr (UpdateFlags) {
+        uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK);
+        
+        // CF: MSB of result
+        bool cf = (res >> (width - 1)) & 1;
+        if (cf) flags |= CF_MASK;
+        
+        // OF: For 1-bit, OF = MSB(Res) ^ MSB-1(Res)
+        if (count == 1) {
+            bool msb = (res >> (width - 1)) & 1;
+            bool smsb = (res >> (width - 2)) & 1;
+            if (msb != smsb) flags |= OF_MASK;
+        }
+        
+        state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
     }
-    
-    state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
     return res;
 }
 

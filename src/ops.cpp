@@ -29,6 +29,7 @@ struct HandlerInit {
         g_Handlers[1023] = OpExitBlock;
         
         // 2. Set MOV
+        g_Handlers[0x87] = DispatchWrapper<OpXchg_EvGv>; // XCHG r/m32, r32
         g_Handlers[0x89] = DispatchWrapper<OpMov_EvGv>;
         g_Handlers[0x8B] = DispatchWrapper<OpMov_GvEv>;
         
@@ -184,6 +185,16 @@ struct HandlerInit {
         g_Handlers[0x1BD] = DispatchWrapper<OpBsr_GvEv>;
         g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
         g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
+        g_Handlers[0x1BC] = DispatchWrapper<OpBsf_Tzcnt_GvEv>; // 0F BC: BSF
+        
+        // Double-Shift Instructions
+        g_Handlers[0x1A4] = DispatchWrapper<OpShld_EvGvIb>;  // 0F A4: SHLD r/m32, r32, imm8
+        g_Handlers[0x1A5] = DispatchWrapper<OpShld_EvGvCl>;  // 0F A5: SHLD r/m32, r32, CL
+        g_Handlers[0x1AC] = DispatchWrapper<OpShrd_EvGvIb>;  // 0F AC: SHRD r/m32, r32, imm8
+        g_Handlers[0x1AD] = DispatchWrapper<OpShrd_EvGvCl>;  // 0F AD: SHRD r/m32, r32, CL
+        
+        // TZCNT (F3 0F BC) - Map 2 prefix with F3
+        g_Handlers[0x2BC] = DispatchWrapper<OpBsf_Tzcnt_GvEv>;
         
         for (int i=0; i<8; ++i) {
             g_Handlers[0x1C8+i] = DispatchWrapper<OpBswap_Reg>;
@@ -244,6 +255,20 @@ struct HandlerInit {
         g_Handlers[0x155] = DispatchWrapper<OpAndn_Sse>;
         g_Handlers[0x156] = DispatchWrapper<OpOr_Sse>;
         g_Handlers[0x157] = DispatchWrapper<OpXor_Sse>;
+        
+        // New SSE handlers        
+        g_Handlers[0x12E] = DispatchWrapper<OpUcomis_Unified>;   // 0F 2E: UCOMISS / UCOMISD
+        // g_Handlers[0x22E] REMOVED - Handled by 0x12E
+        
+        g_Handlers[0x151] = DispatchWrapper<OpSqrt_Sse>;        // 0F 51: SQRTPS/PD/SS/SD
+        // g_Handlers[0x251] REMOVED
+        
+        g_Handlers[0x1C6] = DispatchWrapper<OpShuf_Unified>;    // 0F C6: SHUFPS / SHUFPD
+        // g_Handlers[0x2C6] REMOVED
+        
+        g_Handlers[0x114] = DispatchWrapper<OpUnpckl_Unified>;  // 0F 14: UNPCKLPS / PD
+        g_Handlers[0x115] = DispatchWrapper<OpUnpckh_Unified>;  // 0F 15: UNPCKHPS / PD
+        // g_Handlers[0x214] / 0x215 REMOVED
         
         // Moves
         g_Handlers[0x110] = DispatchWrapper<OpMov_Sse_Load>;

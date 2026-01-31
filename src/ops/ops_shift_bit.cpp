@@ -179,6 +179,41 @@ void OpBsr_GvEv(EmuState* state, DecodedOp* op) {
     }
 }
 
+void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op) {
+    // 0F BC: BSF r32, r/m32
+    // F3 0F BC: TZCNT r32, r/m32
+    
+    uint32_t src = ReadModRM32(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (op->prefixes.flags.rep) { 
+        // TZCNT (F3 Prefix)
+        if (src == 0) {
+            state->ctx.eflags |= CF_MASK;
+            state->ctx.eflags &= ~ZF_MASK;
+            SetReg(state, reg, 32); // Operand Size
+        } else {
+            state->ctx.eflags &= ~(CF_MASK | ZF_MASK); // CF cleared
+            // __builtin_ctz is undefined for 0, but we checked src==0
+            int count = __builtin_ctz(src);
+            SetReg(state, reg, count);
+            if (count == 0) state->ctx.eflags |= ZF_MASK;
+        }
+    } else {
+        // BSF (No F3 Prefix)
+        if (src == 0) {
+            state->ctx.eflags |= ZF_MASK;
+            // Dest undefined.
+        } else {
+            state->ctx.eflags &= ~ZF_MASK;
+            int count = __builtin_ctz(src);
+            SetReg(state, reg, count);
+            // Flags: ZF cleared (done above).
+            // CF, OF, SF, AF, PF undefined.
+        }
+    }
+}
+
 void OpBswap_Reg(EmuState* state, DecodedOp* op) {
     // 0F C8+rd: BSWAP r32
     uint8_t reg = op->handler_index & 7;

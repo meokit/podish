@@ -24,6 +24,8 @@ void OpBtr_EvGv(EmuState* state, DecodedOp* op);
 
 void OpBsr_GvEv(EmuState* state, DecodedOp* op);
 
+void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op);
+
 void OpBswap_Reg(EmuState* state, DecodedOp* op);
 
 } // namespace x86emu

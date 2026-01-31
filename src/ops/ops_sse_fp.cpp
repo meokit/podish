@@ -432,4 +432,185 @@ simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred) {
     return a;
 }
 
+// Sqrt Unified
+void OpSqrt_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 51: SQRTPS
+    // 66 0F 51: SQRTPD
+    // F2 0F 51: SQRTSD
+    // F3 0F 51: SQRTSS
+    
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (op->prefixes.flags.repne) { // F2: SQRTSD
+        simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
+        simde__m128d src;
+        
+        if ((op->modrm >> 6) == 3) {
+            src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t val = state->mmu.read<uint64_t>(addr);
+            double d;
+            std::memcpy(&d, &val, 8);
+            src = simde_mm_set_sd(d);
+        }
+        
+        simde__m128d res = simde_mm_sqrt_sd(dest, src);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
+        
+    } else if (op->prefixes.flags.rep) { // F3: SQRTSS
+        simde__m128 dest = state->ctx.xmm[reg];
+        simde__m128 src;
+        
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t val = state->mmu.read<uint32_t>(addr);
+            float f;
+            std::memcpy(&f, &val, 4);
+            src = simde_mm_set_ss(f);
+        }
+        
+        simde__m128 sqrt_val = simde_mm_sqrt_ss(src);
+        state->ctx.xmm[reg] = simde_mm_move_ss(dest, sqrt_val);
+        
+    } else if (op->prefixes.flags.opsize) { // 66: SQRTPD
+        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op));
+        simde__m128d res = simde_mm_sqrt_pd(src);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
+        
+    } else { // None: SQRTPS
+        simde__m128 src = ReadModRM128(state, op);
+        simde__m128 res = simde_mm_sqrt_ps(src);
+        state->ctx.xmm[reg] = res;
+    }
+}
+
+// Unified UCOMIS (Scalar Ordered Compare)
+void OpUcomis_Unified(EmuState* state, DecodedOp* op) {
+    // 0F 2E: UCOMISS
+    // 66 0F 2E: UCOMISD
+    
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t flags = state->ctx.eflags & ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | AF_MASK | SF_MASK);
+    
+    bool is_unordered = false;
+    bool is_less = false;
+    bool is_equal = false;
+    
+    if (op->prefixes.flags.opsize) { // 66: UCOMISD
+        double a = ((double*)&state->ctx.xmm[reg])[0];
+        double b;
+        if ((op->modrm >> 6) == 3) {
+            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint64_t val = state->mmu.read<uint64_t>(addr);
+            std::memcpy(&b, &val, 8);
+        }
+        
+        if (std::isnan(a) || std::isnan(b)) is_unordered = true;
+        else if (a < b) is_less = true;
+        else if (a == b) is_equal = true;
+        
+    } else { // None: UCOMISS
+        float a = ((float*)&state->ctx.xmm[reg])[0];
+        float b;
+        if ((op->modrm >> 6) == 3) {
+            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+        } else {
+            uint32_t addr = ComputeEAD(state, op);
+            uint32_t val = state->mmu.read<uint32_t>(addr);
+            std::memcpy(&b, &val, 4);
+        }
+        
+        if (std::isnan(a) || std::isnan(b)) is_unordered = true;
+        else if (a < b) is_less = true;
+        else if (a == b) is_equal = true;
+    }
+    
+    if (is_unordered) {
+        flags |= ZF_MASK | PF_MASK | CF_MASK;
+    } else if (is_less) {
+        flags |= CF_MASK;
+    } else if (is_equal) {
+        flags |= ZF_MASK;
+    }
+    // Else (Greater): All Clear
+    
+    state->ctx.eflags = flags;
+}
+
+// Unified SHUF (Packed Shuffle)
+void OpShuf_Unified(EmuState* state, DecodedOp* op) {
+    // 0F C6: SHUFPS
+    // 66 0F C6: SHUFPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t imm = op->imm;
+    
+    if (op->prefixes.flags.opsize) { // 66: SHUFPD
+        double* dest_arr = (double*)&state->ctx.xmm[reg];
+        __m128 src_val = ReadModRM128(state, op);
+        double* src_arr = (double*)&src_val;
+        
+        double result[2];
+        result[0] = dest_arr[(imm & 1)];       // Select from dest
+        result[1] = src_arr[((imm >> 1) & 1)]; // Select from src
+        
+        std::memcpy(&state->ctx.xmm[reg], result, 16);
+        
+    } else { // None: SHUFPS
+        float* dest_arr = (float*)&state->ctx.xmm[reg];
+        __m128 src_val = ReadModRM128(state, op);
+        float* src_arr = (float*)&src_val;
+        
+        float result[4];
+        result[0] = dest_arr[(imm & 3)];         // Select from dest[0:1]
+        result[1] = dest_arr[((imm >> 2) & 3)];  // Select from dest[0:1]
+        result[2] = src_arr[((imm >> 4) & 3)];   // Select from src[2:3]
+        result[3] = src_arr[((imm >> 6) & 3)];   // Select from src[2:3]
+        
+        std::memcpy(&state->ctx.xmm[reg], result, 16);
+    }
+}
+
+// Unified UNPCKL (Unpack Low)
+void OpUnpckl_Unified(EmuState* state, DecodedOp* op) {
+    // 0F 14: UNPCKLPS
+    // 66 0F 14: UNPCKLPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (op->prefixes.flags.opsize) { // 66: UNPCKLPD
+        simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
+        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op));
+        simde__m128d res = simde_mm_unpacklo_pd(dest, src);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
+    } else { // None: UNPCKLPS
+        simde__m128 dest = state->ctx.xmm[reg];
+        simde__m128 src = ReadModRM128(state, op);
+        simde__m128 res = simde_mm_unpacklo_ps(dest, src);
+        state->ctx.xmm[reg] = res;
+    }
+}
+
+// Unified UNPCKH (Unpack High)
+void OpUnpckh_Unified(EmuState* state, DecodedOp* op) {
+    // 0F 15: UNPCKHPS
+    // 66 0F 15: UNPCKHPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    
+    if (op->prefixes.flags.opsize) { // 66: UNPCKHPD
+        simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
+        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op));
+        simde__m128d res = simde_mm_unpackhi_pd(dest, src);
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
+    } else { // None: UNPCKHPS
+        simde__m128 dest = state->ctx.xmm[reg];
+        simde__m128 src = ReadModRM128(state, op);
+        simde__m128 res = simde_mm_unpackhi_ps(dest, src);
+        state->ctx.xmm[reg] = res;
+    }
+}
+
 } // namespace x86emu

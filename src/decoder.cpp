@@ -18,6 +18,18 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
     switch (type) {
         case 0: return -1; // Error
         case 1: return 0;  // None
+        case 3: // Group 3 Byte (TEST=1, others 0) / Group 11 Byte (MOV=1)
+             {
+                 uint8_t reg = (op->modrm >> 3) & 7;
+                 // 0xF6/0xC6: Only Reg 0 (TEST/MOV) and 1 (TEST reserved) have Imm8
+                 return (reg <= 1) ? 1 : 0;
+             }
+        case 4: // Group 3 Word/Dword (TEST=1, others 0) / Group 11 (MOV=1)
+             {
+                 uint8_t reg = (op->modrm >> 3) & 7;
+                 // 0xF7/0xC7: Only Reg 0 and 1 have Imm
+                 return (reg <= 1) ? (osz ? 2 : 4) : 0;
+             }
         case 5: return 1;  // Byte Signed (really just 1 byte)
         case 6: return osz ? 2 : 4; // v (Word or Dword) Same as 7 for 32-bit
         case 7: return osz ? 2 : 4; // v (Word or Dword)

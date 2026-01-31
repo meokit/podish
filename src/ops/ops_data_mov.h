@@ -44,4 +44,6 @@ void OpPush_Imm(EmuState* state, DecodedOp* op);
 
 void OpPop_Reg(EmuState* state, DecodedOp* op);
 
+void OpXchg_EvGv(EmuState* state, DecodedOp* op);
+
 } // namespace x86emu

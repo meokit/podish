@@ -17,13 +17,18 @@ void OpAdd_EbGb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAdd_EvGv(EmuState* state, DecodedOp* op) {
-    // 01: ADD r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
-    uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluAdd(state, dest, src);
-    WriteModRM32(state, op, res);
+    // 01: ADD r/m16/32, r16/32
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
+        uint16_t res = AluAdd(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+        uint32_t res = AluAdd(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpAdd_GbEb(EmuState* state, DecodedOp* op) {
@@ -39,12 +44,19 @@ void OpAdd_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAdd_GvEv(EmuState* state, DecodedOp* op) {
-    // 03: ADD r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 03: ADD r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluAdd(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluAdd(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluAdd(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpAdc_EbGb(EmuState* state, DecodedOp* op) {
@@ -56,11 +68,19 @@ void OpAdc_EbGb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAdc_EvGv(EmuState* state, DecodedOp* op) {
-    // 11: ADC r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
-    uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
-    uint32_t res = AluAdc(state, dest, src);
-    WriteModRM32(state, op, res);
+    // 11: ADC r/m16/32, r16/32
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluAdc(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluAdc(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpAdc_GbEb(EmuState* state, DecodedOp* op) {
@@ -77,22 +97,35 @@ void OpAdc_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAdc_GvEv(EmuState* state, DecodedOp* op) {
-    // 13: ADC r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 13: ADC r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluAdc(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluAdc(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluAdc(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpSub_EvGv(EmuState* state, DecodedOp* op) {
-    // 29: SUB r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
+    // 29: SUB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluSub(state, dest, src);
-    WriteModRM32(state, op, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluSub(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluSub(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpAnd_EbGb(EmuState* state, DecodedOp* op) {
@@ -104,13 +137,19 @@ void OpAnd_EbGb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAnd_EvGv(EmuState* state, DecodedOp* op) {
-    // 21: AND r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
+    // 21: AND r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluAnd(state, dest, src);
-    WriteModRM32(state, op, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluAnd(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluAnd(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpAnd_GbEb(EmuState* state, DecodedOp* op) {
@@ -126,32 +165,51 @@ void OpAnd_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpAnd_GvEv(EmuState* state, DecodedOp* op) {
-    // 23: AND r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 23: AND r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluAnd(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluAnd(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluAnd(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpOr_EvGv(EmuState* state, DecodedOp* op) {
-    // 09: OR r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
+    // 09: OR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluOr(state, dest, src);
-    WriteModRM32(state, op, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluOr(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluOr(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpXor_EvGv(EmuState* state, DecodedOp* op) {
-    // 31: XOR r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
+    // 31: XOR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    
-    uint32_t res = AluXor(state, dest, src);
-    WriteModRM32(state, op, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluXor(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluXor(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpInc_Reg(EmuState* state, DecodedOp* op) {
@@ -233,12 +291,19 @@ void OpOr_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpOr_GvEv(EmuState* state, DecodedOp* op) {
-    // 0B: OR r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 0B: OR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluOr(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluOr(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluOr(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpOr_AlImm(EmuState* state, DecodedOp* op) {
@@ -306,11 +371,19 @@ void OpSbb_EbGb(EmuState* state, DecodedOp* op) {
 }
 
 void OpSbb_EvGv(EmuState* state, DecodedOp* op) {
-    // 19: SBB r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
-    uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
-    uint32_t res = AluSbb(state, dest, src);
-    WriteModRM32(state, op, res);
+    // 19: SBB r/m16/32, r16/32
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluSbb(state, dest, src);
+        WriteModRM16(state, op, res);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        uint32_t res = AluSbb(state, dest, src);
+        WriteModRM32(state, op, res);
+    }
 }
 
 void OpSbb_GbEb(EmuState* state, DecodedOp* op) {
@@ -326,12 +399,19 @@ void OpSbb_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpSbb_GvEv(EmuState* state, DecodedOp* op) {
-    // 1B: SBB r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 1B: SBB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluSbb(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluSbb(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluSbb(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpSbb_AlImm(EmuState* state, DecodedOp* op) {
@@ -408,12 +488,19 @@ void OpSub_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpSub_GvEv(EmuState* state, DecodedOp* op) {
-    // 2B: SUB r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 2B: SUB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluSub(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluSub(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluSub(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpSub_AlImm(EmuState* state, DecodedOp* op) {
@@ -463,12 +550,19 @@ void OpXor_GbEb(EmuState* state, DecodedOp* op) {
 }
 
 void OpXor_GvEv(EmuState* state, DecodedOp* op) {
-    // 33: XOR r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    // 33: XOR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t dest = GetReg(state, reg);
-    uint32_t res = AluXor(state, dest, src);
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t src = ReadModRM16(state, op);
+        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t res = AluXor(state, dest, src);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t src = ReadModRM32(state, op);
+        uint32_t dest = GetReg(state, reg);
+        uint32_t res = AluXor(state, dest, src);
+        SetReg(state, reg, res);
+    }
 }
 
 void OpXor_AlImm(EmuState* state, DecodedOp* op) {

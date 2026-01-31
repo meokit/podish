@@ -53,8 +53,7 @@ void OpTest_EvGv(EmuState* state, DecodedOp* op) {
     uint32_t dest = ReadModRM32(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t src = GetReg(state, reg);
-    
-    AluAnd(state, dest, src); // Discard result
+       AluAnd(state, dest, src); // Discard result
 }
 
 } // namespace x86emu

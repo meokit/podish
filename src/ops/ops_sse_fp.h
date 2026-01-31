@@ -38,4 +38,14 @@ simde__m128 Helper_CmpPS(simde__m128 a, simde__m128 b, uint8_t pred);
 
 simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred);
 
+// New SSE operations
+void OpSqrt_Sse(EmuState* state, DecodedOp* op);
+
+void OpUcomis_Unified(EmuState* state, DecodedOp* op);
+
+void OpShuf_Unified(EmuState* state, DecodedOp* op);
+
+void OpUnpckl_Unified(EmuState* state, DecodedOp* op);
+void OpUnpckh_Unified(EmuState* state, DecodedOp* op);
+
 } // namespace x86emu

@@ -10,6 +10,7 @@
 #include "ops/ops_data_mov.h" 
 #include "ops/ops_alu.h"
 #include "ops/ops_shift_bit.h"
+#include "ops/ops_double_shift.h"
 #include "ops/ops_muldiv.h"
 #include "ops/ops_control.h"
 #include "ops/ops_compare.h"

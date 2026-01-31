@@ -174,4 +174,15 @@ void OpPop_Reg(EmuState* state, DecodedOp* op) {
     SetReg(state, reg, val);
 }
 
+void OpXchg_EvGv(EmuState* state, DecodedOp* op) {
+    // XCHG r/m32, r32 (0x87)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t reg_val = GetReg(state, reg);
+    uint32_t rm_val = ReadModRM32(state, op);
+    
+    WriteModRM32(state, op, reg_val);
+    SetReg(state, reg, rm_val);
+}
+
 } // namespace x86emu
+
