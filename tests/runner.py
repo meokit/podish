@@ -133,15 +133,15 @@ class Runner:
             if os.path.exists(asm_path): os.remove(asm_path)
             if os.path.exists(bin_path): os.remove(bin_path)
 
-    def run_test(self, name, asm, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None):
+    def run_test(self, name, asm, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
         code = self.compile(asm)
         if not code:
             return False
             
-        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base)
+        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask)
 
-    def run_test_bytes(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None):
-        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base)
+    def run_test_bytes(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
+        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask)
 
     def _sim_mem_hook(self, addr, size, is_write, val):
         # Store as (Type, Addr, Val, Size)
@@ -161,7 +161,7 @@ class Runner:
                 real_val = 0
         self.uc_trace.append((op, address, real_val, size))
 
-    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None):
+    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
         # print(f"[TEST] Running {name}...")
         
         # 1. Setup Unicorn (Reference)
@@ -480,10 +480,13 @@ class Runner:
 
         # 3. Check EFLAGS (Strict check if expected provided, masked for arithmetic status)
         sim_eflags = sim.ctx.eflags
-        ARITH_MASK = 0x8D5 # OF, SF, ZF, AF, PF, CF
+        # Default to Arithmetic Flags (0x8D5) + Direction Flag if not specified
+        # Adding DF (0x400) to default? No, keep conservative.
+        mask = check_eflags_mask if check_eflags_mask is not None else 0x8D5
+        
         if expected_eflags is not None:
-            if (sim_eflags & ARITH_MASK) != (expected_eflags & ARITH_MASK):
-                 fail_reason += f"  EFLAGS Mismatch! Exp: 0x{expected_eflags:x}, Got: 0x{sim_eflags:x} (Masked: 0x{sim_eflags & ARITH_MASK:x})\n"
+            if (sim_eflags & mask) != (expected_eflags & mask):
+                 fail_reason += f"  EFLAGS Mismatch! Exp: 0x{expected_eflags:x}, Got: 0x{sim_eflags:x} (Masked: 0x{sim_eflags & mask:x} with mask 0x{mask:x})\n"
                  passed = False
         
         # 4. Check EIP

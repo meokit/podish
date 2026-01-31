@@ -63,7 +63,7 @@ EmuState* X86_Create() {
     
     // Set default EFLAGS and Mask
     state->ctx.eflags = 0x202; // IF=1, Reserved=1
-    state->ctx.eflags_mask = 0x257FD5; // User-modifiable flags (CF,PF,AF,ZF,SF,TF,DF,OF,NT,RF,AC,ID)
+    state->ctx.eflags_mask = 0x240DD5; // User-mode mask: CF,PF,AF,ZF,SF,TF,DF,OF,AC,ID. (Protect IF, IOPL, NT, RF, VM)
     
     // Link pointers
     state->ctx.mmu = &state->mmu;
