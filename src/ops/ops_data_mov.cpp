@@ -115,6 +115,66 @@ void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
     }
 }
 
+void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
+    // 8E /r: MOV Sreg, r/m16
+    uint8_t sreg_idx = (op->modrm >> 3) & 7;
+    // 0=ES, 1=CS, 2=SS, 3=DS, 4=FS, 5=GS
+    if (sreg_idx == 1) {
+        // Loading CS -> #UD
+        return; 
+    }
+    if (sreg_idx > 5) return; 
+    
+    uint16_t selector = 0;
+    
+    // Read Source (Rm) - always 16-bit
+    if (op->modrm >= 0xC0) {
+        uint8_t rm = op->modrm & 7;
+        selector = (uint16_t)GetReg(state, rm);
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        selector = state->mmu.read<uint16_t>(addr);
+        if (state->status != EmuStatus::Running) return;
+    }
+    
+    // We do not store selectors in current Context.
+    // Just ensure side-effects (memory read fault) happen.
+    // Base is preserved (assumed set by syscall).
+}
+
+void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op) {
+    // 8C /r: MOV r/m16, Sreg
+    uint8_t sreg_idx = (op->modrm >> 3) & 7;
+    if (sreg_idx > 5) return;
+    
+    // Mock values since we don't store selectors
+    uint16_t val = 0;
+    switch(sreg_idx) {
+        case 1: val = 0x73; break; // CS
+        case 2: val = 0x7B; break; // SS
+        case 3: val = 0x7B; break; // DS
+        case 0: val = 0x7B; break; // ES
+        default: val = 0; break;
+    }
+    
+    if (op->modrm >= 0xC0) {
+        uint8_t rm = op->modrm & 7;
+        // Write to register (16-bit or 32-bit zero ext?) 
+        // Operand size attribute determines? default is 32-bit for 32-bit mode?
+        // "If the destination is a 32-bit register, the 16-bit selector is zero-extended"
+        // We assume 32-bit destination unless opsize prefix.
+        if (op->prefixes.flags.opsize) {
+            uint32_t* rptr = GetRegPtr(state, rm);
+            *rptr = (*rptr & 0xFFFF0000) | val;
+        } else {
+            SetReg(state, rm, (uint32_t)val);
+        }
+    } else {
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint16_t>(addr, val);
+    }
+}
+
 template<typename T>
 void Helper_Movs(EmuState* state, DecodedOp* op) {
     bool df = (state->ctx.eflags & 0x400); // DF

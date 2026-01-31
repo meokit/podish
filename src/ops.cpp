@@ -200,6 +200,10 @@ struct HandlerInit {
         g_Handlers[0x98] = DispatchWrapper<OpCwde>;
         g_Handlers[0x99] = DispatchWrapper<OpCdq>;
         
+        // MOV Sreg
+        g_Handlers[0x8E] = DispatchWrapper<OpMov_Sreg_Rm>;
+        g_Handlers[0x8C] = DispatchWrapper<OpMov_Rm_Sreg>;
+        
         // Group 2 (Shift/Rotate)
         g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb>;
         g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb>;

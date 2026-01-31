@@ -1,4 +1,8 @@
 build/
+*.o
+*.dylib
+linux/x86loader
+linux/trace.log
 .DS_Store
 analyze/
 .pytest_cache/

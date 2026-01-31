@@ -28,6 +28,12 @@ void OpMov_Moffs_Load(EmuState* state, DecodedOp* op);
 
 void OpMov_Moffs_Store(EmuState* state, DecodedOp* op);
 
+// MOV Sreg, r/m16 (0x8E)
+void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op);
+
+// MOV r/m16, Sreg (0x8C)
+void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op);
+
 void OpMovs_Byte(EmuState* state, DecodedOp* op);
 void OpMovs_Word(EmuState* state, DecodedOp* op);
 
