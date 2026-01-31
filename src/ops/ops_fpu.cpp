@@ -77,7 +77,6 @@ void OpFpu_D9(EmuState* state, DecodedOp* op) {
     if ((op->modrm >> 6) == 3) {
         // D9 C0-FF: FPU Instructions with Regs
         // Map 0xD9C0 -> index
-        uint8_t index = op->modrm & 0x3F; // C0-FF -> 00-3F? No.
         uint8_t op_byte = op->modrm;
         
         if (op_byte == 0xC0) { // FLD ST(0) (DUP) -> D9 C0

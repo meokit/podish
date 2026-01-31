@@ -1,4 +1,7 @@
 #include "float80.h"
+
+#pragma clang diagnostic ignored "-Wc99-extensions"
+
 #include <string.h>
 #include <math.h>
 #include <assert.h>
