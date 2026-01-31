@@ -58,6 +58,40 @@ struct HandlerInit {
         g_Handlers[0xAA] = DispatchWrapper<OpStos_Byte>;
         g_Handlers[0xAB] = DispatchWrapper<OpStos_Word>;
         
+        // LODS (AC-AD)
+        g_Handlers[0xAC] = DispatchWrapper<OpLods_Byte>;
+        g_Handlers[0xAD] = DispatchWrapper<OpLods_Word>;
+        
+        // SCAS (AE-AF)
+        g_Handlers[0xAE] = DispatchWrapper<OpScas_Byte>;
+        g_Handlers[0xAF] = DispatchWrapper<OpScas_Word>;
+        
+        // CMPS (A6-A7)
+        g_Handlers[0xA6] = DispatchWrapper<OpCmps_Byte>;
+        g_Handlers[0xA7] = DispatchWrapper<OpCmps_Word>; // Wait opcodes are A6/A7
+        
+        // PUSHA/POPA
+        g_Handlers[0x60] = DispatchWrapper<OpPusha>;
+        g_Handlers[0x61] = DispatchWrapper<OpPopa>;
+        
+        // ENTER/LEAVE
+        g_Handlers[0xC8] = DispatchWrapper<OpEnter>;
+        g_Handlers[0xC9] = DispatchWrapper<OpLeave>;
+        
+        // XCHG (86, 87) - 86 is new
+        g_Handlers[0x86] = DispatchWrapper<OpXchg_EbGb>;
+        
+        // XCHG EAX, Reg (90-97)
+        // 90 is NOP (XCHG EAX,EAX), already set.
+        for (int i=1; i<8; ++i) g_Handlers[0x90+i] = DispatchWrapper<OpXchg_Reg>;
+        
+        // LAHF/SAHF
+        g_Handlers[0x9F] = DispatchWrapper<OpLahf>;
+        g_Handlers[0x9E] = DispatchWrapper<OpSahf>;
+        
+        // WAIT
+        g_Handlers[0x9B] = DispatchWrapper<OpWait>;
+        
         // 3. Set LEA
         g_Handlers[0x8D] = DispatchWrapper<OpLea>;
         
@@ -187,10 +221,16 @@ struct HandlerInit {
         g_Handlers[0x1A3] = DispatchWrapper<OpBt_EvGv>;
         // UD2 (0F 0B) -> #UD
         g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
+        g_Handlers[0x131] = DispatchWrapper<OpRdtsc>; // 0F 31
+        g_Handlers[0x1A2] = DispatchWrapper<OpCpuid>; // 0F A2
+        g_Handlers[0x1AB] = DispatchWrapper<OpBts_EvGv>; // 0F AB
+        g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg>; // 0F B0
+        g_Handlers[0x1B1] = DispatchWrapper<OpCmpxchg>; // 0F B1
         g_Handlers[0x1B3] = DispatchWrapper<OpBtr_EvGv>;
+        g_Handlers[0x1BB] = DispatchWrapper<OpBtc_EvGv>; // 0F BB
         g_Handlers[0x1B6] = DispatchWrapper<OpMovzx_Byte>;
         g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
-        g_Handlers[0x1BA] = DispatchWrapper<OpBt_EvIb>;
+        g_Handlers[0x1BA] = DispatchWrapper<OpGroup8_EvIb>;
         g_Handlers[0x1BD] = DispatchWrapper<OpBsr_GvEv>;
         g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
         g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;

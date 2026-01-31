@@ -158,6 +158,12 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
         if (imm_len == 1) op->imm = *reinterpret_cast<const uint8_t*>(ptr);
         else if (imm_len == 2) op->imm = *reinterpret_cast<const uint16_t*>(ptr);
         else if (imm_len == 4) op->imm = *reinterpret_cast<const uint32_t*>(ptr);
+        else if (imm_len == 3) {
+            // Special Case for ENTER (Iw Ib)
+            uint16_t iw = *reinterpret_cast<const uint16_t*>(ptr);
+            uint8_t ib = *(ptr + 2);
+            op->imm = iw | (ib << 16);
+        }
         ptr += imm_len;
     }
     

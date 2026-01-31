@@ -18,9 +18,11 @@ void OpGroup2_EvCl(EmuState* state, DecodedOp* op);
 
 void OpBt_EvGv(EmuState* state, DecodedOp* op);
 
-void OpBt_EvIb(EmuState* state, DecodedOp* op);
+void OpGroup8_EvIb(EmuState* state, DecodedOp* op);
 
 void OpBtr_EvGv(EmuState* state, DecodedOp* op);
+void OpBts_EvGv(EmuState* state, DecodedOp* op);
+void OpBtc_EvGv(EmuState* state, DecodedOp* op);
 
 void OpBsr_GvEv(EmuState* state, DecodedOp* op);
 

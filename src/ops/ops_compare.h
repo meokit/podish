@@ -18,6 +18,8 @@ void OpCmp_GvEv(EmuState* state, DecodedOp* op);
 
 void OpSetcc(EmuState* state, DecodedOp* op);
 
+void OpCmpxchg(EmuState* state, DecodedOp* op);
+
 void OpTest_EvGv(EmuState* state, DecodedOp* op);
 
 } // namespace x86emu

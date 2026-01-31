@@ -40,4 +40,8 @@ void OpCld(EmuState* state, DecodedOp* op);
 void OpSti(EmuState* state, DecodedOp* op);
 void OpCli(EmuState* state, DecodedOp* op);
 
+void OpCpuid(EmuState* state, DecodedOp* op);
+void OpRdtsc(EmuState* state, DecodedOp* op);
+void OpWait(EmuState* state, DecodedOp* op);
+
 } // namespace x86emu

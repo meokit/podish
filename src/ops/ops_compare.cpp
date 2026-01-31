@@ -63,4 +63,70 @@ void OpSetcc(EmuState* state, DecodedOp* op) {
     WriteModRM8(state, op, val);
 }
 
+void OpCmpxchg(EmuState* state, DecodedOp* op) {
+    // 0F B0/B1: CMPXCHG r/m, r
+    bool is_byte = (op->handler_index == 0x1B0);
+    
+    if (is_byte) {
+        uint8_t acc = GetReg(state, EAX) & 0xFF;
+        uint8_t src = GetReg8(state, (op->modrm >> 3) & 7); // Reg
+        uint8_t dest = ReadModRM8(state, op); // Mem/Reg
+        
+        // Temp = Dest - Acc
+        AluSub<uint8_t>(state, acc, dest); // Sets flags based on ACC - DEST?
+        // Wait: CMPXCHG: Compare Accumulator with Dest.
+        // If Equal (ZF=1): Dest <- Src
+        // Else: Accumulator <- Dest
+        // Comparison is Dest - Acc? Or Acc - Dest?
+        // CMP instruction does: Op1 - Op2.
+        // CMPXCHG compares AL/AX/EAX with Dest.
+        // "Compares the value in the AL, AX, or EAX register with the first operand (destination operand). If the two values are equal, the second operand (source operand) is loaded into the destination operand. Otherwise, the destination operand is loaded into the AL, AX, or EAX register."
+        // Flag setting is like CMP: Acc - Dest or Dest - Acc?
+        // CMP Dest, Src -> Dest - Src.
+        // Here Dest is memory. Acc is implied source.
+        // Actually: "Compares ... EAX with ... Destination".
+        // Usually CMP A, B is A - B.
+        // So EAX - Dest.
+        
+        AluSub<uint8_t>(state, acc, dest); 
+        
+        if (state->ctx.eflags & ZF_MASK) {
+             WriteModRM8(state, op, src);
+        } else {
+             // Load Dest into AL
+             uint32_t val = GetReg(state, EAX);
+             val = (val & 0xFFFFFF00) | dest;
+             SetReg(state, EAX, val);
+        }
+        
+    } else {
+        uint32_t acc = GetReg(state, EAX);
+        // Check OpSize?
+        if (op->prefixes.flags.opsize) {
+            uint16_t acc16 = (uint16_t)acc;
+            uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
+            uint16_t dest = ReadModRM16(state, op);
+            
+            AluSub<uint16_t>(state, acc16, dest);
+            
+            if (state->ctx.eflags & ZF_MASK) {
+                WriteModRM16(state, op, src);
+            } else {
+                 SetReg(state, EAX, (acc & 0xFFFF0000) | dest);
+            }
+        } else {
+            uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+            uint32_t dest = ReadModRM32(state, op);
+            
+            AluSub<uint32_t>(state, acc, dest);
+            
+            if (state->ctx.eflags & ZF_MASK) {
+                WriteModRM32(state, op, src);
+            } else {
+                 SetReg(state, EAX, dest);
+            }
+        }
+    }
+}
+
 } // namespace x86emu

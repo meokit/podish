@@ -34,6 +34,15 @@ void OpMovs_Word(EmuState* state, DecodedOp* op);
 void OpStos_Byte(EmuState* state, DecodedOp* op);
 void OpStos_Word(EmuState* state, DecodedOp* op);
 
+void OpLods_Byte(EmuState* state, DecodedOp* op);
+void OpLods_Word(EmuState* state, DecodedOp* op);
+
+void OpScas_Byte(EmuState* state, DecodedOp* op);
+void OpScas_Word(EmuState* state, DecodedOp* op);
+
+void OpCmps_Byte(EmuState* state, DecodedOp* op);
+void OpCmps_Word(EmuState* state, DecodedOp* op);
+
 void OpMovzx_Byte(EmuState* state, DecodedOp* op);
 
 void OpMovzx_Word(EmuState* state, DecodedOp* op);
@@ -50,6 +59,16 @@ void OpPush_Imm(EmuState* state, DecodedOp* op);
 
 void OpPop_Reg(EmuState* state, DecodedOp* op);
 
+void OpPusha(EmuState* state, DecodedOp* op);
+void OpPopa(EmuState* state, DecodedOp* op);
+void OpEnter(EmuState* state, DecodedOp* op);
+void OpLeave(EmuState* state, DecodedOp* op);
+
 void OpXchg_EvGv(EmuState* state, DecodedOp* op);
+void OpXchg_EbGb(EmuState* state, DecodedOp* op);
+void OpXchg_Reg(EmuState* state, DecodedOp* op);
+
+void OpLahf(EmuState* state, DecodedOp* op);
+void OpSahf(EmuState* state, DecodedOp* op);
 
 } // namespace x86emu

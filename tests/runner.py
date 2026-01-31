@@ -349,15 +349,15 @@ class Runner:
             if os.path.exists(asm_path): os.remove(asm_path)
             if os.path.exists(bin_path): os.remove(bin_path)
 
-    def run_test(self, name, asm, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
+    def run_test(self, name, asm, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True):
         code = self.compile(asm)
         if not code:
             return False
             
-        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask)
+        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask, check_unicorn)
 
-    def run_test_bytes(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
-        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask)
+    def run_test_bytes(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True):
+        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask, check_unicorn)
 
     def _sim_mem_hook(self, addr, size, is_write, val):
         # Store as (Type, Addr, Val, Size)
@@ -377,7 +377,7 @@ class Runner:
                 real_val = 0
         self.uc_trace.append((op, address, real_val, size))
 
-    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None):
+    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True):
         # Setup Backends
         backends = []
         
@@ -543,8 +543,8 @@ class Runner:
                     fail_reason += msg + "\n"
                     passed = False
             
-            # 2. Compare with Unicorn (always if available)
-            if uc_res:
+            # 2. Compare with Unicorn (always if available and enabled)
+            if uc_res and check_unicorn:
                 uc_val = uc_res[r]
                 # Special cases to ignore Unicorn's oddities
                 if r == 'ESP' and uc_val == 0: continue
@@ -580,7 +580,7 @@ class Runner:
                     fail_reason += msg + "\n"
                     passed = False
 
-            if uc_res:
+            if uc_res and check_unicorn:
                 uc_val = uc_res[r]
                 if sim_val != uc_val:
                     if is_expected and exp_bytes is not None:

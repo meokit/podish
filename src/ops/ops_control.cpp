@@ -196,4 +196,58 @@ void OpCli(EmuState* state, DecodedOp* op) {
     state->fault_vector = 13; // #GP
 }
 
+
+
+void OpCpuid(EmuState* state, DecodedOp* op) {
+    // 0F A2: CPUID
+    uint32_t leaf = GetReg(state, EAX);
+    uint32_t ecx_in = GetReg(state, ECX);
+    
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    
+    if (leaf == 0) {
+        eax = 1; // Max Leaf
+        // "Genu" "ineI" "ntel"
+        ebx = 0x756E6547;
+        edx = 0x49656E69;
+        ecx = 0x6C65746E;
+    } else if (leaf == 1) {
+        eax = 0x00000680; // Pentium III approx
+        ebx = 0;
+        ecx = 0;
+        edx = 0x00008000; // Minimal features
+        // Add SSE/SSE2 flags if needed:
+        // EDX: Bit 25 (SSE), Bit 26 (SSE2)
+        edx |= (1 << 25) | (1 << 26);
+        // Bit 0 (FPU)
+        edx |= 1;
+        // Bit 4 (TSC)
+        edx |= (1 << 4);
+    }
+    
+    SetReg(state, EAX, eax);
+    SetReg(state, EBX, ebx);
+    SetReg(state, ECX, ecx);
+    SetReg(state, EDX, edx);
+}
+
+void OpRdtsc(EmuState* state, DecodedOp* op) {
+    // 0F 31: RDTSC
+    // For now return 0 or a mock counter
+    static uint64_t tsc = 0;
+    tsc += 1000;
+    
+    uint32_t low = (uint32_t)tsc;
+    uint32_t high = (uint32_t)(tsc >> 32);
+    
+    SetReg(state, EAX, low);
+    SetReg(state, EDX, high);
+}
+
+void OpWait(EmuState* state, DecodedOp* op) {
+    // 9B: WAIT/FWAIT n
+    // Check pending FPU exceptions?
+    // For now NOP.
+}
+
 } // namespace x86emu
