@@ -20,7 +20,7 @@ The execution engine transforms raw x86 machine code into an internal "Decoded B
 2.  **Internal Representation (IR):** The block is converted into a `DecodedBlock` array. Each entry contains:
     *   `handler_index`: Index into the global function pointer array.
     *   `metadata`: A bitset/struct containing prefixes, addressing modes, and immediate values (if small/embedded) or offsets.
-3.  **Caching:** This `DecodedBlock` is cached in a `HashMap<eip, DecodedBlock*>`.
+3.  **Caching:** This `DecodedBlock` is cached in a `ankerl::unordered_dense::map<uint32_t, BasicBlock>`.
 4.  **Dispatch:**
     *   The interpreter loop iterates over the `DecodedBlock` array.
     *   **Tail Calls:** Uses `[[clang::musttail]]` to jump from one opcode handler to the next, derived from the `handler_index`.
@@ -32,45 +32,73 @@ Each opcode is implemented as a standalone `force_inline` function (or a templat
 
 ```cpp
 // Conceptual signature
-using OpHandler = void(*)(Context* ctx, const DecodedOp* op);
+using HandlerFunc = void(ATTR_PRESERVE_NONE *)(EmuState* state, DecodedOp* op);
 
-[[clang::musttail]] __attribute__((preserve_none))
-void ExecuteAddRegMem(Context* ctx, const DecodedOp* op) {
-    impl_add_reg_mem(ctx, op); // force_inline
+[[clang::musttail]] ATTR_PRESERVE_NONE
+void ExecuteAddRegMem(EmuState* state, DecodedOp* op) {
+    impl_add_reg_mem(state, op); // force_inline
     // Next instruction dispatch
     auto next_op = op + 1;
-    OpHandler next_handler = GlobalHandlers[next_op->handler_idx];
-    return next_handler(ctx, next_op);
+    HandlerFunc next_handler = g_Handlers[next_op->handler_index];
+    return next_handler(state, next_op);
 }
 ```
 
 ### 3.3 Memory Management (SoftMMU)
 -   **Flat Memory Model:** 4GB logic address space.
--   **Implementation:** A simple 2-level page table or mask-based lookup.
-    -   `HostAddr = PageTable[GuestAddr >> 12] + (GuestAddr & 0xFFF)`
--   **Safety:** Simple bounds checking at the page level.
+-   **Implementation:** `SoftMMU` class with a 2-level page table.
+    -   Level 1: Directory (1024 entries).
+    -   Level 2: Table (1024 entries of 4KB pages).
+-   **Features:**
+    -   **Permissions:** Read/Write/Exec tracking (placeholder).
+    -   **Hooks:** `MemHook` callback for tracing memory accesses.
+    -   **Faults:** `FaultHandler` callback for handling invalid accesses (e.g., segfaults).
+-   **Safety:** Bounds checking and page-level valid bit.
 
 ### 3.4 CPU State (`Context`)
-Aligned with hardware layout for SSE compatibility.
+Aligned with hardware layout for SSE properties and expanded for FPU/State.
 ```cpp
 struct alignas(64) Context {
     uint32_t regs[8];    // EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
     uint32_t eip;
     uint32_t eflags;
+    uint32_t eflags_mask; // Mask for user-modifiable flags
+
+    // SSE/SSE2 Registers
     alignas(16) __m128 xmm[8];
     uint32_t mxcsr;
     
-    // Segment State
-    // User-mode simulation implies "Flat Model" (CS=DS=SS=ES=0 base).
-    // However, FS and GS are used for TLS and can have non-zero bases.
-    // These bases are set by the Host/Caller, not by guest 'mov gs, ax' (mostly).
-    uint32_t seg_base[6]; // CS, DS, SS, ES, FS, GS (Indexed 0-5)
+    // FPU Registers (80-bit Extended Precision)
+    alignas(16) float80 fpu_regs[8];
+    uint16_t fpu_sw;
+    uint16_t fpu_cw;
+    uint16_t fpu_tw;
+    int fpu_top;
+
+    // Segment Base Addresses (Flat Model + TLS)
+    uint32_t seg_base[6]; // CS, DS, SS, ES, FS, GS
+
+    // System Environment
+    void* mmu;   // Pointer to SoftMMU
+    void* hooks; // Pointer to HookManager
 };
+```
 
-// API Note: Caller sets ctx.seg_base[SEG_FS] / [SEG_GS] for TLS.
-// Guest instructions like 'mov gs, ax' may be ignored or strictly validated 
-// to only allow specific values if needed, but 'GS: [0]' will use seg_base[GS].
+### 3.5 FPU Support (x87)
+-   **Data Types:** `float80` (Standard 80-bit extended precision) implemented via `long double` or struct wrapper.
+-   **Stack:** 8-slot register stack with `TOP` pointer.
+-   **Status:** Full x87 status word (SW) and control word (CW) emulation.
 
+### 3.6 EmuState
+Encapsulates the entire simulator state:
+```cpp
+struct EmuState {
+    Context ctx;
+    SoftMMU mmu;
+    HookManager hooks;
+    EmuStatus status;
+    ankerl::unordered_dense::map<uint32_t, BasicBlock> block_cache;
+};
 ```
 
 ## 4. Development Workflow
@@ -102,14 +130,23 @@ x86emu/
 ├── analyze/            # Python/Zydis analysis
 ├── src/
 │   ├── main.cpp
-│   ├── common.h        # Types, Context definition
+│   ├── common.h        # Types, Context, SIMDe
 │   ├── decoder.cpp     # x86 -> IR translator
-│   ├── dispatch.cpp    # Main loop & Tables
-│   ├── mmu.h           # Memory Map
+│   ├── decoder.h       # DecodedOp, BasicBlock
+│   ├── decoder_lut.h   # Lookup tables
+│   ├── dispatch.h      # Dispatcher loop
+│   ├── mmu.h           # SoftMMU implementation
+│   ├── state.h         # EmuState definition
+│   ├── float80.cpp     # 80-bit floating point class
+│   ├── bindings.cpp    # C API for Python integration
 │   └── ops/            # Instruction implementations
-│       ├── alu.h
-│       ├── mov.h
-│       └── sse.h
+│       ├── ops_alu.cpp
+│       ├── ops_fpu.cpp
+│       ├── ops_sse_fp.cpp
+│       ├── ops_sse_int.cpp
+│       └── ...
 └── tests/
-    └── framework.cpp   # Unicorn comparison runner
+    ├── framework.cpp     # Unicorn comparison runner
+    └── regression/       # Python regression tests
+
 ```
