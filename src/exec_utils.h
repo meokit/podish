@@ -231,7 +231,7 @@ inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op) {
     }
 }
 
-inline __m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
+inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
     
@@ -242,9 +242,9 @@ inline __m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
         uint64_t low = state->mmu.read<uint64_t>(addr);
         uint64_t high = state->mmu.read<uint64_t>(addr + 8);
         
-        // Combine into __m128
+        // Combine into simde__m128
         // Assuming little endian host and target
-        __m128 res;
+        simde__m128 res;
         uint64_t* ptr = (uint64_t*)&res;
         ptr[0] = low;
         ptr[1] = high;
@@ -252,7 +252,7 @@ inline __m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
     }
 }
 
-inline void WriteModRM128(EmuState* state, const DecodedOp* op, __m128 val) {
+inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
     

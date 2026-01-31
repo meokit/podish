@@ -65,7 +65,7 @@ struct alignas(64) Context {
     uint32_t eflags_mask; // Mask for user-modifiable flags
 
     // SSE/SSE2 Registers
-    alignas(16) __m128 xmm[8];
+    alignas(16) simde__m128 xmm[8];
     uint32_t mxcsr;
     
     // FPU Registers (80-bit Extended Precision)

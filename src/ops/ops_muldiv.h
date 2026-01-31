@@ -7,9 +7,5 @@
 #include "../decoder.h"
 
 namespace x86emu {
-
-void OpImul_GvEv(EmuState* state, DecodedOp* op);
-
-void OpImul_GvEvIz(EmuState* state, DecodedOp* op);
-
-} // namespace x86emu
+void RegisterMulDivOps();
+}  // namespace x86emu

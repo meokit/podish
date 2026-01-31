@@ -6,9 +6,11 @@
 #ifdef __clang__
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
 #define ATTR_MUSTTAIL [[clang::musttail]]
+#define FORCE_INLINE __attribute__((always_inline)) inline
 #else
 #define ATTR_PRESERVE_NONE
 #define ATTR_MUSTTAIL
+#define FORCE_INLINE inline
 #endif
 
 namespace x86emu {
