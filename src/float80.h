@@ -17,6 +17,10 @@ extern "C" {
 #define EXP64_MIN -1022
 #define EXP64_SPECIAL 2047
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wnested-anon-types"
+
 typedef struct {
     uint64_t signif;
     union {
@@ -27,6 +31,8 @@ typedef struct {
         };
     };
 } __attribute__((aligned(16))) float80;
+
+#pragma clang diagnostic pop
 
 float80 f80_from_int(int64_t i);
 int64_t f80_to_int(float80 f);

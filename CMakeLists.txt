@@ -16,6 +16,12 @@ CPMAddPackage(
     OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES ON"
 )
 
+CPMAddPackage(
+    NAME unordered_dense
+    GITHUB_REPOSITORY martinus/unordered_dense
+    VERSION 4.8.1
+)
+
 # Compiler warnings and options
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
@@ -36,4 +42,6 @@ list(FILTER SOURCES EXCLUDE REGEX "src/main.cpp")
 add_library(x86emu SHARED ${SOURCES})
 
 target_include_directories(x86emu PRIVATE src ${simde_SOURCE_DIR})
+
+target_link_libraries(x86emu PRIVATE unordered_dense::unordered_dense)
 

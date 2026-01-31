@@ -35,6 +35,10 @@ cppyy.add_include_path(SIMDE_PATH)
 # Pre-include some standard headers to avoid issues
 cppyy.c_include("stdint.h")
 
+# Include Dependencies
+cppyy.add_include_path("build/_deps/unordered_dense-src/include")
+cppyy.add_include_path("build/_deps/simde-src") # SIMDE
+
 # Load our headers
 # Note: We need to include common.h first because it defines SIMDE alias
 cppyy.include("common.h")
