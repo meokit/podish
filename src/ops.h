@@ -14,6 +14,7 @@
 #include "ops/ops_control.h"
 #include "ops/ops_compare.h"
 #include "ops/ops_sse_fp.h"
+#include "ops/ops_sse_int.h"
 #include "ops/ops_sse_cvt.h"
 #include "ops/ops_sse_mov.h"
 #include "ops/ops_fpu.h"

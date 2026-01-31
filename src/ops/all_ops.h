@@ -2,7 +2,7 @@
 #pragma once
 
 #include "ops_sse_fp.h"
-#include "ops_sse_cvt.h"
+#include "ops_sse_int.h"
 #include "ops_sse_mov.h"
 #include "ops_fpu.h"
 #include "ops_data_mov.h"

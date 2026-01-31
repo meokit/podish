@@ -20,6 +20,10 @@ void OpAnd_Sse(EmuState* state, DecodedOp* op);
 
 void OpAndn_Sse(EmuState* state, DecodedOp* op);
 
+void OpOr_Sse(EmuState* state, DecodedOp* op);
+
+void OpXor_Sse(EmuState* state, DecodedOp* op);
+
 void OpCmp_Sse(EmuState* state, DecodedOp* op);
 
 void OpMaxMin_Sse(EmuState* state, DecodedOp* op);

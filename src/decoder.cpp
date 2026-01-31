@@ -223,6 +223,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         DecodedOp op;
         if (!DecodeInstruction(buf, &op)) {
             // Decode error: Insert Fault Op
+            printf("[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X %02X %02X\n", current_eip, buf[0], buf[1], buf[2], buf[3]);
             std::memset(&op, 0, sizeof(op));
             op.length = 0; // Fault: EIP points to instruction
             op.handler_index = 0x10B; // UD2

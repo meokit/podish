@@ -242,6 +242,8 @@ struct HandlerInit {
         g_Handlers[0x15C] = DispatchWrapper<OpSub_Sse>;
         g_Handlers[0x154] = DispatchWrapper<OpAnd_Sse>;
         g_Handlers[0x155] = DispatchWrapper<OpAndn_Sse>;
+        g_Handlers[0x156] = DispatchWrapper<OpOr_Sse>;
+        g_Handlers[0x157] = DispatchWrapper<OpXor_Sse>;
         
         // Moves
         g_Handlers[0x110] = DispatchWrapper<OpMov_Sse_Load>;
@@ -255,6 +257,71 @@ struct HandlerInit {
         // XADD
         g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;
         g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Rm_R>;
+
+        // SSE Integer (Batch 005)
+        g_Handlers[0x1DB] = DispatchWrapper<OpPand_Sse>;
+        g_Handlers[0x1DF] = DispatchWrapper<OpPandn_Sse>;
+        g_Handlers[0x1EB] = DispatchWrapper<OpPor_Sse>;
+        g_Handlers[0x1EF] = DispatchWrapper<OpPxor_Sse>;
+        
+        g_Handlers[0x1FC] = DispatchWrapper<OpPaddb_Sse>;
+        g_Handlers[0x1FD] = DispatchWrapper<OpPaddw_Sse>;
+        g_Handlers[0x1FE] = DispatchWrapper<OpPaddd_Sse>;
+        g_Handlers[0x1D4] = DispatchWrapper<OpPaddq_Sse>;
+        
+        g_Handlers[0x1F8] = DispatchWrapper<OpPsubb_Sse>;
+        g_Handlers[0x1F9] = DispatchWrapper<OpPsubw_Sse>;
+        g_Handlers[0x1FA] = DispatchWrapper<OpPsubd_Sse>;
+        g_Handlers[0x1FB] = DispatchWrapper<OpPsubq_Sse>;
+        
+        g_Handlers[0x1F4] = DispatchWrapper<OpPmuludq_Sse>;
+        
+        g_Handlers[0x174] = DispatchWrapper<OpPcmpeqb_Sse>;
+        g_Handlers[0x175] = DispatchWrapper<OpPcmpeqw_Sse>;
+        g_Handlers[0x176] = DispatchWrapper<OpPcmpeqd_Sse>;
+        
+        g_Handlers[0x164] = DispatchWrapper<OpPcmpgtb_Sse>;
+        g_Handlers[0x165] = DispatchWrapper<OpPcmpgtw_Sse>;
+        g_Handlers[0x166] = DispatchWrapper<OpPcmpgtd_Sse>;
+        
+        g_Handlers[0x1DE] = DispatchWrapper<OpPmaxub_Sse>;
+        g_Handlers[0x1DA] = DispatchWrapper<OpPminub_Sse>;
+        g_Handlers[0x1EE] = DispatchWrapper<OpPmaxsw_Sse>;
+        g_Handlers[0x1EA] = DispatchWrapper<OpPminsw_Sse>;
+        
+        g_Handlers[0x1F1] = DispatchWrapper<OpPsllw_Sse>;
+        g_Handlers[0x1F2] = DispatchWrapper<OpPslld_Sse>;
+        g_Handlers[0x1F3] = DispatchWrapper<OpPsllq_Sse>;
+        
+        g_Handlers[0x1E1] = DispatchWrapper<OpPsraw_Sse>;
+        g_Handlers[0x1E2] = DispatchWrapper<OpPsrad_Sse>;
+        
+        g_Handlers[0x1D1] = DispatchWrapper<OpPsrlw_Sse>;
+        g_Handlers[0x1D2] = DispatchWrapper<OpPsrld_Sse>;
+        g_Handlers[0x1D3] = DispatchWrapper<OpPsrlq_Sse>;
+        
+        g_Handlers[0x170] = DispatchWrapper<OpGroup_Pshuf>;
+        g_Handlers[0x171] = DispatchWrapper<OpGroup_Sse_Shift_Imm_W>;
+        g_Handlers[0x172] = DispatchWrapper<OpGroup_Sse_Shift_Imm_D>;
+        g_Handlers[0x173] = DispatchWrapper<OpGroup_Sse_Shift_Imm_Q>;
+        
+        g_Handlers[0x168] = DispatchWrapper<OpPunpckhbw_Sse>;
+        g_Handlers[0x169] = DispatchWrapper<OpPunpckhwd_Sse>;
+        g_Handlers[0x16A] = DispatchWrapper<OpPunpckhdq_Sse>;
+        g_Handlers[0x16D] = DispatchWrapper<OpPunpckhqdq_Sse>;
+        
+        g_Handlers[0x160] = DispatchWrapper<OpPunpcklbw_Sse>;
+        g_Handlers[0x161] = DispatchWrapper<OpPunpcklwd_Sse>;
+        g_Handlers[0x162] = DispatchWrapper<OpPunpckldq_Sse>;
+        g_Handlers[0x16C] = DispatchWrapper<OpPunpcklqdq_Sse>;
+        
+        g_Handlers[0x163] = DispatchWrapper<OpPacksswb_Sse>;
+        g_Handlers[0x16B] = DispatchWrapper<OpPackssdw_Sse>;
+        g_Handlers[0x167] = DispatchWrapper<OpPackuswb_Sse>;
+        
+        g_Handlers[0x1C5] = DispatchWrapper<OpPextrw_Sse>;
+        g_Handlers[0x1C4] = DispatchWrapper<OpPinsrw_Sse>;
+        g_Handlers[0x1D7] = DispatchWrapper<OpPmovmskb_Sse>;
     }
 };
 

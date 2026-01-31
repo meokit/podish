@@ -213,6 +213,36 @@ void OpAndn_Sse(EmuState* state, DecodedOp* op) {
     }
 }
 
+void OpOr_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 56: ORPS/ORPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val = ReadModRM128(state, op);
+    
+    if (op->prefixes.flags.opsize) { // 66: ORPD
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_or_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else { // ORPS
+        state->ctx.xmm[reg] = simde_mm_or_ps(dst_val, src_val);
+    }
+}
+
+void OpXor_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 57: XORPS/XORPD
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 dst_val = state->ctx.xmm[reg];
+    __m128 src_val = ReadModRM128(state, op);
+    
+    if (op->prefixes.flags.opsize) { // 66: XORPD
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(
+            simde_mm_xor_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+        );
+    } else { // XORPS
+        state->ctx.xmm[reg] = simde_mm_xor_ps(dst_val, src_val);
+    }
+}
+
 void OpCmp_Sse(EmuState* state, DecodedOp* op) {
     uint8_t pred = (uint8_t)op->imm;
     uint8_t reg = (op->modrm >> 3) & 7;
