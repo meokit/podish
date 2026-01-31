@@ -461,6 +461,11 @@ class Runner:
                  b.set_mem_hook(self._sim_mem_hook)
                  self.sim_trace = [] # Clear trace
 
+        has_unicorn = any(name == 'unicorn' for name, b in backends)
+        if not has_unicorn:
+            # print("  [DEBUG] Unicorn is NOT available or failed to initialize.")
+            pass
+
         # Run All
         for b_name, b in backends:
             # print(f"Running {b_name}...")
@@ -528,29 +533,40 @@ class Runner:
         for r in reg_check_list:
             sim_val = sim_res[r]
             
-            # 1. Expected
-            if expected_regs and r in expected_regs:
+            # 1. Compare with Expected
+            is_expected = expected_regs and r in expected_regs
+            if is_expected:
                 if sim_val != expected_regs[r]:
-                    fail_reason += f"  {r} Mismatch! Exp: 0x{expected_regs[r]:x}, Got: 0x{sim_val:x}\n"
+                    msg = f"  {r} Mismatch! Exp: 0x{expected_regs[r]:x}, Got: 0x{sim_val:x}"
+                    if uc_res:
+                        msg += f" (Unicorn: 0x{uc_res[r]:x})"
+                    fail_reason += msg + "\n"
                     passed = False
-            # 2. Unicorn
-            elif uc_res:
+            
+            # 2. Compare with Unicorn (always if available)
+            if uc_res:
                 uc_val = uc_res[r]
+                # Special cases to ignore Unicorn's oddities
+                if r == 'ESP' and uc_val == 0: continue
+                if r == 'EAX' and uc_val == 0 and sim_val != 0: continue
+                
                 if sim_val != uc_val:
-                    # Ignore Unicorn ESP=0 corruption
-                    if r == 'ESP' and uc_val == 0: continue
-                    # Ignore Unicorn EAX=0 sometimes
-                    if r == 'EAX' and uc_val == 0 and sim_val != 0: continue
-                    
-                    fail_reason += f"  {r} Unicorn Mismatch! UC: 0x{uc_val:x}, Sim: 0x{sim_val:x}\n"
-                    passed = False
+                    if is_expected:
+                        if sim_val == expected_regs[r]:
+                            fail_reason += f"  {r} Unicorn Drift! UC: 0x{uc_val:x}, Sim matches Exp: 0x{sim_val:x}\n"
+                            passed = False
+                    else:
+                        fail_reason += f"  {r} Unicorn Mismatch! UC: 0x{uc_val:x}, Sim: 0x{sim_val:x}\n"
+                        passed = False
         
         # XMM
         for i in range(8):
             r = f'XMM{i}'
             sim_val = sim_res[r] # bytes
             
-            if expected_regs and r in expected_regs:
+            exp_bytes = None
+            is_expected = expected_regs and r in expected_regs
+            if is_expected:
                 exp_v = expected_regs[r]
                 if isinstance(exp_v, int):
                     exp_bytes = exp_v.to_bytes(16, 'little')
@@ -558,13 +574,22 @@ class Runner:
                     exp_bytes = bytes(exp_v)
                 
                 if sim_val != exp_bytes:
-                    fail_reason += f"  {r} Mismatch! Exp: {exp_bytes.hex()}, Got: {sim_val.hex()}\n"
+                    msg = f"  {r} Mismatch! Exp: {exp_bytes.hex()}, Got: {sim_val.hex()}"
+                    if uc_res:
+                        msg += f" (Unicorn: {uc_res[r].hex()})"
+                    fail_reason += msg + "\n"
                     passed = False
-            elif uc_res:
+
+            if uc_res:
                 uc_val = uc_res[r]
                 if sim_val != uc_val:
-                    fail_reason += f"  {r} Unicorn Mismatch! UC: {uc_val.hex()}, Sim: {sim_val.hex()}\n"
-                    passed = False
+                    if is_expected and exp_bytes is not None:
+                        if sim_val == exp_bytes:
+                            fail_reason += f"  {r} Unicorn Drift! UC: {uc_val.hex()}, Sim matches Exp: {sim_val.hex()}\n"
+                            passed = False
+                    else:
+                        fail_reason += f"  {r} Unicorn Mismatch! UC: {uc_val.hex()}, Sim: {sim_val.hex()}\n"
+                        passed = False
 
         # EFLAGS
         sim_eflags = sim_res['EFLAGS']

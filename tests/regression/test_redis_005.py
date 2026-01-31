@@ -170,7 +170,7 @@ def test_id_364_orps_r128_r128():
         name='ID_364: orps xmm7, xmm2',
         code=binascii.unhexlify('0f56fa'),
         initial_regs={'XMM7': 0x00000000FFFFFFFF00000000FFFFFFFF, 'XMM2': 0xFFFFFFFF00000000FFFFFF0000000000, 'EIP': 0x1000},
-        expected_regs={'XMM7': 0xFFFFFFFF00000000FFFFFFFFFFFFFFFF, 'EIP': 0x1003}
+        expected_regs={'XMM7': 0xffffffffffffffffffffff00ffffffff, 'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -182,7 +182,7 @@ def test_id_490_packssdw_r128_r128():
         name='ID_490: packssdw xmm1, xmm4',
         code=binascii.unhexlify('660f6bcc'),
         initial_regs={'XMM1': 0x000000010000FFFF800000007FFFFFFF, 'XMM4': 0x0001000000007FFF00000000FFFF8000, 'EIP': 0x1000},
-        expected_regs={'XMM1': 0xFFFF80007FFF7FFF00017FFF0001FFFF, 'EIP': 0x1004}
+        expected_regs={'XMM1': 0x7FFF7FFF0000800000017FFF80007FFF, 'EIP': 0x1004}
     )
 # packssdw: Converts signed doublewords to signed words with saturation.
 # XMM1: 1 (->1), -1 (-> -1), -2^31 (-> -2^15), 2^31-1 (-> 2^15-1)
@@ -211,7 +211,7 @@ def test_id_329_packuswb_r128_r128():
         name='ID_329: packuswb xmm0, xmm0',
         code=binascii.unhexlify('660f67c0'),
         initial_regs={'XMM0': 0x00FF80007FFF00000001FFFF00000000, 'EIP': 0x1000},
-        expected_regs={'XMM0': 0x00FF00010000000000FF000100000000, 'EIP': 0x1004}
+        expected_regs={'XMM0': 0xff00ff0001000000ff00ff0001000000, 'EIP': 0x1004}
     )
 # packuswb: signed word to unsigned byte saturation.
 # 0 -> 0, 0 -> 0, -1 (FFFF) -> 0, 1 -> 1, 0 -> 0, 0x7FFF -> 0xFF, 0x8000 -> 0, 0x00FF -> 0xFF
@@ -328,7 +328,7 @@ def test_id_451_pcmpeqb_r128_m128():
         name='ID_451: pcmpeqb xmm0, xmmword ptr [ebp - 0x98]',
         code=binascii.unhexlify('660f748568ffffff'),
         initial_regs={'EBP': 0x8800, 'XMM0': 0x00112233445566778899AABBCCDDEEFF, 'EIP': 0x1000},
-        expected_regs={'XMM0': 0x0000000000FF00000000000000000000, 'EIP': 0x1008},
+        expected_regs={'XMM0': 0xFF00FF00FF00FF00FF00FF00FF00FF00, 'EIP': 0x1008},
         expected_read={0x8768: 0x00AA22BB44CC66DD88EEAAFFCC00EE11}
     )
 # pcmpeqb: byte equality.
@@ -352,7 +352,7 @@ def test_id_376_pcmpeqb_r128_r128():
         name='ID_376: pcmpeqb xmm4, xmm6',
         code=binascii.unhexlify('660f74e6'),
         initial_regs={'XMM4': 0x0123456789ABCDEF0123456789ABCDEF, 'XMM6': 0x010045008900CD00010045008900CD00, 'EIP': 0x1000},
-        expected_regs={'XMM4': 0x000000FF00FF00FF000000FF00FF00FF, 'EIP': 0x1004}
+        expected_regs={'XMM4': 0xFF00FF00FF00FF00FF00FF00FF00FF00, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -376,7 +376,7 @@ def test_id_484_pcmpgtd_r128_r128():
         name='ID_484: pcmpgtd xmm1, xmm4',
         code=binascii.unhexlify('660f66cc'),
         initial_regs={'XMM1': 0x0000000200000000FFFFFFFF80000000, 'XMM4': 0x0000000100000000000000007FFFFFFF, 'EIP': 0x1000},
-        expected_regs={'XMM1': 0x000000000000000000000000FFFFFFFF, 'EIP': 0x1004}
+        expected_regs={'XMM1': 0xFFFFFFFF000000000000000000000000, 'EIP': 0x1004}
     )
 # pcmpgtd: signed packed compare greater than (dword).
 # 0x00000002 > 0x00000001 -> TRUE (FFFFFFFF)
@@ -396,7 +396,7 @@ def test_id_466_pextrw_r32_r128_imm8():
         name='ID_466: pextrw edx, xmm3, 2',
         code=binascii.unhexlify('660fc5d302'),
         initial_regs={'XMM3': 0x112233445566778899AABBCCDDEEFF00, 'EIP': 0x1000},
-        expected_regs={'EDX': 0xBBAA, 'EIP': 0x1005}
+        expected_regs={'EDX': 0xBBCC, 'EIP': 0x1005}
     )
 # Word 0: FF00, Word 1: DDEE, Word 2: BBAA, ...
 
