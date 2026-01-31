@@ -91,7 +91,11 @@ public:
         uint8_t* ptr = translate(addr);
         if (!ptr) {
             handle_fault(addr, 0);
-            return T{}; // Return 0 on fault
+            // Retry translation after fault handler
+            ptr = translate(addr);
+            if (!ptr) {
+                 return T{}; // Still failed
+            }
         }
         T val;
         if ((addr & PAGE_MASK) + sizeof(T) > PAGE_SIZE) {
@@ -134,7 +138,20 @@ public:
         
         // Fault
         handle_fault(addr, 1);
+        
+        // Retry
+        ptr = translate(addr);
+        if (ptr) {
+            if ((addr & PAGE_MASK) + sizeof(T) <= PAGE_SIZE) {
+                *reinterpret_cast<T*>(ptr) = val;
+                return;
+            } else {
+                write_cross_page<T>(addr, val);
+                return;
+            }
+        }
     }
+
     // Block Copy (Page-by-Page)
     // Returns number of bytes copied.
     uint32_t copy_block(uint32_t src_addr, uint32_t dst_addr, uint32_t size) {
