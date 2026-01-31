@@ -12,8 +12,9 @@ def test_id_284_movd_m32_r128():
     assert runner.run_test_bytes(
         name='ID_284: movd dword ptr [ebp - 0x28], xmm6',
         code=binascii.unhexlify('660f7e75d8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'EIP': 0x1000, 'ESP': 0x8800, 'XMM6': 0xDEADBEEFCAFEBABE1234567887654321},
+        expected_regs={'EIP': 0x1005},
+        expected_write={34776: 0x87654321}
     )
 
 @pytest.mark.regression
@@ -24,8 +25,9 @@ def test_id_271_movd_r128_m32():
     assert runner.run_test_bytes(
         name='ID_271: movd xmm2, dword ptr [eax + 0x30]',
         code=binascii.unhexlify('660f6e5030'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2000, 'EIP': 0x1000},
+        expected_regs={'XMM2': 0x12345678, 'EIP': 0x1005},
+        expected_read={0x2030: 0x12345678}
     )
 
 @pytest.mark.regression
@@ -36,8 +38,8 @@ def test_id_262_movd_r128_r32():
     assert runner.run_test_bytes(
         name='ID_262: movd xmm0, ebx',
         code=binascii.unhexlify('660f6ec3'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x87654321, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0x87654321, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -48,8 +50,8 @@ def test_id_281_movd_r32_r128():
     assert runner.run_test_bytes(
         name='ID_281: movd ebx, xmm0',
         code=binascii.unhexlify('660f7ec3'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM0': 0x112233445566778899AABBCC01234567, 'EIP': 0x1000},
+        expected_regs={'EBX': 0x01234567, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -60,8 +62,9 @@ def test_id_266_movdqa_m128_r128():
     assert runner.run_test_bytes(
         name='ID_266: movdqa xmmword ptr [ebp - 0x78], xmm0',
         code=binascii.unhexlify('660f7f4588'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'XMM0': 0xFEDCBA98765432100123456789ABCDEF, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x8788: 0xFEDCBA98765432100123456789ABCDEF}
     )
 
 @pytest.mark.regression
@@ -72,8 +75,9 @@ def test_id_265_movdqa_r128_m128():
     assert runner.run_test_bytes(
         name='ID_265: movdqa xmm0, xmmword ptr [edi]',
         code=binascii.unhexlify('660f6f8700000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDI': 0x2100, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0x112233445566778899AABBCC00FF1122, 'EIP': 0x1008},
+        expected_read={0x2100: 0x112233445566778899AABBCC00FF1122}
     )
 
 @pytest.mark.regression
@@ -84,8 +88,8 @@ def test_id_272_movdqa_r128_r128():
     assert runner.run_test_bytes(
         name='ID_272: movdqa xmm2, xmm3',
         code=binascii.unhexlify('660f6fd3'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM3': 0xDEADBEEFCAFEBABE1234567890ABCDEF, 'EIP': 0x1000},
+        expected_regs={'XMM2': 0xDEADBEEFCAFEBABE1234567890ABCDEF, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -96,8 +100,9 @@ def test_id_296_movdqu_m128_r128():
     assert runner.run_test_bytes(
         name='ID_296: movdqu xmmword ptr [ecx], xmm1',
         code=binascii.unhexlify('f30f7f09'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0x2200, 'XMM1': 0x00112233445566778899AABBCCDDEEFF, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1004},
+        expected_write={0x2200: 0x00112233445566778899AABBCCDDEEFF}
     )
 
 @pytest.mark.regression
@@ -108,8 +113,9 @@ def test_id_267_movdqu_r128_m128():
     assert runner.run_test_bytes(
         name='ID_267: movdqu xmm6, xmmword ptr [eax + 0x20]',
         code=binascii.unhexlify('f30f6f7020'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2300, 'EIP': 0x1000},
+        expected_regs={'XMM6': 0xAABBCCDDEEFF00112233445566778899, 'EIP': 0x1005},
+        expected_read={0x2320: 0xAABBCCDDEEFF00112233445566778899}
     )
 
 @pytest.mark.regression
@@ -120,8 +126,9 @@ def test_id_427_movhpd_r128_m64():
     assert runner.run_test_bytes(
         name='ID_427: movhpd xmm2, qword ptr [ebp - 0x100]',
         code=binascii.unhexlify('660f169500ffffff'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'XMM2': 0x11111111111111112222222222222222, 'EIP': 0x1000},
+        expected_regs={'XMM2': 0xAABBCCDDEEFF00112222222222222222, 'EIP': 0x1008},
+        expected_read={0x8700: 0xAABBCCDDEEFF0011}
     )
 
 @pytest.mark.regression
@@ -132,8 +139,9 @@ def test_id_429_movhps_m64_r128():
     assert runner.run_test_bytes(
         name='ID_429: movhps qword ptr [esp], xmm0',
         code=binascii.unhexlify('0f170424'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESP': 0x8800, 'XMM0': 0xDEADBEEFCAFEBABE1122334455667788, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1004},
+        expected_write={0x8800: 0xDEADBEEFCAFEBABE}
     )
 
 @pytest.mark.regression
@@ -144,8 +152,9 @@ def test_id_428_movlpd_m64_r128():
     assert runner.run_test_bytes(
         name='ID_428: movlpd qword ptr [esp], xmm2',
         code=binascii.unhexlify('660f131424'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESP': 0x8800, 'XMM2': 0x112233445566778899AABBCCDDEEFF00, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x8800: 0x99AABBCCDDEEFF00}
     )
 
 @pytest.mark.regression
@@ -156,8 +165,9 @@ def test_id_344_movlps_m64_r128():
     assert runner.run_test_bytes(
         name='ID_344: movlps qword ptr [eax], xmm0',
         code=binascii.unhexlify('0f1300'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2400, 'XMM0': 0xAABBCCDDEEFF00112233445566778899, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1003},
+        expected_write={0x2400: 0x2233445566778899}
     )
 
 @pytest.mark.regression
@@ -168,9 +178,22 @@ def test_id_308_movmskps_r32_r128():
     assert runner.run_test_bytes(
         name='ID_308: movmskps eax, xmm0',
         code=binascii.unhexlify('0f50c0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM0': 0x80000000000000008000000000000000, 'EIP': 0x1000},
+        expected_regs={'EAX': 0xA, 'EIP': 0x1003}
     )
+# Note: movmskps bits: bit 0 from xmm0[31], bit 1 from xmm0[63], bit 2 from xmm0[95], bit 3 from xmm0[127]
+# 0x80000000 is negative float. if we set xmm0 to all 0x80... then eax should be 0xF (1111b)
+# In my case: xmm0 = 0x80000000_00000000_80000000_00000000
+# Indices: [127...96] [95...64] [63...32] [31...0]
+#           80        00        80        00
+# Bits:     1         0         1         0  => 1010b = 0xA? Wait.
+# XMM0[31] is bit 0. XMM0[63] is bit 1. XMM0[95] is bit 2. XMM0[127] is bit 3.
+# Let's use 0x80000000 00000000 80000000 00000000
+# XMM0[31] = bit 7 of byte 3. byte 3 is 0x00. MSB is 0. bit 0 = 0.
+# XMM0[63] = bit 7 of byte 7. byte 7 is 0x80. MSB is 1. bit 1 = 1.
+# XMM0[95] = bit 7 of byte 11. byte 11 is 0x00. MSB is 0. bit 2 = 0.
+# XMM0[127] = bit 7 of byte 15. byte 15 is 0x80. MSB is 1. bit 3 = 1.
+# Result: 1010b = 0xA.
 
 @pytest.mark.regression
 def test_id_310_movq_m64_r128():
@@ -180,8 +203,9 @@ def test_id_310_movq_m64_r128():
     assert runner.run_test_bytes(
         name='ID_310: movq qword ptr [ebp - 0x48], xmm0',
         code=binascii.unhexlify('660fd645b8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'XMM0': 0x123456789ABCDEF00FEDCBA987654321, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x87B8: 0x0FEDCBA987654321}
     )
 
 @pytest.mark.regression
@@ -192,8 +216,9 @@ def test_id_283_movq_r128_m64():
     assert runner.run_test_bytes(
         name='ID_283: movq xmm0, qword ptr [eax + 0x14]',
         code=binascii.unhexlify('f30f7e4014'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2500, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0xABCDEF1234567890, 'EIP': 0x1005},
+        expected_read={0x2514: 0xABCDEF1234567890}
     )
 
 @pytest.mark.regression
@@ -204,8 +229,8 @@ def test_id_264_movq_r128_r128():
     assert runner.run_test_bytes(
         name='ID_264: movq xmm1, xmm0',
         code=binascii.unhexlify('f30f7ec8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM0': 0x112233445566778899AABBCCDDEEFF00, 'EIP': 0x1000},
+        expected_regs={'XMM1': 0x99AABBCCDDEEFF00, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -216,8 +241,9 @@ def test_id_66_movsd_m64_r128():
     assert runner.run_test_bytes(
         name='ID_66: movsd qword ptr [edi + 0x50], xmm0',
         code=binascii.unhexlify('f20f114750'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDI': 0x2600, 'XMM0': 0xDEADBEEFCAFEBABE0123456789ABCDEF, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x2650: 0x0123456789ABCDEF}
     )
 
 @pytest.mark.regression
@@ -228,8 +254,9 @@ def test_id_65_movsd_r128_m64():
     assert runner.run_test_bytes(
         name='ID_65: movsd xmm0, qword ptr [esi + 0x20]',
         code=binascii.unhexlify('f20f104620'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2700, 'XMM0': 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFF1234567887654321, 'EIP': 0x1005},
+        expected_read={0x2720: 0x1234567887654321}
     )
 
 @pytest.mark.regression
@@ -240,8 +267,8 @@ def test_id_378_movsd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_378: movsd xmm6, xmm7',
         code=binascii.unhexlify('f20f10f7'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM6': 0, 'XMM7': 0x112233445566778899AABBCCDDEEFF00, 'EIP': 0x1000},
+        expected_regs={'XMM6': 0x99AABBCCDDEEFF00, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -252,8 +279,9 @@ def test_id_240_movss_m32_r128():
     assert runner.run_test_bytes(
         name='ID_240: movss dword ptr [esi + 0x10], xmm0',
         code=binascii.unhexlify('f30f114610'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2800, 'XMM0': 0x112233445566778899AABBCC01234567, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x2810: 0x01234567}
     )
 
 @pytest.mark.regression
@@ -264,9 +292,13 @@ def test_id_239_movss_r128_m32():
     assert runner.run_test_bytes(
         name='ID_239: movss xmm0, dword ptr [esi + 0x10]',
         code=binascii.unhexlify('f30f104610'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2800, 'XMM0': 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFFFFFF0011223344, 'EIP': 0x1005},
+        expected_read={0x2810: 0x11223344}
     )
+# Note: movss r128, m32 preserves upper bits of XMM?
+# Intel Manual: "upper bits (127:32) of the destination are preserved" (for xmm, not ymm)
+# My expected_regs reflects this preservation if XMM0 was all Fs.
 
 @pytest.mark.regression
 def test_id_316_movsx_r32_m16():
@@ -276,8 +308,9 @@ def test_id_316_movsx_r32_m16():
     assert runner.run_test_bytes(
         name='ID_316: movsx eax, word ptr [ecx]',
         code=binascii.unhexlify('0fbf01'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0x2900, 'EIP': 0x1000},
+        expected_regs={'EAX': 0xFFFF8000, 'EIP': 0x1003},
+        expected_read={0x2900: 0x8000}
     )
 
 @pytest.mark.regression
@@ -288,8 +321,9 @@ def test_id_84_movsx_r32_m8():
     assert runner.run_test_bytes(
         name='ID_84: movsx eax, byte ptr [esi]',
         code=binascii.unhexlify('0fbe06'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2A00, 'EIP': 0x1000},
+        expected_regs={'EAX': 0xFFFFFF80, 'EIP': 0x1003},
+        expected_read={0x2A00: 0x80}
     )
 
 @pytest.mark.regression
@@ -300,8 +334,8 @@ def test_id_315_movsx_r32_r16():
     assert runner.run_test_bytes(
         name='ID_315: movsx eax, cx',
         code=binascii.unhexlify('0fbfc1'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ECX': 0x7FFF, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x00007FFF, 'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -312,8 +346,8 @@ def test_id_235_movsx_r32_r8():
     assert runner.run_test_bytes(
         name='ID_235: movsx edx, al',
         code=binascii.unhexlify('0fbed0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0xAB, 'EIP': 0x1000},
+        expected_regs={'EDX': 0xFFFFFFAB, 'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -324,8 +358,9 @@ def test_id_392_movupd_m128_r128():
     assert runner.run_test_bytes(
         name='ID_392: movupd xmmword ptr [esi + 0x1c], xmm2',
         code=binascii.unhexlify('660f11561c'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2B00, 'XMM2': 0x0123456789ABCDEFDEADBEEFCAFEBABE, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1005},
+        expected_write={0x2B1C: 0x0123456789ABCDEFDEADBEEFCAFEBABE}
     )
 
 @pytest.mark.regression
@@ -336,8 +371,9 @@ def test_id_238_movups_m128_r128():
     assert runner.run_test_bytes(
         name='ID_238: movups xmmword ptr [esi], xmm0',
         code=binascii.unhexlify('0f1106'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2C00, 'XMM0': 0xDEADCAFEBEEFBABE0121324354657687, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1003},
+        expected_write={0x2C00: 0xDEADCAFEBEEFBABE0121324354657687}
     )
 
 @pytest.mark.regression
@@ -348,8 +384,9 @@ def test_id_236_movups_r128_m128():
     assert runner.run_test_bytes(
         name='ID_236: movups xmm0, xmmword ptr [esi]',
         code=binascii.unhexlify('0f1006'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2C00, 'XMM0': 0xDEADCAFEBEEFBABE0121324354657687, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0xDEADCAFEBEEFBABE0121324354657687, 'EIP': 0x1003},
+        expected_read={0x2C00: 0xDEADCAFEBEEFBABE0121324354657687}
     )
 
 @pytest.mark.regression
@@ -360,8 +397,9 @@ def test_id_73_movzx_r32_m16():
     assert runner.run_test_bytes(
         name='ID_73: movzx ecx, word ptr [eax - 5]',
         code=binascii.unhexlify('0fb748fb'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2D05, 'EIP': 0x1000},
+        expected_regs={'ECX': 0x00001234, 'EIP': 0x1004},
+        expected_read={0x2D00: 0x1234}
     )
 
 @pytest.mark.regression
@@ -372,9 +410,11 @@ def test_id_58_movzx_r32_m8():
     assert runner.run_test_bytes(
         name='ID_58: movzx edx, byte ptr [esi + ecx + 0x27]',
         code=binascii.unhexlify('0fb6540e27'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'ESI': 0x2E00, 'ECX': 0x10, 'EIP': 0x1000},
+        expected_regs={'EDX': 0x000000FF, 'EIP': 0x1005},
+        expected_read={0x2E37: 0xFF}
     )
+# 0x2E00 + 0x10 + 0x27 = 0x2E37
 
 @pytest.mark.regression
 def test_id_160_movzx_r32_r16():
@@ -384,8 +424,8 @@ def test_id_160_movzx_r32_r16():
     assert runner.run_test_bytes(
         name='ID_160: movzx eax, ax',
         code=binascii.unhexlify('0fb7c0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x1234ABCD, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x0000ABCD, 'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -396,8 +436,8 @@ def test_id_85_movzx_r32_r8():
     assert runner.run_test_bytes(
         name='ID_85: movzx eax, dl',
         code=binascii.unhexlify('0fb6c2'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDX': 0xFF, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x000000FF, 'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -408,8 +448,9 @@ def test_id_291_mul_m32():
     assert runner.run_test_bytes(
         name='ID_291: mul dword ptr [ebp - 0x18]',
         code=binascii.unhexlify('f765e8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'EAX': 0x1234, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x1234000, 'EDX': 0, 'EIP': 0x1003},
+        expected_read={0x87E8: 0x1000}
     )
 
 @pytest.mark.regression
@@ -420,8 +461,8 @@ def test_id_162_mul_r32():
     assert runner.run_test_bytes(
         name='ID_162: mul ecx',
         code=binascii.unhexlify('f7e1'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2000, 'ECX': 0x2000, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x04000000, 'EDX': 0, 'EIP': 0x1002}
     )
 
 @pytest.mark.regression
@@ -432,8 +473,9 @@ def test_id_393_mulpd_r128_m128():
     assert runner.run_test_bytes(
         name='ID_393: mulpd xmm0, xmmword ptr [eax]',
         code=binascii.unhexlify('660f598000000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2400, 'XMM0': '0x40000000000000004000000000000000', 'EIP': 0x1000},
+        expected_regs={'XMM0': '0x40100000000000004010000000000000', 'EIP': 0x1008},
+        expected_read={0x2400: 0x40000000000000004000000000000000}
     )
 
 @pytest.mark.regression
@@ -444,8 +486,8 @@ def test_id_390_mulpd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_390: mulpd xmm3, xmm6',
         code=binascii.unhexlify('660f59de'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM3': '0x40000000000000004000000000000000', 'XMM6': '0x40080000000000004008000000000000', 'EIP': 0x1000},
+        expected_regs={'XMM3': '0x40180000000000004018000000000000', 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -456,8 +498,9 @@ def test_id_476_mulps_r128_m128():
     assert runner.run_test_bytes(
         name='ID_476: mulps xmm1, xmmword ptr [ebx]',
         code=binascii.unhexlify('0f598b00000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x3000, 'XMM1': '0x40000000400000004000000040000000', 'EIP': 0x1000},
+        expected_regs={'XMM1': '0x40800000408000004080000040800000', 'EIP': 0x1007},
+        expected_read={0x3000: 0x40000000400000004000000040000000}
     )
 
 @pytest.mark.regression
@@ -468,8 +511,9 @@ def test_id_250_mulsd_r128_m64():
     assert runner.run_test_bytes(
         name='ID_250: mulsd xmm0, qword ptr [ebx]',
         code=binascii.unhexlify('f20f598300000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBX': 0x3100, 'XMM0': '0x00000000000000004000000000000000', 'EIP': 0x1000},
+        expected_regs={'XMM0': '0x00000000000000004014000000000000', 'EIP': 0x1008},
+        expected_read={0x3100: 0x4004000000000000}
     )
 
 @pytest.mark.regression
@@ -480,8 +524,8 @@ def test_id_381_mulsd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_381: mulsd xmm1, xmm2',
         code=binascii.unhexlify('f20f59ca'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM1': '0x00000000000000004000000000000000', 'XMM2': '0x00000000000000004008000000000000', 'EIP': 0x1000},
+        expected_regs={'XMM1': '0x00000000000000004018000000000000', 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -492,8 +536,9 @@ def test_id_438_mulss_r128_m32():
     assert runner.run_test_bytes(
         name='ID_438: mulss xmm0, dword ptr [ebp - 0x10]',
         code=binascii.unhexlify('f30f5945f0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'XMM0': 0xFFFFFFFFFFFFFFFFFFFF40000000, 'EIP': 0x1000}, # 2.0
+        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFFFFFF40800000, 'EIP': 0x1005}, # 2.0 * 2.0 = 4.0
+        expected_read={0x87F0: 0x40000000}
     )
 
 @pytest.mark.regression
@@ -504,8 +549,8 @@ def test_id_491_mulss_r128_r128():
     assert runner.run_test_bytes(
         name='ID_491: mulss xmm0, xmm2',
         code=binascii.unhexlify('f30f59c2'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'XMM0': 0xFFFFFFFFFFFFFFFFFFFF40000000, 'XMM2': 0x40400000, 'EIP': 0x1000}, # 2.0 * 3.0
+        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFFFFFF40C00000, 'EIP': 0x1004} # 6.0 = 0x40C00000
     )
 
 @pytest.mark.regression
@@ -516,8 +561,10 @@ def test_id_423_neg_m32():
     assert runner.run_test_bytes(
         name='ID_423: neg dword ptr [ebp - 0x10]',
         code=binascii.unhexlify('f75df0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EBP': 0x8800, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1003},
+        expected_read={0x87F0: 0x1},
+        expected_write={0x87F0: 0xffffffff}
     )
 
 @pytest.mark.regression
@@ -528,8 +575,8 @@ def test_id_40_neg_r32():
     assert runner.run_test_bytes(
         name='ID_40: neg eax',
         code=binascii.unhexlify('f7d8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0xFFFFFFFF, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x1, 'EIP': 0x1002}
     )
 
 @pytest.mark.regression
@@ -540,8 +587,8 @@ def test_id_292_neg_r8():
     assert runner.run_test_bytes(
         name='ID_292: neg al',
         code=binascii.unhexlify('f6d8'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x80, 'EIP': 0x1000},
+        expected_regs={'EAX': 0x80, 'EIP': 0x1002} # neg 0x80 is 0x80 (overflow)
     )
 
 @pytest.mark.regression
@@ -552,8 +599,8 @@ def test_id_31_nop_no_operands():
     assert runner.run_test_bytes(
         name='ID_31: nop ',
         code=binascii.unhexlify('90'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EIP': 0x1000},
+        expected_regs={'EIP': 0x1001}
     )
 
 @pytest.mark.regression
@@ -564,8 +611,8 @@ def test_id_35_nop_m16():
     assert runner.run_test_bytes(
         name='ID_35: nop word ptr cs:[eax + eax]',
         code=binascii.unhexlify('662e0f1f840000000000'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x1000, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x100A}
     )
 
 @pytest.mark.regression
@@ -576,8 +623,8 @@ def test_id_36_nop_m32():
     assert runner.run_test_bytes(
         name='ID_36: nop dword ptr [eax]',
         code=binascii.unhexlify('0f1f00'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x2000, 'EIP': 0x1000},
+        expected_regs={'EIP': 0x1003}
     )
 
 @pytest.mark.regression
@@ -588,8 +635,8 @@ def test_id_143_not_r32():
     assert runner.run_test_bytes(
         name='ID_143: not eax',
         code=binascii.unhexlify('f7d0'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EAX': 0x0, 'EIP': 0x1000},
+        expected_regs={'EAX': 0xFFFFFFFF, 'EIP': 0x1002}
     )
 
 @pytest.mark.regression
@@ -600,7 +647,7 @@ def test_id_133_not_r8():
     assert runner.run_test_bytes(
         name='ID_133: not dl',
         code=binascii.unhexlify('f6d2'),
-        initial_regs={},
-        expected_regs={}
+        initial_regs={'EDX': 0xFF, 'EIP': 0x1000},
+        expected_regs={'EDX': 0x0, 'EIP': 0x1002}
     )
 
