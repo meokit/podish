@@ -3,7 +3,36 @@
 
 namespace x86emu {
 
-// Extracted from Blink x86.c
+// Extracted and Modified from Blink x86.c
+//
+// Blink is:
+//   Copyright 2022 Justine Alexandra Roberts Tunney
+//   Copyright 2018 Intel Corporation
+//   Licensed under Apache 2.0
+//
+// Xed is:
+//   Copyright 2018 Intel Corporation
+//   Licensed under Apache 2.0
+//
+// Modifications for x86emu:
+// 1. Structural Simplification:
+//    - Reduced to 32-bit specific tables where possible.
+//    - Removed 'eamode' and other generalized decoding structures not needed for i686 user-mode.
+//
+// 2. Control Flow Handling Divergence:
+//    - In standard X86 (and Blink), Branch Displacements (JMP/CALL offsets) are treated as DISPLACEMENTS.
+//      They are decoded via `disp_bits_2d` and `eamode` logic.
+//    - In x86emu, we treat Branch Displacements as IMMEDIATES.
+//      We customized `kImmType` to return valid immediate lengths (1, 2, or 4 bytes) for:
+//      - Short Jumps (0x7x, 0xEB) -> Type 5 (Byte)
+//      - Near Jumps/Calls (0xE8, 0xE9) -> Type 7 (Word/Dword)
+//      - 0F Branching (0x8x) -> Type 7
+//    - This allows `decoder.cpp` to use a unified "fetch extra bytes" path without special handling for branches.
+//
+// 3. Group 1 & Moffs Overrides:
+//    - Opcodes 0x80-0x83 (Group 1) and 0xA0-0xA3 (MOV moffs) have their immediate types slightly adjusted 
+//      or relied upon by `decoder.cpp` specific logic (though 0x80-0x83 are now fully standard in LUT).
+//
 // Map 0 = Standard, Map 1 = 0F
 static const uint8_t kHasModRM[2][256] = {{1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 3, 1, 1, 1, 1, 0, 0,
           0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 3, 0, 1, 1, 1, 1,
