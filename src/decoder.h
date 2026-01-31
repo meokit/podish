@@ -77,7 +77,6 @@ struct BasicBlock {
 bool DecodeInstruction(const uint8_t* code, DecodedOp* op);
 
 // Decode Block
-// Decode Block
 bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block);
 
 } // namespace x86emu

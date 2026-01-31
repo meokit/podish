@@ -15,34 +15,32 @@ void OpMov_Sse_Load(EmuState* state, DecodedOp* op) {
     __m128 dst_val = state->ctx.xmm[reg];
     
     if (op->prefixes.flags.repne) { // F2: MOVSD (Load Scalar Double)
-        // Dest[63:0] = Src[63:0], Dest[127:64] Unchanged
-        __m128 src_val;
         if ((op->modrm >> 6) == 3) {
-             // Reg->Reg: Move low double
-             src_val = state->ctx.xmm[rm];
+             // Reg->Reg: Move low double, preserve high
+             __m128 src_val = state->ctx.xmm[rm];
+             state->ctx.xmm[reg] = simde_mm_castpd_ps(
+                 simde_mm_move_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
+             );
         } else {
-             // Mem->Reg: Load double
+             // Mem->Reg: Load double, zero high
              uint32_t addr = ComputeEAD(state, op);
              double val = state->mmu.read<double>(addr);
-             src_val = simde_mm_castpd_ps(simde_mm_set_sd(val));
+             // set_sd sets low double, zeroes high
+             state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_set_sd(val));
         }
-        // Use move_sd logic: dest, src -> dest_low replaced by src_low
-        state->ctx.xmm[reg] = simde_mm_castpd_ps(
-            simde_mm_move_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val))
-        );
     } else if (op->prefixes.flags.rep) { // F3: MOVSS (Load Scalar Single)
-        // Dest[31:0] = Src[31:0], Dest[127:32] Unchanged
-        __m128 src_val;
         if ((op->modrm >> 6) == 3) {
-             src_val = state->ctx.xmm[rm];
+             // Reg->Reg: Move low float, preserve high
+             __m128 src_val = state->ctx.xmm[rm];
+             state->ctx.xmm[reg] = simde_mm_move_ss(dst_val, src_val);
         } else {
+             // Mem->Reg: Load float, zero high
              uint32_t addr = ComputeEAD(state, op);
              float val = state->mmu.read<float>(addr);
-             src_val = simde_mm_set_ss(val);
+             // set_ss sets low float, zeroes high
+             state->ctx.xmm[reg] = simde_mm_set_ss(val);
         }
-        state->ctx.xmm[reg] = simde_mm_move_ss(dst_val, src_val);
     } else { // (None: MOVUPS) or (66: MOVUPD) -> Load 128
-        // For Load from Mem, we just read 128
         __m128 src_val = ReadModRM128(state, op);
         state->ctx.xmm[reg] = src_val;
     }
@@ -158,6 +156,180 @@ void OpMovq_Store(EmuState* state, DecodedOp* op) {
     } else {
          uint32_t addr = ComputeEAD(state, op);
          state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+void OpMovdqa_Load(EmuState* state, DecodedOp* op) {
+    // 66 0F 6F: MOVDQA xmm, xmm/m128
+    // Should check alignment if strict.
+    __m128 val = ReadModRM128(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    state->ctx.xmm[reg] = val;
+}
+
+void OpMovdqa_Store(EmuState* state, DecodedOp* op) {
+    // 66 0F 7F: MOVDQA xmm/m128, xmm
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 val = state->ctx.xmm[reg];
+    WriteModRM128(state, op, val);
+}
+
+void OpMovdqu_Load(EmuState* state, DecodedOp* op) {
+    // F3 0F 6F: MOVDQU xmm, xmm/m128
+    __m128 val = ReadModRM128(state, op);
+    uint8_t reg = (op->modrm >> 3) & 7;
+    state->ctx.xmm[reg] = val;
+}
+
+void OpMovdqu_Store(EmuState* state, DecodedOp* op) {
+    // F3 0F 7F: MOVDQU xmm/m128, xmm
+    uint8_t reg = (op->modrm >> 3) & 7;
+    __m128 val = state->ctx.xmm[reg];
+    WriteModRM128(state, op, val);
+}
+
+void OpMovhpd(EmuState* state, DecodedOp* op) {
+    // 66 0F 16: MOVHPD xmm, m64 (Load)
+    // 66 0F 17: MOVHPD m64, xmm (Store) -- Wait, Opcode 17 is Store?
+    // Handler mapping handles direction?
+    // Usually 16 is Load (to Reg), 17 is Store (from Reg).
+    // Standard: 66 0F 16 /r: MOVHPD xmm1, m64.
+    // 66 0F 17 /r: MOVHPD m64, xmm1.
+    // I need distinct handlers or check opcode.
+    
+    // Check opcode
+    uint8_t opcode = op->handler_index & 0xFF;
+    
+    if (opcode == 0x16) { // Load
+        // Load m64 to Dest[127:64]
+        uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
+        ptr[1] = val; // High
+    } else { // Store 0x17
+        // Store Dest[127:64] to m64
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+void OpMovhps(EmuState* state, DecodedOp* op) {
+    // 0F 16: MOVHPS xmm, m64 (Load)
+    // 0F 17: MOVHPS m64, xmm (Store)
+    uint8_t opcode = op->handler_index & 0xFF;
+    
+    if (opcode == 0x16) { // Load
+        uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
+        ptr[1] = val; // High
+    } else { // Store 0x17
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+void OpMovlpd(EmuState* state, DecodedOp* op) {
+    // 66 0F 12: MOVLPD xmm, m64 (Load)
+    // 66 0F 13: MOVLPD m64, xmm (Store)
+    uint8_t opcode = op->handler_index & 0xFF;
+    
+    if (opcode == 0x12) { // Load
+        uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
+        ptr[0] = val; // Low
+    } else { // Store 0x13
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+void OpMovlps(EmuState* state, DecodedOp* op) {
+    // 0F 12: MOVLPS xmm, m64 (Load)
+    // 0F 13: MOVLPS m64, xmm (Store)
+    uint8_t opcode = op->handler_index & 0xFF;
+    
+    if (opcode == 0x12) { // Load
+        uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
+        ptr[0] = val; // Low
+    } else { // Store 0x13
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
+        uint32_t addr = ComputeEAD(state, op);
+        state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+void OpMovmskps(EmuState* state, DecodedOp* op) {
+    // 0F 50: MOVMSKPS r32, xmm
+    uint8_t reg = (op->modrm >> 3) & 7; // Dest Reg
+    uint8_t rm = op->modrm & 7; // Src XMM
+    __m128 src = state->ctx.xmm[rm];
+    
+    int mask = simde_mm_movemask_ps(src);
+    SetReg(state, reg, (uint32_t)mask);
+}
+
+// Groups for 0F 6F/7F etc.
+void OpGroup_Mov6F(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVDQA
+        OpMovdqa_Load(state, op);
+    } else if (op->prefixes.flags.rep) { // F3: MOVDQU
+        OpMovdqu_Load(state, op);
+    } else { // None: MOVQ
+        OpMovq_Load(state, op);
+    }
+}
+
+void OpGroup_Mov7F(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVDQA
+        OpMovdqa_Store(state, op);
+    } else if (op->prefixes.flags.rep) { // F3: MOVDQU
+        OpMovdqu_Store(state, op);
+    } else { // None: MOVQ
+        OpMovq_Store(state, op);
+    }
+}
+
+void OpGroup_Mov12(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVLPD
+        OpMovlpd(state, op);
+    } else { // None: MOVLPS (or F2: MOVDDUP?)
+        // TODO: MOVDDUP (F2) check?
+        OpMovlps(state, op);
+    }
+}
+
+void OpGroup_Mov13(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVLPD (Store)
+        OpMovlpd(state, op);
+    } else { // None: MOVLPS (Store)
+        OpMovlps(state, op);
+    }
+}
+
+void OpGroup_Mov16(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVHPD
+        OpMovhpd(state, op);
+    } else { // None: MOVHPS (or F3: MOVSHDUP?)
+        OpMovhps(state, op);
+    }
+}
+
+void OpGroup_Mov17(EmuState* state, DecodedOp* op) {
+    if (op->prefixes.flags.opsize) { // 66: MOVHPD (Store)
+        OpMovhpd(state, op);
+    } else { // None: MOVHPS (Store)
+        OpMovhps(state, op);
     }
 }
 

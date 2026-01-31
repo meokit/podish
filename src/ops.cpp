@@ -248,11 +248,20 @@ struct HandlerInit {
         // Moves
         g_Handlers[0x110] = DispatchWrapper<OpMov_Sse_Load>;
         g_Handlers[0x111] = DispatchWrapper<OpMov_Sse_Store>;
+        g_Handlers[0x112] = DispatchWrapper<OpGroup_Mov12>;
+        g_Handlers[0x113] = DispatchWrapper<OpGroup_Mov13>;
+        g_Handlers[0x116] = DispatchWrapper<OpGroup_Mov16>;
+        g_Handlers[0x117] = DispatchWrapper<OpGroup_Mov17>;
+        
+        g_Handlers[0x11F] = DispatchWrapper<OpNop>; // Multi-byte NOP (0F 1F)
+        
+        g_Handlers[0x150] = DispatchWrapper<OpMovmskps>;
+        
         g_Handlers[0x16E] = DispatchWrapper<OpMovd_Load>;
         g_Handlers[0x17E] = DispatchWrapper<OpMovd_Store>;
         
-        g_Handlers[0x16F] = DispatchWrapper<OpMovq_Load>;
-        g_Handlers[0x17F] = DispatchWrapper<OpMovq_Store>;
+        g_Handlers[0x16F] = DispatchWrapper<OpGroup_Mov6F>;
+        g_Handlers[0x17F] = DispatchWrapper<OpGroup_Mov7F>;
         
         // XADD
         g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;
@@ -322,6 +331,7 @@ struct HandlerInit {
         g_Handlers[0x1C5] = DispatchWrapper<OpPextrw_Sse>;
         g_Handlers[0x1C4] = DispatchWrapper<OpPinsrw_Sse>;
         g_Handlers[0x1D7] = DispatchWrapper<OpPmovmskb_Sse>;
+        g_Handlers[0x1D6] = DispatchWrapper<OpMovq_Store>; // 66 0F D6: MOVQ xmm/m64, xmm
     }
 };
 

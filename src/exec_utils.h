@@ -260,10 +260,9 @@ inline void WriteModRM128(EmuState* state, const DecodedOp* op, __m128 val) {
         state->ctx.xmm[rm] = val;
     } else {
         uint32_t addr = ComputeEAD(state, op);
-        uint8_t* ptr = (uint8_t*)&val;
-        for (int i=0; i<16; ++i) {
-            state->mmu.write<uint8_t>(addr + i, ptr[i]);
-        }
+        uint64_t* ptr = (uint64_t*)&val;
+        state->mmu.write<uint64_t>(addr, ptr[0]);
+        state->mmu.write<uint64_t>(addr + 8, ptr[1]);
     }
 }
 

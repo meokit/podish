@@ -255,7 +255,7 @@ def test_id_65_movsd_r128_m64():
         name='ID_65: movsd xmm0, qword ptr [esi + 0x20]',
         code=binascii.unhexlify('f20f104620'),
         initial_regs={'ESI': 0x2700, 'XMM0': 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 'EIP': 0x1000},
-        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFF1234567887654321, 'EIP': 0x1005},
+        expected_regs={'XMM0': 0x00000000000000001234567887654321, 'EIP': 0x1005},
         expected_read={0x2720: 0x1234567887654321}
     )
 
@@ -293,7 +293,7 @@ def test_id_239_movss_r128_m32():
         name='ID_239: movss xmm0, dword ptr [esi + 0x10]',
         code=binascii.unhexlify('f30f104610'),
         initial_regs={'ESI': 0x2800, 'XMM0': 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, 'EIP': 0x1000},
-        expected_regs={'XMM0': 0xFFFFFFFFFFFFFFFFFFFF0011223344, 'EIP': 0x1005},
+        expected_regs={'XMM0': 0x00000000000000000000000011223344, 'EIP': 0x1005},
         expected_read={0x2810: 0x11223344}
     )
 # Note: movss r128, m32 preserves upper bits of XMM?
@@ -473,8 +473,8 @@ def test_id_393_mulpd_r128_m128():
     assert runner.run_test_bytes(
         name='ID_393: mulpd xmm0, xmmword ptr [eax]',
         code=binascii.unhexlify('660f598000000000'),
-        initial_regs={'EAX': 0x2400, 'XMM0': '0x40000000000000004000000000000000', 'EIP': 0x1000},
-        expected_regs={'XMM0': '0x40100000000000004010000000000000', 'EIP': 0x1008},
+        initial_regs={'EAX': 0x2400, 'XMM0': 0x40000000000000004000000000000000, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0x40100000000000004010000000000000, 'EIP': 0x1008},
         expected_read={0x2400: 0x40000000000000004000000000000000}
     )
 
@@ -486,8 +486,8 @@ def test_id_390_mulpd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_390: mulpd xmm3, xmm6',
         code=binascii.unhexlify('660f59de'),
-        initial_regs={'XMM3': '0x40000000000000004000000000000000', 'XMM6': '0x40080000000000004008000000000000', 'EIP': 0x1000},
-        expected_regs={'XMM3': '0x40180000000000004018000000000000', 'EIP': 0x1004}
+        initial_regs={'XMM3': 0x40000000000000004000000000000000, 'XMM6': 0x40080000000000004008000000000000, 'EIP': 0x1000},
+        expected_regs={'XMM3': 0x40180000000000004018000000000000, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
@@ -498,8 +498,8 @@ def test_id_476_mulps_r128_m128():
     assert runner.run_test_bytes(
         name='ID_476: mulps xmm1, xmmword ptr [ebx]',
         code=binascii.unhexlify('0f598b00000000'),
-        initial_regs={'EBX': 0x3000, 'XMM1': '0x40000000400000004000000040000000', 'EIP': 0x1000},
-        expected_regs={'XMM1': '0x40800000408000004080000040800000', 'EIP': 0x1007},
+        initial_regs={'EBX': 0x3000, 'XMM1': 0x40000000400000004000000040000000, 'EIP': 0x1000},
+        expected_regs={'XMM1': 0x40800000408000004080000040800000, 'EIP': 0x1007},
         expected_read={0x3000: 0x40000000400000004000000040000000}
     )
 
@@ -511,8 +511,8 @@ def test_id_250_mulsd_r128_m64():
     assert runner.run_test_bytes(
         name='ID_250: mulsd xmm0, qword ptr [ebx]',
         code=binascii.unhexlify('f20f598300000000'),
-        initial_regs={'EBX': 0x3100, 'XMM0': '0x00000000000000004000000000000000', 'EIP': 0x1000},
-        expected_regs={'XMM0': '0x00000000000000004014000000000000', 'EIP': 0x1008},
+        initial_regs={'EBX': 0x3100, 'XMM0': 0x00000000000000004000000000000000, 'EIP': 0x1000},
+        expected_regs={'XMM0': 0x00000000000000004014000000000000, 'EIP': 0x1008},
         expected_read={0x3100: 0x4004000000000000}
     )
 
@@ -524,8 +524,8 @@ def test_id_381_mulsd_r128_r128():
     assert runner.run_test_bytes(
         name='ID_381: mulsd xmm1, xmm2',
         code=binascii.unhexlify('f20f59ca'),
-        initial_regs={'XMM1': '0x00000000000000004000000000000000', 'XMM2': '0x00000000000000004008000000000000', 'EIP': 0x1000},
-        expected_regs={'XMM1': '0x00000000000000004018000000000000', 'EIP': 0x1004}
+        initial_regs={'XMM1': 0x00000000000000004000000000000000, 'XMM2': 0x00000000000000004008000000000000, 'EIP': 0x1000},
+        expected_regs={'XMM1': 0x00000000000000004018000000000000, 'EIP': 0x1004}
     )
 
 @pytest.mark.regression
