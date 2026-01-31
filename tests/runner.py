@@ -117,7 +117,7 @@ class Runner:
     def compile(self, asm):
         # Use NASM to compile 32-bit assembly
         with tempfile.NamedTemporaryFile(suffix=".asm", mode="w", delete=False) as f:
-            f.write(f"BITS 32\n{asm}")
+            f.write(f"BITS 32\nORG 0x1000\n{asm}")
             asm_path = f.name
             
         bin_path = asm_path + ".bin"
