@@ -206,8 +206,18 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         // 1. Fetch
         // Read instruction bytes safely
         uint8_t buf[16];
+        bool fetch_fault = false;
         for (int i=0; i<16; ++i) {
              buf[i] = state->mmu.read<uint8_t>(current_eip + i); 
+             if (state->status != EmuStatus::Running) {
+                 fetch_fault = true;
+                 break;
+             }
+        }
+        
+        if (fetch_fault) {
+             if (block->ops.empty()) return false; // First instruction failed
+             break; // Terminate block
         }
         
         DecodedOp op;
