@@ -20,3 +20,6 @@ tests/linux/test_futex
 tests/linux/test_mutex
 tests/linux/test_pthread
 test_futex.asm
+bin/
+obj/
+*.log
