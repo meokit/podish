@@ -392,11 +392,15 @@ class Runner:
             if expected_read:
                 for addr, val in expected_read.items():
                     page_base = (addr // 0x1000) * 0x1000
-                    b.mem_map(page_base, 0x1000, 3)
+                    perms = 3
+                    if page_base == 0x0000 or page_base == 0x1000: perms = 7
+                    b.mem_map(page_base, 0x1000, perms)
             if expected_write:
                 for addr, val in expected_write.items():
                     page_base = (addr // 0x1000) * 0x1000
-                    b.mem_map(page_base, 0x1000, 3)
+                    perms = 3
+                    if page_base == 0x0000 or page_base == 0x1000: perms = 7
+                    b.mem_map(page_base, 0x1000, perms)
             
             padded_code = bytearray([0xCC] * 0x1000)
             padded_code[:len(code)] = code

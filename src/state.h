@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common.h"
-#include "mmu.h"
+#include "mem/mmu.h"
 #include "hooks.h"
 #include <ankerl/unordered_dense.h>
 #include "decoder.h" // For BasicBlock definition
@@ -17,7 +17,7 @@ using InterruptHandler = int(*)(EmuState* state, uint32_t vector, void* userdata
 
 struct EmuState {
     Context ctx;
-    SoftMMU mmu;
+    mem::Mmu mmu;
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
     // Simple Block Cache

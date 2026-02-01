@@ -135,7 +135,7 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
         //uint8_t rm = op->modrm & 7;
         //selector = (uint16_t)GetReg(state, rm);
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        //uint32_t addr = ComputeEAD(state, op);
         //selector = state->mmu.read<uint16_t>(addr);
         if (state->status != EmuStatus::Running) return;
     }

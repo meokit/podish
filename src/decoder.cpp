@@ -222,7 +222,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         uint8_t buf[16];
         bool fetch_fault = false;
         for (int i=0; i<16; ++i) {
-             buf[i] = state->mmu.read<uint8_t>(current_eip + i); 
+             buf[i] = state->mmu.read_for_exec<uint8_t>(current_eip + i); 
              if (state->status != EmuStatus::Running) {
                  fetch_fault = true;
                  break;

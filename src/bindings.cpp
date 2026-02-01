@@ -1,7 +1,7 @@
 #include "bindings.h"
 #include "state.h"
 #include "decoder.h"
-#include "mmu.h"
+#include "mem/mmu.h"
 #include "hooks.h"
 #include "ops.h"
 #include "dispatch.h"
