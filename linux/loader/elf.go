@@ -118,10 +118,6 @@ func Load(filename string, mm *mem.VMAManager, args []string, envs []string) (*L
 	}
 
 	if phdrAddr == 0 {
-		// Simple heuristic: If ET_DYN, usually at base+offset of PHDRs in file
-		// If loaded segment covers it.
-		// Assuming typical layout where headers are at file start.
-		phdrAddr = loadBase + uint32(ef.ByteOrder.Uint32(make([]byte, 4))) // Dummy? No.
 		// Just use loadBase + 52 (sizeof ehdr)
 		phdrAddr = loadBase + 52
 	}
@@ -168,7 +164,7 @@ func Load(filename string, mm *mem.VMAManager, args []string, envs []string) (*L
 	sp = sp &^ 0xF
 
 	pushAux := func(k, v uint32) {
-		fmt.Printf(" [Aux] %d -> %x\n", k, v)
+		// fmt.Printf(" [Aux] %d -> %x\n", k, v)
 		pushUint32(v)
 		pushUint32(k)
 	}
@@ -210,13 +206,17 @@ func Load(filename string, mm *mem.VMAManager, args []string, envs []string) (*L
 
 	pushUint32(uint32(len(args)))
 
-	fmt.Printf("[Loader] loadBase=%x phdr=%x phnum=%d entry=%x\n",
-		loadBase, phdrAddr, len(ef.Progs), uint32(ef.Entry)+loadBase)
+	/*
+		fmt.Printf("[Loader] loadBase=%x phdr=%x phnum=%d entry=%x\n",
+			loadBase, phdrAddr, len(ef.Progs), uint32(ef.Entry)+loadBase)
+	*/
 
 	// Dump Headers with Offset
-	for i, p := range ef.Progs {
-		fmt.Printf(" Phdr[%d]: Type=%x Vaddr=%x Memsz=%x Off=%x\n", i, p.Type, p.Vaddr, p.Memsz, p.Off)
-	}
+	/*
+		for i, p := range ef.Progs {
+			fmt.Printf(" Phdr[%d]: Type=%x Vaddr=%x Memsz=%x Off=%x\n", i, p.Type, p.Vaddr, p.Memsz, p.Off)
+		}
+	*/
 
 	// verification: Read entry bytes from file
 	// Find segment containing entry
@@ -226,7 +226,7 @@ func Load(filename string, mm *mem.VMAManager, args []string, envs []string) (*L
 			fileOff := p.Off + (entryRVA - p.Vaddr)
 			buf := make([]byte, 16)
 			f.ReadAt(buf, int64(fileOff))
-			fmt.Printf("[Debug] File bytes at entry (off %x): %x\n", fileOff, buf)
+			// fmt.Printf("[Debug] File bytes at entry (off %x): %x\n", fileOff, buf)
 			break
 		}
 	}

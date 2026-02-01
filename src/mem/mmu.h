@@ -23,6 +23,19 @@ namespace x86emu::mem {
             permissions.fill(Perm::None);
         }
 
+        // Copy Constructor for Deep Copy (Fork)
+        PageTableChunk(const PageTableChunk& other) {
+            permissions = other.permissions;
+            for (size_t i = 0; i < 1024; ++i) {
+                if (other.pages[i]) {
+                    pages[i] = new std::byte[PAGE_SIZE];
+                    std::memcpy(pages[i], other.pages[i], PAGE_SIZE);
+                } else {
+                    pages[i] = nullptr;
+                }
+            }
+        }
+
         ~PageTableChunk() {
             for (auto* ptr : pages) {
                 if (ptr) delete[] ptr;
@@ -35,11 +48,31 @@ namespace x86emu::mem {
     using FaultHandler = void(*)(void* opaque, uint32_t addr, int is_write);
     using MemHook = void(*)(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val);
 
+    // Shared Memory State (Page Tables)
+    struct PageDirectory {
+         std::array<std::unique_ptr<PageTableChunk>, 1024> l1_directory;
+
+         // Deep Copy Constructor for Fork
+         PageDirectory(const PageDirectory& other) {
+             for (size_t i = 0; i < 1024; ++i) {
+                 if (other.l1_directory[i]) {
+                     l1_directory[i] = std::make_unique<PageTableChunk>(*other.l1_directory[i]);
+                 }
+             }
+         }
+
+         PageDirectory() = default;
+
+         // Copy assignment deleted to prevent accidental heavy copies without explicit intent
+         PageDirectory& operator=(const PageDirectory&) = delete;
+    };
+
     class Mmu {
-    private:
-        // L1 Directory: Covers 4GB (1024 chunks)
-        std::array<std::unique_ptr<PageTableChunk>, 1024> l1_directory;
-        
+    public:
+        // Shared pointer to the page tables
+        std::shared_ptr<PageDirectory> page_dir;
+
+    private: 
         SoftTlb tlb;
 
         // Callbacks
@@ -66,19 +99,21 @@ namespace x86emu::mem {
 
         // Slow Path: Resolve address, handle allocation/permissions/faults
         [[nodiscard]] HostAddr resolve_slow(GuestAddr addr, Perm req_perm) {
+            if (!page_dir) return nullptr; // Should not happen if initialized correctly
+
             const uint32_t l1_idx = addr >> 22;
             const uint32_t l2_idx = (addr >> 12) & 0x3FF;
             const uint32_t offset = addr & 0xFFF;
 
             // 1. Check L1
-            auto& chunk = l1_directory[l1_idx];
+            auto& chunk = page_dir->l1_directory[l1_idx];
             if (!chunk) {
                 // Unmapped region
                 signal_fault(addr, (int)has_perm(req_perm, Perm::Write));
                 // Check if fault handler mapped it
                 // Fix: Allow retry if status is Stopped (API usage). Only abort on Fault.
                 if (emu_status && *emu_status == EmuStatus::Fault) return nullptr;
-                if (!l1_directory[l1_idx]) {
+                if (!page_dir->l1_directory[l1_idx]) {
                     return nullptr;
                 }
                 // chunk is a reference, so it sees the new value
@@ -110,7 +145,12 @@ namespace x86emu::mem {
         }
 
     public:
-        Mmu() = default;
+        Mmu() {
+            page_dir = std::make_shared<PageDirectory>();
+        }
+
+        // Explicitly share memory with another MMU
+        explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {}
 
         // Callback Setup
         void set_fault_callback(FaultHandler handler, void* opaque) {
@@ -140,11 +180,11 @@ namespace x86emu::mem {
                 uint32_t l1_idx = curr >> 22;
                 uint32_t l2_idx = (curr >> 12) & 0x3FF;
 
-                if (!l1_directory[l1_idx]) {
-                    l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+                if (!page_dir->l1_directory[l1_idx]) {
+                    page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
                 }
                 
-                l1_directory[l1_idx]->permissions[l2_idx] = perms;
+                page_dir->l1_directory[l1_idx]->permissions[l2_idx] = perms;
             }
             tlb.flush();
         }

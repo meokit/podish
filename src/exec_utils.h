@@ -78,8 +78,6 @@ inline bool CheckCondition(EmuState* state, uint8_t cond) {
 inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = op->prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
-    // Optimization: Only honor FS(5) and GS(6) overrides. 
-    // CS/DS/ES/SS are assumed to be 0 (Flat Model).
     if (seg == 5 || seg == 6) {
         return state->ctx.seg_base[seg - 1];
     }

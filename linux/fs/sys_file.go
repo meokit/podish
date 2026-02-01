@@ -1,16 +1,29 @@
 package fs
 
 import (
+	"fmt"
 	"os"
 )
 
 func (sm *SyscallManager) sys_exit(a1, a2, a3, a4, a5, a6 uint32) int32 {
-	os.Exit(int(a1))
+	code := int(int32(a1))
+	if sm.ExitHandler != nil {
+		sm.ExitHandler(sm.Emu, code, false)
+	} else {
+		fmt.Printf("sys_exit(%d) called without handler\n", code)
+		os.Exit(code) // Fallback
+	}
 	return 0
 }
 
 func (sm *SyscallManager) sys_exit_group(a1, a2, a3, a4, a5, a6 uint32) int32 {
-	os.Exit(int(a1))
+	code := int(int32(a1))
+	if sm.ExitHandler != nil {
+		sm.ExitHandler(sm.Emu, code, true)
+	} else {
+		fmt.Printf("sys_exit_group(%d) called without handler\n", code)
+		os.Exit(code) // Fallback
+	}
 	return 0
 }
 

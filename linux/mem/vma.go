@@ -104,6 +104,25 @@ func (mm *VMAManager) Mmap(addr uint32, len uint32, perms int, flags int, file *
 	return addr, nil
 }
 
+func (mm *VMAManager) Clone() *VMAManager {
+	newMM := NewVMAManager()
+	for e := mm.vmas.Front(); e != nil; e = e.Next() {
+		vma := e.Value.(*VMA)
+		newVMA := &VMA{
+			Start:  vma.Start,
+			End:    vma.End,
+			Perms:  vma.Perms,
+			Flags:  vma.Flags, // TODO: handle MAP_SHARED
+			File:   vma.File,
+			Offset: vma.Offset,
+			FileSz: vma.FileSz,
+			Name:   vma.Name,
+		}
+		newMM.vmas.PushBack(newVMA)
+	}
+	return newMM
+}
+
 func (mm *VMAManager) Munmap(addr uint32, length uint32) {
 	end := addr + length
 	var next *list.Element
@@ -230,13 +249,17 @@ func (mm *VMAManager) HandleFault(addr uint32, isWrite bool, mapper Mapper) bool
 	// 1. Find VMA
 	vma := mm.FindVMA(addr)
 	if vma == nil {
+		// fmt.Printf("[VMA] Fault at 0x%x: No VMA found\n", addr)
 		return false
 	}
 
 	// 2. Check Permissions
 	if isWrite && (vma.Perms&PROT_WRITE == 0) {
+		fmt.Printf("[VMA] Fault at 0x%x: Permission Denied (Perms=%x)\n", addr, vma.Perms)
 		return false
 	}
+
+	// fmt.Printf("[VMA] Fault at 0x%x: Mapping page (VMA: %s)\n", addr, vma.Name)
 
 	// Read is usually implied
 	// 3. Map page (Temporary RW for loading)

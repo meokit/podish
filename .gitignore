@@ -16,3 +16,7 @@ __pycache__/
 tests/linux/assets/
 tests/linux/rootfs/
 tests/linux/build_podman/
+tests/linux/test_futex
+tests/linux/test_mutex
+tests/linux/test_pthread
+test_futex.asm

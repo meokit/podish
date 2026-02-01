@@ -76,10 +76,69 @@ EmuState* X86_Create() {
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
     
-    // Set internal bridge callbacks
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_mem_hook(InternalMemHookBridge, state);
     
+    return state;
+}
+
+EmuState* X86_Clone(EmuState* parent, int share_mem) {
+    if (!parent) return nullptr;
+
+    EmuState* state = new EmuState();
+    
+    // 1. Copy Context (Registers, Segments, etc.)
+    state->ctx = parent->ctx;
+    
+    // 2. Memory Handling
+    if (share_mem) {
+        // Shared Memory (CLONE_VM) -> Threads
+        // Copy the shared_ptr, incrementing refcount
+        state->mmu = mem::Mmu(parent->mmu.page_dir);
+    } else {
+        // Independent Memory (Fork)
+        // Deep copy the PageDirectory
+        auto new_pd = std::make_shared<mem::PageDirectory>(*parent->mmu.page_dir);
+        state->mmu = mem::Mmu(std::move(new_pd));
+    }
+
+    // 3. Link Internal Pointers
+    state->ctx.mmu = &state->mmu;
+    state->ctx.hooks = &state->hooks;
+    state->mmu.set_status_ptr(&state->status, &state->fault_vector);
+    
+    // 4. Set Callbacks (Bridge to same handlers, but new 'state' passed)
+    // Note: The UserData is pointing to whatever specific object managed the parent.
+    // For Clone, we might need new userdata?
+    // In our Go implementation, we use global wrappers or map state->Task.
+    // So copying userdata is strictly correct for now (same logic applies).
+    state->mmu.set_fault_callback(InternalFaultBridge, state);
+    state->mmu.set_mem_hook(InternalMemHookBridge, state);
+
+    // Reuse parent's external handlers & userdata
+    state->fault_handler = parent->fault_handler;
+    state->fault_userdata = parent->fault_userdata; // This might need care in Go!
+    state->mem_hook = parent->mem_hook;
+    state->mem_userdata = parent->mem_userdata;
+
+    // Interrupt handlers
+    for (int i=0; i<256; ++i) {
+        state->interrupt_handlers[i] = parent->interrupt_handlers[i];
+        state->interrupt_userdata[i] = parent->interrupt_userdata[i];
+    }
+    // Re-register hooks logic
+    // We need to copy the internal C++ std::function hooks too?
+    // 'state->hooks' is copy constructed from parent->hooks via `state->ctx = parent->ctx`? 
+    // Wait, ctx copies pointers. state->hooks is a separate object.
+    
+    // Let's copy hooks explicitly
+    state->hooks = parent->hooks; 
+    
+    // Explicitly copy segment bases (though ctx assignment should have done it, being safe)
+    for (int i=0; i<6; ++i) {
+        state->ctx.seg_base[i] = parent->ctx.seg_base[i];
+    }
+
     return state;
 }
 
@@ -228,6 +287,10 @@ void X86_EmuStop(EmuState* state) {
     if (state) state->status = EmuStatus::Stopped;
 }
 
+void X86_EmuFault(EmuState* state) {
+    if (state) state->status = EmuStatus::Fault;
+}
+
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
 
@@ -253,7 +316,9 @@ int X86_Step(EmuState* state) {
     if (h) {
          uint32_t old_eip = state->ctx.eip;
          h(state, &op);
-         if (state->ctx.eip == old_eip) {
+         // Advance EIP if handler didn't change it AND no fault occurred.
+         // 'Stopped' usually means syscall handled, so we MUST advance.
+         if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
              state->ctx.eip += op.length;
          }
     } else {
@@ -290,7 +355,11 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
     
     state->hooks.set_interrupt_hook(vector, [vector](EmuState* s, uint8_t v) {
         if (s->interrupt_handlers[vector]) {
-            return s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
+            bool handled = s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
+            if (handled) {
+                s->status = EmuStatus::Stopped;
+            }
+            return handled;
         }
         return false;
     });

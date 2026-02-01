@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"fmt"
 	"os"
 	"x86emu-loader/mem"
 )
@@ -38,6 +39,11 @@ func (sm *SyscallManager) sys_mmap2(a1, a2, a3, a4, a5, a6 uint32) int32 {
 	fd := int32(a5)
 	offset := int64(a6) * 4096
 
+	// WORKAROUND: Force RW permissions because sys_mprotect is a stub.
+	// Applications (like Musl) often mmap with PROT_NONE and then mprotect RW.
+	// Since we don't implement mprotect yet, valid memory remains PROT_NONE and faults.
+	prot = prot | mem.PROT_READ | mem.PROT_WRITE
+
 	var f *os.File
 	isAnon := (flags & 0x20) != 0
 
@@ -53,8 +59,10 @@ func (sm *SyscallManager) sys_mmap2(a1, a2, a3, a4, a5, a6 uint32) int32 {
 
 	res, err := sm.Mem.Mmap(addr, length, prot, flags, f, offset, int64(length), "MMAP2")
 	if err != nil {
+		fmt.Printf("sys_mmap2(0x%x, %d) failed: %v\n", addr, length, err)
 		return -12
 	}
+	// fmt.Printf("sys_mmap2(0x%x, %d) -> 0x%x\n", addr, length, res)
 	return int32(res)
 }
 
