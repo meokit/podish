@@ -20,6 +20,13 @@ x86emu is designed to execute 32-bit x86 binaries (via object files or raw code)
     -   **SSE/SSE2:** vector instruction support.
 -   **Cross-Platform:** Targets macOS and Linux (requires Clang).
 
+## Linux Loader & Busybox Support
+
+The project includes a Go-based ELF loader (`x86loader`) capable of running static Linux binaries.
+-   **Syscalls:** Implements core syscalls for file I/O, memory management (`brk`, `mmap`), and process info.
+-   **Busybox:** Successfully runs simple Busybox applets (`true`, `echo`, `ls`).
+-   **Modular:** Syscall layer is refactored into modular handlers (`fs`, `mem`, `proc`) with table-based dispatch.
+
 ## Requirements
 
 -   **Compiler:** Clang++ (supporting C++23).

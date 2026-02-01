@@ -13,3 +13,4 @@ analyze/
 cmake-build-debug/
 __pycache__/
 *.pyc
+tests/linux/assets/
