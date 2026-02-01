@@ -2,7 +2,7 @@ package emu
 
 /*
 #cgo CFLAGS: -I../../src
-#cgo LDFLAGS: -L../../build -lx86emu -Wl,-rpath,../../build
+#cgo LDFLAGS: -L../../build -lx86emu -Wl,-rpath,@loader_path
 
 #include "bindings.h"
 #include <stdlib.h>
@@ -73,7 +73,7 @@ type Engine struct {
 func New() *Engine {
 	s := C.X86_Create()
 	e := &Engine{State: s}
-	
+
 	// Register callbacks
 	C.RegisterCallbacks(s)
 	return e
@@ -150,9 +150,9 @@ func (e *Engine) Stop() {
 }
 
 func (e *Engine) Step() int {
-    return int(C.X86_Step(e.State))
+	return int(C.X86_Step(e.State))
 }
 
 func (e *Engine) GetStatus() int {
-    return int(C.X86_GetStatus(e.State))
+	return int(C.X86_GetStatus(e.State))
 }

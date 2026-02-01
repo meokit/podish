@@ -76,8 +76,11 @@ namespace x86emu::mem {
                 // Unmapped region
                 signal_fault(addr, (int)has_perm(req_perm, Perm::Write));
                 // Check if fault handler mapped it
-                if (emu_status && *emu_status != EmuStatus::Running) return nullptr;
-                if (!l1_directory[l1_idx]) return nullptr;
+                // Fix: Allow retry if status is Stopped (API usage). Only abort on Fault.
+                if (emu_status && *emu_status == EmuStatus::Fault) return nullptr;
+                if (!l1_directory[l1_idx]) {
+                    return nullptr;
+                }
                 // chunk is a reference, so it sees the new value
             }
 

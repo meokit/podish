@@ -24,7 +24,7 @@ type SyscallManager struct {
 	Table map[uint32]SyscallHandler
 }
 
-func NewSyscallManager(e *emu.Engine, m *mem.VMAManager, rootfs string) *SyscallManager {
+func NewSyscallManager(e *emu.Engine, m *mem.VMAManager, rootfs string, brkAddr uint32) *SyscallManager {
 	if rootfs == "" {
 		rootfs = "/"
 	}
@@ -38,7 +38,7 @@ func NewSyscallManager(e *emu.Engine, m *mem.VMAManager, rootfs string) *Syscall
 		RootFS:  rootfs,
 		Cwd:     "/",
 		FDs:     make(map[int]*os.File),
-		BrkAddr: 0x8000000,
+		BrkAddr: brkAddr,
 		Table:   make(map[uint32]SyscallHandler),
 	}
 

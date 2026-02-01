@@ -22,9 +22,9 @@ func main() {
 
 	exe := args[0]
 	exeArgs := args // includes exe name as argv[0]
-    
-    // Environment
-    envs := os.Environ()
+
+	// Environment
+	envs := os.Environ()
 
 	// 1. Init Emulator
 	e := emu.New()
@@ -38,18 +38,18 @@ func main() {
 	e.SetFaultHandler(func(addr uint32, isWrite bool) {
 		if !mm.HandleFault(addr, isWrite, e) {
 			fmt.Printf("Segmentation Fault at 0x%x (Write=%v) EIP=0x%x\n", addr, isWrite, e.Eip())
-            fmt.Printf("EAX=%x ECX=%x EDX=%x EBX=%x ESP=%x EBP=%x ESI=%x EDI=%x\n",
-                e.RegRead(emu.EAX), e.RegRead(emu.ECX), e.RegRead(emu.EDX), e.RegRead(emu.EBX),
-                e.RegRead(emu.ESP), e.RegRead(emu.EBP), e.RegRead(emu.ESI), e.RegRead(emu.EDI))
-            e.Stop()
-            
-            // Debug: Read stack
-            esp := e.RegRead(emu.ESP)
-            stack := e.MemRead(esp, 16)
-            fmt.Printf("Stack at ESP (%x): %x\n", esp, stack)
-			// os.Exit(139) 
-            // We rely on Stop logic or allow Run to return?
-            // X86_Run catches faults?
+			fmt.Printf("EAX=%x ECX=%x EDX=%x EBX=%x ESP=%x EBP=%x ESI=%x EDI=%x\n",
+				e.RegRead(emu.EAX), e.RegRead(emu.ECX), e.RegRead(emu.EDX), e.RegRead(emu.EBX),
+				e.RegRead(emu.ESP), e.RegRead(emu.EBP), e.RegRead(emu.ESI), e.RegRead(emu.EDI))
+			e.Stop()
+
+			// Debug: Read stack
+			esp := e.RegRead(emu.ESP)
+			stack := e.MemRead(esp, 16)
+			fmt.Printf("Stack at ESP (%x): %x\n", esp, stack)
+			// os.Exit(139)
+			// We rely on Stop logic or allow Run to return?
+			// X86_Run catches faults?
 		}
 	})
 
@@ -62,8 +62,8 @@ func main() {
 
 	// 5. Setup Stack
 	// We rely on the write causing a fault which allocates the pages.
-    // If the emulator doesn't support fault-on-write from API, we might crash here.
-    // Assuming standard behavior.
+	// If the emulator doesn't support fault-on-write from API, we might crash here.
+	// Assuming standard behavior.
 	e.MemWrite(res.SP, res.InitialStack)
 
 	// 6. Setup CPU State
@@ -71,17 +71,17 @@ func main() {
 	e.RegWrite(emu.ESP, res.SP)
 	e.SetEflags(0x202) // IF=1, Reserved=1
 
-    // 7. Setup Syscalls
-	sys := fs.NewSyscallManager(e, mm, *rootfs)
-    e.SetInterruptHandler(func(vec uint32) bool {
-        return sys.Handle(vec)
-    })
+	// 7. Setup Syscalls
+	sys := fs.NewSyscallManager(e, mm, *rootfs, res.BrkAddr)
+	e.SetInterruptHandler(func(vec uint32) bool {
+		return sys.Handle(vec)
+	})
 
 	fmt.Printf("Starting execution at 0x%x, SP=0x%x\n", res.Entry, res.SP)
-    
-    // Debug: Read 16 bytes at entry
-    buf := e.MemRead(res.Entry, 16)
-    fmt.Printf("Code at entry: %x\n", buf)
+
+	// Debug: Read 16 bytes at entry
+	buf := e.MemRead(res.Entry, 16)
+	fmt.Printf("Code at entry: %x\n", buf)
 
 	// 8. Run
 	// Infinite loop (max insts large)

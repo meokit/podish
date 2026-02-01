@@ -35,18 +35,19 @@ func (sm *SyscallManager) sys_mmap2(a1, a2, a3, a4, a5, a6 uint32) int32 {
 	length := a2
 	prot := int(a3)
 	flags := int(a4)
-	fd := int(a5)
+	fd := int32(a5)
 	offset := int64(a6) * 4096
 
 	var f *os.File
-	if fd != -1 {
-		if file, ok := sm.GetFD(fd); ok {
+	isAnon := (flags & 0x20) != 0
+
+	if !isAnon && fd != -1 {
+		if file, ok := sm.GetFD(int(fd)); ok {
 			f = file
 		} else {
 			return -9
 		}
-	}
-	if flags&0x20 != 0 {
+	} else if isAnon {
 		f = nil
 	}
 

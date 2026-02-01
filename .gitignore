@@ -14,3 +14,5 @@ cmake-build-debug/
 __pycache__/
 *.pyc
 tests/linux/assets/
+tests/linux/rootfs/
+tests/linux/build_podman/
