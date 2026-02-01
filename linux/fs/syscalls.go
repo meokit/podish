@@ -155,7 +155,7 @@ func (sm *SyscallManager) Handle(eng *emu.Engine, vec uint32) bool {
 
 	ret := int32(-38) // ENOSYS
 	if handler, ok := sm.Table[eax]; ok {
-		// fmt.Printf("Syscall %d (EBX=%x ECX=%x EDX=%x)\n", eax, ebx, ecx, edx) // Debug
+		// fmt.Printf("Task %d Syscall %d: %x %x %x %x %x %x\n", 0, eax, ebx, ecx, edx, esi, edi, ebp)
 		ret = handler(ebx, ecx, edx, esi, edi, ebp)
 	} else {
 		// Only print unimplemented if NOT stracing (since strace prints entry)

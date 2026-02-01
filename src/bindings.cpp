@@ -243,7 +243,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
         
-        if (end_eip != 0 && eip >= end_eip) {
+        if (end_eip != 0 && eip == end_eip) {
             state->status = EmuStatus::Stopped;
             break;
         }
@@ -255,10 +255,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
             BasicBlock block;
-            uint64_t remaining_insts = 0;
-            if (max_insts > 0) remaining_insts = max_insts - inst_count;
-            
-            if (!DecodeBlock(state, eip, end_eip, remaining_insts, &block)) {
+            if (!DecodeBlock(state, eip, end_eip, 0, &block)) {
                 state->status = EmuStatus::Fault;
                 break;
             }
@@ -273,11 +270,15 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             if (head->handler_index < 1024) h = g_Handlers[head->handler_index];
             
             if (h) {
+                // Total instructions in block (excluding sentinel)
+                size_t num_insts = block.ops.size();
+                if (num_insts > 0) num_insts--; 
+                
                 h(state, head); 
-                if (block.ops.size() > 0)
-                    inst_count += (block.ops.size() - 1);
+                inst_count += num_insts;
             } else {
                 OpUd2(state, head);
+                break;
             }
         }
     }

@@ -282,13 +282,8 @@ func (t *Task) RunLoop() {
 		currTask = t
 		currCPU = t.CPU
 
-		// Execute a batch of instructions using Step()
-		for i := 0; i < 1000; i++ {
-			st := t.CPU.Step()
-			if st != emu.StatusRunning {
-				break
-			}
-		}
+		// fmt.Printf("[Task %d] Run EIP=%x\n", t.TID, t.CPU.Eip())
+		t.CPU.Run(0, 1000)
 
 		/*
 			if steps < 50 {
@@ -318,4 +313,5 @@ func (t *Task) RunLoop() {
 	close(t.WaitCh)
 	UnregisterTask(t.CPU)
 	GlobalSched.Remove(t.TID)
+	// fmt.Printf("Task %d Exited Loop\n", t.TID)
 }
