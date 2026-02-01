@@ -70,9 +70,9 @@ run_test() {
 
 run_test "Hello World"  "tests/linux/assets/hello_static" ""
 run_test "Linux Syscalls" "tests/linux/assets/syscall_test" "--rootfs tests/linux/assets"
-# run_test "Futex Sync"   "tests/linux/assets/test_futex" ""
-# run_test "Mutex Lock"   "tests/linux/assets/test_mutex" ""
-# run_test "Pthread Basic" "tests/linux/assets/test_pthread" ""
+run_test "Futex Sync"   "tests/linux/assets/test_futex" ""
+run_test "Mutex Lock"   "tests/linux/assets/test_mutex" ""
+run_test "Pthread Basic" "tests/linux/assets/test_pthread" ""
 
 echo ""
 echo ">>> ALL BIFROST TESTS PASSED! <<<"

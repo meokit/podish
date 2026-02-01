@@ -21,8 +21,8 @@ public class Process
 
 public class Task
 {
-    // Global Lock for serialization (GIL)
-    public static readonly object GIL = new();
+    // Global Lock for serialization (GIL) - Now a SemaphoreSlim for async Support
+    public static readonly SemaphoreSlim GIL = new(1, 1);
 
     private static int _pidCounter = 1000;
     public static int NextPID() => Interlocked.Increment(ref _pidCounter);
@@ -34,6 +34,7 @@ public class Task
     public int ExitCode { get; set; }
     public bool Exited { get; set; }
     public ManualResetEventSlim WaitEvent { get; } = new(false);
+    public uint ChildClearTidPtr { get; set; }
 
     public Task(int tid, Process process, Engine cpu)
     {
@@ -44,44 +45,40 @@ public class Task
 
     public Task Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
     {
-        bool cloneVm = (flags & 0x00000100) != 0;
-        bool cloneFiles = (flags & 0x00000400) != 0;
-        bool cloneThread = (flags & 0x00010000) != 0;
-        bool cloneSetTls = (flags & 0x00080000) != 0;
+        const int CLONE_VM = 0x00000100;
+        const int CLONE_FILES = 0x00000400;
+        const int CLONE_THREAD = 0x00010000;
+        const int CLONE_SETTLS = 0x00080000;
+        const int CLONE_PARENT_SETTID = 0x00001000;
+        const int CLONE_CHILD_CLEARTID = 0x00200000;
+        const int CLONE_CHILD_SETTID = 0x01000000;
+
+        bool cloneVm = (flags & CLONE_VM) != 0;
+        bool cloneFiles = (flags & CLONE_FILES) != 0;
+        bool cloneThread = (flags & CLONE_THREAD) != 0;
+        bool cloneSetTls = (flags & CLONE_SETTLS) != 0;
+        bool cloneParentSetTid = (flags & CLONE_PARENT_SETTID) != 0;
+        bool cloneChildClearTid = (flags & CLONE_CHILD_CLEARTID) != 0;
+        bool cloneChildSetTid = (flags & CLONE_CHILD_SETTID) != 0;
 
         // 1. Clone CPU
-        // If cloneVm is true, C++ Engine clones the state sharing the memory.
         var newCpu = CPU.Clone(cloneVm);
 
         // 2. Resource Management
         Process newProc;
-
         if (cloneThread)
         {
-            // Thread: Share Process
             newProc = Process;
         }
         else
         {
-            // Fork/New Process
             var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
-            
-            // For SyscallManager, we need a way to clone it or create a new one sharing FDs?
-            // If cloneFiles is true, we share FDs. 
-            // Current SyscallManager implementation couples FDs and Logic.
-            // For now, we will use a helper to Clone the SyscallManager wrapper
-            // that might share the underlying FD table.
             var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
-
             newProc = new Process(NextPID(), newMem, newSys);
         }
 
         int newTid = cloneThread ? NextPID() : newProc.TGID;
-
         var child = new Task(newTid, newProc, newCpu);
-        
-        // Register the new engine to the (possibly new) SyscallManager
-        // If it's a thread, it shares the SyscallManager, so we register the new CPU to it.
         child.Process.Syscalls.RegisterEngine(newCpu);
 
         // 3. Setup Child State
@@ -94,29 +91,45 @@ public class Task
         // TLS
         if (cloneSetTls && tlsPtr != 0)
         {
-            // struct user_desc { uint32 entry; uint32 base; ... }
-            // base is at offset 4
             var buf = child.CPU.MemRead(tlsPtr + 4, 4);
             uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf);
             child.CPU.SetSegBase(Seg.GS, baseAddr);
         }
         
-        // TODO: Handle ptidPtr (write child TID to parent memory)
-        // TODO: Handle ctidPtr (write child TID to child memory)
+        // TID Pointers
+        if (cloneParentSetTid && ptidPtr != 0)
+        {
+            byte[] tidBuf = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+            CPU.MemWrite(ptidPtr, tidBuf); 
+        }
+        
+        if (cloneChildSetTid && ctidPtr != 0)
+        {
+            byte[] tidBuf = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+            child.CPU.MemWrite(ctidPtr, tidBuf);
+        }
+        
+        if (cloneChildClearTid)
+        {
+            child.ChildClearTidPtr = ctidPtr;
+        }
 
         Scheduler.Add(child);
         return child;
     }
 
-    public void RunLoop()
+    public async System.Threading.Tasks.Task RunLoopAsync()
     {
         try
         {
             while (!Exited)
             {
-                lock (GIL)
+                await GIL.WaitAsync();
+                try
                 {
-                    // Update current task context if we had one
+                    // Update current task context
                     Scheduler.CurrentTask = this;
                     
                     CPU.Run(0, 1000);
@@ -124,33 +137,75 @@ public class Task
                     var status = CPU.Status;
                     if (status == EmuStatus.Fault)
                     {
-                        // Double check if fault was handled?
-                        // The engine stops on fault.
-                        // If we are here, it means it stopped.
-                        // We can check if it was handled by checking if status is back to Running? 
-                        // No, Native Run returns.
-                        // Actually, if FaultHandler recovers, it might set status?
-                        // But usually we just break.
-                        // Let's assume if it returns with Fault, it's fatal unless handled.
-                        // For now, simple exit.
                         Console.WriteLine($"[Task {TID}] Fatal Fault at 0x{CPU.Eip:x}");
                         Exited = true;
                     }
-                    
+                    else if (status == EmuStatus.Yield)
+                    {
+                        var sm = SyscallManager.Get(CPU.State);
+                        if (sm?.BlockingTask != null)
+                        {
+                            var blockingTask = sm.BlockingTask;
+                            sm.BlockingTask = null; // Clear it
+                            
+                            GIL.Release();
+                            try 
+                            {
+                                await blockingTask;
+                            }
+                            finally
+                            {
+                                await GIL.WaitAsync();
+                                CPU.RegWrite(Reg.EAX, 0); 
+                            }
+                        }
+                        else
+                        {
+                            await System.Threading.Tasks.Task.Yield();
+                        }
+                    }
+                    else if (status == EmuStatus.Stopped)
+                    {
+                        // Some normal stops (like voluntary yield)
+                        if (Process.Syscalls.Strace) Console.WriteLine($"[Task {TID}] Stopped.");
+                        await System.Threading.Tasks.Task.Yield();
+                    }
+                    else
+                    {
+                        if (Process.Syscalls.Strace) Console.WriteLine($"[Task {TID}] Unhandled status {status}, exiting.");
+                        Exited = true;
+                    }
+                }
+                finally
+                {
                     Scheduler.CurrentTask = null;
+                    GIL.Release();
                 }
                 
-                // Yield to let other threads acquire GIL
-                Thread.Yield();
+                // Cooperative yielding
+                await System.Threading.Tasks.Task.Yield();
             }
         }
         finally
         {
             Exited = true;
-            WaitEvent.Set();
-            Scheduler.Remove(TID);
             
-            // Cleanup
+            // Handle CLONE_CHILD_CLEARTID
+            if (ChildClearTidPtr != 0)
+            {
+                await GIL.WaitAsync();
+                try
+                {
+                    byte[] zero = new byte[4];
+                    CPU.MemWrite(ChildClearTidPtr, zero);
+                    Process.Syscalls.Futex.Wake(ChildClearTidPtr, 1);
+                }
+                catch { }
+                finally { GIL.Release(); }
+            }
+
+            WaitEvent.Set();
+            Scheduler.Remove(this);
             CPU.Dispose();
         }
     }
@@ -159,26 +214,56 @@ public class Task
 public static class Scheduler
 {
     private static readonly Dictionary<int, Task> _tasks = new();
+    private static readonly Dictionary<IntPtr, Task> _engineToTask = new();
     private static readonly object _lock = new();
     
-    [ThreadStatic]
-    public static Task? CurrentTask;
+    public static readonly AsyncLocal<Task?> _currentTask = new();
+    public static Task? CurrentTask
+    {
+        get => _currentTask.Value;
+        set => _currentTask.Value = value;
+    }
 
     public static void Add(Task t)
     {
-        lock (_lock) _tasks[t.TID] = t;
+        lock (_lock)
+        {
+            _tasks[t.TID] = t;
+            _engineToTask[t.CPU.State] = t;
+        }
+    }
+
+    public static void Remove(Task t)
+    {
+        lock (_lock)
+        {
+            _tasks.Remove(t.TID);
+            _engineToTask.Remove(t.CPU.State);
+        }
     }
 
     public static void Remove(int tid)
     {
-        lock (_lock) _tasks.Remove(tid);
+        lock (_lock)
+        {
+            if (_tasks.TryGetValue(tid, out var t))
+            {
+                _tasks.Remove(tid);
+                _engineToTask.Remove(t.CPU.State);
+            }
+        }
     }
 
     public static Task? Get(int tid)
     {
         lock (_lock) return _tasks.TryGetValue(tid, out var t) ? t : null;
     }
-    
-    // Helper to get task from Engine (via Registry in SyscallManager or here)
-    // For now we rely on SyscallManager's registry or ThreadStatic if we are in the thread.
+
+    public static Task? GetByEngine(IntPtr state)
+    {
+        lock (_lock)
+        {
+            return _engineToTask.TryGetValue(state, out var t) ? t : null;
+        }
+    }
 }

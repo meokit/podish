@@ -17,7 +17,7 @@ void DispatchWrapper(EmuState* state, DecodedOp* op) {
     // Execute Logic
     Target(state, op);
     
-    // Stop Chain if Fault/Stopped or if this is the last op in a sequence (e.g. X86_Step)
+    // Stop Chain if Fault/Stopped/Yield or if this is the last op in a sequence (e.g. X86_Step)
     if (state->status != EmuStatus::Running || op->meta.flags.is_last) {
         // Restore EIP if Fault (Precise Exception)
         if (state->status == EmuStatus::Fault) {

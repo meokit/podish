@@ -23,7 +23,8 @@ namespace x86emu {
 enum class EmuStatus {
     Running,
     Stopped,
-    Fault
+    Fault,
+    Yield
 };
 
 // General Purpose Registers (Index mapping)

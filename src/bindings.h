@@ -47,6 +47,7 @@ extern "C" {
     void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
     void X86_EmuStop(EmuState* state);
     void X86_EmuFault(EmuState* state);
+    void X86_EmuYield(EmuState* state);
     int X86_Step(EmuState* state);
     int X86_GetStatus(EmuState* state);
 

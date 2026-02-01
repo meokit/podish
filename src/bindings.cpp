@@ -292,6 +292,10 @@ void X86_EmuFault(EmuState* state) {
     if (state) state->status = EmuStatus::Fault;
 }
 
+void X86_EmuYield(EmuState* state) {
+    if (state) state->status = EmuStatus::Yield;
+}
+
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
 
@@ -357,7 +361,7 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
     state->hooks.set_interrupt_hook(vector, [vector](EmuState* s, uint8_t v) {
         if (s->interrupt_handlers[vector]) {
             bool handled = s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
-            if (handled) {
+            if (handled && s->status == EmuStatus::Running) {
                 s->status = EmuStatus::Stopped;
             }
             return handled;

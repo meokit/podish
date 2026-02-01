@@ -113,6 +113,7 @@ public class Engine : IDisposable
     public void Run(uint endEip = 0, ulong maxInsts = 0) => X86Native.Run(State, endEip, maxInsts);
     public void Stop() => X86Native.EmuStop(State);
     public void SetStatusFault() => X86Native.EmuFault(State);
+    public void Yield() => X86Native.EmuYield(State);
     public int Step() => X86Native.Step(State);
     public EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
 

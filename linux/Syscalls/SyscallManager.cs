@@ -26,6 +26,9 @@ public unsafe partial class SyscallManager
     public uint BrkAddr { get; set; }
     public bool Strace { get; set; }
 
+    // Async support: the task that is currently blocking this engine
+    public System.Threading.Tasks.Task? BlockingTask { get; set; }
+
     public delegate int SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
     private SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private const int MaxSyscalls = 512;
@@ -98,6 +101,7 @@ public unsafe partial class SyscallManager
 
         // Update current engine context (GIL ensures safety)
         Engine = engine;
+        BlockingTask = null; // Clear previous blocking task
 
         uint eax = engine.RegRead(Reg.EAX);
         uint ebx = engine.RegRead(Reg.EBX);
@@ -120,6 +124,13 @@ public unsafe partial class SyscallManager
         else if (!Strace)
         {
             Console.WriteLine($"Unimplemented Syscall: {eax}");
+        }
+
+        if (BlockingTask != null)
+        {
+            // If Syscall handler set a blocking task, it should also have set status to Yield.
+            if (Strace) Console.WriteLine(" [Blocked]");
+            return true;
         }
 
         if (Strace)

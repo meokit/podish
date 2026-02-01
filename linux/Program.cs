@@ -9,7 +9,7 @@ namespace Bifrost;
 
 class Program
 {
-    static void Main(string[] args)
+    static async System.Threading.Tasks.Task Main(string[] args)
     {
         string rootfs = "/";
         bool trace = false;
@@ -126,9 +126,8 @@ class Program
             {
                 var child = parent.Clone(flags, stack, ptid, tls, ctid);
                 
-                // Start child in background thread
-                var t = new Thread(child.RunLoop);
-                t.Start();
+                // Start child in background without blocking
+                _ = child.RunLoopAsync();
                 
                 return (child.TID, null);
             }
@@ -142,12 +141,12 @@ class Program
         Console.WriteLine($"Starting execution at 0x{res.Entry:x}, SP=0x{res.SP:x}");
         
         // 10. Run
-        mainTask.RunLoop();
+        await mainTask.RunLoopAsync();
     }
     
     private static void GlobalFaultHandler(Engine eng, uint addr, bool isWrite)
     {
-        var t = Scheduler.CurrentTask;
+        var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);
         if (t != null)
         {
             if (!t.Process.Mem.HandleFault(addr, isWrite, eng))
@@ -158,7 +157,7 @@ class Program
         }
         else
         {
-            Console.WriteLine($"[Unknown Task] SegFault at 0x{addr:x} EIP=0x{eng.Eip:x}");
+            Console.WriteLine($"[Unknown Task - Eng: 0x{eng.State:x}] SegFault at 0x{addr:x} EIP=0x{eng.Eip:x}");
             eng.SetStatusFault();
         }
     }

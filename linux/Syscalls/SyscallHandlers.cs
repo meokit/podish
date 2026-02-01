@@ -48,6 +48,7 @@ public unsafe partial class SyscallManager
         if (sm == null) return -1;
         int code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, false);
+        sm.Engine.Stop();
         return 0;
     }
 
@@ -57,6 +58,7 @@ public unsafe partial class SyscallManager
         if (sm == null) return -1;
         int code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, true);
+        sm.Engine.Stop();
         return 0;
     }
 
@@ -204,15 +206,10 @@ public unsafe partial class SyscallManager
             
             var waiter = sm.Futex.PrepareWait(uaddr);
             
-            Monitor.Exit(Task.GIL);
-            try
-            {
-                waiter.Tcs.Task.Wait();
-            }
-            finally
-            {
-                Monitor.Enter(Task.GIL);
-            }
+            // Non-blocking: set the Task to await and yield the engine
+            sm.BlockingTask = waiter.Tcs.Task;
+            sm.Engine.Yield();
+            
             return 0;
         }
         else if (opCode == 1) // WAKE

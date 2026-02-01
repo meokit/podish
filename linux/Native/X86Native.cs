@@ -7,7 +7,8 @@ public enum EmuStatus
 {
     Running = 0,
     Stopped = 1,
-    Fault = 2
+    Fault = 2,
+    Yield = 3
 }
 
 public enum Reg
@@ -105,6 +106,10 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_EmuFault")]
     [SuppressGCTransition]
     public static partial void EmuFault(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_EmuYield")]
+    [SuppressGCTransition]
+    public static partial void EmuYield(IntPtr state);
 
     [LibraryImport(LibName, EntryPoint = "X86_Step")]
     public static partial int Step(IntPtr state);
