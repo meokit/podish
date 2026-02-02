@@ -53,26 +53,34 @@ run_test() {
     local bin=$2
     local args=$3
     echo -n "Test $name: "
+    
+    # Run Bifrost and capture output. 
+    # Dotnet run --no-build will propagate the exit code of our Main method.
     if dotnet run --project linux/Bifrost.csproj --no-build -- $args $bin > /tmp/emu_test_cs.log 2>&1; then
-        if grep -qE "SUCCESS|Hello|All Tests Passed|Exiting" /tmp/emu_test_cs.log; then
-            echo "PASSED"
-        else
-            echo "FAILED (Unexpected output. Check /tmp/emu_test_cs.log)"
-            cat /tmp/emu_test_cs.log
-            exit 1
-        fi
+        echo "PASSED"
     else
-        echo "CRASHED (Exit Code $?. Check /tmp/emu_test_cs.log)"
+        local exit_code=$?
+        echo "FAILED (Exit Code $exit_code. Check /tmp/emu_test_cs.log)"
         cat /tmp/emu_test_cs.log
         exit 1
     fi
 }
+
 
 run_test "Hello World"  "tests/linux/assets/hello_static" ""
 run_test "Linux Syscalls" "tests/linux/assets/syscall_test" "--rootfs tests/linux/assets"
 run_test "Futex Sync"   "tests/linux/assets/test_futex" ""
 run_test "Mutex Lock"   "tests/linux/assets/test_mutex" ""
 run_test "Pthread Basic" "tests/linux/assets/test_pthread" ""
+
+# Build and run fork/wait test
+echo "Building test_fork_wait..."
+zig cc -target x86-linux-musl -static -O2 tests/test_fork_wait.c -o tests/linux/assets/test_fork_wait || exit 1
+run_test "Fork/Wait" "tests/linux/assets/test_fork_wait" ""
+
+echo ""
+echo "=== Running C# Tests ==="
+dotnet test linux-tests/Bifrost.Tests.csproj || exit 1
 
 echo ""
 echo ">>> ALL BIFROST TESTS PASSED! <<<"

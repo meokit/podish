@@ -5,6 +5,16 @@ using Bifrost.Native;
 
 namespace Bifrost.Core;
 
+public enum ProcessState
+{
+    Running,
+    Sleeping,
+    Stopped,     // Suspended by signal
+    Continued,   // Resumed from stopped state
+    Zombie,      // Exited but not reaped by parent
+    Dead         // Reaped by parent
+}
+
 public class Process
 {
     public int TGID { get; set; }
@@ -20,6 +30,13 @@ public class Process
     public int SGID { get; set; }
     public int FSUID { get; set; }
     public int FSGID { get; set; }
+    
+    // Parent-child relationship
+    public int PPID { get; set; } = 0;  // Parent Process ID
+    public List<int> Children { get; } = new List<int>();  // Child Process IDs
+    public ProcessState State { get; set; } = ProcessState.Running;
+    public int ExitStatus { get; set; } = 0;
+    public ManualResetEventSlim ZombieEvent { get; } = new(false);  // Signaled when process becomes zombie
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls)
     {
@@ -48,7 +65,11 @@ public class Task
     public bool Exited { get; set; }
     public ManualResetEventSlim WaitEvent { get; } = new(false);
     public uint ChildClearTidPtr { get; set; }
-
+    public Task? VforkParent { get; set; } = null;  // For CLONE_VFORK
+    
+    // Async support: the task that is currently blocking this emulator task
+    public System.Threading.Tasks.Task? BlockingTask { get; set; }
+    
     public Task(int tid, Process process, Engine cpu)
     {
         TID = tid;
@@ -60,6 +81,7 @@ public class Task
     {
         const int CLONE_VM = 0x00000100;
         const int CLONE_FILES = 0x00000400;
+        const int CLONE_VFORK = 0x00004000;
         const int CLONE_THREAD = 0x00010000;
         const int CLONE_SETTLS = 0x00080000;
         const int CLONE_PARENT_SETTID = 0x00001000;
@@ -68,6 +90,7 @@ public class Task
 
         bool cloneVm = (flags & CLONE_VM) != 0;
         bool cloneFiles = (flags & CLONE_FILES) != 0;
+        bool cloneVfork = (flags & CLONE_VFORK) != 0;
         bool cloneThread = (flags & CLONE_THREAD) != 0;
         bool cloneSetTls = (flags & CLONE_SETTLS) != 0;
         bool cloneParentSetTid = (flags & CLONE_PARENT_SETTID) != 0;
@@ -93,6 +116,15 @@ public class Task
         int newTid = cloneThread ? NextPID() : newProc.TGID;
         var child = new Task(newTid, newProc, newCpu);
         child.Process.Syscalls.RegisterEngine(newCpu);
+
+        if (!cloneThread)
+        {
+            child.Process.PPID = Process.TGID;
+            lock (Process.Children)
+            {
+                Process.Children.Add(child.Process.TGID);
+            }
+        }
 
         // 3. Setup Child State
         if (stackPtr != 0)
@@ -128,6 +160,12 @@ public class Task
         {
             child.ChildClearTidPtr = ctidPtr;
         }
+        
+        // CLONE_VFORK: child will wake parent on exit/exec
+        if (cloneVfork)
+        {
+            child.VforkParent = this;
+        }
 
         Scheduler.Add(child);
         return child;
@@ -155,11 +193,10 @@ public class Task
                     }
                     else if (status == EmuStatus.Yield)
                     {
-                        var sm = SyscallManager.Get(CPU.State);
-                        if (sm?.BlockingTask != null)
+                        if (BlockingTask != null)
                         {
-                            var blockingTask = sm.BlockingTask;
-                            sm.BlockingTask = null; // Clear it
+                            var blockingTask = BlockingTask;
+                            BlockingTask = null; // Clear it
                             
                             GIL.Release();
                             try 
@@ -169,7 +206,12 @@ public class Task
                             finally
                             {
                                 await GIL.WaitAsync();
-                                CPU.RegWrite(Reg.EAX, 0); 
+                                
+                                // Write result to EAX if it was a Task<int>
+                                if (blockingTask is System.Threading.Tasks.Task<int> intTask)
+                                {
+                                    CPU.RegWrite(Reg.EAX, (uint)intTask.Result);
+                                }
                             }
                         }
                         else
@@ -227,6 +269,7 @@ public class Task
 public static class Scheduler
 {
     private static readonly Dictionary<int, Task> _tasks = new();
+    private static readonly Dictionary<int, Process> _processes = new();
     private static readonly Dictionary<IntPtr, Task> _engineToTask = new();
     private static readonly object _lock = new();
     
@@ -243,6 +286,7 @@ public static class Scheduler
         {
             _tasks[t.TID] = t;
             _engineToTask[t.CPU.State] = t;
+            _processes[t.Process.TGID] = t.Process;
         }
     }
 
@@ -278,5 +322,41 @@ public static class Scheduler
         {
             return _engineToTask.TryGetValue(state, out var t) ? t : null;
         }
+    }
+    
+    // New methods for fork/wait support
+    public static Process? GetProcessByPID(int pid)
+    {
+        lock (_lock)
+        {
+            return _processes.TryGetValue(pid, out var p) ? p : null;
+        }
+    }
+    
+    public static void RemoveProcess(int pid)
+    {
+        lock (_lock)
+        {
+            _processes.Remove(pid);
+            
+            // Also remove any remaining tasks for this process
+            var toRemove = _tasks.Where(kv => kv.Value.Process.TGID == pid).ToList();
+            foreach (var kv in toRemove)
+            {
+                _tasks.Remove(kv.Key);
+                _engineToTask.Remove(kv.Value.CPU.State);
+            }
+        }
+    }
+    
+    public static List<Process> GetAllProcesses()
+    {
+        lock (_lock) return _processes.Values.ToList();
+    }
+    
+    public static Task? GetCurrent()
+    {
+        // Return current task from AsyncLocal
+        return CurrentTask;
     }
 }

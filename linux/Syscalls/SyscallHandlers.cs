@@ -15,6 +15,8 @@ public unsafe partial class SyscallManager
     private void RegisterHandlers()
     {
         Register(1, SysExit);
+        Register(2, SysFork);
+        Register(7, SysWaitPid);
         Register(3, SysRead);
         Register(4, SysWrite);
         Register(5, SysOpen);
@@ -38,6 +40,7 @@ public unsafe partial class SyscallManager
         Register(50, SysGetEGid);
         Register(54, SysIoctl);
         Register(61, SysChroot);
+        Register(64, SysGetPPid);  // getppid
         Register(70, SysSetReUid);
         Register(71, SysSetReGid);
         Register(91, SysMunmap);
@@ -67,10 +70,13 @@ public unsafe partial class SyscallManager
         Register(203, SysSetGroups);
         Register(207, SysFchown);
         Register(220, SysGetdents64);
+        Register(114, SysWait4);
+        Register(190, SysVfork);
         Register(240, SysFutex);
         Register(243, SysSetThreadArea);
         Register(252, SysExitGroup);
         Register(258, SysSetTidAddress);
+        Register(284, SysWaitId);
         Register(298, SysFchownAt);
         Register(306, SysFchmodAt);
         Register(307, SysFaccessAt);
@@ -80,6 +86,40 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
+        
+        var task = Scheduler.GetByEngine(state);
+        if (task != null)
+        {
+            Console.WriteLine($"[SysExit] TID={task.TID}, TGID={task.Process.TGID}, ExitCode={a1}");
+            Console.WriteLine($"[SysExit] Task.Process hash={task.Process.GetHashCode()}, TID==TGID? {task.TID == task.Process.TGID}");
+            
+            task.ExitCode = (int)a1;
+            task.Exited = true;
+            
+            // CRITICAL: Set process to zombie state BEFORE signaling events
+            // to avoid race condition where parent wakes up before state is set
+            lock (task.Process)
+            {
+                task.Process.State = ProcessState.Zombie;
+                task.Process.ExitStatus = (int)a1;
+                Console.WriteLine($"[SysExit] Set Process {task.Process.TGID} to Zombie, state={task.Process.State}, hash={task.Process.GetHashCode()}");
+                
+                // Signal zombie event for waitpid
+                task.Process.ZombieEvent.Set();
+            }
+            
+            // Wake vfork parent if exists
+            if (task.VforkParent != null)
+            {
+                // Vfork parent is waiting, signal it to continue
+                task.VforkParent = null;
+            }
+            
+            // Signal after state is set
+            task.WaitEvent.Set();
+            Console.WriteLine($"[SysExit] WaitEvent.Set() called");
+        }
+        
         int code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, false);
         sm.Engine.Stop();
@@ -250,7 +290,45 @@ public unsafe partial class SyscallManager
         var (tid, err) = sm.CloneHandler((int)a1, a2, a3, a4, a5);
         if (err != null) return -11; // EAGAIN
         
+        const int CLONE_VFORK = 0x4000;
+        if (((int)a1 & CLONE_VFORK) != 0)
+        {
+            // Parent should be suspended until child exits
+            var child = Scheduler.Get(tid);
+            var task = Scheduler.GetByEngine(state);
+            if (child != null && task != null)
+            {
+                // Suspend parent using BlockingTask pattern
+                var tcs = new TaskCompletionSource<int>();
+                task.BlockingTask = tcs.Task;
+                
+                // Spawn task to wait for child and wake parent
+                _ = System.Threading.Tasks.Task.Run(() =>
+                {
+                    child.WaitEvent.Wait();
+                    tcs.SetResult(0);
+                });
+                
+                sm.Engine.Yield();
+            }
+        }
+        
         return tid;
+    }
+    
+    private static int SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // fork = clone(0, 0, NULL, NULL, NULL) - no flags, copy everything
+        return SysClone(state, 0, 0, 0, 0, 0, 0);
+    }
+    
+    private static int SysVfork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // vfork = clone(CLONE_VM | CLONE_VFORK, 0, NULL, NULL, NULL)
+        const uint CLONE_VM = 0x100;
+        const uint CLONE_VFORK = 0x4000;
+        
+        return SysClone(state, CLONE_VM | CLONE_VFORK, 0, 0, 0, 0, 0);
     }
     
     private static int SysFutex(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -273,7 +351,12 @@ public unsafe partial class SyscallManager
             var waiter = sm.Futex.PrepareWait(uaddr);
             
             // Non-blocking: set the Task to await and yield the engine
-            sm.BlockingTask = waiter.Tcs.Task;
+            var task = Scheduler.GetByEngine(state);
+            if (task != null) 
+            {
+                // Use wrapper to avoid CS4004 (await in unsafe context)
+                task.BlockingTask = SyscallAsyncWrappers.WaitFutexAsync(waiter.Tcs.Task);
+            }
             sm.Engine.Yield();
             
             return 0;
@@ -683,6 +766,120 @@ public unsafe partial class SyscallManager
         var sm = Get(state);
         if (sm?.GetTGID != null) return sm.GetTGID(sm.Engine);
         return 1000;
+    }
+    
+    private static int SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -1;
+        
+        return task.Process.PPID;
+    }
+    
+    private static int SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        
+        IdType idtype;
+        int id;
+        
+        if ((int)pid < -1)
+        {
+            // Wait for process group
+            return -38; // ENOSYS - not implemented
+        }
+        else if ((int)pid == -1)
+        {
+            idtype = IdType.P_ALL;
+            id = 0;
+        }
+        else if (pid == 0)
+        {
+            // Wait for same process group
+            return -38; // ENOSYS
+        }
+        else
+        {
+            idtype = IdType.P_PID;
+            id = (int)pid;
+        }
+        
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -10; // ECHILD
+
+        var infop = new SigInfo();
+        var (result, tcs) = WaitHelpers.KernelWaitId(task, idtype, id, infop, (int)options);
+        
+        if (tcs != null)
+        {
+            // Need to block - set BlockingTask and yield
+            task.BlockingTask = SyscallAsyncWrappers.SysWait4Async(sm, task, idtype, id, statusPtr, (int)options, tcs.Task);
+            sm.Engine.Yield();
+            return 0;
+        }
+        
+        if (result > 0 && statusPtr != 0)
+        {
+            // Write exit status (WEXITSTATUS macro format)
+            int status = (infop.si_status & 0xFF) << 8;
+            byte[] statusBuf = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(statusBuf, status);
+            sm.Engine.MemWrite(statusPtr, statusBuf);
+        }
+        
+        // rusagePtr ignored for now
+        
+        return result;
+    }
+    
+    private static int SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4, uint a5, uint a6)
+    {
+        // waitpid(pid, status, options) = wait4(pid, status, options, NULL)
+        return SysWait4(state, pid, statusPtr, options, 0, 0, 0);
+    }
+    
+    private static int SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options, uint rusagePtr, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -10; // ECHILD
+
+        var info = new SigInfo();
+        var (result, tcs) = WaitHelpers.KernelWaitId(task, (IdType)idtype, (int)id, info, (int)options);
+        
+        if (tcs != null)
+        {
+            // Need to block - yield and child will run
+            task.BlockingTask = SyscallAsyncWrappers.SysWaitIdAsync(sm, task, (IdType)idtype, (int)id, infop, (int)options, tcs.Task);
+            sm.Engine.Yield();
+            return 0;
+        }
+        
+        if (result >= 0 && infop != 0)
+        {
+            // Write siginfo_t structure
+            WriteSigInfo(sm, infop, info);
+        }
+        
+        return result >= 0 ? 0 : result;
+    }
+    
+    private static void WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
+    {
+        var buf = new byte[128];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.si_signo);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), info.si_errno);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), info.si_code);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.si_pid);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(16, 4), info.si_uid);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.si_status);
+        sm.Engine.MemWrite(addr, buf);
     }
     
     private static int SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

@@ -30,9 +30,6 @@ public unsafe partial class SyscallManager
     public uint BrkAddr { get; set; }
     public bool Strace { get; set; }
 
-    // Async support: the task that is currently blocking this engine
-    public System.Threading.Tasks.Task? BlockingTask { get; set; }
-
     public delegate int SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
     private SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private const int MaxSyscalls = 512;
@@ -108,7 +105,12 @@ public unsafe partial class SyscallManager
             newFds = new Dictionary<int, Bifrost.VFS.File>(FDs); 
         }
         
-        return new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
+        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
+        newSys.CloneHandler = CloneHandler;
+        newSys.ExitHandler = ExitHandler;
+        newSys.GetTID = GetTID;
+        newSys.GetTGID = GetTGID;
+        return newSys;
     }
 
     public static SyscallManager? Get(IntPtr state)
@@ -133,9 +135,15 @@ public unsafe partial class SyscallManager
 
         // Update current engine context (GIL ensures safety)
         Engine = engine;
-        BlockingTask = null; // Clear previous blocking task
+        
+        var task = Scheduler.GetByEngine(engine.State);
+        if (task != null)
+        {
+            task.BlockingTask = null; // Clear previous blocking task
+        }
 
         uint eax = engine.RegRead(Reg.EAX);
+        // ... (registers)
         uint ebx = engine.RegRead(Reg.EBX);
         uint ecx = engine.RegRead(Reg.ECX);
         uint edx = engine.RegRead(Reg.EDX);
@@ -158,7 +166,7 @@ public unsafe partial class SyscallManager
             Console.WriteLine($"Unimplemented Syscall: {eax}");
         }
 
-        if (BlockingTask != null)
+        if (task != null && task.BlockingTask != null)
         {
             // If Syscall handler set a blocking task, it should also have set status to Yield.
             if (Strace) Console.WriteLine(" [Blocked]");

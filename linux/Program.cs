@@ -9,7 +9,7 @@ namespace Bifrost;
 
 class Program
 {
-    static async System.Threading.Tasks.Task Main(string[] args)
+    static async Task<int> Main(string[] args)
     {
         string rootfs = Directory.GetCurrentDirectory();
         bool trace = false;
@@ -36,7 +36,7 @@ class Program
         if (argIdx >= args.Length)
         {
             Console.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
-            return;
+            return 1;
         }
 
         string exe = args[argIdx];
@@ -82,20 +82,38 @@ class Program
         // 9. Setup Callbacks
         sys.ExitHandler = (eng, code, group) =>
         {
-            var t = Scheduler.CurrentTask; 
-            // Fallback if not set (should be set in RunLoop)
+            var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);
             if (t == null) return; 
 
-            Console.WriteLine($"[Task {t.TID}] Exit Code: {code} Group: {group}");
-            
             if (group)
             {
-                 // Exit all tasks in process
-                 // For now, just exit app
-                 Environment.Exit(code);
+                // mark the whole process as exiting
+                lock (t.Process)
+                {
+                    if (t.Process.State != ProcessState.Zombie)
+                    {
+                        t.Process.State = ProcessState.Zombie;
+                        t.Process.ExitStatus = code;
+                        t.Process.ZombieEvent.Set();
+                    }
+                }
+                
+                t.Exited = true;
+                t.ExitCode = code;
+                t.CPU.Stop();
             }
             else
             {
+                // Single thread exit - if it's the main thread (TID == TGID), mark process as zombie
+                if (t.TID == t.Process.TGID)
+                {
+                    lock (t.Process)
+                    {
+                        t.Process.State = ProcessState.Zombie;
+                        t.Process.ExitStatus = code;
+                        t.Process.ZombieEvent.Set();
+                    }
+                }
                 t.Exited = true;
                 t.ExitCode = code;
                 t.CPU.Stop();
@@ -138,10 +156,10 @@ class Program
             }
         };
 
-        Console.WriteLine($"Starting execution at 0x{res.Entry:x}, SP=0x{res.SP:x}");
-        
         // 10. Run
         await mainTask.RunLoopAsync();
+        
+        return mainTask.ExitCode;
     }
     
     private static void GlobalFaultHandler(Engine eng, uint addr, bool isWrite)

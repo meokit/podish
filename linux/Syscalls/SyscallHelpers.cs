@@ -1,4 +1,6 @@
 using System.Text;
+using System.Linq;
+using System.Threading;
 using Bifrost.Core;
 using Bifrost.VFS;
 
@@ -127,5 +129,147 @@ public unsafe partial class SyscallManager
         {
             f.Close();
         }
+    }
+}
+
+// Wait syscall support
+public enum IdType
+{
+    P_ALL = 0,    // Wait for any child
+    P_PID = 1,    // Wait for specific PID
+    P_PGID = 2    // Wait for process group (not implemented)
+}
+
+public class SigInfo
+{
+    public int si_signo;
+    public int si_errno;
+    public int si_code;
+    public int si_pid;
+    public int si_uid;
+    public int si_status;
+}
+
+public static class WaitHelpers
+{
+    public const int WNOHANG = 1;
+    public const int WUNTRACED = 2;
+    public const int WCONTINUED = 8;
+    public const int WEXITED = 4;
+    public const int WSTOPPED = 2;
+    
+    // Core wait implementation - returns (result, tcs) where tcs is set if blocking is needed
+    public static (int result, TaskCompletionSource<int>? tcs) KernelWaitId(Bifrost.Core.Task parentTask, IdType idtype, int id, SigInfo? infop, int options)
+    {
+        bool noHang = (options & WNOHANG) != 0;
+        bool noWait = (options & 0x01000000) != 0; // WNOWAIT
+        
+        bool wantExited = (options & WEXITED) != 0;
+        bool wantStopped = (options & (WSTOPPED | WUNTRACED)) != 0;
+        bool wantContinued = (options & WCONTINUED) != 0;
+        
+        if ((options & (WEXITED | WSTOPPED | WUNTRACED | WCONTINUED)) == 0)
+            wantExited = true;
+        
+        int parentTgid = parentTask.Process.TGID;
+        Process? matchedChild = null;
+        int matchCode = 0;
+
+        List<int> childPids;
+        lock (parentTask.Process.Children)
+        {
+            childPids = parentTask.Process.Children.ToList();
+        }
+
+        bool hasAnyChild = childPids.Count > 0;
+
+        foreach (var childPid in childPids)
+        {
+            var proc = Scheduler.GetProcessByPID(childPid);
+            if (proc == null) continue;
+            
+            // Check ID matching
+            bool idMatch = false;
+            if (idtype == IdType.P_ALL) idMatch = true;
+            else if (idtype == IdType.P_PID && proc.TGID == id) idMatch = true;
+            else if (idtype == IdType.P_PGID && proc.TGID == id) idMatch = true; // Simplified PGID
+            
+            if (!idMatch) continue;
+
+            if (wantExited && proc.State == ProcessState.Zombie)
+            {
+                matchedChild = proc;
+                matchCode = 1;
+                break;
+            }
+            if (wantStopped && proc.State == ProcessState.Stopped)
+            {
+                matchedChild = proc;
+                matchCode = 2;
+                break;
+            }
+            if (wantContinued && proc.State == ProcessState.Continued)
+            {
+                matchedChild = proc;
+                matchCode = 3;
+                break;
+            }
+        }
+
+        if (matchedChild != null)
+        {
+            if (infop != null)
+            {
+                infop.si_signo = 17; // SIGCHLD
+                infop.si_pid = matchedChild.TGID;
+                infop.si_uid = matchedChild.UID;
+                infop.si_code = matchCode switch { 1 => 1, 2 => 4, 3 => 6, _ => 1 };
+                infop.si_status = matchedChild.ExitStatus;
+            }
+
+            int childTgid = matchedChild.TGID;
+            if (!noWait)
+            {
+                if (matchCode == 1)
+                {
+                    matchedChild.State = ProcessState.Dead;
+                    Scheduler.RemoveProcess(childTgid);
+                    lock(parentTask.Process.Children) parentTask.Process.Children.Remove(childTgid);
+                }
+                else
+                {
+                    matchedChild.State = ProcessState.Running;
+                }
+            }
+            return (childTgid, null);
+        }
+
+        if (!hasAnyChild) return (-10, null); // ECHILD
+        if (noHang) return (0, null);
+
+        // Blocking wait
+        var tcs = new TaskCompletionSource<int>();
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            List<Process> children;
+            lock (parentTask.Process.Children)
+            {
+                children = parentTask.Process.Children
+                    .Select(pid => Scheduler.GetProcessByPID(pid))
+                    .Where(p => p != null)
+                    .ToList()!;
+            }
+            
+            if (children.Count == 0) { tcs.SetResult(-10); return; }
+
+            var waitHandles = children.Select(p => p.ZombieEvent.WaitHandle).ToArray();
+            // Wait for ANY child to change state
+            await System.Threading.Tasks.Task.Run(() => WaitHandle.WaitAny(waitHandles, 5000));
+            
+            // Just wake up the caller, don't reap here
+            tcs.SetResult(0);
+        });
+
+        return (0, tcs);
     }
 }
