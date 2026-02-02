@@ -1,5 +1,6 @@
 using System.Text;
 using Bifrost.Core;
+using Bifrost.VFS;
 
 namespace Bifrost.Syscalls;
 
@@ -13,33 +14,101 @@ public unsafe partial class SyscallManager
 
     public string ReadString(uint addr)
     {
-        var sb = new StringBuilder();
-        uint current = addr;
-        while (true)
+        if (addr == 0) return "";
+        
+        try
         {
-            var b = Engine.MemRead(current++, 1)[0];
-            if (b == 0) break;
-            sb.Append((char)b);
-            if (sb.Length > 4096) break; // Safety limit
+            var sb = new StringBuilder();
+            uint current = addr;
+            while (true)
+            {
+                var b = Engine.MemRead(current++, 1)[0];
+                if (b == 0) break;
+                sb.Append((char)b);
+                if (sb.Length > 4096) break; // Safety limit
+            }
+            return sb.ToString();
         }
-        return sb.ToString();
+        catch
+        {
+            return "";
+        }
     }
 
-    public string ResolvePath(string path)
+    public Dentry? PathWalk(string path, bool followLink = true)
     {
-        string guestPath;
-        if (path.StartsWith("/"))
+        if (string.IsNullOrEmpty(path)) return null;
+        
+        // Console.WriteLine($"PathWalk: {path}");
+        Dentry current = path.StartsWith("/") ? ProcessRoot : CurrentWorkingDirectory;
+        
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var part in parts)
         {
-            guestPath = path;
+            if (part == ".") continue;
+            if (part == "..")
+            {
+                if (current == ProcessRoot) continue;
+                
+                if (current == current.SuperBlock.Root)
+                {
+                    if (current.MountedAt != null)
+                    {
+                        current = current.MountedAt;
+                    }
+                }
+                
+                if (current.Parent != null)
+                {
+                    current = current.Parent;
+                }
+                continue;
+            }
+
+            // Down
+            // If current is a mount point, traverse into it
+            if (current.IsMounted && current.MountRoot != null)
+            {
+                current = current.MountRoot;
+            }
+
+            if (current.Children.TryGetValue(part, out var cached))
+            {
+                current = cached;
+            }
+            else
+            {
+                var nextInode = current.Inode.Lookup(part);
+                if (nextInode == null) 
+                {
+                    // Console.WriteLine($"PathWalk: Failed to find '{part}' in '{current.Name}'");
+                    return null;
+                }
+                
+                // Create a new Dentry in the tree
+                var nextDentry = new Dentry(part, nextInode, current, current.SuperBlock);
+                current.Children[part] = nextDentry;
+                
+                // If it's a TmpfsInode, we should link it (though Tmpfs.Lookup should have done it)
+                if (nextInode is TmpfsInode ti)
+                {
+                    ti.SetPrimaryDentry(nextDentry);
+                }
+                
+                current = nextDentry;
+            }
         }
-        else
+        
+        // Final check: if the result is a mount point, we should probably return the mount root?
+        if (current.IsMounted && current.MountRoot != null)
         {
-            guestPath = Path.Combine(Cwd, path);
+            current = current.MountRoot;
         }
-        return Path.Combine(RootFS, guestPath.TrimStart('/'));
+        
+        return current;
     }
 
-    public int AllocFD(LinuxFile file)
+    public int AllocFD(Bifrost.VFS.File file)
     {
         int fd = 3;
         while (FDs.ContainsKey(fd)) fd++;
@@ -47,11 +116,8 @@ public unsafe partial class SyscallManager
         return fd;
     }
 
-    public LinuxFile? GetFD(int fd)
+    public Bifrost.VFS.File? GetFD(int fd)
     {
-        if (fd == 0) return new LinuxStandardStream(Console.OpenStandardInput(), "/dev/stdin");
-        if (fd == 1) return new LinuxStandardStream(Console.OpenStandardOutput(), "/dev/stdout");
-        if (fd == 2) return new LinuxStandardStream(Console.OpenStandardError(), "/dev/stderr");
         return FDs.TryGetValue(fd, out var f) ? f : null;
     }
 
@@ -59,7 +125,7 @@ public unsafe partial class SyscallManager
     {
         if (FDs.Remove(fd, out var f))
         {
-            f.Dispose();
+            f.Close();
         }
     }
 }

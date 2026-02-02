@@ -11,11 +11,24 @@ public class Process
     public VMAManager Mem { get; set; }
     public SyscallManager Syscalls { get; set; }
 
+    // Credentials
+    public int UID { get; set; }
+    public int GID { get; set; }
+    public int EUID { get; set; }
+    public int EGID { get; set; }
+    public int SUID { get; set; }
+    public int SGID { get; set; }
+    public int FSUID { get; set; }
+    public int FSGID { get; set; }
+
     public Process(int tgid, VMAManager mem, SyscallManager syscalls)
     {
         TGID = tgid;
         Mem = mem;
         Syscalls = syscalls;
+
+        // Default to root
+        UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
     }
 }
 

@@ -1,3 +1,6 @@
+using System.IO;
+using Bifrost.VFS;
+
 namespace Bifrost.Memory;
 
 public enum Protection
@@ -22,7 +25,7 @@ public class VMA
     public uint End { get; set; } // Exclusive
     public Protection Perms { get; set; }
     public MapFlags Flags { get; set; }
-    public FileStream? File { get; set; }
+    public Bifrost.VFS.File? File { get; set; }
     public long Offset { get; set; }
     public long FileSz { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;

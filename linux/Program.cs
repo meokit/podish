@@ -11,7 +11,7 @@ class Program
 {
     static async System.Threading.Tasks.Task Main(string[] args)
     {
-        string rootfs = "/";
+        string rootfs = Directory.GetCurrentDirectory();
         bool trace = false;
         int argIdx = 0;
 
@@ -58,26 +58,26 @@ class Program
         // This global handler delegates to the specific Task's handler
         engine.FaultHandler = GlobalFaultHandler;
 
-        // 4. Load ELF
-        var res = ElfLoader.Load(exe, mm, exeArgs, envs, engine);
+        // 4. Setup Syscalls (Init VFS)
+        var sys = new SyscallManager(engine, mm, 0, rootfs);
+        sys.Strace = trace;
 
-        // 5. Setup Stack
-        engine.MemWrite(res.SP, res.InitialStack);
+        // 5. Load ELF (Using VFS)
+        var res = ElfLoader.Load(exe, sys, exeArgs, envs);
+        sys.BrkAddr = res.BrkAddr;
 
-        // 6. Setup CPU State
+        // 6. Setup CPU State (before stack write)
         engine.Eip = res.Entry;
         engine.RegWrite(Reg.ESP, res.SP);
         engine.Eflags = 0x202;
 
-        // 7. Setup Syscalls
-        var sys = new SyscallManager(engine, mm, res.BrkAddr);
-        sys.Strace = trace;
-        sys.RootFS = rootfs;
-
-        // 8. Create Main Task
+        // 7. Create Main Task (BEFORE writing stack to avoid "Unknown Task" faults)
         var proc = new Process(Task.NextPID(), mm, sys);
         var mainTask = new Task(proc.TGID, proc, engine);
         Scheduler.Add(mainTask);
+
+        // 8. Setup Stack (after Task is registered so fault handler can find it)
+        engine.MemWrite(res.SP, res.InitialStack);
 
         // 9. Setup Callbacks
         sys.ExitHandler = (eng, code, group) =>

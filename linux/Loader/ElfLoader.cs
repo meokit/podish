@@ -1,8 +1,11 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.IO;
 using LibObjectFile.Elf;
 using Bifrost.Memory;
 using Bifrost.Core;
+using Bifrost.Syscalls;
+using Bifrost.VFS;
 
 namespace Bifrost.Loader;
 
@@ -35,9 +38,29 @@ public class ElfLoader
     const uint AT_PLATFORM = 15;
     const uint AT_RANDOM = 25;
 
-    public static LoaderResult Load(string filename, VMAManager mm, string[] args, string[] envs, Engine engine)
+    public static LoaderResult Load(string filename, SyscallManager sys, string[] args, string[] envs)
     {
-        using var stream = File.OpenRead(filename);
+        var mm = sys.Mem;
+        var engine = sys.Engine;
+
+        // Try to find the file in VFS to get a Dentry for mmap
+        // If filename is absolute on host, try to make it relative to rootfs if possible
+        string vfsLookupPath = filename;
+        string hostRoot = Path.GetFullPath(((HostSuperBlock)sys.Root.SuperBlock).HostRoot).TrimEnd(Path.DirectorySeparatorChar);
+        string absFilename = Path.GetFullPath(filename);
+        
+        if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            vfsLookupPath = absFilename.Substring(hostRoot.Length);
+            if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
+            else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/') vfsLookupPath = "/" + vfsLookupPath;
+            vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
+        }
+
+        var dentry = sys.PathWalk(vfsLookupPath);
+
+        // Still use Host IO for ElfFile reader as it needs a Stream
+        using var stream = System.IO.File.OpenRead(filename);
         var elf = ElfFile.Read(stream);
         
         uint loadBase = 0;
@@ -71,9 +94,31 @@ public class ElfLoader
 
                 if (sizeRaw > 0)
                 {
-                    long fileSzLimit = diff + (long)segment.Size;
-                    var fs = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, fs, pageOffset, fileSzLimit, "ELF_LOAD", engine);
+                    if (dentry != null)
+                    {
+                        long fileSzLimit = diff + (long)segment.Size;
+                        var vfsFile = new Bifrost.VFS.File(dentry, FileFlags.O_RDONLY);
+                        mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, fileSzLimit, "ELF_LOAD", engine);
+                    }
+                    else
+                    {
+                        // Fallback to anonymous mapping + MemWrite if not in VFS
+                        mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "ELF_LOAD_ANON", engine);
+                        
+                        // Map and copy data immediately
+                        for (uint p = pageStart; p < pageStart + alignedLen; p += 4096)
+                        {
+                            engine.MemMap(p, 4096, (byte)perms);
+                        }
+
+                        if (segment.Size > 0)
+                        {
+                            byte[] buf = new byte[segment.Size];
+                            stream.Seek((long)segment.Position, SeekOrigin.Begin);
+                            stream.ReadExactly(buf);
+                            engine.MemWrite(vaddrRaw, buf);
+                        }
+                    }
                 }
             }
 

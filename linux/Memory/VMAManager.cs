@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using Bifrost.Core;
+using Bifrost.VFS;
 
 namespace Bifrost.Memory;
 
@@ -17,7 +20,7 @@ public class VMAManager
         return null;
     }
 
-    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, FileStream? file, long offset, long filesz, string name, Engine engine)
+    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, Bifrost.VFS.File? file, long offset, long filesz, string name, Engine engine)
     {
         // Align to 4k
         if ((addr & 0xFFF) != 0)
@@ -230,8 +233,7 @@ public class VMAManager
             if (readLen > 0)
             {
                 Span<byte> buf = stackalloc byte[4096];
-                vma.File.Seek(off, SeekOrigin.Begin);
-                int n = vma.File.Read(buf.Slice(0, readLen));
+                int n = vma.File.Dentry.Inode.Read(vma.File, buf.Slice(0, readLen), off);
                 if (n > 0)
                 {
                     engine.MemWrite(pageStart, buf.Slice(0, n));
@@ -274,11 +276,9 @@ public class VMAManager
 
                 if (writeLen > 0)
                 {
-                    vma.File.Seek(off, SeekOrigin.Begin);
-                    vma.File.Write(data.AsSpan(0, writeLen));
+                    vma.File.Dentry.Inode.Write(vma.File, data.AsSpan(0, writeLen), off);
                 }
             }
         }
-        vma.File.Flush();
     }
 }

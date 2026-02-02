@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Bifrost.Core;
 using Bifrost.Memory;
 using Bifrost.Native;
+using Bifrost.VFS;
 
 namespace Bifrost.Syscalls;
 
@@ -15,11 +16,14 @@ public unsafe partial class SyscallManager
     
     public VMAManager Mem { get; set; }
 
-    public string RootFS { get; set; } = "/";
-    public string Cwd { get; set; } = "/";
+    public Dentry Root { get; set; } = null!;
+    public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
+    
+    // For chroot tracking, we keep a Dentry pointer to the process root
+    public Dentry ProcessRoot { get; set; } = null!;
 
     // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, LinuxFile> FDs { get; private set; } = new();
+    public Dictionary<int, Bifrost.VFS.File> FDs { get; private set; } = new();
     
     public FutexManager Futex { get; private set; }
 
@@ -33,7 +37,7 @@ public unsafe partial class SyscallManager
     private SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private const int MaxSyscalls = 512;
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk)
+    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot)
     {
         Engine = engine;
         Mem = mem;
@@ -41,17 +45,45 @@ public unsafe partial class SyscallManager
         Futex = new FutexManager();
 
         RegisterEngine(engine);
-
         RegisterHandlers();
+        
+        // Init VFS
+        var hostFsType = new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() };
+        
+        var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
+        Root = sb.Root;
+        ProcessRoot = Root;
+        CurrentWorkingDirectory = Root;
+        
+        // Add console FDs
+        InitStdio();
     }
     
-    private SyscallManager(VMAManager mem, Dictionary<int, LinuxFile> fds, FutexManager futex, uint brk, bool strace)
+    private void InitStdio()
+    {
+        // 0: Stdin
+        // We need a dummy SuperBlock for devices
+        var devSb = new TmpfsSuperBlock(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
+        var stdinInode = new ConsoleInode(devSb, true);
+        var stdinDentry = new Dentry("stdin", stdinInode, Root, devSb);
+        FDs[0] = new Bifrost.VFS.File(stdinDentry, FileFlags.O_RDONLY);
+        
+        var stdoutInode = new ConsoleInode(devSb, false);
+        var stdoutDentry = new Dentry("stdout", stdoutInode, Root, devSb);
+        FDs[1] = new Bifrost.VFS.File(stdoutDentry, FileFlags.O_WRONLY);
+        FDs[2] = new Bifrost.VFS.File(stdoutDentry, FileFlags.O_WRONLY); // stderr uses same
+    }
+
+    private SyscallManager(VMAManager mem, Dictionary<int, Bifrost.VFS.File> fds, FutexManager futex, uint brk, bool strace, Dentry root, Dentry cwd, Dentry procRoot)
     {
         Mem = mem;
         FDs = fds;
         Futex = futex;
         BrkAddr = brk;
         Strace = strace;
+        Root = root; // Global root (shared)
+        CurrentWorkingDirectory = cwd;
+        ProcessRoot = procRoot;
         
         RegisterHandlers();
     }
@@ -66,17 +98,17 @@ public unsafe partial class SyscallManager
 
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
     {
-        Dictionary<int, LinuxFile> newFds;
+        Dictionary<int, Bifrost.VFS.File> newFds;
         if (shareFiles)
         {
             newFds = FDs;
         }
         else
         {
-            newFds = new Dictionary<int, LinuxFile>(FDs); 
+            newFds = new Dictionary<int, Bifrost.VFS.File>(FDs); 
         }
         
-        return new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace);
+        return new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
     }
 
     public static SyscallManager? Get(IntPtr state)
