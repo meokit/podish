@@ -16,11 +16,11 @@ namespace x86emu::mem {
     // Sparse allocation of actual pages
     struct PageTableChunk {
         std::array<std::byte*, 1024> pages;
-        std::array<Perm, 1024> permissions;
+        std::array<Property, 1024> permissions;
 
         PageTableChunk() {
             pages.fill(nullptr);
-            permissions.fill(Perm::None);
+            permissions.fill(Property::None);
         }
 
         // Copy Constructor for Deep Copy (Fork)
@@ -97,8 +97,18 @@ namespace x86emu::mem {
             }
         }
 
+        void sync_dirty(GuestAddr vaddr) {
+            const uint32_t l1_idx = vaddr >> 22;
+            const uint32_t l2_idx = (vaddr >> 12) & 0x3FF;
+            if (!page_dir) return;
+            auto& chunk = page_dir->l1_directory[l1_idx];
+            if (chunk) {
+                chunk->permissions[l2_idx] = chunk->permissions[l2_idx] | Property::Dirty;
+            }
+        }
+
         // Slow Path: Resolve address, handle allocation/permissions/faults
-        [[nodiscard]] HostAddr resolve_slow(GuestAddr addr, Perm req_perm) {
+        [[nodiscard]] HostAddr resolve_slow(GuestAddr addr, Property req_perm) {
             if (!page_dir) return nullptr; // Should not happen if initialized correctly
 
             const uint32_t l1_idx = addr >> 22;
@@ -109,23 +119,27 @@ namespace x86emu::mem {
             auto& chunk = page_dir->l1_directory[l1_idx];
             if (!chunk) {
                 // Unmapped region
-                signal_fault(addr, (int)has_perm(req_perm, Perm::Write));
+                signal_fault(addr, (int)has_property(req_perm, Property::Write));
                 // Check if fault handler mapped it
-                // Fix: Allow retry if status is Stopped (API usage). Only abort on Fault.
                 if (emu_status && *emu_status == EmuStatus::Fault) return nullptr;
                 if (!page_dir->l1_directory[l1_idx]) {
                     return nullptr;
                 }
-                // chunk is a reference, so it sees the new value
             }
 
             // 2. Check Permissions
-            Perm current_perm = chunk->permissions[l2_idx];
-            if (!has_perm(current_perm, req_perm)) {
-                signal_fault(addr, (int)has_perm(req_perm, Perm::Write));
+            Property current_perm = chunk->permissions[l2_idx];
+            if (!has_property(current_perm, req_perm)) {
+                signal_fault(addr, (int)has_property(req_perm, Property::Write));
                 if (emu_status && *emu_status != EmuStatus::Running) return nullptr;
                 current_perm = chunk->permissions[l2_idx];
-                if (!has_perm(current_perm, req_perm)) return nullptr; 
+                if (!has_property(current_perm, req_perm)) return nullptr; 
+            }
+
+            // --- Triggered Dirty Bit Update ---
+            if (has_property(req_perm, Property::Write) && !has_property(current_perm, Property::Dirty)) {
+                current_perm = current_perm | Property::Dirty;
+                chunk->permissions[l2_idx] = current_perm;
             }
 
             // 3. Lazy Allocation
@@ -138,7 +152,7 @@ namespace x86emu::mem {
 
             // 4. Fill TLB (ONLY if no hooks)
             if (!mem_hook) {
-                tlb.fill(addr, page_base, current_perm);
+                tlb.fill(addr, page_base, current_perm, [this](GuestAddr v){ this->sync_dirty(v); });
             }
 
             return page_base + offset;
@@ -165,6 +179,15 @@ namespace x86emu::mem {
             tlb.flush(); 
         }
 
+        Property get_property(GuestAddr addr) const {
+            if (!page_dir) return Property::None;
+            const uint32_t l1_idx = addr >> 22;
+            const uint32_t l2_idx = (addr >> 12) & 0x3FF;
+            auto& chunk = page_dir->l1_directory[l1_idx];
+            if (!chunk) return Property::None;
+            return chunk->permissions[l2_idx];
+        }
+
         void set_status_ptr(EmuStatus* status, uint8_t* vector) {
             emu_status = status;
             emu_fault_vector = vector;
@@ -172,7 +195,7 @@ namespace x86emu::mem {
 
         // API: mmap
         void mmap(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
-            Perm perms = static_cast<Perm>(perms_raw);
+            Property perms = static_cast<Property>(perms_raw);
             uint32_t start = addr & ~PAGE_MASK;
             uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
 
@@ -190,16 +213,21 @@ namespace x86emu::mem {
         }
 
         // Internal helper for resolution (TLB or Slow) without hooks
-        [[nodiscard]] inline HostAddr resolve_ptr(GuestAddr addr, Perm perm) {
+        [[nodiscard]] inline HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-            if (perm == Perm::Read) {
-                if (tlb.read_tlb[idx].tag_page == (addr & ~PAGE_MASK)) 
+            const uint32_t tag = addr & ~PAGE_MASK;
+            if (req_perm == Property::Read) {
+                if ((tlb.read_tlb[idx].tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) == (tag | (uint32_t)Property::Valid)) 
                     return reinterpret_cast<HostAddr>(tlb.read_tlb[idx].addend + addr);
-                return resolve_slow(addr, Perm::Read);
+                return resolve_slow(addr, Property::Read);
             } else { // Write
-                if (tlb.write_tlb[idx].tag_page == (addr & ~PAGE_MASK)) 
-                    return reinterpret_cast<HostAddr>(tlb.write_tlb[idx].addend + addr);
-                return resolve_slow(addr, Perm::Write);
+                const auto& entry = tlb.write_tlb[idx];
+                // Hit only if Valid and Dirty bits are set
+                const uint32_t mask = ~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
+                const uint32_t expected = tag | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
+                if ((entry.tag_page & mask) == expected) 
+                    return reinterpret_cast<HostAddr>(entry.addend + addr);
+                return resolve_slow(addr, Property::Write);
             }
         }
 
@@ -212,8 +240,9 @@ namespace x86emu::mem {
 
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
             const auto& entry = tlb.read_tlb[idx];
+            const uint32_t tag = addr & ~PAGE_MASK;
             
-            if (entry.tag_page == (addr & ~PAGE_MASK)) {
+            if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) == (tag | (uint32_t)Property::Valid)) {
                  // Hit
                  return *reinterpret_cast<T*>(entry.addend + addr);
             }
@@ -230,8 +259,12 @@ namespace x86emu::mem {
 
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
             const auto& entry = tlb.write_tlb[idx];
+            const uint32_t tag = addr & ~PAGE_MASK;
 
-            if (entry.tag_page == (addr & ~PAGE_MASK)) {
+            // Hit only if Valid and Dirty bit are set
+            const uint32_t mask = ~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
+            const uint32_t expected = tag | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
+            if ((entry.tag_page & mask) == expected) {
                 *reinterpret_cast<T*>(entry.addend + addr) = val;
                 return;
             }
@@ -295,10 +328,10 @@ namespace x86emu::mem {
             
             GuestAddr addr2 = addr + len1;
             
-            HostAddr p1 = resolve_ptr(addr, Perm::Read);
+            HostAddr p1 = resolve_ptr(addr, Property::Read);
             if (!p1) return T{};
             
-            HostAddr p2 = resolve_ptr(addr2, Perm::Read);
+            HostAddr p2 = resolve_ptr(addr2, Property::Read);
             if (!p2) return T{};
             
             T val;
@@ -319,10 +352,10 @@ namespace x86emu::mem {
             
             GuestAddr addr2 = addr + len1;
             
-            HostAddr p1 = resolve_ptr(addr, Perm::Write);
+            HostAddr p1 = resolve_ptr(addr, Property::Write);
             if (!p1) return;
             
-            HostAddr p2 = resolve_ptr(addr2, Perm::Write);
+            HostAddr p2 = resolve_ptr(addr2, Property::Write);
             if (!p2) return;
             
             std::byte* src = reinterpret_cast<std::byte*>(&val);
@@ -351,10 +384,10 @@ namespace x86emu::mem {
                 uint32_t dst_rem = PAGE_SIZE - (curr_dst & PAGE_MASK);
                 uint32_t chunk = std::min(size - bytes_done, std::min(src_rem, dst_rem));
                 
-                HostAddr p_src = resolve_slow(curr_src, Perm::Read);
+                HostAddr p_src = resolve_slow(curr_src, Property::Read);
                 if (!p_src) return bytes_done;
                 
-                HostAddr p_dst = resolve_slow(curr_dst, Perm::Write);
+                HostAddr p_dst = resolve_slow(curr_dst, Property::Write);
                 if (!p_dst) return bytes_done;
                 
                 std::memcpy(p_dst, p_src, chunk);
@@ -367,12 +400,13 @@ namespace x86emu::mem {
         [[nodiscard]] inline const std::byte* translate_exec(GuestAddr addr) {
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
             const auto& entry = tlb.exec_tlb[idx];
+            const uint32_t tag = addr & ~PAGE_MASK;
 
-            if (entry.tag_page == (addr & ~PAGE_MASK)) {
+            if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) == (tag | (uint32_t)Property::Valid)) {
                 return reinterpret_cast<const std::byte*>(entry.addend + addr);
             }
 
-            return resolve_slow(addr, Perm::Exec);
+            return resolve_slow(addr, Property::Exec);
         }
 
         // Read for Execution (Instruction Fetch)
@@ -380,12 +414,13 @@ namespace x86emu::mem {
         [[nodiscard]] inline T read_for_exec(GuestAddr addr) {
              const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
              const auto& entry = tlb.exec_tlb[idx];
+             const uint32_t tag = addr & ~PAGE_MASK;
              
              HostAddr ptr = nullptr;
-             if (entry.tag_page == (addr & ~PAGE_MASK)) {
+             if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) == (tag | (uint32_t)Property::Valid)) {
                  ptr = reinterpret_cast<HostAddr>(entry.addend + addr);
              } else {
-                 ptr = resolve_slow(addr, Perm::Exec);
+                 ptr = resolve_slow(addr, Property::Exec);
              }
              
              if (!ptr) return T{};

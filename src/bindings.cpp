@@ -232,6 +232,11 @@ void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     }
 }
 
+int X86_MemIsDirty(EmuState* state, uint32_t addr) {
+    mem::Property p = state->mmu.get_property(addr);
+    return mem::has_property(p, mem::Property::Dirty) ? 1 : 0;
+}
+
 // ----------------------------------------------------------------------------
 // Execution
 // ----------------------------------------------------------------------------

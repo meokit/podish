@@ -218,6 +218,9 @@ class X86EmuBackend(EmulatorBackend):
         cppyy.gbl.X86_MemRead(self.state, addr, buf, size)
         return bytes(buf)
         
+    def mem_is_dirty(self, addr):
+        return cppyy.gbl.X86_MemIsDirty(self.state, addr) != 0
+        
     def set_segment_base(self, reg_name, base):
         idx = -1
         if reg_name == 'ES': idx = 0

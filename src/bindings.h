@@ -42,6 +42,7 @@ extern "C" {
     void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
     void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
     void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
+    int X86_MemIsDirty(EmuState* state, uint32_t addr);
 
     // Execution
     void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
