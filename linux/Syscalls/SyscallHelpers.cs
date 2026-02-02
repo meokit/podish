@@ -91,14 +91,14 @@ public unsafe partial class SyscallManager
             }
             else
             {
-                nextDentry = current.Inode.Lookup(part);
+                nextDentry = current.Inode!.Lookup(part);
                 if (nextDentry == null) return null;
                 
                 current.Children[part] = nextDentry;
             }
 
             // Handle Symlink
-            if (nextDentry.Inode.Type == InodeType.Symlink && (followLink || i < parts.Length - 1))
+            if (nextDentry.Inode!.Type == InodeType.Symlink && (followLink || i < parts.Length - 1))
             {
                 string target = nextDentry.Inode.Readlink();
                 var resolved = PathWalk(target, current, followLink, recursion + 1);

@@ -235,7 +235,7 @@ public class VMAManager
             if (readLen > 0)
             {
                 Span<byte> buf = stackalloc byte[LinuxConstants.PageSize];
-                int n = vma.File.Dentry.Inode.Read(vma.File, buf.Slice(0, readLen), off);
+                int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
                 if (n > 0)
                 {
                     engine.MemWrite(pageStart, buf.Slice(0, n));
@@ -278,7 +278,7 @@ public class VMAManager
 
                 if (writeLen > 0)
                 {
-                    vma.File.Dentry.Inode.Write(vma.File, data.AsSpan(0, writeLen), off);
+                    vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), off);
                 }
             }
         }

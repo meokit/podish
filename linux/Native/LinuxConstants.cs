@@ -189,4 +189,44 @@ public static class LinuxConstants
     public const uint SA_NODEFER = 0x40000000;
     public const uint SA_RESETHAND = 0x80000000;
     public const uint SA_RESTORER = 0x04000000;
+
+    // AT_* flags for path resolution
+    public const uint AT_FDCWD = 0xFFFFFF9C; // -100
+    public const uint AT_SYMLINK_NOFOLLOW = 0x100;
+    public const uint AT_REMOVEDIR = 0x200;
+    public const uint AT_SYMLINK_FOLLOW = 0x400;
+    public const uint AT_NO_AUTOMOUNT = 0x800;
+    public const uint AT_EMPTY_PATH = 0x1000;
+    public const uint AT_STATX_SYNC_TYPE = 0x6000;
+    public const uint AT_STATX_SYNC_AS_STAT = 0x0000;
+    public const uint AT_STATX_FORCE_SYNC = 0x2000;
+    public const uint AT_STATX_DONT_SYNC = 0x4000;
+
+    // Statx mask bits
+    public const uint STATX_TYPE = 0x00000001;
+    public const uint STATX_MODE = 0x00000002;
+    public const uint STATX_NLINK = 0x00000004;
+    public const uint STATX_UID = 0x00000008;
+    public const uint STATX_GID = 0x00000010;
+    public const uint STATX_ATIME = 0x00000020;
+    public const uint STATX_MTIME = 0x00000040;
+    public const uint STATX_CTIME = 0x00000080;
+    public const uint STATX_INO = 0x00000100;
+    public const uint STATX_SIZE = 0x00000200;
+    public const uint STATX_BLOCKS = 0x00000400;
+    public const uint STATX_BASIC_STATS = 0x000007ff;
+    public const uint STATX_BTIME = 0x00000800;
+    public const uint STATX_MNT_ID = 0x00001000;
+    public const uint STATX_DIOALIGN = 0x00002000;
+    public const uint STATX_MNT_ID_UNIQUE = 0x00004000;
+
+    // Clock IDs
+    public const int CLOCK_REALTIME = 0;
+    public const int CLOCK_MONOTONIC = 1;
+    public const int CLOCK_PROCESS_CPUTIME_ID = 2;
+    public const int CLOCK_THREAD_CPUTIME_ID = 3;
+    public const int CLOCK_MONOTONIC_RAW = 4;
+    public const int CLOCK_REALTIME_COARSE = 5;
+    public const int CLOCK_MONOTONIC_COARSE = 6;
+    public const int CLOCK_BOOTTIME = 7;
 }

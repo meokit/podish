@@ -275,7 +275,7 @@ public class VFSTests
             Assert.NotNull(d1);
             Assert.NotNull(d2);
             Assert.Equal(d1.Inode, d2.Inode);
-            Assert.Equal(2, d1.Inode.Dentries.Count);
+            Assert.Equal(2, d1.Inode!.Dentries.Count);
 
             // unlink(link) - 10
             SetArgs(engine, 10, linkNameAddr);
@@ -283,7 +283,7 @@ public class VFSTests
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
             Assert.Null(sys.PathWalk("/mnt_adv/link.txt"));
             Assert.NotNull(d1);
-            Assert.Single(d1.Inode.Dentries);
+            Assert.Single(d1.Inode!.Dentries);
 
             // 3. Symlink/Readlink Test
             uint symNameAddr = 0x20005000;
@@ -1041,7 +1041,7 @@ public class VFSTests
             var fileDentry = new Dentry("file.txt", fileInode, parentDentry, sb);
             
             var linkDentry = new Dentry("link.txt", null, parentDentry, sb);
-            var result = parentDentry.Inode.Link(linkDentry, fileInode);
+            var result = parentDentry.Inode!.Link(linkDentry, fileInode);
             
             Assert.NotNull(result);
             Assert.Equal("link.txt", result.Name);

@@ -329,7 +329,7 @@ public class HostInode : Inode
             var dentry = sb.GetDentry(entryPath, name, Dentries.Count > 0 ? Dentries[0] : null);
             if (dentry != null)
             {
-                list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode.Ino, Type = dentry.Inode.Type });
+                list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
             }
         }
         return list;

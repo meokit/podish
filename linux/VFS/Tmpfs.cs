@@ -374,7 +374,7 @@ public class TmpfsInode : Inode
         {
             if (sb.Dentries.TryGetValue(new DCacheKey(primaryDentry.Id, name), out var dentry))
             {
-                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode.Ino, Type = dentry.Inode.Type });
+                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
             }
         }
         return list;

@@ -149,4 +149,14 @@ public static class X86SyscallNumbers
     public const int statx = 383;
     public const int openat2 = 437;
     public const int faccessat2 = 439;
+
+    public const int getuid32 = 199;
+    public const int getgid32 = 200;
+    public const int geteuid32 = 201;
+    public const int getegid32 = 202;
+    public const int setuid32 = 213;
+    public const int setgid32 = 214;
+    public const int clock_gettime = 265;
+    public const int clock_gettime64 = 403;
+    public const int gettimeofday = 78; // Standard 78
 }

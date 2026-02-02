@@ -31,7 +31,7 @@ public class DirtySyncTests
             var hostFs = new Hostfs();
             var fsType = new FileSystemType { Name = "hostfs", FileSystem = hostFs };
             var sb = hostFs.ReadSuper(fsType, 0, Path.GetDirectoryName(fullPath)!, null);
-            var dentry = sb.Root.Inode.Lookup(Path.GetFileName(fullPath));
+            var dentry = sb.Root.Inode!.Lookup(Path.GetFileName(fullPath));
             Assert.NotNull(dentry);
             var vfsFile = new Bifrost.VFS.File(dentry, FileFlags.O_RDWR);
 

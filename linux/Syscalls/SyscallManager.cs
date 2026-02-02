@@ -52,9 +52,9 @@ public unsafe partial class SyscallManager
         ProcessRoot = Root;
         CurrentWorkingDirectory = Root;
 
-        Root.Inode.Get();
-        ProcessRoot.Inode.Get();
-        CurrentWorkingDirectory.Inode.Get();
+        Root.Inode!.Get();
+        ProcessRoot.Inode!.Get();
+        CurrentWorkingDirectory.Inode!.Get();
         
         // Add console FDs
         InitStdio();
@@ -86,9 +86,9 @@ public unsafe partial class SyscallManager
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
         
-        Root.Inode.Get();
-        CurrentWorkingDirectory.Inode.Get();
-        ProcessRoot.Inode.Get();
+        Root.Inode!.Get();
+        CurrentWorkingDirectory.Inode!.Get();
+        ProcessRoot.Inode!.Get();
 
         RegisterHandlers();
     }
