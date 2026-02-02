@@ -17,7 +17,7 @@ public class VMAManager
         return null;
     }
 
-    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, FileStream? file, long offset, long filesz, string name)
+    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, FileStream? file, long offset, long filesz, string name, Engine engine)
     {
         // Align to 4k
         if ((addr & 0xFFF) != 0)
@@ -35,7 +35,7 @@ public class VMAManager
         {
             if ((flags & MapFlags.Fixed) != 0)
             {
-                Munmap(addr, len);
+                Munmap(addr, len, engine);
             }
             else
             {
@@ -84,7 +84,7 @@ public class VMAManager
         return newMM;
     }
 
-    public void Munmap(uint addr, uint length)
+    public void Munmap(uint addr, uint length, Engine engine)
     {
         uint end = addr + length;
         for (int i = 0; i < _vmas.Count; i++)
@@ -98,6 +98,7 @@ public class VMAManager
             // Full removal
             if (addr <= vma.Start && end >= vma.End)
             {
+                SyncVMA(vma, engine);
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -244,5 +245,40 @@ public class VMAManager
         }
 
         return true;
+    }
+
+    public void SyncVMA(VMA vma, Engine engine)
+    {
+        if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
+            return;
+
+        for (uint page = vma.Start; page < vma.End; page += 4096)
+        {
+            if (engine.IsDirty(page))
+            {
+                // Write back dirty page
+                byte[] data = engine.MemRead(page, 4096);
+                
+                long vmaOffset = page - vma.Start;
+                long off = vma.Offset + vmaOffset;
+                
+                int writeLen = 4096;
+                if (vma.FileSz > 0)
+                {
+                    long remainingFile = vma.FileSz - vmaOffset;
+                    if (remainingFile <= 0)
+                        writeLen = 0;
+                    else if (remainingFile < 4096)
+                        writeLen = (int)remainingFile;
+                }
+
+                if (writeLen > 0)
+                {
+                    vma.File.Seek(off, SeekOrigin.Begin);
+                    vma.File.Write(data.AsSpan(0, writeLen));
+                }
+            }
+        }
+        vma.File.Flush();
     }
 }

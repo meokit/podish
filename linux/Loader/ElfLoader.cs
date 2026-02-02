@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using LibObjectFile.Elf;
 using Bifrost.Memory;
+using Bifrost.Core;
 
 namespace Bifrost.Loader;
 
@@ -34,7 +35,7 @@ public class ElfLoader
     const uint AT_PLATFORM = 15;
     const uint AT_RANDOM = 25;
 
-    public static LoaderResult Load(string filename, VMAManager mm, string[] args, string[] envs)
+    public static LoaderResult Load(string filename, VMAManager mm, string[] args, string[] envs, Engine engine)
     {
         using var stream = File.OpenRead(filename);
         var elf = ElfFile.Read(stream);
@@ -72,7 +73,7 @@ public class ElfLoader
                 {
                     long fileSzLimit = diff + (long)segment.Size;
                     var fs = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, fs, pageOffset, fileSzLimit, "ELF_LOAD");
+                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, fs, pageOffset, fileSzLimit, "ELF_LOAD", engine);
                 }
             }
 
@@ -87,7 +88,7 @@ public class ElfLoader
 
         // Setup Stack
         uint stackStart = StackTop - StackSize;
-        mm.Mmap(stackStart, StackSize, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "STACK");
+        mm.Mmap(stackStart, StackSize, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "STACK", engine);
 
         uint sp = StackTop;
         byte[] stackData = new byte[StackSize];

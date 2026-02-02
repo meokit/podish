@@ -167,7 +167,7 @@ public unsafe partial class SyscallManager
             if (end > start)
             {
                 // Map anonymous
-                sm.Mem.Mmap(start, end - start, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "HEAP");
+                sm.Mem.Mmap(start, end - start, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "HEAP", sm.Engine);
             }
             sm.BrkAddr = newBrk;
         }
@@ -329,7 +329,7 @@ public unsafe partial class SyscallManager
         
         try
         {
-            uint res = sm.Mem.Mmap(addr, len, (Protection)prot, (MapFlags)flags, f, offset, len, "MMAP2");
+            uint res = sm.Mem.Mmap(addr, len, (Protection)prot, (MapFlags)flags, f, offset, len, "MMAP2", sm.Engine);
             return (int)res;
         }
         catch
@@ -342,7 +342,7 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        sm.Mem.Munmap(a1, a2);
+        sm.Mem.Munmap(a1, a2, sm.Engine);
         return 0;
     }
 

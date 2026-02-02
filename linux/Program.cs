@@ -59,7 +59,7 @@ class Program
         engine.FaultHandler = GlobalFaultHandler;
 
         // 4. Load ELF
-        var res = ElfLoader.Load(exe, mm, exeArgs, envs);
+        var res = ElfLoader.Load(exe, mm, exeArgs, envs, engine);
 
         // 5. Setup Stack
         engine.MemWrite(res.SP, res.InitialStack);

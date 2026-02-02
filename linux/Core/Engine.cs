@@ -119,6 +119,8 @@ public class Engine : IDisposable
 
     public int FaultVector => X86Native.GetFaultVector(State);
 
+    public bool IsDirty(uint addr) => X86Native.IsDirty(State, addr) != 0;
+
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)

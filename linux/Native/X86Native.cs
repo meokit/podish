@@ -135,4 +135,8 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetFaultVector")]
     [SuppressGCTransition]
     public static partial int GetFaultVector(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_MemIsDirty")]
+    [SuppressGCTransition]
+    public static partial int IsDirty(IntPtr state, uint addr);
 }
