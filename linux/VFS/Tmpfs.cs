@@ -43,15 +43,24 @@ public class TmpfsSuperBlock : SuperBlock
     {
         var inode = new TmpfsInode(_nextIno++, this);
         Inodes.Add(inode);
+        AllInodes.Add(inode);
+        // Don't call Get() - inodes start with RefCount=0
+        // Only File objects should increment RefCount
         return inode;
     }
 
     public override void WriteInode(Inode inode) { }
+    
+    protected override void Shutdown()
+    {
+        base.Shutdown();
+        Dentries.Clear();
+    }
 }
 
 public class TmpfsInode : Inode
 {
-    private byte[] _data = Array.Empty<byte>();
+    private byte[]? _data = Array.Empty<byte>();
     private HashSet<string> _childNames = new();
     private Dentry? _primaryDentry;
 
@@ -143,7 +152,7 @@ public class TmpfsInode : Inode
     public override int Read(File file, Span<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
-        if (offset >= _data.Length) return 0;
+        if (_data == null || offset >= _data.Length) return 0;
         
         int count = Math.Min(buffer.Length, _data.Length - (int)offset);
         _data.AsSpan((int)offset, count).CopyTo(buffer);
@@ -155,7 +164,7 @@ public class TmpfsInode : Inode
         if (Type == InodeType.Directory) return 0;
         
         long end = offset + buffer.Length;
-        if (end > _data.Length)
+        if (_data == null || end > _data.Length)
         {
             Array.Resize(ref _data, (int)end);
         }
@@ -195,4 +204,11 @@ public class TmpfsInode : Inode
     }
     
     public void SetPrimaryDentry(Dentry d) { _primaryDentry = d; }
+    
+    protected override void Release()
+    {
+        // Clean up tmpfs inode resources
+        _data = null;
+        _childNames.Clear();
+    }
 }

@@ -50,6 +50,32 @@ public abstract class SuperBlock
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = new();
     
+    // Reference counting for lifecycle management
+    public int RefCount { get; set; } = 0;
+    protected HashSet<Inode> AllInodes = new();
+    
+    public void Get() => RefCount++;
+    
+    public void Put()
+    {
+        if (--RefCount <= 0)
+        {
+            Shutdown();
+        }
+    }
+    
+    public bool HasActiveInodes()
+    {
+        return AllInodes.Any(i => i.RefCount > 0);
+    }
+    
+    protected virtual void Shutdown()
+    {
+        // Subclasses can override to clean up resources
+        AllInodes.Clear();
+        Inodes.Clear();
+    }
+    
     public abstract Inode AllocInode();
     public abstract void WriteInode(Inode inode);
 }
@@ -67,6 +93,25 @@ public abstract class Inode
     public DateTime CTime { get; set; }
     
     public SuperBlock SuperBlock { get; set; } = null!;
+    
+    // Reference counting for lifecycle management
+    public int RefCount { get; set; } = 0;
+    
+    // Reference counting methods
+    public void Get() => RefCount++;
+    
+    public void Put()
+    {
+        if (--RefCount <= 0)
+        {
+            Release();
+        }
+    }
+    
+    protected virtual void Release()
+    {
+        // Subclasses can override to clean up resources
+    }
     
     // Operations
     public abstract Inode? Lookup(string name);
@@ -132,12 +177,14 @@ public class File
     {
         Dentry = dentry;
         Flags = flags;
+        dentry.Inode?.Get();  // Increase reference count
         dentry.Inode?.Open(this);
     }
     
     public virtual void Close()
     {
         Dentry.Inode?.Release(this);
+        Dentry.Inode?.Put();  // Decrease reference count
     }
     
     public virtual int Read(Span<byte> buffer)

@@ -26,6 +26,7 @@ public unsafe partial class SyscallManager
         Register(20, SysGetPid);
         Register(21, SysMount);
         Register(22, SysUmount);
+        Register(52, SysUmount2);  // umount2 with flags
         Register(23, SysSetUid);
         Register(24, SysGetUid);
         Register(33, SysAccess);
@@ -913,20 +914,106 @@ public unsafe partial class SyscallManager
         {
             // This dentry is a mount root, find the mount point
             var mountPoint = targetDentry.MountedAt;
+            var mountRoot = mountPoint.MountRoot;
+            
+            if (mountRoot == null) return -22; // EINVAL
+            
+            // Check if filesystem is busy (has active inodes)
+            if (mountRoot.SuperBlock.HasActiveInodes())
+            {
+                Console.WriteLine($"SysUmount: filesystem busy (active inodes), cannot unmount");
+                return -16; // EBUSY
+            }
+            
+            // Detach mount
             mountPoint.IsMounted = false;
             mountPoint.MountRoot = null;
             targetDentry.MountedAt = null;
+            
+            // Release SuperBlock reference
+            mountRoot.SuperBlock.Put();
             return 0;
         }
         else if (targetDentry != null && targetDentry.IsMounted)
         {
             // This is the mount point itself
+            var mountRoot = targetDentry.MountRoot;
+            
+            if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes())
+            {
+                Console.WriteLine($"SysUmount: filesystem busy (active inodes), cannot unmount");
+                return -16; // EBUSY
+            }
+            
             targetDentry.IsMounted = false;
-            if (targetDentry.MountRoot != null) targetDentry.MountRoot.MountedAt = null;
+            if (targetDentry.MountRoot != null)
+            {
+                targetDentry.MountRoot.MountedAt = null;
+                targetDentry.MountRoot.SuperBlock.Put();
+            }
             targetDentry.MountRoot = null;
             return 0;
         }
         return -22; // EINVAL
+    }
+
+    private static int SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        
+        string target = sm.ReadString(a1);
+        var targetDentry = sm.PathWalk(target);
+        
+        const uint MNT_FORCE = 1;
+        const uint MNT_DETACH = 2;
+        
+        Dentry? mountPoint = null;
+        Dentry? mountRoot = null;
+        
+        if (targetDentry != null && targetDentry.MountedAt != null)
+        {
+            mountPoint = targetDentry.MountedAt;
+            mountRoot = mountPoint.MountRoot;
+        }
+        else if (targetDentry != null && targetDentry.IsMounted)
+        {
+            mountPoint = targetDentry;
+            mountRoot = targetDentry.MountRoot;
+        }
+        else
+        {
+            return -22; // EINVAL
+        }
+        
+        if (mountRoot == null) return -22; // EINVAL
+        
+        if ((flags & MNT_DETACH) != 0)
+        {
+            // Lazy unmount: detach immediately but allow active references to continue
+            Console.WriteLine($"SysUmount2: lazy unmount (MNT_DETACH)");
+            mountPoint.IsMounted = false;
+            mountPoint.MountRoot = null;
+            if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
+            else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
+            // Don't call sb.Put() - let reference counting naturally decrease when files close
+            return 0;
+        }
+        
+        // Normal umount with optional force
+        if (mountRoot.SuperBlock.HasActiveInodes() && (flags & MNT_FORCE) == 0)
+        {
+            return -16; // EBUSY
+        }
+        
+        // Force unmount or no active inodes
+        mountPoint.IsMounted = false;
+        mountPoint.MountRoot = null;
+        if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
+        else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
+        mountRoot.SuperBlock.Put();
+        
+        return 0;
     }
 
     private static int SysChroot(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
