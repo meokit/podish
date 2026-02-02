@@ -14,78 +14,78 @@ public unsafe partial class SyscallManager
 {
     private void RegisterHandlers()
     {
-        Register(1, SysExit);
-        Register(2, SysFork);
-        Register(7, SysWaitPid);
-        Register(3, SysRead);
-        Register(4, SysWrite);
-        Register(5, SysOpen);
-        Register(6, SysClose);
-        Register(10, SysUnlink);
-        Register(15, SysChmod);
-        Register(16, SysChown);
-        Register(19, SysLseek);
-        Register(20, SysGetPid);
-        Register(21, SysMount);
-        Register(22, SysUmount);
-        Register(52, SysUmount2);  // umount2 with flags
-        Register(23, SysSetUid);
-        Register(24, SysGetUid);
-        Register(33, SysAccess);
-        Register(45, SysBrk);
-        Register(46, SysSetGid);
-        Register(47, SysGetGid);
-        Register(48, SysSignal);
-        Register(49, SysGetEUid);
-        Register(50, SysGetEGid);
-        Register(54, SysIoctl);
-        Register(61, SysChroot);
-        Register(64, SysGetPPid);  // getppid
-        Register(70, SysSetReUid);
-        Register(71, SysSetReGid);
-        Register(91, SysMunmap);
-        Register(94, SysFchmod);
-        Register(95, SysFchown);
-        Register(119, SysSigReturn);
-        Register(120, SysClone);
-        Register(122, SysUname);
-        Register(125, SysMprotect);
-        Register(138, SysSetFsUid);
-        Register(139, SysSetFsGid);
-        Register(146, SysWriteV);
-        Register(164, SysSetResUid);
-        Register(165, SysGetResUid);
-        Register(170, SysSetResGid);
-        Register(171, SysGetResGid);
-        Register(174, SysRtSigAction);
-        Register(175, SysRtSigProcMask);
-        Register(182, SysChown);
-        Register(183, SysGetCwd);
-        Register(192, SysMmap2);
-        Register(195, SysStat64);
-        Register(196, SysLstat64);
-        Register(197, SysFstat64);
-        Register(198, SysLchown);
-        Register(202, SysGetGroups);
-        Register(203, SysSetGroups);
-        Register(207, SysFchown);
-        Register(220, SysGetdents64);
-        Register(114, SysWait4);
-        Register(190, SysVfork);
-        Register(240, SysFutex);
-        Register(243, SysSetThreadArea);
-        Register(252, SysExitGroup);
-        Register(258, SysSetTidAddress);
-        Register(284, SysWaitId);
-        Register(298, SysFchownAt);
-        Register(306, SysFchmodAt);
-        Register(307, SysFaccessAt);
+        Register(X86SyscallNumbers.exit, SysExit);
+        Register(X86SyscallNumbers.fork, SysFork);
+        Register(X86SyscallNumbers.waitpid, SysWaitPid);
+        Register(X86SyscallNumbers.read, SysRead);
+        Register(X86SyscallNumbers.write, SysWrite);
+        Register(X86SyscallNumbers.open, SysOpen);
+        Register(X86SyscallNumbers.close, SysClose);
+        Register(X86SyscallNumbers.unlink, SysUnlink);
+        Register(X86SyscallNumbers.chmod, SysChmod);
+        Register(X86SyscallNumbers.chown, SysChown);
+        Register(X86SyscallNumbers.lseek, SysLseek);
+        Register(X86SyscallNumbers.getpid, SysGetPid);
+        Register(X86SyscallNumbers.mount, SysMount);
+        Register(X86SyscallNumbers.umount, SysUmount);
+        Register(X86SyscallNumbers.umount2, SysUmount2);
+        Register(X86SyscallNumbers.setuid, SysSetUid);
+        Register(X86SyscallNumbers.getuid, SysGetUid);
+        Register(X86SyscallNumbers.access, SysAccess);
+        Register(X86SyscallNumbers.brk, SysBrk);
+        Register(X86SyscallNumbers.setgid, SysSetGid);
+        Register(X86SyscallNumbers.getgid, SysGetGid);
+        Register(X86SyscallNumbers.signal, SysSignal);
+        Register(X86SyscallNumbers.geteuid, SysGetEUid);
+        Register(X86SyscallNumbers.getegid, SysGetEGid);
+        Register(X86SyscallNumbers.ioctl, SysIoctl);
+        Register(X86SyscallNumbers.chroot, SysChroot);
+        Register(X86SyscallNumbers.getppid, SysGetPPid);
+        Register(X86SyscallNumbers.setreuid, SysSetReUid);
+        Register(X86SyscallNumbers.setregid, SysSetReGid);
+        Register(X86SyscallNumbers.munmap, SysMunmap);
+        Register(X86SyscallNumbers.fchmod, SysFchmod);
+        Register(X86SyscallNumbers.fchown, SysFchown);
+        Register(X86SyscallNumbers.sigreturn, SysSigReturn);
+        Register(X86SyscallNumbers.clone, SysClone);
+        Register(X86SyscallNumbers.uname, SysUname);
+        Register(X86SyscallNumbers.mprotect, SysMprotect);
+        Register(X86SyscallNumbers.setfsuid, SysSetFsUid);
+        Register(X86SyscallNumbers.setfsgid, SysSetFsGid);
+        Register(X86SyscallNumbers.writev, SysWriteV);
+        Register(X86SyscallNumbers.setresuid, SysSetResUid);
+        Register(X86SyscallNumbers.getresuid, SysGetResUid);
+        Register(X86SyscallNumbers.setresgid, SysSetResGid);
+        Register(X86SyscallNumbers.getresgid, SysGetResGid);
+        Register(X86SyscallNumbers.rt_sigaction, SysRtSigAction);
+        Register(X86SyscallNumbers.rt_sigprocmask, SysRtSigProcMask);
+        Register(X86SyscallNumbers.chown32, SysChown);
+        Register(X86SyscallNumbers.getcwd, SysGetCwd);
+        Register(X86SyscallNumbers.mmap2, SysMmap2);
+        Register(X86SyscallNumbers.stat64, SysStat64);
+        Register(X86SyscallNumbers.lstat64, SysLstat64);
+        Register(X86SyscallNumbers.fstat64, SysFstat64);
+        Register(X86SyscallNumbers.lchown32, SysLchown);
+        Register(X86SyscallNumbers.getgroups, SysGetGroups);
+        Register(X86SyscallNumbers.setgroups, SysSetGroups);
+        Register(X86SyscallNumbers.fchown32, SysFchown);
+        Register(X86SyscallNumbers.getdents64, SysGetdents64);
+        Register(X86SyscallNumbers.wait4, SysWait4);
+        Register(X86SyscallNumbers.vfork, SysVfork);
+        Register(X86SyscallNumbers.futex, SysFutex);
+        Register(X86SyscallNumbers.set_thread_area, SysSetThreadArea);
+        Register(X86SyscallNumbers.exit_group, SysExitGroup);
+        Register(X86SyscallNumbers.set_tid_address, SysSetTidAddress);
+        Register(X86SyscallNumbers.waitid, SysWaitId);
+        Register(X86SyscallNumbers.fchownat, SysFchownAt);
+        Register(X86SyscallNumbers.fchmodat, SysFchmodAt);
+        Register(X86SyscallNumbers.faccessat, SysFaccessAt);
     }
 
     private static int SysExit(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         var task = Scheduler.GetByEngine(state);
         if (task != null)
@@ -129,7 +129,7 @@ public unsafe partial class SyscallManager
     private static int SysExitGroup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, true);
         sm.Engine.Stop();
@@ -152,9 +152,9 @@ public unsafe partial class SyscallManager
                 if (n > 0) sm.Engine.MemWrite(bufAddr, buf.AsSpan(0, n));
                 return n;
             }
-        } catch { return -5; } // EIO
+        } catch { return -(int)Errno.EIO; }
 
-        return -9; // EBADF
+        return -(int)Errno.EBADF;
     }
 
     private static int SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -172,10 +172,10 @@ public unsafe partial class SyscallManager
             try {
                 int n = f.Write(data);
                 return n;
-            } catch { return -5; } // EIO
+            } catch { return -(int)Errno.EIO; }
         }
 
-        return -9; // EBADF
+        return -(int)Errno.EBADF;
     }
 
     private static int SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -189,14 +189,14 @@ public unsafe partial class SyscallManager
         var dentry = sm.PathWalk(path);
         if (dentry == null)
         {
-            if ((flags & 0x40) != 0) // O_CREAT
+            if ((flags & (uint)FileFlags.O_CREAT) != 0)
             {
                 int lastSlash = path.LastIndexOf('/');
                 string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path.Substring(0, lastSlash));
                 string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
                 
                 var parentDentry = sm.PathWalk(parentPath);
-                if (parentDentry == null || parentDentry.Inode == null) return -2; // ENOENT
+                if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
                 
                 // Get current process credentials
                 var t = Scheduler.GetByEngine(sm.Engine.State);
@@ -210,12 +210,12 @@ public unsafe partial class SyscallManager
                     if (newInode is TmpfsInode ti) ti.SetPrimaryDentry(dentry);
                 } catch {
                     // Failed to create file
-                    return -13; // EACCES or EEXIST
+                    return -(int)Errno.EACCES; // or EEXIST
                 }
             }
             else
             {
-                return -2; // ENOENT
+                return -(int)Errno.ENOENT;
             }
         }
         
@@ -237,7 +237,7 @@ public unsafe partial class SyscallManager
         int whence = (int)a3;
         
         var f = sm.GetFD(fd);
-        if (f == null) return -9; // EBADF
+        if (f == null) return -(int)Errno.EBADF;
         
         long newPos = whence switch
         {
@@ -247,7 +247,7 @@ public unsafe partial class SyscallManager
             _ => -1
         };
         
-        if (newPos < 0) return -22; // EINVAL
+        if (newPos < 0) return -(int)Errno.EINVAL;
         f.Position = newPos;
         return (int)newPos;
     }
@@ -283,15 +283,14 @@ public unsafe partial class SyscallManager
     private static int SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -38;
+        if (sm == null) return -(int)Errno.ENOSYS;
         
-        if (sm.CloneHandler == null) return -38;
+        if (sm.CloneHandler == null) return -(int)Errno.ENOSYS;
         
         var (tid, err) = sm.CloneHandler((int)a1, a2, a3, a4, a5);
-        if (err != null) return -11; // EAGAIN
+        if (err != null) return -(int)Errno.EAGAIN;
         
-        const int CLONE_VFORK = 0x4000;
-        if (((int)a1 & CLONE_VFORK) != 0)
+        if (((int)a1 & (int)LinuxConstants.CLONE_VFORK) != 0)
         {
             // Parent should be suspended until child exits
             var child = Scheduler.Get(tid);
@@ -325,16 +324,13 @@ public unsafe partial class SyscallManager
     private static int SysVfork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // vfork = clone(CLONE_VM | CLONE_VFORK, 0, NULL, NULL, NULL)
-        const uint CLONE_VM = 0x100;
-        const uint CLONE_VFORK = 0x4000;
-        
-        return SysClone(state, CLONE_VM | CLONE_VFORK, 0, 0, 0, 0, 0);
+        return SysClone(state, LinuxConstants.CLONE_VM | LinuxConstants.CLONE_VFORK, 0, 0, 0, 0, 0);
     }
     
     private static int SysFutex(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -38;
+        if (sm == null) return -(int)Errno.ENOSYS;
         
         uint uaddr = a1;
         int op = (int)a2;
@@ -346,7 +342,7 @@ public unsafe partial class SyscallManager
         {
             var buf = sm.Engine.MemRead(uaddr, 4);
             uint currentVal = BinaryPrimitives.ReadUInt32LittleEndian(buf);
-            if (currentVal != val) return -11; // EWOULDBLOCK
+            if (currentVal != val) return -(int)Errno.EAGAIN; // EWOULDBLOCK
             
             var waiter = sm.Futex.PrepareWait(uaddr);
             
@@ -367,13 +363,13 @@ public unsafe partial class SyscallManager
             return sm.Futex.Wake(uaddr, count);
         }
         
-        return -38; // ENOSYS
+        return -(int)Errno.ENOSYS;
     }
     
     private static int SysSetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         uint uInfoAddr = a1;
         var buf = sm.Engine.MemRead(uInfoAddr, 16); 
@@ -395,7 +391,7 @@ public unsafe partial class SyscallManager
     private static int SysSetTidAddress(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         if (sm.GetTID != null) return sm.GetTID(sm.Engine);
         return 1;
     }
@@ -403,7 +399,7 @@ public unsafe partial class SyscallManager
     private static int SysUname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         sm.Engine.MemWrite(a1, System.Text.Encoding.ASCII.GetBytes("Linux\0"));
         return 0;
     }
@@ -562,7 +558,7 @@ public unsafe partial class SyscallManager
     private static int SysChmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string path = sm.ReadString(a1);
         uint mode = a2;
@@ -573,7 +569,7 @@ public unsafe partial class SyscallManager
         // Permission check: only owner or root can chmod
         var t = Scheduler.GetByEngine(sm.Engine.State);
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
-            return -1; // EPERM
+            return -(int)Errno.EPERM;
         
         // Only modify permission bits (lower 12 bits: rwx for user/group/other + special bits)
         dentry.Inode.Mode = (int)(mode & 0xFFF);
@@ -583,7 +579,7 @@ public unsafe partial class SyscallManager
     private static int SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         int fd = (int)a1;
         uint mode = a2;
@@ -594,7 +590,7 @@ public unsafe partial class SyscallManager
         // Permission check
         var t = Scheduler.GetByEngine(sm.Engine.State);
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != f.Dentry.Inode.Uid)
-            return -1; // EPERM
+            return -(int)Errno.EPERM;
         
         f.Dentry.Inode.Mode = (int)(mode & 0xFFF);
         f.Dentry.Inode.CTime = DateTime.Now;
@@ -603,7 +599,7 @@ public unsafe partial class SyscallManager
     private static int SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string path = sm.ReadString(a1);
         int uid = (int)a2;
@@ -626,7 +622,7 @@ public unsafe partial class SyscallManager
     private static int SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         int fd = (int)a1;
         int uid = (int)a2;
@@ -660,7 +656,7 @@ public unsafe partial class SyscallManager
     private static int SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         uint bufAddr = a1;
         uint size = a2;
         
@@ -679,7 +675,7 @@ public unsafe partial class SyscallManager
         }
         
         string cwd = "/" + string.Join("/", parts);
-        if (cwd.Length + 1 > size) return -34; // ERANGE
+        if (cwd.Length + 1 > size) return -(int)Errno.ERANGE;
         
         sm.Engine.MemWrite(bufAddr, System.Text.Encoding.ASCII.GetBytes(cwd + "\0"));
         return cwd.Length + 1;
@@ -688,13 +684,13 @@ public unsafe partial class SyscallManager
     private static int SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         uint iovAddr = a2;
         int iovCnt = (int)a3;
         
         var f = sm.GetFD(fd);
-        if (f == null) return -9;
+        if (f == null) return -(int)Errno.EBADF;
 
         int total = 0;
         for(int i=0; i<iovCnt; i++)
@@ -717,7 +713,7 @@ public unsafe partial class SyscallManager
     private static int SysMmap2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         uint addr = a1;
         uint len = a2;
@@ -734,7 +730,7 @@ public unsafe partial class SyscallManager
         if (!isAnon && fd != -1)
         {
             f = sm.GetFD(fd);
-            if (f == null) return -9; // EBADF
+            if (f == null) return -(int)Errno.EBADF;
         }
         
         try
@@ -744,14 +740,14 @@ public unsafe partial class SyscallManager
         }
         catch
         {
-            return -12; // ENOMEM
+            return -(int)Errno.ENOMEM;
         }
     }
     
     private static int SysMunmap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         sm.Mem.Munmap(a1, a2, sm.Engine);
         return 0;
     }
@@ -771,10 +767,10 @@ public unsafe partial class SyscallManager
     private static int SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         var task = Scheduler.GetByEngine(state);
-        if (task == null) return -1;
+        if (task == null) return -(int)Errno.EPERM;
         
         return task.Process.PPID;
     }
@@ -782,7 +778,7 @@ public unsafe partial class SyscallManager
     private static int SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         IdType idtype;
         int id;
@@ -790,7 +786,7 @@ public unsafe partial class SyscallManager
         if ((int)pid < -1)
         {
             // Wait for process group
-            return -38; // ENOSYS - not implemented
+            return -(int)Errno.ENOSYS;
         }
         else if ((int)pid == -1)
         {
@@ -800,7 +796,7 @@ public unsafe partial class SyscallManager
         else if (pid == 0)
         {
             // Wait for same process group
-            return -38; // ENOSYS
+            return -(int)Errno.ENOSYS;
         }
         else
         {
@@ -809,7 +805,7 @@ public unsafe partial class SyscallManager
         }
         
         var task = Scheduler.GetByEngine(state);
-        if (task == null) return -10; // ECHILD
+        if (task == null) return -(int)Errno.ECHILD;
 
         var infop = new SigInfo();
         var (result, tcs) = WaitHelpers.KernelWaitId(task, idtype, id, infop, (int)options);
@@ -845,10 +841,10 @@ public unsafe partial class SyscallManager
     private static int SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options, uint rusagePtr, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         var task = Scheduler.GetByEngine(state);
-        if (task == null) return -10; // ECHILD
+        if (task == null) return -(int)Errno.ECHILD;
 
         var info = new SigInfo();
         var (result, tcs) = WaitHelpers.KernelWaitId(task, (IdType)idtype, (int)id, info, (int)options);
@@ -885,7 +881,7 @@ public unsafe partial class SyscallManager
     private static int SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         string path = sm.ReadString(a1);
         
         int lastSlash = path.LastIndexOf('/');
@@ -893,13 +889,13 @@ public unsafe partial class SyscallManager
         string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
         
         var parentDentry = sm.PathWalk(parentPath);
-        if (parentDentry == null) return -2;
+        if (parentDentry == null) return -(int)Errno.ENOENT;
         
         try {
             parentDentry.Inode.Unlink(name);
             parentDentry.Children.Remove(name);
             return 0;
-        } catch { return -2; }
+        } catch { return -(int)Errno.ENOENT; }
     }
     
     private static int SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -909,7 +905,7 @@ public unsafe partial class SyscallManager
         string path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
         if (dentry != null && dentry.Inode != null) return 0;
-        return -2;
+        return -(int)Errno.ENOENT;
     }
     
     private static int SysIoctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -920,13 +916,13 @@ public unsafe partial class SyscallManager
     private static int SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         uint bufAddr = a2;
         int count = (int)a3;
 
         var f = sm.GetFD(fd);
-        if (f == null) return -9;
+        if (f == null) return -(int)Errno.EBADF;
 
         try {
             var entries = f.Dentry.Inode.GetEntries();
@@ -965,7 +961,7 @@ public unsafe partial class SyscallManager
             }
             
             return writeOffset;
-        } catch { return -1; }
+        } catch { return -(int)Errno.EPERM; }
     }
 
     private static void WriteStat64(SyscallManager sm, uint addr, Inode inode)
@@ -1011,10 +1007,10 @@ public unsafe partial class SyscallManager
     private static int ImplStat64(IntPtr state, uint ptrPath, uint ptrStat)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         string path = sm.ReadString(ptrPath);
         var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -2;
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
         
         WriteStat64(sm, ptrStat, dentry.Inode);
         return 0;
@@ -1023,10 +1019,10 @@ public unsafe partial class SyscallManager
     private static int SysFstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -9;
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
         
         WriteStat64(sm, a2, f.Dentry.Inode);
         return 0;
@@ -1050,7 +1046,7 @@ public unsafe partial class SyscallManager
     private static int SysMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string source = a1 == 0 ? "" : sm.ReadString(a1);
         string target = sm.ReadString(a2);
@@ -1060,7 +1056,7 @@ public unsafe partial class SyscallManager
         var targetDentry = sm.PathWalk(target);
         if (targetDentry == null)
         {
-            return -2; // ENOENT
+            return -(int)Errno.ENOENT;
         }
         
         SuperBlock? newSb = null;
@@ -1069,10 +1065,10 @@ public unsafe partial class SyscallManager
             var fsType = new FileSystemType { Name = fstype, FileSystem = new Tmpfs() };
             newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, null);
         }
-        else if (fstype == "hostfs" || ((flags & 4096) != 0)) // MS_BIND
+        else if (fstype == "hostfs" || ((flags & (uint)LinuxConstants.MS_BIND) != 0)) // MS_BIND
         {
              string hostRoot = source;
-             if ((flags & 4096) != 0)
+             if ((flags & (uint)LinuxConstants.MS_BIND) != 0)
              {
                  var srcDentry = sm.PathWalk(source);
                  if (srcDentry != null && srcDentry.Inode is HostInode hi) hostRoot = hi.HostPath;
@@ -1083,7 +1079,7 @@ public unsafe partial class SyscallManager
                 newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null);
              } catch {
                 // Failed to create hostfs
-                return -2;
+                return -(int)Errno.ENOENT;
              }
         }
 
@@ -1101,7 +1097,7 @@ public unsafe partial class SyscallManager
     private static int SysUmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string target = sm.ReadString(a1);
         var targetDentry = sm.PathWalk(target);
@@ -1113,7 +1109,7 @@ public unsafe partial class SyscallManager
             var mountPoint = targetDentry.MountedAt;
             var mountRoot = mountPoint.MountRoot;
             
-            if (mountRoot == null) return -22; // EINVAL
+            if (mountRoot == null) return -(int)Errno.EINVAL;
             
             // Check if filesystem is busy (has active inodes)
             if (mountRoot.SuperBlock.HasActiveInodes())
@@ -1157,7 +1153,7 @@ public unsafe partial class SyscallManager
     private static int SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string target = sm.ReadString(a1);
         var targetDentry = sm.PathWalk(target);
@@ -1216,13 +1212,13 @@ public unsafe partial class SyscallManager
     private static int SysChroot(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         
         string path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
         
-        if (dentry == null || dentry.Inode == null) return -2; // ENOENT
-        if (dentry.Inode.Type != InodeType.Directory) return -20; // ENOTDIR
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR; // ENOTDIR
         
         sm.ProcessRoot = dentry;
         return 0;

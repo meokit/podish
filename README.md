@@ -24,8 +24,19 @@ The project is divided into two layers:
 -   **Linux Emulation:**
     -   Support for static binaries (musl-libc compatible).
     -   File I/O with host path mapping.
+    -   **Process Management**: Support for `fork`, `vfork`, and the `wait` syscall family with parent-child relationship tracking.
+    -   **Asynchronous Syscalls**: Non-blocking syscall execution using C# async/await.
     -   Multithreading support (`pthread_create`, `futex`).
     -   Signal handling (Partial).
+
+## Roadmap to POSIX 1995
+
+Bifrost aims to provide a highly compliant POSIX environment. Current priorities include:
+
+1.  **Process Execution**: Implementation of `execve` to support running new programs from within the guest.
+2.  **Directory & File Control**: Adding `chdir`, `mkdir`, `rmdir`, and `rename`.
+3.  **Pipe & Redirection**: Implementation of `pipe`, `dup2`, and `fcntl` for Shell-like inter-process communication.
+4.  **Signal Reliability**: Robust signal delivery and mask management (`rt_sigaction`, `kill`).
 
 ## Requirements
 

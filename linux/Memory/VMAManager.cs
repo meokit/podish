@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using Bifrost.Core;
 using Bifrost.VFS;
+using Bifrost.Native;
+using Bifrost.Loader;
 
 namespace Bifrost.Memory;
 
@@ -23,7 +25,7 @@ public class VMAManager
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, Bifrost.VFS.File? file, long offset, long filesz, string name, Engine engine)
     {
         // Align to 4k
-        if ((addr & 0xFFF) != 0)
+        if ((addr & LinuxConstants.PageOffsetMask) != 0)
             throw new ArgumentException("Address not aligned");
 
         if (addr == 0)
@@ -190,14 +192,14 @@ public class VMAManager
 
     private uint FindFreeRegion(uint size)
     {
-        uint baseAddr = 0x10000;
+        uint baseAddr = LinuxConstants.MinMmapAddr;
         while (true)
         {
             uint end = baseAddr + size;
             if (!CheckOverlap(baseAddr, end))
                 return baseAddr;
-            baseAddr += 0x1000;
-            if (baseAddr >= 0xC0000000)
+            baseAddr += (uint)LinuxConstants.PageSize;
+            if (baseAddr >= LinuxConstants.TaskSize32)
                 return 0;
         }
     }
@@ -210,29 +212,29 @@ public class VMAManager
         if (isWrite && (vma.Perms & Protection.Write) == 0)
             return false;
 
-        uint pageStart = addr & ~0xFFFu;
+        uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
         
-        engine.MemMap(pageStart, 4096, (byte)tempPerms);
+        engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)tempPerms);
 
         if (vma.File != null)
         {
             long vmaOffset = pageStart - vma.Start;
             long off = vma.Offset + vmaOffset;
 
-            int readLen = 4096;
+            int readLen = LinuxConstants.PageSize;
             if (vma.FileSz > 0)
             {
                 long remainingFile = vma.FileSz - vmaOffset;
                 if (remainingFile <= 0)
                     readLen = 0;
-                else if (remainingFile < 4096)
+                else if (remainingFile < LinuxConstants.PageSize)
                     readLen = (int)remainingFile;
             }
 
             if (readLen > 0)
             {
-                Span<byte> buf = stackalloc byte[4096];
+                Span<byte> buf = stackalloc byte[LinuxConstants.PageSize];
                 int n = vma.File.Dentry.Inode.Read(vma.File, buf.Slice(0, readLen), off);
                 if (n > 0)
                 {
@@ -243,7 +245,7 @@ public class VMAManager
 
         if (tempPerms != vma.Perms)
         {
-            engine.MemMap(pageStart, 4096, (byte)vma.Perms);
+            engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)vma.Perms);
         }
 
         return true;
@@ -254,23 +256,23 @@ public class VMAManager
         if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
             return;
 
-        for (uint page = vma.Start; page < vma.End; page += 4096)
+        for (uint page = vma.Start; page < vma.End; page += (uint)LinuxConstants.PageSize)
         {
             if (engine.IsDirty(page))
             {
                 // Write back dirty page
-                byte[] data = engine.MemRead(page, 4096);
+                byte[] data = engine.MemRead(page, (uint)LinuxConstants.PageSize);
                 
                 long vmaOffset = page - vma.Start;
                 long off = vma.Offset + vmaOffset;
                 
-                int writeLen = 4096;
+                int writeLen = LinuxConstants.PageSize;
                 if (vma.FileSz > 0)
                 {
                     long remainingFile = vma.FileSz - vmaOffset;
                     if (remainingFile <= 0)
                         writeLen = 0;
-                    else if (remainingFile < 4096)
+                    else if (remainingFile < LinuxConstants.PageSize)
                         writeLen = (int)remainingFile;
                 }
 

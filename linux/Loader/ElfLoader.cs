@@ -6,6 +6,7 @@ using Bifrost.Memory;
 using Bifrost.Core;
 using Bifrost.Syscalls;
 using Bifrost.VFS;
+using Bifrost.Native;
 
 namespace Bifrost.Loader;
 
@@ -22,21 +23,7 @@ public class ElfLoader
     public const uint StackTop = 0xC0000000;
     public const uint StackSize = 0x20000;
 
-    // Auxv types
-    const uint AT_NULL = 0;
-    const uint AT_PHDR = 3;
-    const uint AT_PHENT = 4;
-    const uint AT_PHNUM = 5;
-    const uint AT_PAGESZ = 6;
-    const uint AT_BASE = 7;
-    const uint AT_FLAGS = 8;
-    const uint AT_ENTRY = 9;
-    const uint AT_UID = 11;
-    const uint AT_EUID = 12;
-    const uint AT_GID = 13;
-    const uint AT_EGID = 14;
-    const uint AT_PLATFORM = 15;
-    const uint AT_RANDOM = 25;
+    // Auxv types moved to LinuxConstants
 
     public static LoaderResult Load(string filename, SyscallManager sys, string[] args, string[] envs)
     {
@@ -85,12 +72,12 @@ public class ElfLoader
                 long offsetRaw = (long)segment.Position;
                 uint sizeRaw = (uint)segment.SizeInMemory;
 
-                uint pageStart = vaddrRaw & ~0xFFFu;
-                long pageOffset = offsetRaw & ~0xFFFu;
+                uint pageStart = vaddrRaw & LinuxConstants.PageMask;
+                long pageOffset = offsetRaw & (long)LinuxConstants.PageMask;
                 uint diff = vaddrRaw - pageStart;
 
                 uint totalSize = sizeRaw + diff;
-                uint alignedLen = (totalSize + 0xFFF) & ~0xFFFu;
+                uint alignedLen = (totalSize + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
 
                 if (sizeRaw > 0)
                 {
@@ -106,9 +93,9 @@ public class ElfLoader
                         mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "ELF_LOAD_ANON", engine);
                         
                         // Map and copy data immediately
-                        for (uint p = pageStart; p < pageStart + alignedLen; p += 4096)
+                        for (uint p = pageStart; p < pageStart + alignedLen; p += (uint)LinuxConstants.PageSize)
                         {
-                            engine.MemMap(p, 4096, (byte)perms);
+                            engine.MemMap(p, (uint)LinuxConstants.PageSize, (byte)perms);
                         }
 
                         if (segment.Size > 0)
@@ -174,20 +161,20 @@ public class ElfLoader
             PushUint32(k);
         }
 
-        PushAux(AT_NULL, 0);
-        PushAux(AT_PLATFORM, platPtr);
-        PushAux(AT_RANDOM, randPtr);
-        PushAux(AT_UID, 1000);
-        PushAux(AT_EUID, 1000);
-        PushAux(AT_GID, 1000);
-        PushAux(AT_EGID, 1000);
-        PushAux(AT_PHNUM, (uint)elf.Segments.Count);
-        PushAux(AT_PHENT, (uint)elf.Layout.SizeOfProgramHeaderEntry);
-        PushAux(AT_PHDR, phdrAddr);
-        PushAux(AT_PAGESZ, 4096);
-        PushAux(AT_ENTRY, (uint)elf.EntryPointAddress + loadBase);
-        PushAux(AT_BASE, loadBase);
-        PushAux(AT_FLAGS, 0);
+        PushAux(LinuxConstants.AT_NULL, 0);
+        PushAux(LinuxConstants.AT_PLATFORM, platPtr);
+        PushAux(LinuxConstants.AT_RANDOM, randPtr);
+        PushAux(LinuxConstants.AT_UID, 1000);
+        PushAux(LinuxConstants.AT_EUID, 1000);
+        PushAux(LinuxConstants.AT_GID, 1000);
+        PushAux(LinuxConstants.AT_EGID, 1000);
+        PushAux(LinuxConstants.AT_PHNUM, (uint)elf.Segments.Count);
+        PushAux(LinuxConstants.AT_PHENT, (uint)elf.Layout.SizeOfProgramHeaderEntry);
+        PushAux(LinuxConstants.AT_PHDR, phdrAddr);
+        PushAux(LinuxConstants.AT_PAGESZ, (uint)LinuxConstants.PageSize);
+        PushAux(LinuxConstants.AT_ENTRY, (uint)elf.EntryPointAddress + loadBase);
+        PushAux(LinuxConstants.AT_BASE, loadBase);
+        PushAux(LinuxConstants.AT_FLAGS, 0);
 
         PushUint32(0);
         for (int i = envPtrs.Length - 1; i >= 0; i--) PushUint32(envPtrs[i]);
@@ -203,7 +190,7 @@ public class ElfLoader
             if (segment.Type == ElfSegmentTypeCore.Load)
             {
                 uint end = (uint)segment.VirtualAddress + (uint)segment.SizeInMemory + loadBase;
-                end = (end + 0xFFF) & ~0xFFFu;
+                end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
                 if (end > brkAddr) brkAddr = end;
             }
         }
