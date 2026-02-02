@@ -12,10 +12,10 @@ public class Hostfs : FileSystem
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         var sb = new HostSuperBlock(fsType, devName); // devName is the root path on host
-        var rootInode = sb.GetInode(devName);
-        if (rootInode == null) throw new FileNotFoundException("Root path not found", devName);
+        var rootDentry = sb.GetDentry(devName, "/", null);
+        if (rootDentry == null) throw new FileNotFoundException("Root path not found", devName);
         
-        sb.Root = new Dentry("/", rootInode, null, sb);
+        sb.Root = rootDentry;
         sb.Root.Parent = sb.Root;
         return sb;
     }
@@ -25,7 +25,7 @@ public class HostSuperBlock : SuperBlock
 {
     private ulong _nextIno = 1;
     public string HostRoot { get; }
-    private Dictionary<string, HostInode> _inodeCache = new();
+    private Dictionary<string, Dentry> _dentryCache = new();
 
     public HostSuperBlock(FileSystemType type, string hostRoot)
     {
@@ -33,14 +33,9 @@ public class HostSuperBlock : SuperBlock
         HostRoot = hostRoot;
     }
 
-    public override Inode AllocInode()
+    public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
-        throw new NotImplementedException();
-    }
-    
-    public HostInode? GetInode(string hostPath)
-    {
-        if (_inodeCache.TryGetValue(hostPath, out var inode)) return inode;
+        if (_dentryCache.TryGetValue(hostPath, out var dentry)) return dentry;
         
         // Check existence
         bool isDir = Directory.Exists(hostPath);
@@ -48,16 +43,48 @@ public class HostSuperBlock : SuperBlock
         if (!isDir && !isFile) return null;
         
         var newInode = new HostInode(_nextIno++, this, hostPath, isDir);
-        _inodeCache[hostPath] = newInode;
-        return newInode;
+        var newDentry = new Dentry(name, newInode, parent, this);
+        _dentryCache[hostPath] = newDentry;
+        return newDentry;
     }
 
     public override void WriteInode(Inode inode) { }
+
+    public void MoveDentry(string oldPath, string newPath, Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!string.IsNullOrEmpty(oldPath)) _dentryCache.Remove(oldPath);
+            _dentryCache[newPath] = dentry;
+        }
+    }
+
+    public void RemoveDentry(string hostPath)
+    {
+        lock (Lock)
+        {
+            _dentryCache.Remove(hostPath);
+        }
+    }
+
+    public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir)
+    {
+        var inode = new HostInode(_nextIno++, this, hostPath, isDir);
+        dentry.Instantiate(inode);
+        lock (Lock)
+        {
+            _dentryCache[hostPath] = dentry;
+        }
+        if (dentry.Parent != null)
+        {
+            dentry.Parent.Children[dentry.Name] = dentry;
+        }
+    }
 }
 
 public class HostInode : Inode
 {
-    public string HostPath { get; }
+    public string HostPath { get; set; }
     
     public HostInode(ulong ino, SuperBlock sb, string hostPath, bool isDir)
     {
@@ -78,44 +105,143 @@ public class HostInode : Inode
         }
     }
 
-    public override Inode? Lookup(string name)
+    public override Dentry? Lookup(string name)
     {
         if (Type != InodeType.Directory) return null;
         string subPath = Path.Combine(HostPath, name);
-        return ((HostSuperBlock)SuperBlock).GetInode(subPath);
+        if (Dentries.Count == 0) return null;
+        return ((HostSuperBlock)SuperBlock).GetDentry(subPath, name, Dentries[0]);
     }
 
-    public override Inode Create(string name, int mode, int uid, int gid)
+    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        string subPath = Path.Combine(HostPath, name);
+        string subPath = Path.Combine(HostPath, dentry.Name);
         if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
         
         using (System.IO.File.Create(subPath)) { } // Create empty file
         
-        // Note: hostfs doesn't set uid/gid - relies on host filesystem
-        return ((HostSuperBlock)SuperBlock).GetInode(subPath) ?? throw new IOException("Failed to create host file");
+        var sb = (HostSuperBlock)SuperBlock;
+        sb.InstantiateDentry(dentry, subPath, false);
+        return dentry;
     }
 
-    public override Inode Mkdir(string name, int mode, int uid, int gid)
+    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        string subPath = Path.Combine(HostPath, name);
+        string subPath = Path.Combine(HostPath, dentry.Name);
+        if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        
         Directory.CreateDirectory(subPath);
-        // Note: hostfs doesn't set uid/gid - relies on host filesystem
-        return ((HostSuperBlock)SuperBlock).GetInode(subPath) ?? throw new IOException("Failed to create host directory");
+        
+        var sb = (HostSuperBlock)SuperBlock;
+        sb.InstantiateDentry(dentry, subPath, true);
+        return dentry;
     }
 
     public override void Unlink(string name)
     {
         string subPath = Path.Combine(HostPath, name);
-        if (System.IO.File.Exists(subPath)) System.IO.File.Delete(subPath);
+        if (System.IO.File.Exists(subPath))
+        {
+             var sb = (HostSuperBlock)SuperBlock;
+             var dentry = sb.GetDentry(subPath, name, null);
+             System.IO.File.Delete(subPath);
+             dentry?.Inode?.Put(); 
+             sb.RemoveDentry(subPath);
+        }
     }
 
     public override void Rmdir(string name)
     {
         string subPath = Path.Combine(HostPath, name);
-        if (Directory.Exists(subPath)) Directory.Delete(subPath);
+        if (Directory.Exists(subPath))
+        {
+             var sb = (HostSuperBlock)SuperBlock;
+             var dentry = sb.GetDentry(subPath, name, null);
+             Directory.Delete(subPath, true);
+             dentry?.Inode?.Put();
+             sb.RemoveDentry(subPath);
+        }
+    }
+
+    public override void Rename(string oldName, Inode newParent, string newName)
+    {
+        if (Type != InodeType.Directory || newParent.Type != InodeType.Directory)
+            throw new InvalidOperationException("Not a directory");
+
+        var targetParent = (HostInode)newParent;
+        string oldFullPath = Path.Combine(HostPath, oldName);
+        string newFullPath = Path.Combine(targetParent.HostPath, newName);
+
+        var sb = (HostSuperBlock)SuperBlock;
+        var dentry = sb.GetDentry(oldFullPath, oldName, null);
+        if (dentry == null) throw new FileNotFoundException("Source not found", oldName);
+
+        // Handle overwrite
+        if (System.IO.File.Exists(newFullPath) || Directory.Exists(newFullPath))
+        {
+            var targetDentry = sb.GetDentry(newFullPath, newName, null);
+            if (Directory.Exists(newFullPath)) Directory.Delete(newFullPath, true);
+            else System.IO.File.Delete(newFullPath);
+            targetDentry?.Inode?.Put();
+            sb.RemoveDentry(newFullPath);
+        }
+
+        if (dentry.Inode!.Type == InodeType.Directory)
+        {
+             Directory.Move(oldFullPath, newFullPath);
+        }
+        else
+        {
+             System.IO.File.Move(oldFullPath, newFullPath);
+        }
+
+        // Update cache and internal path
+        sb.MoveDentry(oldFullPath, newFullPath, dentry);
+        ((HostInode)dentry.Inode).HostPath = newFullPath;
+        dentry.Name = newName;
+        if (targetParent.Dentries.Count > 0) dentry.Parent = targetParent.Dentries[0];
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int link(string oldpath, string newpath);
+
+    public override Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        if (!(oldInode is HostInode hi)) throw new InvalidOperationException("Not a host inode");
+        
+        string newPath = Path.Combine(HostPath, dentry.Name);
+        if (link(hi.HostPath, newPath) != 0)
+        {
+            throw new IOException($"link failed with error {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}");
+        }
+        
+        var sb = (HostSuperBlock)SuperBlock;
+        dentry.Instantiate(oldInode);
+        lock (sb.Lock)
+        {
+            sb.MoveDentry("", newPath, dentry); // hack: we don't have an old host path for this new link yet in the cache
+        }
+        return dentry;
+    }
+
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        string newPath = Path.Combine(HostPath, dentry.Name);
+        
+        global::System.IO.File.CreateSymbolicLink(newPath, target);
+        var sb = (HostSuperBlock)SuperBlock;
+        sb.InstantiateDentry(dentry, newPath, false);
+        return dentry;
+    }
+
+    public override string Readlink()
+    {
+        var info = new global::System.IO.FileInfo(HostPath);
+        return info.LinkTarget ?? throw new IOException("Not a link or target missing");
     }
 
     public override void Open(File file)
@@ -196,13 +322,14 @@ public class HostInode : Inode
         list.Add(new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory });
 
         var entries = Directory.GetFileSystemEntries(HostPath);
+        var sb = (HostSuperBlock)SuperBlock;
         foreach (var entryPath in entries)
         {
             string name = Path.GetFileName(entryPath);
-            var inode = ((HostSuperBlock)SuperBlock).GetInode(entryPath);
-            if (inode != null)
+            var dentry = sb.GetDentry(entryPath, name, Dentries.Count > 0 ? Dentries[0] : null);
+            if (dentry != null)
             {
-                list.Add(new DirectoryEntry { Name = name, Ino = inode.Ino, Type = inode.Type });
+                list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode.Ino, Type = dentry.Inode.Type });
             }
         }
         return list;

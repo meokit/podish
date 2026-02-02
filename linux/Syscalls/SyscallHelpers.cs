@@ -37,16 +37,26 @@ public unsafe partial class SyscallManager
         }
     }
 
-    public Dentry? PathWalk(string path, bool followLink = true)
+    public Dentry? PathWalk(string path, Dentry? startAt = null, bool followLink = true, int recursion = 0)
     {
         if (string.IsNullOrEmpty(path)) return null;
+        if (recursion > 40) return null; // ELOOP
         
         // Console.WriteLine($"PathWalk: {path}");
-        Dentry current = path.StartsWith("/") ? ProcessRoot : CurrentWorkingDirectory;
+        Dentry current;
+        if (path.StartsWith("/"))
+        {
+            current = ProcessRoot;
+        }
+        else
+        {
+            current = startAt ?? CurrentWorkingDirectory;
+        }
         
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var part in parts)
+        for (int i = 0; i < parts.Length; i++)
         {
+            var part = parts[i];
             if (part == ".") continue;
             if (part == "..")
             {
@@ -74,34 +84,33 @@ public unsafe partial class SyscallManager
                 current = current.MountRoot;
             }
 
+            Dentry? nextDentry = null;
             if (current.Children.TryGetValue(part, out var cached))
             {
-                current = cached;
+                nextDentry = cached;
             }
             else
             {
-                var nextInode = current.Inode.Lookup(part);
-                if (nextInode == null) 
-                {
-                    // Console.WriteLine($"PathWalk: Failed to find '{part}' in '{current.Name}'");
-                    return null;
-                }
+                nextDentry = current.Inode.Lookup(part);
+                if (nextDentry == null) return null;
                 
-                // Create a new Dentry in the tree
-                var nextDentry = new Dentry(part, nextInode, current, current.SuperBlock);
                 current.Children[part] = nextDentry;
-                
-                // If it's a TmpfsInode, we should link it (though Tmpfs.Lookup should have done it)
-                if (nextInode is TmpfsInode ti)
-                {
-                    ti.SetPrimaryDentry(nextDentry);
-                }
-                
+            }
+
+            // Handle Symlink
+            if (nextDentry.Inode.Type == InodeType.Symlink && (followLink || i < parts.Length - 1))
+            {
+                string target = nextDentry.Inode.Readlink();
+                var resolved = PathWalk(target, current, followLink, recursion + 1);
+                if (resolved == null) return null;
+                current = resolved;
+            }
+            else
+            {
                 current = nextDentry;
             }
         }
         
-        // Final check: if the result is a mount point, we should probably return the mount root?
         if (current.IsMounted && current.MountRoot != null)
         {
             current = current.MountRoot;

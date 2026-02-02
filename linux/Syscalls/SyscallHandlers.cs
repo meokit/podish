@@ -80,6 +80,780 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.fchownat, SysFchownAt);
         Register(X86SyscallNumbers.fchmodat, SysFchmodAt);
         Register(X86SyscallNumbers.faccessat, SysFaccessAt);
+        
+        Register(X86SyscallNumbers.creat, SysCreat);
+        Register(X86SyscallNumbers.link, SysLink);
+        Register(X86SyscallNumbers.chdir, SysChdir);
+        Register(X86SyscallNumbers.time, SysTime);
+
+        Register(X86SyscallNumbers.openat, SysOpenAt);
+        Register(X86SyscallNumbers.dup, SysDup);
+        Register(X86SyscallNumbers.dup2, SysDup2);
+        Register(X86SyscallNumbers.dup3, SysDup3);
+
+        Register(X86SyscallNumbers.pread, SysPRead);
+        Register(X86SyscallNumbers.pwrite, SysPWrite);
+        Register(X86SyscallNumbers.readv, SysReadV);
+        Register(X86SyscallNumbers.preadv, SysPReadV);
+        Register(X86SyscallNumbers.pwritev, SysPWriteV);
+
+        Register(X86SyscallNumbers.mkdir, SysMkdir);
+        Register(X86SyscallNumbers.rmdir, SysRmdir);
+        Register(X86SyscallNumbers.mkdirat, SysMkdirAt);
+        Register(X86SyscallNumbers.unlinkat, SysUnlinkAt);
+        Register(X86SyscallNumbers.symlink, SysSymlink);
+        Register(X86SyscallNumbers.readlink, SysReadlink);
+        Register(X86SyscallNumbers.readlinkat, SysReadlinkAt);
+        Register(X86SyscallNumbers.getdents, SysGetdents);
+
+        Register(X86SyscallNumbers.fstatat64, SysNewFstatAt);
+        Register(X86SyscallNumbers.utimensat, SysUtimensAt);
+
+        Register(X86SyscallNumbers.rename, SysRename);
+        Register(X86SyscallNumbers.renameat, SysRenameAt);
+        Register(X86SyscallNumbers.renameat2, SysRenameAt2);
+        
+        Register(X86SyscallNumbers.stat, SysStat);
+        Register(X86SyscallNumbers.lstat, SysLstat);
+        Register(X86SyscallNumbers.fstat, SysFstat);
+    }
+
+    private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // creat(path, mode) is open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
+        return SysOpen(state, a1, (uint)(FileFlags.O_CREAT | FileFlags.O_WRONLY | FileFlags.O_TRUNC), a2, a4, a5, a6);
+    }
+
+    private static int SysLink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        string oldPath = sm.ReadString(a1);
+        string newPath = sm.ReadString(a2);
+        
+        var oldDentry = sm.PathWalk(oldPath);
+        if (oldDentry == null || oldDentry.Inode == null) return -(int)Errno.ENOENT;
+        if (oldDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EPERM;
+
+        int lastSlash = newPath.LastIndexOf('/');
+        string dirPath = lastSlash == -1 ? "." : newPath.Substring(0, lastSlash);
+        if (dirPath == "") dirPath = "/";
+        string name = lastSlash == -1 ? newPath : newPath.Substring(lastSlash + 1);
+        
+        var dirDentry = sm.PathWalk(dirPath);
+        if (dirDentry == null || dirDentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dirDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        
+        try
+        {
+            var newDentry = new Dentry(name, null, dirDentry, dirDentry.SuperBlock);
+            dirDentry.Inode.Link(newDentry, oldDentry.Inode);
+            return 0;
+        }
+        catch (Exception)
+        {
+            return -(int)Errno.EIO;
+        }
+    }
+
+    private static int SysChdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        string path = sm.ReadString(a1);
+        var dentry = sm.PathWalk(path);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        
+        var oldCwd = sm.CurrentWorkingDirectory;
+        sm.CurrentWorkingDirectory = dentry;
+        dentry.Inode.Get();
+        oldCwd?.Inode.Put();
+        return 0;
+    }
+
+    private static int SysTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        long t = DateTimeOffset.Now.ToUnixTimeSeconds();
+        if (a1 != 0)
+        {
+            sm.Engine.MemWrite(a1, BitConverter.GetBytes((uint)t));
+        }
+        return (int)t;
+    }
+
+    private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
+    {
+        var dentry = sm.PathWalk(path, startAt);
+        if (dentry == null)
+        {
+            if ((flags & (uint)FileFlags.O_CREAT) != 0)
+            {
+                int lastSlash = path.LastIndexOf('/');
+                string parentPath = lastSlash == -1 ? "" : (lastSlash == 0 ? "/" : path.Substring(0, lastSlash));
+                string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
+                
+                var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
+                if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+                
+                var t = Scheduler.GetByEngine(sm.Engine.State);
+                int uid = t?.Process.EUID ?? 0;
+                int gid = t?.Process.EGID ?? 0;
+                
+                try {
+                    dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+                    parentDentry.Inode.Create(dentry, (int)mode, uid, gid);
+                } catch {
+                    return -(int)Errno.EACCES;
+                }
+            }
+            else
+            {
+                return -(int)Errno.ENOENT;
+            }
+        }
+        else
+        {
+            // File exists - check for O_EXCL
+            if ((flags & (uint)FileFlags.O_CREAT) != 0 && (flags & (uint)FileFlags.O_EXCL) != 0)
+            {
+                return -(int)Errno.EEXIST;
+            }
+        }
+        
+        try {
+            var f = new Bifrost.VFS.File(dentry, (FileFlags)flags);
+            return sm.AllocFD(f);
+        } catch {
+            return -1;
+        }
+    }
+
+    private static int SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        return ImplOpen(sm, sm.ReadString(a1), a2, a3);
+    }
+
+    private static int SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint flags = a3;
+        uint mode = a4;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        return ImplOpen(sm, path, flags, mode, startAt);
+    }
+
+    private static int SysDup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        int oldfd = (int)a1;
+        var f = sm.GetFD(oldfd);
+        if (f == null) return -(int)Errno.EBADF;
+        
+        return sm.AllocFD(f);
+    }
+
+    private static int SysDup2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        int oldfd = (int)a1;
+        int newfd = (int)a2;
+        
+        if (oldfd == newfd)
+        {
+            if (sm.GetFD(oldfd) == null) return -(int)Errno.EBADF;
+            return newfd;
+        }
+
+        var f = sm.GetFD(oldfd);
+        if (f == null) return -(int)Errno.EBADF;
+        
+        sm.FreeFD(newfd);
+        sm.FDs[newfd] = f;
+        f.Dentry.Inode?.Get();
+        return newfd;
+    }
+
+    private static int SysDup3(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // For now ignore flags like O_CLOEXEC
+        return SysDup2(state, a1, a2, a3, a4, a5, a6);
+    }
+
+    private static int SysPRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint bufAddr = a2;
+        uint count = a3;
+        long offset = (long)a4 | ((long)a5 << 32);
+
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+        
+        try {
+            byte[] buf = new byte[count];
+            int n = f.Dentry.Inode.Read(f, buf.AsSpan(), offset);
+            if (n > 0) sm.Engine.MemWrite(bufAddr, buf.AsSpan(0, n));
+            return n;
+        } catch { return -(int)Errno.EIO; }
+    }
+
+    private static int SysPWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint bufAddr = a2;
+        uint count = a3;
+        long offset = (long)a4 | ((long)a5 << 32);
+
+        var data = sm.Engine.MemRead(bufAddr, count);
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+        
+        try {
+            int n = f.Dentry.Inode.Write(f, data, offset);
+            return n;
+        } catch { return -(int)Errno.EIO; }
+    }
+
+    private static int SysReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint iovAddr = a2;
+        int iovCnt = (int)a3;
+        
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        int totalRead = 0;
+        for(int i=0; i<iovCnt; i++)
+        {
+            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i*8, 4);
+            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i*8 + 4, 4);
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            
+            if (len > 0)
+            {
+                byte[] buf = new byte[len];
+                int n = f.Read(buf);
+                if (n > 0)
+                {
+                    sm.Engine.MemWrite(baseAddr, buf.AsSpan(0, n));
+                    totalRead += n;
+                    if (n < (int)len) break; // EOF or short read
+                }
+                else break;
+            }
+        }
+        return totalRead;
+    }
+
+    private static int SysPReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint iovAddr = a2;
+        int iovCnt = (int)a3;
+        long offset = (long)a4 | ((long)a5 << 32); // Modified line
+        
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        int totalRead = 0;
+        for(int i=0; i<iovCnt; i++)
+        {
+            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i*8, 4);
+            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i*8 + 4, 4);
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            
+            if (len > 0)
+            {
+                byte[] buf = new byte[len];
+                int n = f.Dentry.Inode.Read(f, buf, offset + totalRead);
+                if (n > 0)
+                {
+                    sm.Engine.MemWrite(baseAddr, buf.AsSpan(0, n));
+                    totalRead += n;
+                    if (n < (int)len) break;
+                }
+                else break;
+            }
+        }
+        return totalRead;
+    }
+
+    private static int SysPWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint iovAddr = a2;
+        int iovCnt = (int)a3;
+        long offset = (long)a4 | ((long)a5 << 32); // Modified line
+
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        int totalWritten = 0;
+        for(int i=0; i<iovCnt; i++)
+        {
+            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i*8, 4);
+            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i*8 + 4, 4);
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            
+            if (len > 0)
+            {
+                var data = sm.Engine.MemRead(baseAddr, len);
+                int n = f.Dentry.Inode.Write(f, data, offset + totalWritten);
+                if (n > 0)
+                {
+                    totalWritten += n;
+                    if (n < (int)len) break;
+                }
+                else break;
+            }
+        }
+        return totalWritten;
+    }
+
+    private static int SysMkdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string path = sm.ReadString(a1);
+        uint mode = a2;
+
+        int lastSlash = path.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path.Substring(0, lastSlash));
+        string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        var t = Scheduler.GetByEngine(sm.Engine.State);
+        int uid = t?.Process.EUID ?? 0;
+        int gid = t?.Process.EGID ?? 0;
+
+        try {
+            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
+    }
+
+    private static int SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string path = sm.ReadString(a1);
+
+        int lastSlash = path.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path.Substring(0, lastSlash));
+        string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        
+        // Check if directory exists and is empty
+        var targetDentry = sm.PathWalk(path);
+        if (targetDentry == null) return -(int)Errno.ENOENT;
+        if (targetDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        
+        // Check if empty (only . and .. entries)
+        var entries = targetDentry.Inode.GetEntries();
+        if (entries.Count > 2) return -(int)Errno.ENOTEMPTY;  // Has more than . and ..
+
+        try {
+            parentDentry.Inode.Rmdir(name);
+            parentDentry.Children.Remove(name);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
+    }
+
+    private static int SysMkdirAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint mode = a3;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        int lastSlash = path.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "" : path.Substring(0, lastSlash);
+        string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        var t = Scheduler.GetByEngine(sm.Engine.State);
+        int uid = t?.Process.EUID ?? 0;
+        int gid = t?.Process.EGID ?? 0;
+
+        try {
+            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
+    }
+
+    private static int SysUnlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint flags = a3;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        int lastSlash = path.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "" : path.Substring(0, lastSlash);
+        string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        if ((flags & 0x200) != 0) // AT_REMOVEDIR
+        {
+            try {
+                parentDentry.Inode.Rmdir(name);
+                parentDentry.Children.Remove(name);
+                return 0;
+            } catch { return -(int)Errno.EACCES; }
+        }
+        else
+        {
+            try {
+                parentDentry.Inode.Unlink(name);
+                parentDentry.Children.Remove(name);
+                return 0;
+            } catch { return -(int)Errno.ENOENT; }
+        }
+    }
+
+
+    private static int SysGetdents(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        uint bufAddr = a2;
+        int count = (int)a3;
+
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+        try {
+            var entries = f.Dentry.Inode.GetEntries();
+            int startIdx = (int)f.Position;
+            if (startIdx >= entries.Count) return 0;
+
+            int writeOffset = 0;
+            for (int i = startIdx; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                byte[] nameBytes = Encoding.UTF8.GetBytes(entry.Name);
+                int nameLen = nameBytes.Length + 1;
+                // reclen: ino(4) + off(4) + reclen(2) + name + pad + type(1)
+                // We align to 4 bytes for 32-bit
+                int reclen = (4 + 4 + 2 + nameLen + 1 + 3) & ~3;
+
+                if (writeOffset + reclen > count) break;
+
+                uint baseAddr = bufAddr + (uint)writeOffset;
+                byte[] buf = new byte[reclen];
+                
+                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0), (uint)entry.Ino);
+                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)(i + 1)); // d_off
+                BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(8), (ushort)reclen);
+                
+                Array.Copy(nameBytes, 0, buf, 10, nameBytes.Length);
+                buf[10 + nameBytes.Length] = 0; // null terminator
+                
+                byte dType = entry.Type switch {
+                    InodeType.Directory => (byte)4,
+                    InodeType.File => (byte)8,
+                    InodeType.Symlink => (byte)10,
+                    InodeType.CharDev => (byte)2,
+                    InodeType.BlockDev => (byte)6,
+                    InodeType.Fifo => (byte)1,
+                    InodeType.Socket => (byte)12,
+                    _ => (byte)0
+                };
+                buf[reclen - 1] = dType;
+
+                sm.Engine.MemWrite(baseAddr, buf);
+                writeOffset += reclen;
+                f.Position = i + 1;
+            }
+            return writeOffset;
+        } catch { return -(int)Errno.EIO; }
+    }
+
+    private static int SysNewFstatAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint statAddr = a3;
+        uint flags = a4;
+
+        if (path == "" && (flags & 0x1000) != 0) // AT_EMPTY_PATH
+        {
+            return SysFstat64(state, a1, a3, 0, 0, 0, 0);
+        }
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        var dentry = sm.PathWalk(path, startAt);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        
+        WriteStat64(sm, statAddr, dentry.Inode);
+        return 0;
+    }
+
+    private static int SysUtimensAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint timesAddr = a3;
+        uint flags = a4;
+
+        var dentry = sm.PathWalk(path);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        if (timesAddr == 0)
+        {
+            dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
+        }
+        else
+        {
+            // TODO: Read timespec from memory
+            dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
+        }
+        return 0;
+    }
+
+    private static int SysFchownAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        int uid = (int)a3;
+        int gid = (int)a4;
+        uint flags = a5;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        var dentry = sm.PathWalk(path, startAt);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        // Redirect to SysChown logic or similar
+        return SysChown(state, a2, a3, a4, 0, 0, 0); // Simplified: should use dentry directly
+    }
+
+    private static int SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint mode = a3;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        var dentry = sm.PathWalk(path, startAt);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        return SysChmod(state, a2, a3, 0, 0, 0, 0);
+    }
+
+    private static int SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint mode = a3;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        var dentry = sm.PathWalk(path, startAt);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        return SysAccess(state, a2, a3, 0, 0, 0, 0);
+    }
+
+    private static int SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string oldPath = sm.ReadString(a1);
+        string newPath = sm.ReadString(a2);
+
+        return ImplRename(sm, -100, oldPath, -100, newPath, 0);
+    }
+
+    private static int SysRenameAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), 0);
+    }
+
+    private static int SysRenameAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), a5);
+    }
+
+    private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath, uint flags)
+    {
+        Dentry? oldStart = null;
+        if (oldDirFd != -100 && !oldPath.StartsWith("/"))
+        {
+            var f = sm.GetFD(oldDirFd);
+            if (f == null) return -(int)Errno.EBADF;
+            oldStart = f.Dentry;
+        }
+
+        Dentry? newStart = null;
+        if (newDirFd != -100 && !newPath.StartsWith("/"))
+        {
+            var f = sm.GetFD(newDirFd);
+            if (f == null) return -(int)Errno.EBADF;
+            newStart = f.Dentry;
+        }
+
+        int lastSlashOld = oldPath.LastIndexOf('/');
+        string oldParentPath = lastSlashOld == -1 ? "" : oldPath.Substring(0, lastSlashOld);
+        string oldName = lastSlashOld == -1 ? oldPath : oldPath.Substring(lastSlashOld + 1);
+
+        int lastSlashNew = newPath.LastIndexOf('/');
+        string newParentPath = lastSlashNew == -1 ? "" : newPath.Substring(0, lastSlashNew);
+        string newName = lastSlashNew == -1 ? newPath : newPath.Substring(lastSlashNew + 1);
+
+        var oldParentDentry = sm.PathWalk(oldParentPath == "" ? "." : oldParentPath, oldStart);
+        var newParentDentry = sm.PathWalk(newParentPath == "" ? "." : newParentPath, newStart);
+
+        if (oldParentDentry == null || newParentDentry == null) return -(int)Errno.ENOENT;
+
+        try {
+            oldParentDentry.Inode!.Rename(oldName, newParentDentry.Inode!, newName);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
+    }
+
+    private static int SysStat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string path = sm.ReadString(a1);
+        var dentry = sm.PathWalk(path);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        
+        WriteStat(sm, a2, dentry.Inode);
+        return 0;
+    }
+
+    private static int SysLstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string path = sm.ReadString(a1);
+        var dentry = sm.PathWalk(path, followLink: false);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        
+        WriteStat(sm, a2, dentry.Inode);
+        return 0;
+    }
+
+    private static int SysFstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int fd = (int)a1;
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        
+        WriteStat(sm, a2, f.Dentry.Inode);
+        return 0;
     }
 
     private static int SysExit(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -90,8 +864,6 @@ public unsafe partial class SyscallManager
         var task = Scheduler.GetByEngine(state);
         if (task != null)
         {
-            Console.WriteLine($"[SysExit] TID={task.TID}, TGID={task.Process.TGID}, ExitCode={a1}");
-            Console.WriteLine($"[SysExit] Task.Process hash={task.Process.GetHashCode()}, TID==TGID? {task.TID == task.Process.TGID}");
             
             task.ExitCode = (int)a1;
             task.Exited = true;
@@ -102,7 +874,6 @@ public unsafe partial class SyscallManager
             {
                 task.Process.State = ProcessState.Zombie;
                 task.Process.ExitStatus = (int)a1;
-                Console.WriteLine($"[SysExit] Set Process {task.Process.TGID} to Zombie, state={task.Process.State}, hash={task.Process.GetHashCode()}");
                 
                 // Signal zombie event for waitpid
                 task.Process.ZombieEvent.Set();
@@ -117,7 +888,6 @@ public unsafe partial class SyscallManager
             
             // Signal after state is set
             task.WaitEvent.Set();
-            Console.WriteLine($"[SysExit] WaitEvent.Set() called");
         }
         
         int code = (int)a1;
@@ -178,55 +948,7 @@ public unsafe partial class SyscallManager
         return -(int)Errno.EBADF;
     }
 
-    private static int SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        var sm = Get(state);
-        if (sm == null) return -1;
-        string path = sm.ReadString(a1);
-        uint flags = a2;
-        uint mode = a3;
-        
-        var dentry = sm.PathWalk(path);
-        if (dentry == null)
-        {
-            if ((flags & (uint)FileFlags.O_CREAT) != 0)
-            {
-                int lastSlash = path.LastIndexOf('/');
-                string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path.Substring(0, lastSlash));
-                string name = lastSlash == -1 ? path : path.Substring(lastSlash + 1);
-                
-                var parentDentry = sm.PathWalk(parentPath);
-                if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
-                
-                // Get current process credentials
-                var t = Scheduler.GetByEngine(sm.Engine.State);
-                int uid = t?.Process.EUID ?? 0;
-                int gid = t?.Process.EGID ?? 0;
-                
-                try {
-                    var newInode = parentDentry.Inode.Create(name, (int)mode, uid, gid);
-                    dentry = new Dentry(name, newInode, parentDentry, parentDentry.SuperBlock);
-                    parentDentry.Children[name] = dentry;
-                    if (newInode is TmpfsInode ti) ti.SetPrimaryDentry(dentry);
-                } catch {
-                    // Failed to create file
-                    return -(int)Errno.EACCES; // or EEXIST
-                }
-            }
-            else
-            {
-                return -(int)Errno.ENOENT;
-            }
-        }
-        
-        try {
-            var f = new Bifrost.VFS.File(dentry, (FileFlags)flags);
-            return sm.AllocFD(f);
-        } catch {
-            // Failed to create file object
-            return -1;
-        }
-    }
+
 
     private static int SysLseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -646,9 +1368,6 @@ public unsafe partial class SyscallManager
         // Since we don't have symlinks yet, behave like chown
         return SysChown(state, a1, a2, a3, a4, a5, a6);
     }
-    private static int SysFchownAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
-    private static int SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
-    private static int SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
     private static int SysSetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
     private static int SysGetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
 
@@ -968,21 +1687,15 @@ public unsafe partial class SyscallManager
     {
         byte[] buf = new byte[96];
         
-        uint mode = (uint)inode.Mode;
-        if (inode.Type == InodeType.Directory) mode |= 0x4000;
-        else if (inode.Type == InodeType.File) mode |= 0x8000;
-        else if (inode.Type == InodeType.CharDev) mode |= 0x2000;
-        
+        uint mode = (uint)inode.Mode | (uint)inode.Type;
         long size = (long)inode.Size;
-        
-        // Return the actual file ownership, not process credentials
         uint uid = (uint)inode.Uid;
         uint gid = (uint)inode.Gid;
 
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), 0x800);
-        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(8), inode.Ino);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)inode.Ino); // __st_ino
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), mode);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), 1); // nlink
         
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), uid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), gid);
@@ -990,6 +1703,38 @@ public unsafe partial class SyscallManager
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(44), (ulong)size);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(52), 4096);
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(56), (ulong)((size+511)/512));
+        
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(64), (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(72), (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(80), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(88), inode.Ino);
+        
+        sm.Engine.MemWrite(addr, buf);
+    }
+
+    private static void WriteStat(SyscallManager sm, uint addr, Inode inode)
+    {
+        byte[] buf = new byte[64];
+        
+        uint mode = (uint)inode.Mode | (uint)inode.Type;
+        long size = (long)inode.Size;
+        uint uid = (uint)inode.Uid;
+        uint gid = (uint)inode.Gid;
+
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), 0x800); // st_dev
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)inode.Ino);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(8), (ushort)mode);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), 1); // nlink
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12), (ushort)uid);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(14), (ushort)gid);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), 0); // st_rdev
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), (uint)size);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), 4096); // blksize
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), (uint)((size+511)/512));
+        
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(32), (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(40), (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(48), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
         
         sm.Engine.MemWrite(addr, buf);
     }
@@ -1026,6 +1771,112 @@ public unsafe partial class SyscallManager
         
         WriteStat64(sm, a2, f.Dentry.Inode);
         return 0;
+    }
+    
+    private static int SysSymlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string target = sm.ReadString(a1);
+        string linkpath = sm.ReadString(a2);
+
+        int lastSlash = linkpath.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "" : linkpath.Substring(0, lastSlash);
+        string name = lastSlash == -1 ? linkpath : linkpath.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        var t = Scheduler.GetByEngine(sm.Engine.State);
+        int uid = t?.Process.EUID ?? 0;
+        int gid = t?.Process.EGID ?? 0;
+
+        try {
+            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            parentDentry.Inode.Symlink(dentry, target, uid, gid);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
+    }
+
+    private static int SysReadlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string path = sm.ReadString(a1);
+        uint bufAddr = a2;
+        int bufSize = (int)a3;
+
+        var dentry = sm.PathWalk(path, followLink: false);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
+
+        string target = dentry.Inode.Readlink();
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
+        int len = Math.Min(bytes.Length, bufSize);
+        sm.Engine.MemWrite(bufAddr, bytes.AsSpan(0, len));
+        return len;
+    }
+
+    private static int SysReadlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint bufAddr = a3;
+        int bufSize = (int)a4;
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        var dentry = sm.PathWalk(path, startAt, followLink: false);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
+
+        string target = dentry.Inode.Readlink();
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
+        int len = Math.Min(bytes.Length, bufSize);
+        sm.Engine.MemWrite(bufAddr, bytes.AsSpan(0, len));
+        return len;
+    }
+
+    private static int SysSymlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        string target = sm.ReadString(a1);
+        int dirfd = (int)a2;
+        string linkpath = sm.ReadString(a3);
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !linkpath.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        int lastSlash = linkpath.LastIndexOf('/');
+        string parentPath = lastSlash == -1 ? "" : linkpath.Substring(0, lastSlash);
+        string name = lastSlash == -1 ? linkpath : linkpath.Substring(lastSlash + 1);
+
+        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
+        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        var t = Scheduler.GetByEngine(sm.Engine.State);
+        int uid = t?.Process.EUID ?? 0;
+        int gid = t?.Process.EGID ?? 0;
+
+        try {
+            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            parentDentry.Inode.Symlink(dentry, target, uid, gid);
+            return 0;
+        } catch { return -(int)Errno.EACCES; }
     }
     
     private static int SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1114,7 +1965,6 @@ public unsafe partial class SyscallManager
             // Check if filesystem is busy (has active inodes)
             if (mountRoot.SuperBlock.HasActiveInodes())
             {
-                Console.WriteLine($"SysUmount: filesystem busy (active inodes), cannot unmount");
                 return -16; // EBUSY
             }
             
@@ -1134,7 +1984,6 @@ public unsafe partial class SyscallManager
             
             if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes())
             {
-                Console.WriteLine($"SysUmount: filesystem busy (active inodes), cannot unmount");
                 return -16; // EBUSY
             }
             
@@ -1184,7 +2033,6 @@ public unsafe partial class SyscallManager
         if ((flags & MNT_DETACH) != 0)
         {
             // Lazy unmount: detach immediately but allow active references to continue
-            Console.WriteLine($"SysUmount2: lazy unmount (MNT_DETACH)");
             mountPoint.IsMounted = false;
             mountPoint.MountRoot = null;
             if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;

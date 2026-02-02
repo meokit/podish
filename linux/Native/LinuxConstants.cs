@@ -37,7 +37,55 @@ public enum Errno : int
     EPIPE = 32,     /* Broken pipe */
     EDOM = 33,      /* Math argument out of domain of func */
     ERANGE = 34,    /* Math result not representable */
-    ENOSYS = 38     /* Invalid system call number */
+    ENOSYS = 38,    /* Invalid system call number */
+    ELOOP = 40,     /* Too many levels of symbolic links */
+    ENOTEMPTY = 39, /* Directory not empty */
+    ERESTARTSYS = 512,
+}
+
+public enum Signal : int
+{
+    SIGHUP = 1,
+    SIGINT = 2,
+    SIGQUIT = 3,
+    SIGILL = 4,
+    SIGTRAP = 5,
+    SIGABRT = 6,
+    SIGIOT = 6,
+    SIGBUS = 7,
+    SIGFPE = 8,
+    SIGKILL = 9,
+    SIGUSR1 = 10,
+    SIGSEGV = 11,
+    SIGUSR2 = 12,
+    SIGPIPE = 13,
+    SIGALRM = 14,
+    SIGTERM = 15,
+    SIGSTKFLT = 16,
+    SIGCHLD = 17,
+    SIGCONT = 18,
+    SIGSTOP = 19,
+    SIGTSTP = 20,
+    SIGTTIN = 21,
+    SIGTTOU = 22,
+    SIGURG = 23,
+    SIGXCPU = 24,
+    SIGXFSZ = 25,
+    SIGVTALRM = 26,
+    SIGPROF = 27,
+    SIGWINCH = 28,
+    SIGIO = 29,
+    SIGPOLL = 29,
+    SIGPWR = 30,
+    SIGSYS = 31,
+    SIGUNUSED = 31,
+}
+
+public enum SigProcMaskAction : int
+{
+    SIG_BLOCK = 0,
+    SIG_UNBLOCK = 1,
+    SIG_SETMASK = 2,
 }
 
 public static class LinuxConstants
@@ -131,4 +179,14 @@ public static class LinuxConstants
     public const uint MS_MOVE = 8192;
     public const uint MS_REC = 16384;
     public const uint MS_SILENT = 32768;
+
+    // SigAction flags
+    public const uint SA_NOCLDSTOP = 0x00000001;
+    public const uint SA_NOCLDWAIT = 0x00000002;
+    public const uint SA_SIGINFO = 0x00000004;
+    public const uint SA_ONSTACK = 0x08000000;
+    public const uint SA_RESTART = 0x10000000;
+    public const uint SA_NODEFER = 0x40000000;
+    public const uint SA_RESETHAND = 0x80000000;
+    public const uint SA_RESTORER = 0x04000000;
 }

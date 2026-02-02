@@ -51,6 +51,10 @@ public unsafe partial class SyscallManager
         Root = sb.Root;
         ProcessRoot = Root;
         CurrentWorkingDirectory = Root;
+
+        Root.Inode.Get();
+        ProcessRoot.Inode.Get();
+        CurrentWorkingDirectory.Inode.Get();
         
         // Add console FDs
         InitStdio();
@@ -82,6 +86,10 @@ public unsafe partial class SyscallManager
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
         
+        Root.Inode.Get();
+        CurrentWorkingDirectory.Inode.Get();
+        ProcessRoot.Inode.Get();
+
         RegisterHandlers();
     }
 
@@ -102,7 +110,12 @@ public unsafe partial class SyscallManager
         }
         else
         {
-            newFds = new Dictionary<int, Bifrost.VFS.File>(FDs); 
+            newFds = new Dictionary<int, Bifrost.VFS.File>();
+            foreach (var kv in FDs)
+            {
+                // We need to manually clone because File's constructor/Close manage refcounts
+                newFds[kv.Key] = new Bifrost.VFS.File(kv.Value.Dentry, kv.Value.Flags) { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
+            }
         }
         
         var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
@@ -189,5 +202,17 @@ public unsafe partial class SyscallManager
             if (Engine != null)
                 _registry.Remove(Engine.State);
         }
+
+        Root?.Inode?.Put();
+        CurrentWorkingDirectory?.Inode?.Put();
+        ProcessRoot?.Inode?.Put();
+        
+        foreach (var fd in FDs.Values)
+        {
+            // Note: If shareFiles is true, this might be dangerous if multiple tasks close the same FDs
+            // But usually SyscallManager.Close is called when the task/process actually dies.
+            fd.Close();
+        }
+        FDs.Clear();
     }
 }

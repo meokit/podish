@@ -16,11 +16,10 @@ public class ConsoleInode : Inode
         Ino = 1; // Dummy
     }
 
-    public override Inode? Lookup(string name) => null;
-    public override Inode Create(string name, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot create in /dev");
-    public override Inode Mkdir(string name, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot mkdir in /dev");
-    public override void Unlink(string name) { }
-    public override void Rmdir(string name) { }
+    public override Dentry Create(Dentry dentry, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot create in /dev");
+    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot mkdir in /dev");
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new InvalidOperationException("Cannot symlink in /dev");
+    public override Dentry Link(Dentry dentry, Inode oldInode) => throw new InvalidOperationException("Cannot link in /dev");
     
     public override int Read(File file, Span<byte> buffer, long offset)
     {
@@ -40,5 +39,4 @@ public class ConsoleInode : Inode
     }
     
     public override void Truncate(long size) { }
-    public override List<DirectoryEntry> GetEntries() => new();
 }

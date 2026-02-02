@@ -3,16 +3,16 @@ using System.Collections.Generic;
 
 namespace Bifrost.VFS;
 
-public enum InodeType
+public enum InodeType : int
 {
     Unknown = 0,
-    Fifo = 1,
-    CharDev = 2,
-    Directory = 4,
-    BlockDev = 6,
-    File = 8,
-    Symlink = 10,
-    Socket = 12
+    File = 0x8000,
+    Directory = 0x4000,
+    Symlink = 0xA000,
+    CharDev = 0x2000,
+    BlockDev = 0x6000,
+    Fifo = 0x1000,
+    Socket = 0xC000
 }
 
 [Flags]
@@ -49,6 +49,7 @@ public abstract class SuperBlock
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = new();
+    public object Lock { get; } = new();
     
     // Reference counting for lifecycle management
     public int RefCount { get; set; } = 0;
@@ -66,7 +67,7 @@ public abstract class SuperBlock
     
     public bool HasActiveInodes()
     {
-        return AllInodes.Any(i => i.RefCount > 0);
+        return AllInodes.Any(i => i.RefCount > i.Dentries.Count);
     }
     
     protected virtual void Shutdown()
@@ -76,8 +77,8 @@ public abstract class SuperBlock
         Inodes.Clear();
     }
     
-    public abstract Inode AllocInode();
-    public abstract void WriteInode(Inode inode);
+    public virtual Inode AllocInode() => throw new NotSupportedException();
+    public virtual void WriteInode(Inode inode) { }
 }
 
 public abstract class Inode
@@ -93,6 +94,10 @@ public abstract class Inode
     public DateTime CTime { get; set; }
     
     public SuperBlock SuperBlock { get; set; } = null!;
+    
+    // All dentries pointing to this inode (hard links)
+    public List<Dentry> Dentries { get; } = new();
+    public object Lock { get; } = new();
     
     // Reference counting for lifecycle management
     public int RefCount { get; set; } = 0;
@@ -114,22 +119,26 @@ public abstract class Inode
     }
     
     // Operations
-    public abstract Inode? Lookup(string name);
-    public abstract Inode Create(string name, int mode, int uid, int gid);
-    public abstract Inode Mkdir(string name, int mode, int uid, int gid);
-    public abstract void Unlink(string name);
-    public abstract void Rmdir(string name);
+    public virtual Dentry? Lookup(string name) => null;
+    public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid) => throw new NotSupportedException();
+    public virtual Dentry Mkdir(Dentry dentry, int mode, int uid, int gid) => throw new NotSupportedException();
+    public virtual void Unlink(string name) => throw new NotSupportedException();
+    public virtual void Rmdir(string name) => throw new NotSupportedException();
+    public virtual Dentry Link(Dentry dentry, Inode oldInode) => throw new NotSupportedException();
+    public virtual void Rename(string oldName, Inode newParent, string newName) => throw new NotSupportedException();
+    public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new NotSupportedException();
+    public virtual string Readlink() => throw new NotSupportedException();
     
-    public abstract int Read(File file, Span<byte> buffer, long offset);
-    public abstract int Write(File file, ReadOnlySpan<byte> buffer, long offset);
-    public abstract void Truncate(long size);
+    public virtual int Read(File file, Span<byte> buffer, long offset) => 0;
+    public virtual int Write(File file, ReadOnlySpan<byte> buffer, long offset) => 0;
+    public virtual void Truncate(long size) => throw new NotSupportedException();
     
     // File operations hooks
     public virtual void Open(File file) { }
     public virtual void Release(File file) { }
     
     // For directories, we need iteration. 
-    public abstract List<DirectoryEntry> GetEntries();
+    public virtual List<DirectoryEntry> GetEntries() => new();
 }
 
 public struct DirectoryEntry
@@ -145,7 +154,7 @@ public class Dentry
     public long Id { get; } = System.Threading.Interlocked.Increment(ref _nextId);
     
     public string Name { get; set; }
-    public Inode Inode { get; set; }
+    public Inode? Inode { get; set; }
     public Dentry? Parent { get; set; }
     public SuperBlock SuperBlock { get; set; }
     public Dictionary<string, Dentry> Children { get; } = new();
@@ -157,12 +166,25 @@ public class Dentry
     // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
     public Dentry? MountedAt { get; set; }
     
-    public Dentry(string name, Inode inode, Dentry? parent, SuperBlock sb)
+    public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
         Name = name;
         Inode = inode;
         Parent = parent;
         SuperBlock = sb;
+        if (inode != null)
+        {
+            inode.Dentries.Add(this);
+            inode.Get();
+        }
+    }
+
+    public void Instantiate(Inode inode)
+    {
+        if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
+        Inode = inode;
+        Inode.Dentries.Add(this);
+        Inode.Get();
     }
 }
 
@@ -172,6 +194,7 @@ public class File
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
     public object? PrivateData { get; set; }
+    private bool _isClosed = false;
     
     public File(Dentry dentry, FileFlags flags)
     {
@@ -183,20 +206,23 @@ public class File
     
     public virtual void Close()
     {
+        if (_isClosed) return;
+        _isClosed = true;
+        
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put();  // Decrease reference count
     }
     
     public virtual int Read(Span<byte> buffer)
     {
-        int n = Dentry.Inode.Read(this, buffer, Position);
+        int n = Dentry.Inode!.Read(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
     
     public virtual int Write(ReadOnlySpan<byte> buffer)
     {
-        int n = Dentry.Inode.Write(this, buffer, Position);
+        int n = Dentry.Inode!.Write(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
