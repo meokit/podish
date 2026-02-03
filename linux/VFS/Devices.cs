@@ -24,7 +24,6 @@ public class ConsoleInode : Inode
     public override int Read(File file, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
-        // Console.OpenStandardInput().Read... but Console.In is easier?
         // Using OpenStandardInput for binary compatibility
         using var stream = Console.OpenStandardInput();
         return stream.Read(buffer);

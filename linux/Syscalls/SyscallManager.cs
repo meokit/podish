@@ -158,7 +158,6 @@ public unsafe partial class SyscallManager
         }
 
         uint eax = engine.RegRead(Reg.EAX);
-        // ... (registers)
         uint ebx = engine.RegRead(Reg.EBX);
         uint ecx = engine.RegRead(Reg.ECX);
         uint edx = engine.RegRead(Reg.EDX);
@@ -168,7 +167,8 @@ public unsafe partial class SyscallManager
 
         if (Strace)
         {
-            Console.WriteLine($"[Syscall] {eax} ({ebx:X}, {ecx:X}, {edx:X}, {esi:X}, {edi:X}, {ebp:X})");
+            Logger.LogTrace("[Syscall] {eax} ({ebx:X}, {ecx:X}, {edx:X}, {esi:X}, {edi:X}, {ebp:X})",
+                eax, ebx, ecx, edx, esi, edi, ebp);
         }
 
         int ret = -38; // ENOSYS
