@@ -221,29 +221,43 @@ static FORCE_INLINE void OpXor_EvGv(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpInc_Reg(EmuState* state, DecodedOp* op) {
-    // 40+rd: INC r32
+    // 40+rd: INC r16/32
     uint8_t reg = op->handler_index & 7;
-    uint32_t val = GetReg(state, reg);
-
+    
     // INC does not affect CF
     uint32_t old_cf = state->ctx.eflags & CF_MASK;
-    uint32_t res = AluAdd(state, val, 1U);
-    state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
-
-    SetReg(state, reg, res);
+    
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = (uint16_t)GetReg(state, reg);
+        uint16_t res = AluAdd<uint16_t>(state, val, 1);
+        state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t val = GetReg(state, reg);
+        uint32_t res = AluAdd<uint32_t>(state, val, 1U);
+        state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        SetReg(state, reg, res);
+    }
 }
 
 static FORCE_INLINE void OpDec_Reg(EmuState* state, DecodedOp* op) {
-    // 48+rd: DEC r32
+    // 48+rd: DEC r16/32
     uint8_t reg = op->handler_index & 7;
-    uint32_t val = GetReg(state, reg);
 
     // DEC does not affect CF
     uint32_t old_cf = state->ctx.eflags & CF_MASK;
-    uint32_t res = AluSub(state, val, 1U);
-    state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
 
-    SetReg(state, reg, res);
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = (uint16_t)GetReg(state, reg);
+        uint16_t res = AluSub<uint16_t>(state, val, 1);
+        state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+    } else {
+        uint32_t val = GetReg(state, reg);
+        uint32_t res = AluSub<uint32_t>(state, val, 1U);
+        state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        SetReg(state, reg, res);
+    }
 }
 
 static FORCE_INLINE void OpAdd_AlImm(EmuState* state, DecodedOp* op) {

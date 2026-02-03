@@ -84,55 +84,30 @@ inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     return 0; 
 }
 
-inline uint32_t ComputeEAD(EmuState* state, const DecodedOp* op) {
-    // Mod=3 (Register) should be handled by caller before calling ComputeEAD.
-    
+inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
+    // Computes Effective Address (no segment base)
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
-    
     uint32_t base = 0;
     
-    // SIB?
     if (op->meta.flags.has_sib) {
         uint8_t scale = (op->sib >> 6) & 3;
-        uint8_t index = (op->sib >> 3) & 7; // Index Register
-        uint8_t base_reg = op->sib & 7;     // Base Register
-        
-        uint32_t idx_val = 0;
-        if (index != 4) { // ESP cannot be Index
-            idx_val = GetReg(state, index);
-        }
-        
-        uint32_t base_val = 0;
-         // Special SIB Base: If Mod=0 and Base=5 -> No Base (Disp32 only)
-        if (mod == 0 && base_reg == 5) {
-            base_val = 0; 
-        } else {
-            base_val = GetReg(state, base_reg);
-        }
-        
+        uint8_t index = (op->sib >> 3) & 7;
+        uint8_t base_reg = op->sib & 7;
+        uint32_t idx_val = (index != 4) ? GetReg(state, index) : 0;
+        uint32_t base_val = (mod == 0 && base_reg == 5) ? 0 : GetReg(state, base_reg);
         base = base_val + (idx_val << scale);
-    } 
-    else {
-        // No SIB
-        // Mod=0, RM=5 -> Disp32 (Base=0)
-        
-        if (mod == 0 && rm == 5) {
-            base = 0; // Absolute Disp32
-        } else {
-            base = GetReg(state, rm); 
-        }
+    } else {
+        if (mod == 0 && rm == 5) base = 0;
+        else base = GetReg(state, rm);
     }
-    
-    // Add Displacement
-    if (op->meta.flags.has_disp) {
-        base += op->disp;
-    }
-    
-    // Add Segment Base
-    base += GetSegmentBase(state, op);
-    
+    if (op->meta.flags.has_disp) base += op->disp;
     return base;
+}
+
+inline uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
+    uint32_t ea = ComputeEA(state, op);
+    return ea + GetSegmentBase(state, op);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -148,7 +123,7 @@ inline uint32_t ReadModRM32(EmuState* state, const DecodedOp* op) {
         return GetReg(state, rm);
     } else {
         // Memory Operand
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         return state->mmu.read<uint32_t>(addr);
     }
 }
@@ -162,7 +137,7 @@ inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val) {
         SetReg(state, rm, val);
     } else {
         // Memory Operand
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         state->mmu.write<uint32_t>(addr, val);
     }
 }
@@ -182,7 +157,7 @@ inline void WriteModRM8(EmuState* state, const DecodedOp* op, uint8_t val) {
         }
         *rptr = curr;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         state->mmu.write<uint8_t>(addr, val);
     }
 }
@@ -196,7 +171,7 @@ inline void WriteModRM16(EmuState* state, const DecodedOp* op, uint16_t val) {
         uint32_t* rptr = GetRegPtr(state, rm);
         *rptr = (*rptr & 0xFFFF0000) | val;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         state->mmu.write<uint16_t>(addr, val);
     }
 }
@@ -211,7 +186,7 @@ inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op) {
         if (rm < 4) return val & 0xFF;
         else return (val >> 8) & 0xFF;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         return state->mmu.read<uint8_t>(addr);
     }
 }
@@ -224,7 +199,7 @@ inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op) {
         // Register (AX, CX, DX, BX, SP, BP, SI, DI)
         return GetReg(state, rm) & 0xFFFF;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         return state->mmu.read<uint16_t>(addr);
     }
 }
@@ -236,7 +211,7 @@ inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
     if (mod == 3) {
         return state->ctx.xmm[rm];
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         uint64_t low = state->mmu.read<uint64_t>(addr);
         uint64_t high = state->mmu.read<uint64_t>(addr + 8);
         
@@ -257,7 +232,7 @@ inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val)
     if (mod == 3) {
         state->ctx.xmm[rm] = val;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         uint64_t* ptr = (uint64_t*)&val;
         state->mmu.write<uint64_t>(addr, ptr[0]);
         state->mmu.write<uint64_t>(addr + 8, ptr[1]);

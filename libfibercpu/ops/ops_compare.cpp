@@ -51,11 +51,17 @@ static FORCE_INLINE void OpCmp_GvEv(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op) {
-    // 85: TEST r/m32, r32
-    uint32_t dest = ReadModRM32(state, op);
+    // 85: TEST r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src = GetReg(state, reg);
-    AluAnd(state, dest, src);  // Discard result
+    if (op->prefixes.flags.opsize) {
+        uint16_t dest = ReadModRM16(state, op);
+        uint16_t src = (uint16_t)GetReg(state, reg);
+        AluAnd<uint16_t>(state, dest, src);
+    } else {
+        uint32_t dest = ReadModRM32(state, op);
+        uint32_t src = GetReg(state, reg);
+        AluAnd<uint32_t>(state, dest, src);
+    }
 }
 
 static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op) {

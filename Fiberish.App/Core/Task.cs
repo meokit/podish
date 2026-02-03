@@ -254,9 +254,6 @@ public class Task
                     }
                     else if (status == EmuStatus.Stopped || status == EmuStatus.Running)
                     {
-                        // Some normal stops (like voluntary yield) or just Step() completion
-                        if (status == EmuStatus.Stopped && Process.Syscalls.Strace)
-                            Logger.LogTrace("[Task {TID}] Stopped.", TID);
                         await System.Threading.Tasks.Task.Yield();
                     }
                     else

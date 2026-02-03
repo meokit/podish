@@ -2,6 +2,8 @@
 #include "decoder.h"
 #include "state.h"
 
+#include <cstdio>
+
 namespace x86emu {
 
 // External reference to handlers
@@ -28,7 +30,14 @@ void DispatchWrapper(EmuState* state, DecodedOp* op) {
     
     // Tail call next instruction in the block
     DecodedOp* next = op + 1;
-    ATTR_MUSTTAIL return g_Handlers[next->handler_index](state, next);
+    HandlerFunc h = g_Handlers[next->handler_index];
+    if (h == nullptr) {
+        fprintf(stderr, "[Dispatch] CRITICAL: Null handler for opcode index %04x at next EIP %08x (Prev EIP %08x)\n", 
+                next->handler_index, state->ctx.eip, original_eip);
+        state->status = EmuStatus::Fault;
+        return;
+    }
+    ATTR_MUSTTAIL return h(state, next);
 }
 
 } // namespace x86emu

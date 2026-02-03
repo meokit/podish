@@ -1,18 +1,17 @@
-# x86emu & Bifrost
+# Fiberish
 
-**x86emu** is a high-performance, non-JIT, user-mode x86 IA-32 emulation library written in C++23.
-**Bifrost** is a .NET 8 runtime that wraps `x86emu` to provide a functional Linux kernel simulation layer, capable of running static x86 Linux binaries on macOS and Linux.
+**Fiberish** is a .NET 8 runtime that provides a functional Linux kernel simulation layer, capable of running static x86 Linux binaries on macOS and Linux. It wraps **libfibercpu**, a high-performance, non-JIT, user-mode x86 IA-32 emulation library written in C++23.
 
 ## Architecture
 
 The project is divided into two layers:
 
-1.  **Core (C++):** A standalone shared library (`libx86emu`) implementing the raw CPU execution logic.
+1.  **Core (C++):** A standalone shared library (`libfibercpu`) implementing the raw CPU execution logic.
     *   **Threaded Interpreter:** Uses `[[clang::musttail]]` for rapid instruction dispatch.
     *   **SoftMMU:** Software Memory Management Unit with permission tracking.
     *   **FPU/SSE:** Full 80-bit x87 FPU and SSE/SSE2 support.
     
-2.  **Bifrost (C#):** A managed runtime that acts as the "kernel" and loader.
+2.  **Fiberish (C#):** A managed runtime that acts as the "kernel" and loader.
     *   **ELF Loader:** Parses and loads static x86 binaries.
     *   **Syscall Translation:** Implements Linux syscalls (Filesystem, Memory, threading) in managed code.
     *   **Process Management:** Maps Guest threads to Host threads/Tasks.
@@ -31,7 +30,7 @@ The project is divided into two layers:
 
 ## Roadmap to POSIX 1995
 
-Bifrost aims to provide a highly compliant POSIX environment. Current priorities include:
+Fiberish aims to provide a highly compliant POSIX environment. Current priorities include:
 
 1.  **Process Execution**: Implementation of `execve` to support running new programs from within the guest.
 2.  **Directory & File Control**: Adding `chdir`, `mkdir`, `rmdir`, and `rename`.
@@ -41,7 +40,7 @@ Bifrost aims to provide a highly compliant POSIX environment. Current priorities
 ## Requirements
 
 -   **C++ Core:** Clang++ (supporting C++23), CMake 3.20+.
--   **Bifrost:** .NET 8 SDK.
+-   **Fiberish:** .NET 8 SDK.
 -   **Testing:** Python 3.10+ (for core regression tests).
 
 ## Build Instructions
@@ -60,40 +59,40 @@ Or build manually:
 cmake -B build
 cmake --build build -j
 # On macOS, you may need to codesign the library locally
-codesign -f -s - build/libx86emu.dylib
+codesign -f -s - build/bin/libfibercpu.dylib
 ```
 
-### 2. Build Bifrost
+### 2. Build Fiberish
 
 ```bash
 # Copy the native library to the output directory or ensure it's in LD_LIBRARY_PATH
-dotnet build linux/Bifrost.csproj
-cp build/libx86emu.dylib linux/bin/Debug/net8.0/  # macOS
-# cp build/libx86emu.so linux/bin/Debug/net8.0/     # Linux
+dotnet build Fiberish.App/Fiberish.App.csproj
+cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net8.0/  # macOS
+# cp build/bin/libfibercpu.so Fiberish.App/bin/Debug/net8.0/     # Linux
 ```
 
 ## Usage
 
-To run a static Linux x86 binary using Bifrost:
+To run a static Linux x86 binary using Fiberish:
 
 ```bash
-dotnet run --project linux/Bifrost.csproj -- <binary_path> [arguments]
+dotnet run --project Fiberish.App/Fiberish.App.csproj -- <binary_path> [arguments]
 ```
 
 ### Example
 
 ```bash
 # Run a static hello world
-dotnet run --project linux/Bifrost.csproj -- tests/linux/assets/hello_static
+dotnet run --project Fiberish.App/Fiberish.App.csproj -- tests/linux/assets/hello_static
 
 # Run with RootFS mapping
-dotnet run --project linux/Bifrost.csproj --rootfs ./my_rootfs -- /bin/ls
+dotnet run --project Fiberish.App/Fiberish.App.csproj --rootfs ./my_rootfs -- /bin/ls
 ```
 
 ## Directory Structure
 
--   `src/`: **Core C++ Library**. Instruction decoder, OPS, and execution engine.
--   `linux/`: **Bifrost (C#)**. Syscall implementations, ELF loader, and CLI entry point.
+-   `libfibercpu/`: **Core C++ Library**. Instruction decoder, OPS, and execution engine.
+-   `Fiberish.App/`: **Fiberish (C#)**. Syscall implementations, ELF loader, and CLI entry point.
 -   `tests/`:
     -   `regression/`: Python-based instruction verification against Unicorn/QEMU.
     -   `linux/`: C source files for integration tests.

@@ -29,7 +29,7 @@ uint32_t ReadModRM(EmuState* state, DecodedOp* op, bool is_byte) {
             else
                 return (val >> 8) & 0xFF;
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             return state->mmu.read<uint8_t>(addr);
         }
     } else if (op->prefixes.flags.opsize) {

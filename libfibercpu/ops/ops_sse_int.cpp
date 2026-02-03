@@ -102,6 +102,13 @@ static FORCE_INLINE void OpPmuludq_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mul_epu32(dst, src));
 }
 
+static FORCE_INLINE void OpPmaddwd_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_madd_epi16(dst, src));
+}
+
 // Comparison
 static FORCE_INLINE void OpPcmpeqb_Sse(EmuState* state, DecodedOp* op) {
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -558,7 +565,7 @@ static FORCE_INLINE void OpPinsrw_Sse(EmuState* state, DecodedOp* op) {
     if (op->modrm >= 0xC0) {
         val = (int)(uint16_t)state->ctx.regs[op->modrm & 7];
     } else {
-        val = (int)state->mmu.read<uint16_t>(ComputeEAD(state, op));
+        val = (int)state->mmu.read<uint16_t>(ComputeLinearAddress(state, op));
     }
 
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
@@ -687,6 +694,7 @@ void RegisterSseIntOps() {
     g_Handlers[0x1FA] = DispatchWrapper<OpPsubd_Sse>;
     g_Handlers[0x1FB] = DispatchWrapper<OpPsubq_Sse>;
     g_Handlers[0x1F4] = DispatchWrapper<OpPmuludq_Sse>;
+    g_Handlers[0x1F5] = DispatchWrapper<OpPmaddwd_Sse>;
     g_Handlers[0x174] = DispatchWrapper<OpPcmpeqb_Sse>;
     g_Handlers[0x175] = DispatchWrapper<OpPcmpeqw_Sse>;
     g_Handlers[0x176] = DispatchWrapper<OpPcmpeqd_Sse>;

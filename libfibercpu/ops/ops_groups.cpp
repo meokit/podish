@@ -85,39 +85,72 @@ static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpGroup5_Ev(EmuState* state, DecodedOp* op) {
     // FF: Group 5
     uint8_t subop = (op->modrm >> 3) & 7;
-    uint32_t dest = 0;
 
     switch (subop) {
         case 0:  // INC Ev
-            dest = ReadModRM32(state, op);
-            {
+            if (op->prefixes.flags.opsize) {
+                uint16_t val = ReadModRM16(state, op);
                 uint32_t old_cf = state->ctx.eflags & CF_MASK;
-                uint32_t res = AluAdd(state, dest, 1U);
+                uint16_t res = AluAdd<uint16_t>(state, val, 1);
+                state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+                WriteModRM16(state, op, res);
+            } else {
+                uint32_t val = ReadModRM32(state, op);
+                uint32_t old_cf = state->ctx.eflags & CF_MASK;
+                uint32_t res = AluAdd<uint32_t>(state, val, 1U);
                 state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
                 WriteModRM32(state, op, res);
             }
             break;
         case 1:  // DEC Ev
-            dest = ReadModRM32(state, op);
-            {
+            if (op->prefixes.flags.opsize) {
+                uint16_t val = ReadModRM16(state, op);
                 uint32_t old_cf = state->ctx.eflags & CF_MASK;
-                uint32_t res = AluSub(state, dest, 1U);
+                uint16_t res = AluSub<uint16_t>(state, val, 1);
+                state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+                WriteModRM16(state, op, res);
+            } else {
+                uint32_t val = ReadModRM32(state, op);
+                uint32_t old_cf = state->ctx.eflags & CF_MASK;
+                uint32_t res = AluSub<uint32_t>(state, val, 1U);
                 state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
                 WriteModRM32(state, op, res);
             }
             break;
         case 2:  // CALL Ev (Near Indirect)
-            dest = ReadModRM32(state, op);
-            Push32(state, state->ctx.eip);
-            state->ctx.eip = dest;
+        {
+            uint32_t target;
+            if (op->prefixes.flags.opsize) {
+                target = ReadModRM16(state, op);
+                Push16(state, (uint16_t)state->ctx.eip);
+                state->ctx.eip = target & 0xFFFF;
+            } else {
+                target = ReadModRM32(state, op);
+                Push32(state, state->ctx.eip);
+                state->ctx.eip = target;
+            }
             break;
+        }
         case 4:  // JMP Ev (Near Indirect)
-            dest = ReadModRM32(state, op);
-            state->ctx.eip = dest;
+        {
+            uint32_t target;
+            if (op->prefixes.flags.opsize) {
+                target = ReadModRM16(state, op);
+                state->ctx.eip = target & 0xFFFF;
+            } else {
+                target = ReadModRM32(state, op);
+                state->ctx.eip = target;
+            }
             break;
+        }
         case 6:  // PUSH Ev
-            dest = ReadModRM32(state, op);
-            Push32(state, dest);
+            if (op->prefixes.flags.opsize) {
+                uint16_t val = ReadModRM16(state, op);
+                Push16(state, val);
+            } else {
+                uint32_t val = ReadModRM32(state, op);
+                Push32(state, val);
+            }
             break;
         default:
             OpUd2(state, op);
@@ -133,7 +166,7 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op) {
         // If equal, ZF=1 and m64 = ECX:EBX.
         // Else, ZF=0 and EDX:EAX = m64.
 
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         uint64_t mem_val = state->mmu.read<uint64_t>(addr);
 
         uint32_t eax = GetReg(state, EAX);
@@ -232,7 +265,7 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op) {
     // Since WriteModRM8 might not exist or be exported, use manual logic
     // But Wait, OpMov_EvGv uses WriteModRM32.
     // Ops like OpMovzx don't write.
-    // Let's rely on manual write using ComputeEAD if memory.
+    // Let's rely on manual write using ComputeLinearAddress if memory.
 
     if (op->modrm >= 0xC0) {
         // Register Check
@@ -255,7 +288,7 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op) {
         }
     } else {
         // Memory
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         if (width == 1)
             state->mmu.write<uint8_t>(addr, (uint8_t)res);
         else if (width == 2)

@@ -33,13 +33,13 @@ static inline float80& FpuTop(EmuState* state, int index) {
 
 // Helper to read float32 from memory and convert to float80
 static inline float80 ReadF32(EmuState* state, DecodedOp* op) {
-    uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+    uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
     return f80_from_double((double)*(float*)&val);
 }
 
 // Helper to read float64 from memory and convert to float80
 static inline float80 ReadF64(EmuState* state, DecodedOp* op) {
-    uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+    uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
     return f80_from_double(*(double*)&val);
 }
 
@@ -144,7 +144,7 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
         }
     } else {
         // Memory Access
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
             case 0:  // FLD m32
             {
@@ -183,7 +183,7 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpFpu_DA(EmuState* state, DecodedOp* op) {
     // DA: Int Arith m32
     uint8_t subop = (op->modrm >> 3) & 7;
-    int32_t val32 = (int32_t)state->mmu.read<uint32_t>(ComputeEAD(state, op));
+    int32_t val32 = (int32_t)state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
     float80 val = f80_from_int(val32);
     float80& st0 = FpuTop(state, 0);
 
@@ -251,7 +251,7 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op) {
             OpUd2(state, op);
         }
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
             case 0:  // FILD m32
             {
@@ -373,7 +373,7 @@ static FORCE_INLINE void OpFpu_DD(EmuState* state, DecodedOp* op) {
             OpUd2(state, op);
         }
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
             case 0:  // FLD m64
             {
@@ -465,7 +465,7 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op) {
             OpUd2(state, op);
         }
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
             case 0:  // FILD m16
             {

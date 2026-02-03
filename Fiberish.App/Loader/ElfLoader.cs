@@ -21,7 +21,7 @@ public class LoaderResult
 public class ElfLoader
 {
     public const uint StackTop = 0xC0000000;
-    public const uint StackSize = 0x20000;
+    public const uint StackSize = 0x800000;
 
     // Auxv types moved to LinuxConstants
 

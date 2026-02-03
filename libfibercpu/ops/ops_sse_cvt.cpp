@@ -33,7 +33,7 @@ static FORCE_INLINE void OpCvt_2A(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op) {
     // 2C: CVTTSD2SI (F2), CVTTSS2SI (F3)
     uint32_t addr = 0;
-    if (op->modrm < 0xC0) addr = ComputeEAD(state, op);
+    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
     int32_t res = 0;
 
     if (op->prefixes.flags.repne) {  // F2: CVTTSD2SI (Double -> Int32)
@@ -75,7 +75,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
             src_pd = simde_mm_set_sd(*(double*)&val);
         }
         *dest_ptr = simde_mm_cvtsd_ss(*dest_ptr, src_pd);
@@ -86,7 +86,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+            uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
             src = simde_mm_set_ss(*(float*)&val);
         }
 
@@ -100,7 +100,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
             uint32_t v0 = val & 0xFFFFFFFF;
             uint32_t v1 = val >> 32;
             src = simde_mm_set_ps(0.0f, 0.0f, *(float*)&v1, *(float*)&v0);
@@ -152,7 +152,7 @@ static FORCE_INLINE void OpCvt_E6(EmuState* state, DecodedOp* op) {
             simde__m128 src = state->ctx.xmm[op->modrm & 7];
             isrc = simde_mm_castps_si128(src);
         } else {
-            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
             uint32_t v0 = val & 0xFFFFFFFF;
             uint32_t v1 = val >> 32;
             isrc = simde_mm_set_epi32(0, 0, v1, v0);

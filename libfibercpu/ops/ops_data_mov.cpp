@@ -11,19 +11,27 @@
 namespace x86emu {
 
 static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op) {
-    // MOV r/m32, r32 (0x89)
-    // Store Reg into ModRM
+    // MOV r/m16/32, r16/32 (0x89)
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t val = GetReg(state, reg);
-    WriteModRM32(state, op, val);
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = (uint16_t)GetReg(state, reg);
+        WriteModRM16(state, op, val);
+    } else {
+        uint32_t val = GetReg(state, reg);
+        WriteModRM32(state, op, val);
+    }
 }
 
 static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op) {
-    // MOV r32, r/m32 (0x8B)
-    // Load ModRM into Reg
-    uint32_t val = ReadModRM32(state, op);
+    // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, val);
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = ReadModRM16(state, op);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+    } else {
+        uint32_t val = ReadModRM32(state, op);
+        SetReg(state, reg, val);
+    }
 }
 
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op) {
@@ -58,9 +66,13 @@ static FORCE_INLINE void OpMov_EbIb(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op) {
-    // B8+reg: MOV r32, imm32
+    // B8+reg: MOV r16/32, imm16/32
     uint8_t reg = op->handler_index & 7;
-    SetReg(state, reg, op->imm);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)op->imm);
+    } else {
+        SetReg(state, reg, op->imm);
+    }
 }
 
 static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
@@ -82,8 +94,12 @@ static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpMov_EvIz(EmuState* state, DecodedOp* op) {
-    // C7: MOV r/m32, imm32
-    WriteModRM32(state, op, op->imm);
+    // C7: MOV r/m16/32, imm16/32
+    if (op->prefixes.flags.opsize) {
+        WriteModRM16(state, op, (uint16_t)op->imm);
+    } else {
+        WriteModRM32(state, op, op->imm);
+    }
 }
 
 static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
@@ -97,8 +113,13 @@ static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
         uint32_t* rptr = GetRegPtr(state, EAX);
         *rptr = (*rptr & 0xFFFFFF00) | val;
     } else {  // A1
-        uint32_t val = state->mmu.read<uint32_t>(linear);
-        SetReg(state, EAX, val);
+        if (op->prefixes.flags.opsize) {
+            uint16_t val = state->mmu.read<uint16_t>(linear);
+            SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | val);
+        } else {
+            uint32_t val = state->mmu.read<uint32_t>(linear);
+            SetReg(state, EAX, val);
+        }
     }
 }
 
@@ -108,12 +129,17 @@ static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
 
-    uint32_t val = GetReg(state, EAX);
-
     if ((op->handler_index & 1) == 0) {  // A2
-        state->mmu.write<uint8_t>(linear, (uint8_t)val);
+        uint8_t val = GetReg8(state, EAX);
+        state->mmu.write<uint8_t>(linear, val);
     } else {  // A3
-        state->mmu.write<uint32_t>(linear, val);
+        if (op->prefixes.flags.opsize) {
+            uint16_t val = (uint16_t)GetReg(state, EAX);
+            state->mmu.write<uint16_t>(linear, val);
+        } else {
+            uint32_t val = GetReg(state, EAX);
+            state->mmu.write<uint32_t>(linear, val);
+        }
     }
 }
 
@@ -135,7 +161,7 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
         //uint8_t rm = op->modrm & 7;
         //selector = (uint16_t)GetReg(state, rm);
     } else {
-        //uint32_t addr = ComputeEAD(state, op);
+        //uint32_t addr = ComputeLinearAddress(state, op);
         //selector = state->mmu.read<uint16_t>(addr);
         if (state->status != EmuStatus::Running) return;
     }
@@ -183,7 +209,7 @@ static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op) {
             SetReg(state, rm, (uint32_t)val);
         }
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         state->mmu.write<uint16_t>(addr, val);
     }
 }
@@ -313,45 +339,70 @@ static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
-    // 0F B6: MOVZX r32, r/m8
+    // 0F B6: MOVZX r16/32, r/m8
     uint8_t val = ReadModRM8(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, (uint32_t)val);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
+    } else {
+        SetReg(state, reg, (uint32_t)val);
+    }
 }
 
 static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op) {
-    // 0F B7: MOVZX r32, r/m16
+    // 0F B7: MOVZX r16/32, r/m16
+    // Note: MOVZX r16, m16 is effectively MOV r16, m16
     uint16_t val = ReadModRM16(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, (uint32_t)val);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+    } else {
+        SetReg(state, reg, (uint32_t)val);
+    }
 }
 
 static FORCE_INLINE void OpMovsx_Byte(EmuState* state, DecodedOp* op) {
-    // 0F BE: MOVSX r32, r/m8
+    // 0F BE: MOVSX r16/32, r/m8
     uint8_t val = ReadModRM8(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, (uint32_t)(int32_t)(int8_t)val);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)(int16_t)(int8_t)val);
+    } else {
+        SetReg(state, reg, (uint32_t)(int32_t)(int8_t)val);
+    }
 }
 
 static FORCE_INLINE void OpMovsx_Word(EmuState* state, DecodedOp* op) {
-    // 0F BF: MOVSX r32, r/m16
+    // 0F BF: MOVSX r16/32, r/m16
+    // Note: MOVSX r16, m16 is effectively MOV r16, m16
     uint16_t val = ReadModRM16(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, (uint32_t)(int32_t)(int16_t)val);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+    } else {
+        SetReg(state, reg, (uint32_t)(int32_t)(int16_t)val);
+    }
 }
 
 static FORCE_INLINE void OpLea(EmuState* state, DecodedOp* op) {
-    // LEA r32, m (0x8D)
-    uint32_t addr = ComputeEAD(state, op);
+    // LEA r16/32, m (0x8D)
+    uint32_t addr = ComputeEA(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
-    SetReg(state, reg, addr);
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)addr);
+    } else {
+        SetReg(state, reg, addr);
+    }
 }
 
 static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op) {
-    // PUSH r32 (0x50+rd)
-    uint8_t reg = op->handler_index & 7;  // Extract reg from opcode
-    uint32_t val = GetReg(state, reg);
-    Push32(state, val);
+    // PUSH r16/32 (0x50+rd)
+    uint8_t reg = op->handler_index & 7;
+    if (op->prefixes.flags.opsize) {
+        Push16(state, (uint16_t)GetReg(state, reg));
+    } else {
+        Push32(state, GetReg(state, reg));
+    }
 }
 
 static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op) {
@@ -365,20 +416,31 @@ static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op) {
-    // POP r32 (0x58+rd)
+    // POP r16/32 (0x58+rd)
     uint8_t reg = op->handler_index & 7;
-    uint32_t val = Pop32(state);
-    SetReg(state, reg, val);
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = Pop16(state);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+    } else {
+        uint32_t val = Pop32(state);
+        SetReg(state, reg, val);
+    }
 }
 
 static FORCE_INLINE void OpXchg_EvGv(EmuState* state, DecodedOp* op) {
-    // XCHG r/m32, r32 (0x87)
+    // XCHG r/m16/32, r16/32 (0x87)
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t reg_val = GetReg(state, reg);
-    uint32_t rm_val = ReadModRM32(state, op);
-
-    WriteModRM32(state, op, reg_val);
-    SetReg(state, reg, rm_val);
+    if (op->prefixes.flags.opsize) {
+        uint16_t reg_val = (uint16_t)GetReg(state, reg);
+        uint16_t rm_val = ReadModRM16(state, op);
+        WriteModRM16(state, op, reg_val);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | rm_val);
+    } else {
+        uint32_t reg_val = GetReg(state, reg);
+        uint32_t rm_val = ReadModRM32(state, op);
+        WriteModRM32(state, op, reg_val);
+        SetReg(state, reg, rm_val);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -703,15 +765,21 @@ static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpXchg_Reg(EmuState* state, DecodedOp* op) {
-    // 90+reg: XCHG EAX, r32
+    // 90+reg: XCHG EAX, r16/32
     uint8_t reg = op->handler_index & 7;
-    // If reg=0 (EAX), it's NOP.
-    if (reg == 0) return;
+    if (reg == 0) return; // NOP
 
-    uint32_t val_eax = GetReg(state, EAX);
-    uint32_t val_reg = GetReg(state, reg);
-    SetReg(state, EAX, val_reg);
-    SetReg(state, reg, val_eax);
+    if (op->prefixes.flags.opsize) {
+        uint16_t val_eax = (uint16_t)GetReg(state, EAX);
+        uint16_t val_reg = (uint16_t)GetReg(state, reg);
+        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | val_reg);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val_eax);
+    } else {
+        uint32_t val_eax = GetReg(state, EAX);
+        uint32_t val_reg = GetReg(state, reg);
+        SetReg(state, EAX, val_reg);
+        SetReg(state, reg, val_eax);
+    }
 }
 
 void RegisterDataMovOps() {

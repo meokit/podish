@@ -429,7 +429,11 @@ namespace x86emu::mem {
                 HostAddr p_dst = resolve_slow(curr_dst, Property::Write);
                 if (!p_dst) return bytes_done;
                 
-                std::memcpy(p_dst, p_src, chunk);
+                // x86 REP MOVS with DF=0 usually handles overlap by copying byte-by-byte.
+                // std::memcpy is NOT safe for overlap.
+                // However, std::memmove is safe for overlap but doesn't match "fill" behavior.
+                // For now, use memmove as it's safer than memcpy.
+                std::memmove(p_dst, p_src, chunk);
                 bytes_done += chunk;
             }
             return bytes_done;

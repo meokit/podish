@@ -98,7 +98,7 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
             *rptr = val;
 
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             state->mmu.write<uint8_t>(addr, (uint8_t)res);
         }
     } else if (is_opsize) {
@@ -135,19 +135,26 @@ static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
-    // 0F A3: BT r/m32, r32
+    // 0F A3: BT r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
+    bool opsize = op->prefixes.flags.opsize;
 
     uint8_t bit_val = 0;
     if (mod == 3) {
         uint32_t base = GetReg(state, rm);
-        offset &= 31;
+        uint32_t mask = opsize ? 15 : 31;
+        offset &= mask;
         bit_val = (base >> offset) & 1;
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         int32_t signed_offset = (int32_t)offset;
+        if (opsize) {
+            // For 16-bit displacement, bit index is within the word?
+            // Actually, for BT r/m, reg, the bit offset is treated as a signed integer
+            // that offsets the memory address. This is the same for 16 and 32 bit.
+        }
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
         bit_val = (state->mmu.read<uint8_t>(addr) >> bit_idx) & 1;
@@ -160,30 +167,32 @@ static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
-    // 0F BA /4: BT  r/m32, imm8
-    // 0F BA /5: BTS r/m32, imm8
-    // 0F BA /6: BTR r/m32, imm8
-    // 0F BA /7: BTC r/m32, imm8
+    // 0F BA /4: BT  r/m16/32, imm8
+    // 0F BA /5: BTS r/m16/32, imm8
+    // 0F BA /6: BTR r/m16/32, imm8
+    // 0F BA /7: BTC r/m16/32, imm8
 
     uint8_t subop = (op->modrm >> 3) & 7;
-    uint8_t offset = op->imm & 31;  // imm8 modulo 32
+    bool opsize = op->prefixes.flags.opsize;
+    uint8_t offset = op->imm & (opsize ? 15 : 31);
 
     bool is_mem = ((op->modrm >> 6) & 3) != 3;
     uint32_t base = 0;
     uint32_t addr = 0;
 
     if (is_mem) {
-        // Memory Operand
-        // For Immediate form, the bit index is within the ModRM operand (16 or 32 bits).
-        // It DOES NOT offset the address like r/m, reg form does.
-        // It operates on the word/dword at effective address.
-        addr = ComputeEAD(state, op);
-        base = state->mmu.read<uint32_t>(addr);  // Always 32-bit in our emu for now (or opsize)
-        // If 16-bit opsize, we should read 16. Assuming 32 for simplicity or check opsize.
-        if (op->prefixes.flags.opsize) base &= 0xFFFF;
+        addr = ComputeLinearAddress(state, op);
+        if (opsize) {
+            base = state->mmu.read<uint16_t>(addr);
+        } else {
+            base = state->mmu.read<uint32_t>(addr);
+        }
     } else {
-        // Register Operand
-        base = ReadModRM32(state, op);
+        if (opsize) {
+            base = GetReg(state, op->modrm & 7) & 0xFFFF;
+        } else {
+            base = GetReg(state, op->modrm & 7);
+        }
     }
 
     uint8_t bit_val = (base >> offset) & 1;
@@ -207,9 +216,15 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
             res ^= mask;  // BTC
 
         if (is_mem) {
-            state->mmu.write<uint32_t>(addr, res);
+            if (opsize)
+                state->mmu.write<uint16_t>(addr, (uint16_t)res);
+            else
+                state->mmu.write<uint32_t>(addr, res);
         } else {
-            WriteModRM32(state, op, res);
+            if (opsize)
+                SetReg(state, op->modrm & 7, (GetReg(state, op->modrm & 7) & 0xFFFF0000) | (uint16_t)res);
+            else
+                SetReg(state, op->modrm & 7, res);
         }
     } else if (subop != 4) {
         OpUd2(state, op);
@@ -217,19 +232,20 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
-    // 0F B3: BTR r/m32, r32
+    // 0F B3: BTR r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
+    bool opsize = op->prefixes.flags.opsize;
 
     uint8_t bit_val = 0;
     if (mod == 3) {
         uint32_t base = GetReg(state, rm);
-        uint32_t mask = 1 << (offset & 31);
+        uint32_t mask = 1 << (offset & (opsize ? 15 : 31));
         bit_val = (base & mask) ? 1 : 0;
         SetReg(state, rm, base & ~mask);
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         int32_t signed_offset = (int32_t)offset;
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
@@ -246,19 +262,20 @@ static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op) {
-    // 0F AB: BTS r/m32, r32
+    // 0F AB: BTS r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
+    bool opsize = op->prefixes.flags.opsize;
 
     uint8_t bit_val = 0;
     if (mod == 3) {
         uint32_t base = GetReg(state, rm);
-        uint32_t mask = 1 << (offset & 31);
+        uint32_t mask = 1 << (offset & (opsize ? 15 : 31));
         bit_val = (base & mask) ? 1 : 0;
         SetReg(state, rm, base | mask);
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         int32_t signed_offset = (int32_t)offset;
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
@@ -275,19 +292,20 @@ static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op) {
-    // 0F BB: BTC r/m32, r32
+    // 0F BB: BTC r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
+    bool opsize = op->prefixes.flags.opsize;
 
     uint8_t bit_val = 0;
     if (mod == 3) {
         uint32_t base = GetReg(state, rm);
-        uint32_t mask = 1 << (offset & 31);
+        uint32_t mask = 1 << (offset & (opsize ? 15 : 31));
         bit_val = (base & mask) ? 1 : 0;
         SetReg(state, rm, base ^ mask);
     } else {
-        uint32_t addr = ComputeEAD(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
         int32_t signed_offset = (int32_t)offset;
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;

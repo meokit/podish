@@ -28,7 +28,7 @@ static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t mem_val = state->mmu.read<uint64_t>(addr);
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
@@ -41,7 +41,7 @@ static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t mem_val = state->mmu.read<uint32_t>(addr);
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
@@ -70,7 +70,7 @@ static FORCE_INLINE void OpSub_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t mem_val = state->mmu.read<uint64_t>(addr);
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
@@ -82,7 +82,7 @@ static FORCE_INLINE void OpSub_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t mem_val = state->mmu.read<uint32_t>(addr);
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
@@ -111,7 +111,7 @@ static FORCE_INLINE void OpMul_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t mem_val = state->mmu.read<uint64_t>(addr);
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
@@ -123,7 +123,7 @@ static FORCE_INLINE void OpMul_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t mem_val = state->mmu.read<uint32_t>(addr);
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
@@ -152,7 +152,7 @@ static FORCE_INLINE void OpDiv_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t mem_val = state->mmu.read<uint64_t>(addr);
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
@@ -164,7 +164,7 @@ static FORCE_INLINE void OpDiv_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t mem_val = state->mmu.read<uint32_t>(addr);
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
@@ -255,7 +255,7 @@ static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint64_t val = state->mmu.read<uint64_t>(ComputeEAD(state, op));
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
             src_pd = simde_mm_set_sd(*(double*)&val);
         }
 
@@ -268,7 +268,7 @@ static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t val = state->mmu.read<uint32_t>(ComputeEAD(state, op));
+            uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
             src = simde_mm_set_ss(*(float*)&val);
         }
         *dest_ptr = Helper_CmpSS(*dest_ptr, src, pred);
@@ -297,7 +297,7 @@ static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op) {
         if (op->modrm >= 0xC0)
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<double>(ComputeEAD(state, op));
+            b = state->mmu.read<double>(ComputeLinearAddress(state, op));
 
         double* dest = (double*)&state->ctx.xmm[reg_idx];  // [0]
         if (is_min)
@@ -311,7 +311,7 @@ static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op) {
         if (op->modrm >= 0xC0)
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<float>(ComputeEAD(state, op));
+            b = state->mmu.read<float>(ComputeLinearAddress(state, op));
 
         float* dest = (float*)&state->ctx.xmm[reg_idx];  // [0]
         if (is_min)
@@ -360,7 +360,7 @@ static FORCE_INLINE void OpMovAp_Sse(EmuState* state, DecodedOp* op) {
         if (op->modrm >= 0xC0) {
             state->ctx.xmm[op->modrm & 7] = val;
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             // MOVAPS/MOVAPD require alignment check?
             // Ignoring for SoftMMU unless strict mode.
             // Using generic write128 helper if available or manual.
@@ -478,7 +478,7 @@ static FORCE_INLINE void OpSqrt_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t val = state->mmu.read<uint64_t>(addr);
             double d;
             std::memcpy(&d, &val, 8);
@@ -495,7 +495,7 @@ static FORCE_INLINE void OpSqrt_Sse(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t val = state->mmu.read<uint32_t>(addr);
             float f;
             std::memcpy(&f, &val, 4);
@@ -536,7 +536,7 @@ static FORCE_INLINE void OpUcomis_Unified(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint64_t val = state->mmu.read<uint64_t>(addr);
             std::memcpy(&b, &val, 8);
         }
@@ -554,7 +554,7 @@ static FORCE_INLINE void OpUcomis_Unified(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            uint32_t addr = ComputeEAD(state, op);
+            uint32_t addr = ComputeLinearAddress(state, op);
             uint32_t val = state->mmu.read<uint32_t>(addr);
             std::memcpy(&b, &val, 4);
         }
