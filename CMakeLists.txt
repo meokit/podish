@@ -1,47 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(x86emu VERSION 0.1 LANGUAGES C CXX)
+project(Fiberish LANGUAGES C CXX)
 
-# Enforce C++23
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# Unified output directory
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-# CPM Integration
-include(cmake/CPM.cmake)
-
-CPMAddPackage(
-    NAME simde
-    GITHUB_REPOSITORY simd-everywhere/simde
-    VERSION 0.8.2
-    OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES ON"
-)
-
-CPMAddPackage(
-    NAME unordered_dense
-    GITHUB_REPOSITORY martinus/unordered_dense
-    VERSION 4.8.1
-)
-
-# Compiler warnings and options
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(
-        -Wall -Wextra -Wpedantic
-        -Wno-unused-parameter
-        # Optimization flags for simulator
-        -fno-rtti -fno-exceptions
-    )
-else()
-    message(WARNING "This project is designed for Clang (supporting preserve_none and musttail). You are using ${CMAKE_CXX_COMPILER_ID}.")
-endif()
-
-# Source files
-file(GLOB_RECURSE SOURCES "src/*.cpp")
-list(FILTER SOURCES EXCLUDE REGEX "src/main.cpp")
-
-
-add_library(x86emu SHARED ${SOURCES})
-
-target_include_directories(x86emu PRIVATE src ${simde_SOURCE_DIR})
-
-target_link_libraries(x86emu PRIVATE unordered_dense::unordered_dense)
-
+add_subdirectory(libfibercpu)
+add_subdirectory(Fiberish.App)

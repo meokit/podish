@@ -2,13 +2,13 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux-tests", "linux-tests", "{999CDDC9-EC24-866A-B863-D1B25C3A9B42}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Fiberish.Tests", "Fiberish.Tests", "{999CDDC9-EC24-866A-B863-D1B25C3A9B42}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux", "linux", "{8E443371-16C4-AB83-8FD5-84A79F0DB75D}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Fiberish.App", "Fiberish.App", "{8E443371-16C4-AB83-8FD5-84A79F0DB75D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bifrost.Tests", "linux-tests\Bifrost.Tests.csproj", "{3FC2B15B-F193-4569-19BA-5D52F8F23E18}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.Tests", "Fiberish.Tests\Fiberish.Tests.csproj", "{3FC2B15B-F193-4569-19BA-5D52F8F23E18}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bifrost", "linux\Bifrost.csproj", "{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.App", "Fiberish.App\Fiberish.App.csproj", "{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

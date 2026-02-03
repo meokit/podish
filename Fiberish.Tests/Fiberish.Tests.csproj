@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\linux\Bifrost.csproj" />
+    <ProjectReference Include="..\Fiberish.App\Fiberish.App.csproj" />
   </ItemGroup>
 
 </Project>

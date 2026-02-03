@@ -35,7 +35,7 @@ public enum Seg
 
 public unsafe partial class X86Native
 {
-    private const string LibName = "libx86emu.dylib";
+    private const string LibName = "fibercpu";
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]
     public static partial IntPtr Create();
