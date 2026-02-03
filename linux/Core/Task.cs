@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using Bifrost.Memory;
 using Bifrost.Syscalls;
 using Bifrost.Native;
+using Microsoft.Extensions.Logging;
+using Bifrost.Diagnostics;
 
 namespace Bifrost.Core;
 
@@ -70,6 +72,8 @@ public class Process
 
 public class Task
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<Task>();
+
     // Global Lock for serialization (GIL) - Now a SemaphoreSlim for async Support
     public static readonly SemaphoreSlim GIL = new(1, 1);
 
@@ -209,7 +213,7 @@ public class Task
                     var status = CPU.Status;
                     if (status == EmuStatus.Fault)
                     {
-                        Console.WriteLine($"[Task {TID}] Fatal Fault at 0x{CPU.Eip:x}");
+                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x}", TID, CPU.Eip);
                         Exited = true;
                     }
                     else if (status == EmuStatus.Yield)
@@ -243,12 +247,12 @@ public class Task
                     else if (status == EmuStatus.Stopped)
                     {
                         // Some normal stops (like voluntary yield)
-                        if (Process.Syscalls.Strace) Console.WriteLine($"[Task {TID}] Stopped.");
+                        if (Process.Syscalls.Strace) Logger.LogTrace("[Task {TID}] Stopped.", TID);
                         await System.Threading.Tasks.Task.Yield();
                     }
                     else
                     {
-                        if (Process.Syscalls.Strace) Console.WriteLine($"[Task {TID}] Unhandled status {status}, exiting.");
+                        if (Process.Syscalls.Strace) Logger.LogTrace("[Task {TID}] Unhandled status {Status}, exiting.", TID, status);
                         Exited = true;
                     }
                 }

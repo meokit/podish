@@ -1,13 +1,15 @@
-using System.Runtime.InteropServices;
 using Bifrost.Core;
 using Bifrost.Memory;
 using Bifrost.Native;
 using Bifrost.VFS;
+using Microsoft.Extensions.Logging;
+using Bifrost.Diagnostics;
 
 namespace Bifrost.Syscalls;
 
 public unsafe partial class SyscallManager
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly Dictionary<IntPtr, SyscallManager> _registry = new();
     private static readonly object _registryLock = new();
 
@@ -166,7 +168,8 @@ public unsafe partial class SyscallManager
 
         if (Strace)
         {
-            Console.Write($"[{Bifrost.Core.Task.GIL.GetHashCode()}] syscall({eax}, 0x{ebx:x}, 0x{ecx:x}, 0x{edx:x}, 0x{esi:x}, 0x{edi:x}, 0x{ebp:x})");
+            Logger.LogTrace("[{GIL}] syscall({Eax}, 0x{Ebx:x}, 0x{Ecx:x}, 0x{Edx:x}, 0x{Esi:x}, 0x{Edi:x}, 0x{Ebp:x})", 
+                Bifrost.Core.Task.GIL.GetHashCode(), eax, ebx, ecx, edx, esi, edi, ebp);
         }
 
         int ret = -38; // ENOSYS
@@ -176,19 +179,19 @@ public unsafe partial class SyscallManager
         }
         else if (!Strace)
         {
-            Console.WriteLine($"Unimplemented Syscall: {eax}");
+            Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
         }
 
         if (task != null && task.BlockingTask != null)
         {
             // If Syscall handler set a blocking task, it should also have set status to Yield.
-            if (Strace) Console.WriteLine(" [Blocked]");
+            if (Strace) Logger.LogTrace(" [Blocked]");
             return true;
         }
 
         if (Strace)
         {
-            Console.WriteLine($" = {ret}");
+            Logger.LogTrace(" = {Ret}", ret);
         }
 
         engine.RegWrite(Reg.EAX, (uint)ret);

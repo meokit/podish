@@ -3,12 +3,16 @@ using Bifrost.Memory;
 using Bifrost.Loader;
 using Bifrost.Syscalls;
 using Bifrost.Native;
+using Microsoft.Extensions.Logging;
+using Bifrost.Diagnostics;
 using Task = Bifrost.Core.Task;
 
 namespace Bifrost;
 
 class Program
 {
+    private static ILogger Logger = null!;
+
     static async Task<int> Main(string[] args)
     {
         string rootfs = Directory.GetCurrentDirectory();
@@ -33,9 +37,20 @@ class Program
             }
         }
 
+        // Initialize Logging
+        Logging.LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+        {
+            builder.AddConsole(options =>
+            {
+                options.LogToStandardErrorThreshold = LogLevel.Trace;
+            });
+            builder.SetMinimumLevel(trace ? LogLevel.Trace : LogLevel.Information);
+        });
+        Logger = Logging.CreateLogger<Program>();
+
         if (argIdx >= args.Length)
         {
-            Console.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
+            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
             return 1;
         }
 
@@ -151,7 +166,7 @@ class Program
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Clone failed: {ex}");
+                Logger.LogError(ex, "Clone failed");
                 return (-1, ex);
             }
         };
@@ -169,13 +184,13 @@ class Program
         {
             if (!t.Process.Mem.HandleFault(addr, isWrite, eng))
             {
-                Console.WriteLine($"[Task {t.TID}] SegFault at 0x{addr:x} EIP=0x{eng.Eip:x}");
+                Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} EIP=0x{Eip:x}", t.TID, addr, eng.Eip);
                 eng.SetStatusFault();
             }
         }
         else
         {
-            Console.WriteLine($"[Unknown Task - Eng: 0x{eng.State:x}] SegFault at 0x{addr:x} EIP=0x{eng.Eip:x}");
+            Logger.LogError("[Unknown Task - Eng: 0x{Eng:x}] SegFault at 0x{Addr:x} EIP=0x{Eip:x}", eng.State, addr, eng.Eip);
             eng.SetStatusFault();
         }
     }
