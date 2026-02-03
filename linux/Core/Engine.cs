@@ -144,5 +144,10 @@ public class Engine : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    public override string ToString()
+    {
+        return $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8}";
+    }
+
     ~Engine() => Dispose(false);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 // Use SIMDe for cross-platform intrinsics (Arm64 -> x86 SSE/AVX emulation)
 // This definition allows us to use _mm_add_ps etc. on non-x86 hardware.

@@ -39,11 +39,21 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
                 res = AluRor<uint32_t>(state, dest, count);
             break;
         case 2:  // RCL
-            OpUd2(state, op);
-            return;
+            if (is_byte)
+                res = AluRcl<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize)
+                res = AluRcl<uint16_t>(state, (uint16_t)dest, count);
+            else
+                res = AluRcl<uint32_t>(state, dest, count);
+            break;
         case 3:  // RCR
-            OpUd2(state, op);
-            return;
+            if (is_byte)
+                res = AluRcr<uint8_t>(state, (uint8_t)dest, count);
+            else if (is_opsize)
+                res = AluRcr<uint16_t>(state, (uint16_t)dest, count);
+            else
+                res = AluRcr<uint32_t>(state, dest, count);
+            break;
         case 4:  // SHL/SAL
             if (is_byte)
                 res = AluShl<uint8_t>(state, (uint8_t)dest, count);

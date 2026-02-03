@@ -213,7 +213,8 @@ public class Task
                     var status = CPU.Status;
                     if (status == EmuStatus.Fault)
                     {
-                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x}", TID, CPU.Eip);
+                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector}) - {Registers}", TID, CPU.Eip, CPU.FaultVector, CPU.ToString());
+                        Process.Mem.LogVMAs();
                         Exited = true;
                     }
                     else if (status == EmuStatus.Yield)

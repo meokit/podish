@@ -664,5 +664,62 @@ inline T AluRor(EmuState* state, T dest, uint8_t count) {
     return res;
 }
 
+template<typename T, bool UpdateFlags = true>
+inline T AluRcl(EmuState* state, T dest, uint8_t count) {
+    uint32_t width = sizeof(T) * 8;
+    count %= (width + 1);
+    if (count == 0) return dest;
+
+    uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
+    if (state->ctx.eflags & CF_MASK) val |= (1ULL << width);
+    
+    uint64_t mask = (1ULL << (width + 1)) - 1;
+    uint64_t res64 = ((val << count) | (val >> (width + 1 - count))) & mask;
+    
+    T res = (T)res64;
+    bool new_cf = (res64 >> width) & 1;
+
+    if constexpr (UpdateFlags) {
+        if (new_cf) state->ctx.eflags |= CF_MASK;
+        else state->ctx.eflags &= ~CF_MASK;
+
+        if (count == 1) {
+            bool msb = (res >> (width - 1)) & 1;
+            if (msb != new_cf) state->ctx.eflags |= OF_MASK;
+            else state->ctx.eflags &= ~OF_MASK;
+        }
+    }
+    return res;
+}
+
+template<typename T, bool UpdateFlags = true>
+inline T AluRcr(EmuState* state, T dest, uint8_t count) {
+    uint32_t width = sizeof(T) * 8;
+    count %= (width + 1);
+    if (count == 0) return dest;
+
+    uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
+    if (state->ctx.eflags & CF_MASK) val |= (1ULL << width);
+    
+    uint64_t mask = (1ULL << (width + 1)) - 1;
+    uint64_t res64 = ((val >> count) | (val << (width + 1 - count))) & mask;
+    
+    T res = (T)res64;
+    bool new_cf = (res64 >> width) & 1;
+
+    if constexpr (UpdateFlags) {
+        if (new_cf) state->ctx.eflags |= CF_MASK;
+        else state->ctx.eflags &= ~CF_MASK;
+
+        if (count == 1) {
+            bool msb = (res >> (width - 1)) & 1;
+            bool smsb = (res >> (width - 2)) & 1;
+            if (msb != smsb) state->ctx.eflags |= OF_MASK;
+            else state->ctx.eflags &= ~OF_MASK;
+        }
+    }
+    return res;
+}
+
 }
 

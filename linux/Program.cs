@@ -184,13 +184,14 @@ class Program
         {
             if (!t.Process.Mem.HandleFault(addr, isWrite, eng))
             {
-                Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} EIP=0x{Eip:x}", t.TID, addr, eng.Eip);
+                Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} (Vector: {Vector}) EIP=0x{Eip:x} - {Registers}", t.TID, addr, eng.FaultVector, eng.Eip, eng.ToString());
+                t.Process.Mem.LogVMAs();
                 eng.SetStatusFault();
             }
         }
         else
         {
-            Logger.LogError("[Unknown Task - Eng: 0x{Eng:x}] SegFault at 0x{Addr:x} EIP=0x{Eip:x}", eng.State, addr, eng.Eip);
+            Logger.LogError("[Unknown Task - Eng: 0x{Eng:x}] SegFault at 0x{Addr:x} EIP=0x{Eip:x} - {Registers}", eng.State, addr, eng.Eip, eng.ToString());
             eng.SetStatusFault();
         }
     }

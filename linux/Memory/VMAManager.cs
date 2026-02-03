@@ -1,15 +1,17 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using Bifrost.Core;
 using Bifrost.VFS;
 using Bifrost.Native;
 using Bifrost.Loader;
+using Bifrost.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Bifrost.Memory;
 
 public class VMAManager
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
     private readonly List<VMA> _vmas = new();
 
     public VMA? FindVMA(uint addr)
@@ -38,6 +40,9 @@ public class VMAManager
         // Align to 4k
         if ((addr & LinuxConstants.PageOffsetMask) != 0)
             throw new ArgumentException("Address not aligned");
+
+        // Round up len to 4k
+        len = (len + (uint)LinuxConstants.PageOffsetMask) & (uint)LinuxConstants.PageMask;
 
         if (addr == 0)
         {
@@ -218,10 +223,17 @@ public class VMAManager
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
         var vma = FindVMA(addr);
-        if (vma == null) return false;
+        if (vma == null)
+        {
+            Logger.LogTrace("No VMA found for address 0x{Addr:x}", addr);
+            return false;
+        }
 
         if (isWrite && (vma.Perms & Protection.Write) == 0)
+        {
+            Logger.LogTrace("Write fault on read-only VMA: {VmaName} at 0x{Addr:x}", vma.Name, addr);
             return false;
+        }
 
         uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
@@ -292,6 +304,15 @@ public class VMAManager
                     vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), off);
                 }
             }
+        }
+    }
+
+    public void LogVMAs()
+    {
+        Logger.LogInformation("Memory Map:");
+        foreach (var vma in _vmas)
+        {
+            Logger.LogInformation("0x{Start:x8}-0x{End:x8} {Perms} {Flags} {Name}", vma.Start, vma.End, vma.Perms, vma.Flags, vma.Name);
         }
     }
 }
