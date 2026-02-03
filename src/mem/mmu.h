@@ -82,6 +82,11 @@ namespace x86emu::mem {
         MemHook mem_hook = nullptr;
         void* mem_hook_opaque = nullptr;
         
+        // SMC Callback: Called when writing to an Executable Page
+        using SmcHandler = void(*)(void* opaque, uint32_t addr);
+        SmcHandler smc_handler = nullptr;
+        void* smc_opaque = nullptr;
+        
         // Status Linking
         EmuStatus* emu_status = nullptr;
         uint8_t* emu_fault_vector = nullptr;
@@ -152,7 +157,16 @@ namespace x86emu::mem {
 
             // 4. Fill TLB (ONLY if no hooks)
             if (!mem_hook) {
+                bool is_exec = has_property(current_perm, Property::Exec);
+                
                 tlb.fill(addr, page_base, current_perm, [this](GuestAddr v){ this->sync_dirty(v); });
+                
+                // If it was Exec, ensure Write TLB entry is invalid, effectively creating a "Trap on Write"
+                if (is_exec) {
+                    const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+                    // Preserve the tag but clear Valid/Dirty bits or just zero it
+                    tlb.write_tlb[idx].tag_page = 0; 
+                }
             }
 
             return page_base + offset;
@@ -177,6 +191,11 @@ namespace x86emu::mem {
             mem_hook_opaque = opaque;
             // Flush TLB to ensure hooks are caught immediately (forcing slow path)
             tlb.flush(); 
+        }
+
+        void set_smc_callback(SmcHandler handler, void* opaque) {
+            smc_handler = handler;
+            smc_opaque = opaque;
         }
 
         Property get_property(GuestAddr addr) const {
@@ -313,7 +332,18 @@ namespace x86emu::mem {
                 return;
             }
 
-            HostAddr ptr = resolve_slow(addr, Perm::Write);
+            HostAddr ptr = resolve_slow(addr, Property::Write);
+            
+            // SMC Detection
+            if (ptr && smc_handler) {
+                 // Optimization: We could cache "is_exec" in resolve_slow or check TLB, 
+                 // but getting property here is safe.
+                 Property p = get_property(addr);
+                 if (has_property(p, Property::Exec)) {
+                     smc_handler(smc_opaque, addr);
+                 }
+            }
+
             if (ptr) *reinterpret_cast<T*>(ptr) = val;
         }
 
@@ -357,6 +387,15 @@ namespace x86emu::mem {
             
             HostAddr p2 = resolve_ptr(addr2, Property::Write);
             if (!p2) return;
+
+            // SMC Detection
+            if (smc_handler) {
+                Property prop1 = get_property(addr);
+                if (has_property(prop1, Property::Exec)) smc_handler(smc_opaque, addr);
+                
+                Property prop2 = get_property(addr2);
+                if (has_property(prop2, Property::Exec)) smc_handler(smc_opaque, addr2);
+            }
             
             std::byte* src = reinterpret_cast<std::byte*>(&val);
             std::memcpy(p1, src, len1);

@@ -19,17 +19,11 @@ class Program
         bool trace = false;
         int argIdx = 0;
 
-        bool instrTrace = false;
         while (argIdx < args.Length && args[argIdx].StartsWith("--"))
         {
             if (args[argIdx] == "--trace")
             {
                 trace = true;
-                argIdx++;
-            }
-            else if (args[argIdx] == "--instr-trace")
-            {
-                instrTrace = true;
                 argIdx++;
             }
             else if (args[argIdx] == "--rootfs" && argIdx + 1 < args.Length)
@@ -50,13 +44,13 @@ class Program
             {
                 options.LogToStandardErrorThreshold = LogLevel.Trace;
             });
-            builder.SetMinimumLevel((trace || instrTrace) ? LogLevel.Trace : LogLevel.Information);
+            builder.SetMinimumLevel(trace ? LogLevel.Trace : LogLevel.Information);
         });
         Logger = Logging.CreateLogger<Program>();
 
         if (argIdx >= args.Length)
         {
-            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] [--instr-trace] <native_binary> [args...]");
+            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
             return 1;
         }
 
@@ -71,7 +65,6 @@ class Program
         // Note: Engine is IDisposable. We should manage its lifecycle carefully with Tasks.
         // Initial engine for loading.
         var engine = new Engine();
-        engine.TraceInstructions = instrTrace;
 
         // 2. Init VMA Manager
         var mm = new VMAManager();
@@ -106,7 +99,7 @@ class Program
         sys.ExitHandler = (eng, code, group) =>
         {
             var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);
-            if (t == null) return; 
+            if (t == null) return;
 
             if (group)
             {
@@ -120,7 +113,7 @@ class Program
                         t.Process.ZombieEvent.Set();
                     }
                 }
-                
+
                 t.Exited = true;
                 t.ExitCode = code;
                 t.CPU.Stop();
@@ -153,23 +146,23 @@ class Program
             }
             return sys.Handle(eng, vec); // Fallback
         };
-        
+
         // Setup Dependency Injection
         sys.GetTID = (eng) => Scheduler.CurrentTask?.TID ?? 0;
         sys.GetTGID = (eng) => Scheduler.CurrentTask?.Process?.TGID ?? 0;
-        
+
         sys.CloneHandler = (flags, stack, ptid, tls, ctid) =>
         {
             var parent = Scheduler.CurrentTask;
             if (parent == null) return (-1, new Exception("No parent task"));
-            
+
             try
             {
                 var child = parent.Clone(flags, stack, ptid, tls, ctid);
-                
+
                 // Start child in background without blocking
                 _ = child.RunLoopAsync();
-                
+
                 return (child.TID, null);
             }
             catch (Exception ex)
@@ -181,10 +174,10 @@ class Program
 
         // 10. Run
         await mainTask.RunLoopAsync();
-        
+
         return mainTask.ExitCode;
     }
-    
+
     private static void GlobalFaultHandler(Engine eng, uint addr, bool isWrite)
     {
         var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);

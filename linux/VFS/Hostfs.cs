@@ -14,7 +14,7 @@ public class Hostfs : FileSystem
         var sb = new HostSuperBlock(fsType, devName); // devName is the root path on host
         var rootDentry = sb.GetDentry(devName, "/", null);
         if (rootDentry == null) throw new FileNotFoundException("Root path not found", devName);
-        
+
         sb.Root = rootDentry;
         sb.Root.Parent = sb.Root;
         return sb;
@@ -36,12 +36,12 @@ public class HostSuperBlock : SuperBlock
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
         if (_dentryCache.TryGetValue(hostPath, out var dentry)) return dentry;
-        
+
         // Check existence
         bool isDir = Directory.Exists(hostPath);
         bool isFile = System.IO.File.Exists(hostPath);
         if (!isDir && !isFile) return null;
-        
+
         var newInode = new HostInode(_nextIno++, this, hostPath, isDir);
         var newDentry = new Dentry(name, newInode, parent, this);
         _dentryCache[hostPath] = newDentry;
@@ -86,7 +86,7 @@ public class HostSuperBlock : SuperBlock
 public class HostInode : Inode
 {
     public string HostPath { get; set; }
-    
+
     public HostInode(ulong ino, SuperBlock sb, string hostPath, bool isDir)
     {
         Ino = ino;
@@ -94,7 +94,7 @@ public class HostInode : Inode
         HostPath = hostPath;
         Type = isDir ? InodeType.Directory : InodeType.File;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
-        
+
         var info = isDir ? (FileSystemInfo)new DirectoryInfo(hostPath) : new FileInfo(hostPath);
         if (info.Exists)
         {
@@ -119,9 +119,9 @@ public class HostInode : Inode
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         string subPath = Path.Combine(HostPath, dentry.Name);
         if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
-        
+
         using (System.IO.File.Create(subPath)) { } // Create empty file
-        
+
         var sb = (HostSuperBlock)SuperBlock;
         sb.InstantiateDentry(dentry, subPath, false, mode);
         return dentry;
@@ -132,9 +132,9 @@ public class HostInode : Inode
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         string subPath = Path.Combine(HostPath, dentry.Name);
         if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
-        
+
         Directory.CreateDirectory(subPath);
-        
+
         var sb = (HostSuperBlock)SuperBlock;
         sb.InstantiateDentry(dentry, subPath, true, mode);
         return dentry;
@@ -145,11 +145,11 @@ public class HostInode : Inode
         string subPath = Path.Combine(HostPath, name);
         if (System.IO.File.Exists(subPath))
         {
-             var sb = (HostSuperBlock)SuperBlock;
-             var dentry = sb.GetDentry(subPath, name, null);
-             System.IO.File.Delete(subPath);
-             dentry?.Inode?.Put(); 
-             sb.RemoveDentry(subPath);
+            var sb = (HostSuperBlock)SuperBlock;
+            var dentry = sb.GetDentry(subPath, name, null);
+            System.IO.File.Delete(subPath);
+            dentry?.Inode?.Put();
+            sb.RemoveDentry(subPath);
         }
     }
 
@@ -158,11 +158,11 @@ public class HostInode : Inode
         string subPath = Path.Combine(HostPath, name);
         if (Directory.Exists(subPath))
         {
-             var sb = (HostSuperBlock)SuperBlock;
-             var dentry = sb.GetDentry(subPath, name, null);
-             Directory.Delete(subPath, true);
-             dentry?.Inode?.Put();
-             sb.RemoveDentry(subPath);
+            var sb = (HostSuperBlock)SuperBlock;
+            var dentry = sb.GetDentry(subPath, name, null);
+            Directory.Delete(subPath, true);
+            dentry?.Inode?.Put();
+            sb.RemoveDentry(subPath);
         }
     }
 
@@ -191,11 +191,11 @@ public class HostInode : Inode
 
         if (dentry.Inode!.Type == InodeType.Directory)
         {
-             Directory.Move(oldFullPath, newFullPath);
+            Directory.Move(oldFullPath, newFullPath);
         }
         else
         {
-             System.IO.File.Move(oldFullPath, newFullPath);
+            System.IO.File.Move(oldFullPath, newFullPath);
         }
 
         // Update cache and internal path
@@ -212,13 +212,13 @@ public class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         if (!(oldInode is HostInode hi)) throw new InvalidOperationException("Not a host inode");
-        
+
         string newPath = Path.Combine(HostPath, dentry.Name);
         if (link(hi.HostPath, newPath) != 0)
         {
             throw new IOException($"link failed with error {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}");
         }
-        
+
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
         lock (sb.Lock)
@@ -232,7 +232,7 @@ public class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         string newPath = Path.Combine(HostPath, dentry.Name);
-        
+
         global::System.IO.File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
         sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
@@ -252,14 +252,14 @@ public class HostInode : Inode
             FileMode mode = FileMode.Open;
             FileAccess access = FileAccess.Read;
             FileShare share = FileShare.ReadWrite;
-            
+
             if ((file.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.Write;
             else if ((file.Flags & FileFlags.O_RDWR) != 0) access = FileAccess.ReadWrite;
-            
+
             if ((file.Flags & FileFlags.O_CREAT) != 0) mode = FileMode.OpenOrCreate;
             if ((file.Flags & FileFlags.O_TRUNC) != 0) mode = FileMode.Truncate;
             if ((file.Flags & FileFlags.O_APPEND) != 0) mode = FileMode.Append;
-            
+
             file.PrivateData = new FileStream(HostPath, mode, access, share);
         }
     }
@@ -284,13 +284,13 @@ public class HostInode : Inode
     public override int Read(File file, Span<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
-        
+
         if (file?.PrivateData is FileStream fs)
         {
             if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
             return fs.Read(buffer);
         }
-        
+
         using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         tempFs.Seek(offset, SeekOrigin.Begin);
         return tempFs.Read(buffer);
@@ -307,7 +307,7 @@ public class HostInode : Inode
             Size = (ulong)fs.Length;
             return buffer.Length;
         }
-        
+
         using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         tempFs.Seek(offset, SeekOrigin.Begin);
         tempFs.Write(buffer);
@@ -317,9 +317,9 @@ public class HostInode : Inode
 
     public override void Truncate(long size)
     {
-         using var fs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-         fs.SetLength(size);
-         Size = (ulong)size;
+        using var fs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        fs.SetLength(size);
+        Size = (ulong)size;
     }
 
     public override List<DirectoryEntry> GetEntries()

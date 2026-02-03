@@ -16,13 +16,14 @@ public static class SyscallAsyncWrappers
     {
         int waitResult = await tcsTask;
         if (waitResult < 0) return waitResult;
-        
+
         await Bifrost.Core.Task.GIL.WaitAsync();
-        try {
+        try
+        {
             var info = new SigInfo();
             // Call KernelWaitId with WNOHANG to actually do the reaping using ORIGINAL criteria
             var (pid, _) = WaitHelpers.KernelWaitId(parentTask, idtype, id, info, options | WaitHelpers.WNOHANG);
-            
+
             if (pid > 0 && statusPtr != 0)
             {
                 int status = (info.si_status & 0xFF) << 8;
@@ -31,7 +32,9 @@ public static class SyscallAsyncWrappers
                 sm.Engine.MemWrite(statusPtr, statusBuf);
             }
             return pid;
-        } finally {
+        }
+        finally
+        {
             Bifrost.Core.Task.GIL.Release();
         }
     }
@@ -40,18 +43,21 @@ public static class SyscallAsyncWrappers
     {
         int waitResult = await tcsTask;
         if (waitResult < 0) return waitResult;
-        
+
         await Bifrost.Core.Task.GIL.WaitAsync();
-        try {
+        try
+        {
             var info = new SigInfo();
             var (pid, _) = WaitHelpers.KernelWaitId(parentTask, idtype, id, info, options | WaitHelpers.WNOHANG);
-            
+
             if (pid >= 0 && infop != 0)
             {
                 WriteSigInfo(sm, infop, info);
             }
             return pid >= 0 ? 0 : pid;
-        } finally {
+        }
+        finally
+        {
             Bifrost.Core.Task.GIL.Release();
         }
     }

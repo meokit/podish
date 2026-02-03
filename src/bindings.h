@@ -61,6 +61,10 @@ extern "C" {
     void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata);
     void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata);
 
+    // Cache Control
+    void X86_FlushCache(EmuState* state);
+    void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size);
+
     // Diagnostics
     int32_t X86_GetFaultVector(EmuState* state);
 

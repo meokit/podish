@@ -139,4 +139,10 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_MemIsDirty")]
     [SuppressGCTransition]
     public static partial int IsDirty(IntPtr state, uint addr);
+
+    [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
+    public static partial void FlushCache(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_InvalidateRange")]
+    public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
 }

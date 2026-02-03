@@ -17,7 +17,7 @@ public unsafe partial class SyscallManager
     public string ReadString(uint addr)
     {
         if (addr == 0) return "";
-        
+
         try
         {
             var sb = new StringBuilder();
@@ -41,7 +41,7 @@ public unsafe partial class SyscallManager
     {
         if (string.IsNullOrEmpty(path)) return null;
         if (recursion > 40) return null; // ELOOP
-        
+
         // Console.WriteLine($"PathWalk: {path}");
         Dentry current;
         if (path.StartsWith("/"))
@@ -52,7 +52,7 @@ public unsafe partial class SyscallManager
         {
             current = startAt ?? CurrentWorkingDirectory;
         }
-        
+
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         for (int i = 0; i < parts.Length; i++)
         {
@@ -61,7 +61,7 @@ public unsafe partial class SyscallManager
             if (part == "..")
             {
                 if (current == ProcessRoot) continue;
-                
+
                 if (current == current.SuperBlock.Root)
                 {
                     if (current.MountedAt != null)
@@ -69,7 +69,7 @@ public unsafe partial class SyscallManager
                         current = current.MountedAt;
                     }
                 }
-                
+
                 if (current.Parent != null)
                 {
                     current = current.Parent;
@@ -93,7 +93,7 @@ public unsafe partial class SyscallManager
             {
                 nextDentry = current.Inode!.Lookup(part);
                 if (nextDentry == null) return null;
-                
+
                 current.Children[part] = nextDentry;
             }
 
@@ -110,12 +110,12 @@ public unsafe partial class SyscallManager
                 current = nextDentry;
             }
         }
-        
+
         if (current.IsMounted && current.MountRoot != null)
         {
             current = current.MountRoot;
         }
-        
+
         return current;
     }
 
@@ -166,20 +166,20 @@ public static class WaitHelpers
     public const int WCONTINUED = 8;
     public const int WEXITED = 4;
     public const int WSTOPPED = 2;
-    
+
     // Core wait implementation - returns (result, tcs) where tcs is set if blocking is needed
     public static (int result, TaskCompletionSource<int>? tcs) KernelWaitId(Bifrost.Core.Task parentTask, IdType idtype, int id, SigInfo? infop, int options)
     {
         bool noHang = (options & WNOHANG) != 0;
         bool noWait = (options & 0x01000000) != 0; // WNOWAIT
-        
+
         bool wantExited = (options & WEXITED) != 0;
         bool wantStopped = (options & (WSTOPPED | WUNTRACED)) != 0;
         bool wantContinued = (options & WCONTINUED) != 0;
-        
+
         if ((options & (WEXITED | WSTOPPED | WUNTRACED | WCONTINUED)) == 0)
             wantExited = true;
-        
+
         int parentTgid = parentTask.Process.TGID;
         Process? matchedChild = null;
         int matchCode = 0;
@@ -196,13 +196,13 @@ public static class WaitHelpers
         {
             var proc = Scheduler.GetProcessByPID(childPid);
             if (proc == null) continue;
-            
+
             // Check ID matching
             bool idMatch = false;
             if (idtype == IdType.P_ALL) idMatch = true;
             else if (idtype == IdType.P_PID && proc.TGID == id) idMatch = true;
             else if (idtype == IdType.P_PGID && proc.TGID == id) idMatch = true; // Simplified PGID
-            
+
             if (!idMatch) continue;
 
             if (wantExited && proc.State == ProcessState.Zombie)
@@ -243,7 +243,7 @@ public static class WaitHelpers
                 {
                     matchedChild.State = ProcessState.Dead;
                     Scheduler.RemoveProcess(childTgid);
-                    lock(parentTask.Process.Children) parentTask.Process.Children.Remove(childTgid);
+                    lock (parentTask.Process.Children) parentTask.Process.Children.Remove(childTgid);
                 }
                 else
                 {
@@ -268,13 +268,13 @@ public static class WaitHelpers
                     .Where(p => p != null)
                     .ToList()!;
             }
-            
+
             if (children.Count == 0) { tcs.SetResult(-10); return; }
 
             var waitHandles = children.Select(p => p.ZombieEvent.WaitHandle).ToArray();
             // Wait for ANY child to change state
             await System.Threading.Tasks.Task.Run(() => WaitHandle.WaitAny(waitHandles, 5000));
-            
+
             // Just wake up the caller, don't reap here
             tcs.SetResult(0);
         });

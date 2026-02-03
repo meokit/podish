@@ -21,10 +21,10 @@ public class LinuxFileStream : LinuxFile
     public override string Name => _fs.Name;
     public override long Position { get => _fs.Position; set => _fs.Position = value; }
     public override int Read(Span<byte> buffer) => _fs.Read(buffer);
-    public override int Write(ReadOnlySpan<byte> buffer) 
-    { 
-        _fs.Write(buffer); 
-        return buffer.Length; 
+    public override int Write(ReadOnlySpan<byte> buffer)
+    {
+        _fs.Write(buffer);
+        return buffer.Length;
     }
     public override void Flush() => _fs.Flush();
     public override void Dispose() => _fs.Dispose();

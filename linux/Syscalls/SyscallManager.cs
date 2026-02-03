@@ -15,18 +15,18 @@ public unsafe partial class SyscallManager
 
     // The current engine executing a syscall (protected by GIL)
     public Engine Engine { get; set; } = null!;
-    
+
     public VMAManager Mem { get; set; }
 
     public Dentry Root { get; set; } = null!;
     public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
-    
+
     // For chroot tracking, we keep a Dentry pointer to the process root
     public Dentry ProcessRoot { get; set; } = null!;
 
     // File Descriptors (Shared if CLONE_FILES)
     public Dictionary<int, Bifrost.VFS.File> FDs { get; private set; } = new();
-    
+
     public FutexManager Futex { get; private set; }
 
     public uint BrkAddr { get; set; }
@@ -45,10 +45,10 @@ public unsafe partial class SyscallManager
 
         RegisterEngine(engine);
         RegisterHandlers();
-        
+
         // Init VFS
         var hostFsType = new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() };
-        
+
         var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
         Root = sb.Root;
         ProcessRoot = Root;
@@ -57,11 +57,11 @@ public unsafe partial class SyscallManager
         Root.Inode!.Get();
         ProcessRoot.Inode!.Get();
         CurrentWorkingDirectory.Inode!.Get();
-        
+
         // Add console FDs
         InitStdio();
     }
-    
+
     private void InitStdio()
     {
         // 0: Stdin
@@ -70,7 +70,7 @@ public unsafe partial class SyscallManager
         var stdinInode = new ConsoleInode(devSb, true);
         var stdinDentry = new Dentry("stdin", stdinInode, Root, devSb);
         FDs[0] = new Bifrost.VFS.File(stdinDentry, FileFlags.O_RDONLY);
-        
+
         var stdoutInode = new ConsoleInode(devSb, false);
         var stdoutDentry = new Dentry("stdout", stdoutInode, Root, devSb);
         FDs[1] = new Bifrost.VFS.File(stdoutDentry, FileFlags.O_WRONLY);
@@ -87,7 +87,7 @@ public unsafe partial class SyscallManager
         Root = root; // Global root (shared)
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
-        
+
         Root.Inode!.Get();
         CurrentWorkingDirectory.Inode!.Get();
         ProcessRoot.Inode!.Get();
@@ -119,7 +119,7 @@ public unsafe partial class SyscallManager
                 newFds[kv.Key] = new Bifrost.VFS.File(kv.Value.Dentry, kv.Value.Flags) { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
             }
         }
-        
+
         var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
         newSys.CloneHandler = CloneHandler;
         newSys.ExitHandler = ExitHandler;
@@ -150,7 +150,7 @@ public unsafe partial class SyscallManager
 
         // Update current engine context (GIL ensures safety)
         Engine = engine;
-        
+
         var task = Scheduler.GetByEngine(engine.State);
         if (task != null)
         {
@@ -168,8 +168,7 @@ public unsafe partial class SyscallManager
 
         if (Strace)
         {
-            Logger.LogTrace("[{GIL}] syscall({Eax}, 0x{Ebx:x}, 0x{Ecx:x}, 0x{Edx:x}, 0x{Esi:x}, 0x{Edi:x}, 0x{Ebp:x})", 
-                Bifrost.Core.Task.GIL.GetHashCode(), eax, ebx, ecx, edx, esi, edi, ebp);
+            Console.WriteLine($"[Syscall] {eax} ({ebx:X}, {ecx:X}, {edx:X}, {esi:X}, {edi:X}, {ebp:X})");
         }
 
         int ret = -38; // ENOSYS
@@ -209,7 +208,7 @@ public unsafe partial class SyscallManager
         Root?.Inode?.Put();
         CurrentWorkingDirectory?.Inode?.Put();
         ProcessRoot?.Inode?.Put();
-        
+
         foreach (var fd in FDs.Values)
         {
             // Note: If shareFiles is true, this might be dangerous if multiple tasks close the same FDs

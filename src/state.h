@@ -22,6 +22,9 @@ struct EmuState {
     EmuStatus status = EmuStatus::Stopped;
     // Simple Block Cache
     ankerl::unordered_dense::map<uint32_t, BasicBlock> block_cache;
+    // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
+    // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.
+    ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
 
     // Fault Info
     uint8_t fault_vector = 0xFF; // 0xFF = No Fault

@@ -50,13 +50,13 @@ public abstract class SuperBlock
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = new();
     public object Lock { get; } = new();
-    
+
     // Reference counting for lifecycle management
     public int RefCount { get; set; } = 0;
     protected HashSet<Inode> AllInodes = new();
-    
+
     public void Get() => RefCount++;
-    
+
     public void Put()
     {
         if (--RefCount <= 0)
@@ -64,19 +64,19 @@ public abstract class SuperBlock
             Shutdown();
         }
     }
-    
+
     public bool HasActiveInodes()
     {
         return AllInodes.Any(i => i.RefCount > i.Dentries.Count);
     }
-    
+
     protected virtual void Shutdown()
     {
         // Subclasses can override to clean up resources
         AllInodes.Clear();
         Inodes.Clear();
     }
-    
+
     public virtual Inode AllocInode() => throw new NotSupportedException();
     public virtual void WriteInode(Inode inode) { }
 }
@@ -92,19 +92,19 @@ public abstract class Inode
     public DateTime MTime { get; set; }
     public DateTime ATime { get; set; }
     public DateTime CTime { get; set; }
-    
+
     public SuperBlock SuperBlock { get; set; } = null!;
-    
+
     // All dentries pointing to this inode (hard links)
     public List<Dentry> Dentries { get; } = new();
     public object Lock { get; } = new();
-    
+
     // Reference counting for lifecycle management
     public int RefCount { get; set; } = 0;
-    
+
     // Reference counting methods
     public void Get() => RefCount++;
-    
+
     public void Put()
     {
         if (--RefCount <= 0)
@@ -112,12 +112,12 @@ public abstract class Inode
             Release();
         }
     }
-    
+
     protected virtual void Release()
     {
         // Subclasses can override to clean up resources
     }
-    
+
     // Operations
     public virtual Dentry? Lookup(string name) => null;
     public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid) => throw new NotSupportedException();
@@ -128,17 +128,17 @@ public abstract class Inode
     public virtual void Rename(string oldName, Inode newParent, string newName) => throw new NotSupportedException();
     public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new NotSupportedException();
     public virtual string Readlink() => throw new NotSupportedException();
-    
+
     public virtual int Read(File file, Span<byte> buffer, long offset) => 0;
     public virtual int Write(File file, ReadOnlySpan<byte> buffer, long offset) => 0;
     public virtual void Truncate(long size) => throw new NotSupportedException();
-    
+
     // File operations hooks
     public virtual void Open(File file) { }
     public virtual void Release(File file) { }
-    
+
     public virtual void Sync(File file) { }
-    
+
     // For directories, we need iteration. 
     public virtual List<DirectoryEntry> GetEntries() => new();
 }
@@ -154,7 +154,7 @@ public class Dentry
 {
     private static long _nextId = 0;
     public long Id { get; } = System.Threading.Interlocked.Increment(ref _nextId);
-    
+
     public string Name { get; set; }
     public Inode? Inode { get; set; }
     public Dentry? Parent { get; set; }
@@ -163,11 +163,11 @@ public class Dentry
 
     // Mount point support
     public bool IsMounted { get; set; }
-    public Dentry? MountRoot { get; set; } 
-    
+    public Dentry? MountRoot { get; set; }
+
     // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
     public Dentry? MountedAt { get; set; }
-    
+
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
         Name = name;
@@ -197,7 +197,7 @@ public class File
     public FileFlags Flags { get; set; }
     public object? PrivateData { get; set; }
     private bool _isClosed = false;
-    
+
     public File(Dentry dentry, FileFlags flags)
     {
         Dentry = dentry;
@@ -205,30 +205,30 @@ public class File
         dentry.Inode?.Get();  // Increase reference count
         dentry.Inode?.Open(this);
     }
-    
+
     public virtual void Close()
     {
         if (_isClosed) return;
         _isClosed = true;
-        
+
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put();  // Decrease reference count
     }
-    
+
     public virtual int Read(Span<byte> buffer)
     {
         int n = Dentry.Inode!.Read(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
-    
+
     public virtual int Write(ReadOnlySpan<byte> buffer)
     {
         int n = Dentry.Inode!.Write(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
-    
+
     public virtual void Sync()
     {
         Dentry.Inode?.Sync(this);

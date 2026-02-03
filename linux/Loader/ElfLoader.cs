@@ -35,7 +35,7 @@ public class ElfLoader
         string vfsLookupPath = filename;
         string hostRoot = Path.GetFullPath(((HostSuperBlock)sys.Root.SuperBlock).HostRoot).TrimEnd(Path.DirectorySeparatorChar);
         string absFilename = Path.GetFullPath(filename);
-        
+
         if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
         {
             vfsLookupPath = absFilename.Substring(hostRoot.Length);
@@ -63,7 +63,7 @@ public class ElfLoader
         // Still use Host IO for ElfFile reader as it needs a Stream
         using var stream = System.IO.File.OpenRead(filename);
         var elf = ElfFile.Read(stream);
-        
+
         uint loadBase = 0;
         if (elf.FileType == ElfFileType.Dynamic)
         {
@@ -195,6 +195,8 @@ public class ElfLoader
                 if (end > brkAddr) brkAddr = end;
             }
         }
+
+        sys.Engine.FlushCache();
 
         var res = new LoaderResult
         {

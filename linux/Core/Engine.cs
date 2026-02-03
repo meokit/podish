@@ -22,7 +22,7 @@ public class Engine : IDisposable
 
         // Create GCHandle to this object so it can be retrieved in callbacks
         _gcHandle = GCHandle.Alloc(this);
-        
+
         // Register callbacks
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
@@ -121,6 +121,9 @@ public class Engine : IDisposable
     public int FaultVector => X86Native.GetFaultVector(State);
 
     public bool IsDirty(uint addr) => X86Native.IsDirty(State, addr) != 0;
+
+    public void InvalidateRange(uint addr, uint size) => X86Native.InvalidateRange(State, addr, size);
+    public void FlushCache() => X86Native.FlushCache(State);
 
     protected virtual void Dispose(bool disposing)
     {

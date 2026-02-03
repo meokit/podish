@@ -39,6 +39,26 @@ static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, in
     }
 }
 
+// Invalidate all blocks on a specific page
+static void X86_InvalidatePage(EmuState* state, uint32_t page_addr) {
+    uint32_t page_idx = page_addr >> 12;
+    auto it = state->page_to_blocks.find(page_idx);
+    if (it != state->page_to_blocks.end()) {
+        // Remove all blocks
+        for (uint32_t eip : it->second) {
+            state->block_cache.erase(eip);
+        }
+        // Clear list
+        state->page_to_blocks.erase(it);
+    }
+}
+
+static void InternalSmcBridge(void* opaque, uint32_t addr) {
+    EmuState* state = static_cast<EmuState*>(opaque);
+    // Invalidate the page containing 'addr'
+    X86_InvalidatePage(state, addr);
+}
+
 // Signal Handler for safety
 void SignalHandler(int sig) {
     void* array[20];
@@ -79,6 +99,7 @@ EmuState* X86_Create() {
     
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    state->mmu.set_smc_callback(InternalSmcBridge, state);
     
     return state;
 }
@@ -115,6 +136,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // So copying userdata is strictly correct for now (same logic applies).
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    state->mmu.set_smc_callback(InternalSmcBridge, state);
 
     // Reuse parent's external handlers & userdata
     state->fault_handler = parent->fault_handler;
@@ -383,6 +405,30 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
 int32_t X86_GetFaultVector(EmuState* state) {
     if (state->status != EmuStatus::Fault) return -1;
     return (int32_t)state->fault_vector;
+}
+
+void X86_FlushCache(EmuState* state) {
+    if (state) {
+        state->block_cache.clear();
+        state->page_to_blocks.clear();
+    }
+}
+
+void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
+    if (!state || size == 0) return;
+    
+    uint32_t start_page = addr >> 12;
+    uint32_t end_page = (addr + size - 1) >> 12;
+    
+    for (uint32_t p = start_page; p <= end_page; ++p) {
+        auto it = state->page_to_blocks.find(p);
+        if (it != state->page_to_blocks.end()) {
+            for (uint32_t eip : it->second) {
+                state->block_cache.erase(eip);
+            }
+            state->page_to_blocks.erase(it);
+        }
+    }
 }
 
 } // extern "C"

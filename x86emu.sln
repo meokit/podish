@@ -1,0 +1,38 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux-tests", "linux-tests", "{999CDDC9-EC24-866A-B863-D1B25C3A9B42}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "linux", "linux", "{8E443371-16C4-AB83-8FD5-84A79F0DB75D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bifrost.Tests", "linux-tests\Bifrost.Tests.csproj", "{3FC2B15B-F193-4569-19BA-5D52F8F23E18}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bifrost", "linux\Bifrost.csproj", "{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3FC2B15B-F193-4569-19BA-5D52F8F23E18}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3FC2B15B-F193-4569-19BA-5D52F8F23E18}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3FC2B15B-F193-4569-19BA-5D52F8F23E18}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3FC2B15B-F193-4569-19BA-5D52F8F23E18}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB5AE6C4-0E52-362C-08F0-CA3BA238693B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{3FC2B15B-F193-4569-19BA-5D52F8F23E18} = {999CDDC9-EC24-866A-B863-D1B25C3A9B42}
+		{AB5AE6C4-0E52-362C-08F0-CA3BA238693B} = {8E443371-16C4-AB83-8FD5-84A79F0DB75D}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {56E92940-FCCF-4DC5-8063-7627ABD60DB2}
+	EndGlobalSection
+EndGlobal

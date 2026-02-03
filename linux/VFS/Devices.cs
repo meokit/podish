@@ -6,7 +6,7 @@ namespace Bifrost.VFS;
 public class ConsoleInode : Inode
 {
     private readonly bool _isInput;
-    
+
     public ConsoleInode(SuperBlock sb, bool isInput)
     {
         SuperBlock = sb;
@@ -20,7 +20,7 @@ public class ConsoleInode : Inode
     public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot mkdir in /dev");
     public override Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new InvalidOperationException("Cannot symlink in /dev");
     public override Dentry Link(Dentry dentry, Inode oldInode) => throw new InvalidOperationException("Cannot link in /dev");
-    
+
     public override int Read(File file, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
@@ -29,7 +29,7 @@ public class ConsoleInode : Inode
         using var stream = Console.OpenStandardInput();
         return stream.Read(buffer);
     }
-    
+
     public override int Write(File file, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
@@ -37,6 +37,6 @@ public class ConsoleInode : Inode
         stream.Write(buffer);
         return buffer.Length;
     }
-    
+
     public override void Truncate(long size) { }
 }

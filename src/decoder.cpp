@@ -8,10 +8,17 @@
 
 namespace x86emu {
 
+alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
+    // Map 0: Primary opcodes (Jcc short, CALL, JMP, RET, LOOP, INT, HLT, etc.)
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 
+      0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x0C, 0xFC, 0x00, 0x00, 0x0F, 0x0F, 0x10, 0x80 },
+    // Map 1: 0x0F prefixed opcodes (Jcc near, SYSCALL, SYSENTER)
+    { 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+      0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+};
 
 
 // Helper to determine Immediate Size (in bytes) based on Blink Type and Prefixes
-// Assuming 32-bit mode by default
 static int GetImmLength(uint8_t type, const DecodedOp* op) {
     bool osz = op->prefixes.flags.opsize; // 0x66
     
@@ -168,35 +175,34 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     }
     
     op->length = (ptr - start);
-    // printf("[Dec] Op=%02X Len=%d ImmType=%d ImmLen=%d Imm=%08X\n", opcode, op->length, imm_type, imm_len, op->imm);
+
+    // Rule 1: REP/REPNE prefixes always terminate blocks as they can loop (modify EIP)
+    bool is_rep = op->prefixes.flags.rep || op->prefixes.flags.repne;
+
+    // Rule 2: Table-based lookup for branching opcodes
+    // Access bitmap using map & 1 to ensure safe indexing. 
+    // Filter map > 1 later to ensure strict correctness.
+    bool is_map_match = (kControlFlowMaps[map & 1][opcode >> 3] >> (opcode & 7)) & 1;
+
+    // Rule 3: Handle Group 5 (0xFF) Special Case
+    // Only sub-opcodes 2 (CALL), 3 (CALLF), 4 (JMP), 5 (JMPF) are control flow.
+    // Use __builtin_expect to hint that 0xFF is less common than other instructions.
+    if (__builtin_expect((opcode == 0xFF) && (map == 0), 0)) {
+        // Optimized range check: (reg - 2) <= 3 is equivalent to (reg >= 2 && reg <= 5)
+        uint8_t reg = (op->modrm >> 3) & 7;
+        is_map_match = ((uint8_t)(reg - 2) <= 3);
+    }
+
+    // Combine results and apply map safety filter (ensures 0x0F 0x0F maps don't false positive)
+    op->meta.flags.is_control_flow = is_rep | (is_map_match & (map <= 1));
+
     return true;
+
 }
 
 // Helper to check if opcode is Control Flow
 static bool IsControlFlow(const DecodedOp* op) {
-    // Treat REP prefixes as Control Flow because they might loop (modifying EIP)
-    if (op->prefixes.flags.rep || op->prefixes.flags.repne) return true;
-
-    // Low byte of handler_index is opcode.
-    uint8_t opcode = op->handler_index & 0xFF;
-    uint8_t map = (op->handler_index >> 8) & 0xFF;
-    
-    if (map == 0) {
-        if (opcode == 0xE8) return true; // CALL
-        if (opcode == 0xC3 || opcode == 0xCB) return true; // RET
-        if (opcode == 0xE9 || opcode == 0xEB) return true; // JMP
-        if (opcode >= 0x70 && opcode <= 0x7F) return true; // Jcc (short)
-        if (opcode == 0xF4) return true; // HLT (Stop Block)
-        if (opcode == 0xFF) {
-            // Group 5: 2=CALL, 4=JMP. Need ModRM.
-             uint8_t reg = (op->modrm >> 3) & 7;
-             if (reg == 2 || reg == 4) return true;
-        }
-    } else if (map == 1) {
-        if (opcode >= 0x80 && opcode <= 0x8F) return true; // Jcc (near)
-    }
-    
-    return false;
+    return op->meta.flags.is_control_flow;
 }
 
 bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block) {

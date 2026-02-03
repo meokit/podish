@@ -44,13 +44,13 @@ public class Process
     public int SGID { get; set; }
     public int FSUID { get; set; }
     public int FSGID { get; set; }
-    
+
     // Namespaces
     public UTSNamespace UTS { get; set; }
-    
+
     // Other process state
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
-    
+
     // Parent-child relationship
     public int PPID { get; set; } = 0;  // Parent Process ID
     public List<int> Children { get; } = new List<int>();  // Child Process IDs
@@ -90,10 +90,10 @@ public class Task
     public ManualResetEventSlim WaitEvent { get; } = new(false);
     public uint ChildClearTidPtr { get; set; }
     public Task? VforkParent { get; set; } = null;  // For CLONE_VFORK
-    
+
     // Async support: the task that is currently blocking this emulator task
     public System.Threading.Tasks.Task? BlockingTask { get; set; }
-    
+
     public Task(int tid, Process process, Engine cpu)
     {
         TID = tid;
@@ -166,27 +166,27 @@ public class Task
             uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf);
             child.CPU.SetSegBase(Seg.GS, baseAddr);
         }
-        
+
         // TID Pointers
         if (cloneParentSetTid && ptidPtr != 0)
         {
             byte[] tidBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
-            CPU.MemWrite(ptidPtr, tidBuf); 
+            CPU.MemWrite(ptidPtr, tidBuf);
         }
-        
+
         if (cloneChildSetTid && ctidPtr != 0)
         {
             byte[] tidBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
             child.CPU.MemWrite(ctidPtr, tidBuf);
         }
-        
+
         if (cloneChildClearTid)
         {
             child.ChildClearTidPtr = ctidPtr;
         }
-        
+
         // CLONE_VFORK: child will wake parent on exit/exec
         if (cloneVfork)
         {
@@ -208,23 +208,9 @@ public class Task
                 {
                     // Update current task context
                     Scheduler.CurrentTask = this;
-                    
-                    Logger.LogTrace("[Task {TID}] Loop start. Status={Status}", TID, CPU.Status);
-                    if (CPU.TraceInstructions)
-                    {
-                        CPU.Step();
-                        string regStr = CPU.ToString();
-                        lock (_traceBuffer)
-                        {
-                            if (_traceBuffer.Count >= 1000) _traceBuffer.Dequeue();
-                            _traceBuffer.Enqueue(regStr);
-                        }
-                    }
-                    else
-                    {
-                        CPU.Run(0, 1000);
-                    }
-                    
+
+                    CPU.Run(0, 1000);
+
                     var status = CPU.Status;
                     if (status == EmuStatus.Fault)
                     {
@@ -244,16 +230,16 @@ public class Task
                         {
                             var blockingTask = BlockingTask;
                             BlockingTask = null; // Clear it
-                            
+
                             GIL.Release();
-                            try 
+                            try
                             {
                                 await blockingTask;
                             }
                             finally
                             {
                                 await GIL.WaitAsync();
-                                
+
                                 // Write result to EAX if it was a Task<int>
                                 if (blockingTask is System.Threading.Tasks.Task<int> intTask)
                                 {
@@ -269,7 +255,7 @@ public class Task
                     else if (status == EmuStatus.Stopped || status == EmuStatus.Running)
                     {
                         // Some normal stops (like voluntary yield) or just Step() completion
-                        if (status == EmuStatus.Stopped && Process.Syscalls.Strace) 
+                        if (status == EmuStatus.Stopped && Process.Syscalls.Strace)
                             Logger.LogTrace("[Task {TID}] Stopped.", TID);
                         await System.Threading.Tasks.Task.Yield();
                     }
@@ -284,7 +270,7 @@ public class Task
                     Scheduler.CurrentTask = null;
                     GIL.Release();
                 }
-                
+
                 // Cooperative yielding
                 await System.Threading.Tasks.Task.Yield();
             }
@@ -292,7 +278,7 @@ public class Task
         finally
         {
             Exited = true;
-            
+
             // Handle CLONE_CHILD_CLEARTID
             if (ChildClearTidPtr != 0)
             {
@@ -329,7 +315,7 @@ public static class Scheduler
     private static readonly Dictionary<int, Process> _processes = new();
     private static readonly Dictionary<IntPtr, Task> _engineToTask = new();
     private static readonly object _lock = new();
-    
+
     public static readonly AsyncLocal<Task?> _currentTask = new();
     public static Task? CurrentTask
     {
@@ -381,7 +367,7 @@ public static class Scheduler
             return _engineToTask.TryGetValue(state, out var t) ? t : null;
         }
     }
-    
+
     // New methods for fork/wait support
     public static Process? GetProcessByPID(int pid)
     {
@@ -390,13 +376,13 @@ public static class Scheduler
             return _processes.TryGetValue(pid, out var p) ? p : null;
         }
     }
-    
+
     public static void RemoveProcess(int pid)
     {
         lock (_lock)
         {
             _processes.Remove(pid);
-            
+
             // Also remove any remaining tasks for this process
             var toRemove = _tasks.Where(kv => kv.Value.Process.TGID == pid).ToList();
             foreach (var kv in toRemove)
@@ -406,12 +392,12 @@ public static class Scheduler
             }
         }
     }
-    
+
     public static List<Process> GetAllProcesses()
     {
         lock (_lock) return _processes.Values.ToList();
     }
-    
+
     public static Task? GetCurrent()
     {
         // Return current task from AsyncLocal

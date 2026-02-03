@@ -93,7 +93,7 @@ public static class LinuxConstants
     public const int PageSize = 4096;
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
-    
+
     public const uint MinMmapAddr = 0x10000;
     public const uint TaskSize32 = 0xC0000000;
 

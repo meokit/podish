@@ -247,7 +247,7 @@ public class VMAManager
 
         uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
-        
+
         engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)tempPerms);
 
         if (vma.File != null)
@@ -296,10 +296,10 @@ public class VMAManager
             {
                 // Write back dirty page
                 byte[] data = engine.MemRead(page, (uint)LinuxConstants.PageSize);
-                
+
                 long vmaOffset = page - vma.Start;
                 long off = vma.Offset + vmaOffset;
-                
+
                 int writeLen = LinuxConstants.PageSize;
                 if (vma.FileSz > 0)
                 {
