@@ -159,4 +159,15 @@ public static class X86SyscallNumbers
     public const int clock_gettime = 265;
     public const int clock_gettime64 = 403;
     public const int gettimeofday = 78; // Standard 78
+
+    public const int gettid = 224;
+    public const int getpgid = 132;
+    public const int umask = 60;
+    public const int sethostname = 74;
+    public const int setdomainname = 121;
+    public const int sched_yield = 158;
+    public const int fsync = 118;
+    public const int sync = 36;
+    public const int madvise = 219;
+    public const int msync = 144;
 }

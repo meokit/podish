@@ -20,7 +20,7 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.read, SysRead);
         Register(X86SyscallNumbers.pwritev2, SysPWriteV);
         Register(X86SyscallNumbers.statx, SysStatx);
-        Register(X86SyscallNumbers.openat2, SysOpenAt); // Needs implementation
+        Register(X86SyscallNumbers.openat2, SysOpenAt2);
         Register(X86SyscallNumbers.write, SysWrite);
         Register(X86SyscallNumbers.open, SysOpen);
         Register(X86SyscallNumbers.close, SysClose);
@@ -125,6 +125,20 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.clock_gettime, SysClockGetTime);
         Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
         Register(X86SyscallNumbers.gettimeofday, SysGetTimeOfDay);
+
+        Register(X86SyscallNumbers.gettid, SysGettid);
+        Register(X86SyscallNumbers.getpgid, SysGetpgid);
+        Register(X86SyscallNumbers.umask, SysUmask);
+        Register(X86SyscallNumbers.sethostname, SysSethostname);
+        Register(X86SyscallNumbers.setdomainname, SysSetdomainname);
+        Register(X86SyscallNumbers.sched_yield, SysSchedYield);
+        Register(X86SyscallNumbers.pause, SysPause);
+
+        Register(X86SyscallNumbers.fsync, SysFsync);
+        Register(X86SyscallNumbers.fdatasync, SysFdatasync);
+        Register(X86SyscallNumbers.sync, SysSync);
+        Register(X86SyscallNumbers.madvise, SysMadvise);
+        Register(X86SyscallNumbers.msync, SysMsync);
     }
 
     private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -216,7 +230,8 @@ public unsafe partial class SyscallManager
                 
                 try {
                     dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-                    parentDentry.Inode.Create(dentry, (int)mode, uid, gid);
+                    int finalMode = (int)mode & ~(t?.Process.Umask ?? 0);
+                    parentDentry.Inode.Create(dentry, finalMode, uid, gid);
                 } catch {
                     return -(int)Errno.EACCES;
                 }
@@ -269,6 +284,33 @@ public unsafe partial class SyscallManager
         }
 
         return ImplOpen(sm, path, flags, mode, startAt);
+    }
+
+    private static int SysOpenAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        int dirfd = (int)a1;
+        string path = sm.ReadString(a2);
+        uint howPtr = a3;
+        uint howSize = a4;
+
+        if (howSize < 24) return -(int)Errno.EINVAL;
+
+        byte[] howBuf = sm.Engine.MemRead(howPtr, 24);
+        ulong flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
+        ulong mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
+
+        Dentry? startAt = null;
+        if (dirfd != -100 && !path.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(dirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            startAt = fdir.Dentry;
+        }
+
+        return ImplOpen(sm, path, (uint)flags, (uint)mode, startAt);
     }
 
     private static int SysDup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1166,7 +1208,26 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        sm.Engine.MemWrite(a1, System.Text.Encoding.ASCII.GetBytes("Linux\0"));
+        var t = Scheduler.GetByEngine(state);
+        if (t == null) return -(int)Errno.EPERM;
+
+        var uts = t.Process.UTS;
+        
+        void WriteUnameString(uint addr, string s)
+        {
+            byte[] buf = new byte[65];
+            var bytes = System.Text.Encoding.ASCII.GetBytes(s);
+            Array.Copy(bytes, buf, Math.Min(bytes.Length, 64));
+            sm.Engine.MemWrite(addr, buf);
+        }
+
+        WriteUnameString(a1, uts.SysName);
+        WriteUnameString(a1 + 65, uts.NodeName);
+        WriteUnameString(a1 + 130, uts.Release);
+        WriteUnameString(a1 + 195, uts.Version);
+        WriteUnameString(a1 + 260, uts.Machine);
+        WriteUnameString(a1 + 325, uts.DomainName);
+        
         return 0;
     }
 
@@ -1543,6 +1604,109 @@ public unsafe partial class SyscallManager
         if (task == null) return -(int)Errno.EPERM;
         
         return task.Process.PPID;
+    }
+
+    private static int SysGettid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        return task?.TID ?? -1;
+    }
+
+    private static int SysGetpgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        // Simple PGID = TGID for now
+        return task?.Process.TGID ?? -1;
+    }
+
+    private static int SysUmask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return 0;
+        int old = task.Process.Umask;
+        task.Process.Umask = (int)(a1 & 0x1FF);
+        return old;
+    }
+
+    private static int SysSethostname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        var task = Scheduler.GetByEngine(state);
+        if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
+
+        string name = sm.ReadString(a1);
+        task.Process.UTS.NodeName = name;
+        return 0;
+    }
+
+    private static int SysSetdomainname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        var task = Scheduler.GetByEngine(state);
+        if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
+
+        string name = sm.ReadString(a1);
+        task.Process.UTS.DomainName = name;
+        return 0;
+    }
+
+    private static int SysSchedYield(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        sm?.Engine.Yield();
+        return 0;
+    }
+
+    private static int SysPause(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        sm?.Engine.Yield();
+        return 0;
+    }
+
+    private static int SysSync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        foreach (var file in sm.FDs.Values)
+        {
+            file?.Sync();
+        }
+        return 0;
+    }
+
+    private static int SysFsync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        var file = sm.GetFD((int)a1);
+        if (file == null) return -(int)Errno.EBADF;
+        file.Sync();
+        return 0;
+    }
+
+    private static int SysFdatasync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return SysFsync(state, a1, a2, a3, a4, a5, a6);
+    }
+
+    private static int SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return 0; // No-op
+    }
+
+    private static int SysMsync(IntPtr state, uint addr, uint len, uint flags, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        uint end = addr + len;
+        foreach (var vma in sm.Mem.FindVMAsInRange(addr, end))
+        {
+            sm.Mem.SyncVMA(vma, sm.Engine);
+        }
+        return 0;
     }
     
     private static int SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)

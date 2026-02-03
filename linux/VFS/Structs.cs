@@ -137,6 +137,8 @@ public abstract class Inode
     public virtual void Open(File file) { }
     public virtual void Release(File file) { }
     
+    public virtual void Sync(File file) { }
+    
     // For directories, we need iteration. 
     public virtual List<DirectoryEntry> GetEntries() => new();
 }
@@ -225,6 +227,11 @@ public class File
         int n = Dentry.Inode!.Write(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
+    }
+    
+    public virtual void Sync()
+    {
+        Dentry.Inode?.Sync(this);
     }
 }
 

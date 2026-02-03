@@ -67,9 +67,10 @@ public class HostSuperBlock : SuperBlock
         }
     }
 
-    public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir)
+    public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
         var inode = new HostInode(_nextIno++, this, hostPath, isDir);
+        if (mode != 0) inode.Mode = mode;
         dentry.Instantiate(inode);
         lock (Lock)
         {
@@ -122,7 +123,7 @@ public class HostInode : Inode
         using (System.IO.File.Create(subPath)) { } // Create empty file
         
         var sb = (HostSuperBlock)SuperBlock;
-        sb.InstantiateDentry(dentry, subPath, false);
+        sb.InstantiateDentry(dentry, subPath, false, mode);
         return dentry;
     }
 
@@ -135,7 +136,7 @@ public class HostInode : Inode
         Directory.CreateDirectory(subPath);
         
         var sb = (HostSuperBlock)SuperBlock;
-        sb.InstantiateDentry(dentry, subPath, true);
+        sb.InstantiateDentry(dentry, subPath, true, mode);
         return dentry;
     }
 
@@ -234,7 +235,7 @@ public class HostInode : Inode
         
         global::System.IO.File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
-        sb.InstantiateDentry(dentry, newPath, false);
+        sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
         return dentry;
     }
 
@@ -269,6 +270,14 @@ public class HostInode : Inode
         {
             fs.Dispose();
             file.PrivateData = null;
+        }
+    }
+
+    public override void Sync(File file)
+    {
+        if (file.PrivateData is FileStream fs)
+        {
+            fs.Flush(true);
         }
     }
 

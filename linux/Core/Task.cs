@@ -15,6 +15,18 @@ public enum ProcessState
     Dead         // Reaped by parent
 }
 
+public class UTSNamespace
+{
+    public string SysName { get; set; } = "Linux";
+    public string NodeName { get; set; } = "x86emu";
+    public string Release { get; set; } = "6.1.0";
+    public string Version { get; set; } = "#1 SMP PREEMPT";
+    public string Machine { get; set; } = "i686";
+    public string DomainName { get; set; } = "(none)";
+
+    public UTSNamespace Clone() => (UTSNamespace)MemberwiseClone();
+}
+
 public class Process
 {
     public int TGID { get; set; }
@@ -31,6 +43,12 @@ public class Process
     public int FSUID { get; set; }
     public int FSGID { get; set; }
     
+    // Namespaces
+    public UTSNamespace UTS { get; set; }
+    
+    // Other process state
+    public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
+    
     // Parent-child relationship
     public int PPID { get; set; } = 0;  // Parent Process ID
     public List<int> Children { get; } = new List<int>();  // Child Process IDs
@@ -38,11 +56,12 @@ public class Process
     public int ExitStatus { get; set; } = 0;
     public ManualResetEventSlim ZombieEvent { get; } = new(false);  // Signaled when process becomes zombie
 
-    public Process(int tgid, VMAManager mem, SyscallManager syscalls)
+    public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
         TGID = tgid;
         Mem = mem;
         Syscalls = syscalls;
+        UTS = uts ?? new UTSNamespace();
 
         // Default to root
         UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
@@ -110,7 +129,9 @@ public class Task
         {
             var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
             var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
-            newProc = new Process(NextPID(), newMem, newSys);
+            // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS is specified.
+            // For now, always share the reference.
+            newProc = new Process(NextPID(), newMem, newSys, Process.UTS);
         }
 
         int newTid = cloneThread ? NextPID() : newProc.TGID;

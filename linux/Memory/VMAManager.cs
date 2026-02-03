@@ -22,6 +22,17 @@ public class VMAManager
         return null;
     }
 
+    public List<VMA> FindVMAsInRange(uint start, uint end)
+    {
+        var result = new List<VMA>();
+        foreach (var vma in _vmas)
+        {
+            if (vma.Start < end && vma.End > start)
+                result.Add(vma);
+        }
+        return result;
+    }
+
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, Bifrost.VFS.File? file, long offset, long filesz, string name, Engine engine)
     {
         // Align to 4k
