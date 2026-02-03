@@ -12,6 +12,7 @@ public class Engine : IDisposable
     // Callbacks
     public Action<Engine, uint, bool>? FaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
+    public bool TraceInstructions { get; set; } = false;
 
     public unsafe Engine()
     {
@@ -146,7 +147,7 @@ public class Engine : IDisposable
 
     public override string ToString()
     {
-        return $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8}";
+        return $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8} EFLAGS: 0x{Eflags:x8}";
     }
 
     ~Engine() => Dispose(false);

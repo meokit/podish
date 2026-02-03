@@ -46,6 +46,20 @@ public class ElfLoader
 
         var dentry = sys.PathWalk(vfsLookupPath);
 
+        // If PathWalk failed (e.g. file is outside rootfs), try to get a Dentry directly from Hostfs if applicable
+        if (dentry == null && sys.Root.SuperBlock is HostSuperBlock hsb)
+        {
+            try
+            {
+                string absPath = Path.GetFullPath(filename);
+                if (System.IO.File.Exists(absPath))
+                {
+                    dentry = hsb.GetDentry(absPath, Path.GetFileName(absPath), null);
+                }
+            }
+            catch { /* ignore */ }
+        }
+
         // Still use Host IO for ElfFile reader as it needs a Stream
         using var stream = System.IO.File.OpenRead(filename);
         var elf = ElfFile.Read(stream);
@@ -81,31 +95,14 @@ public class ElfLoader
 
                 if (sizeRaw > 0)
                 {
-                    if (dentry != null)
+                    if (dentry == null)
                     {
-                        long fileSzLimit = diff + (long)segment.Size;
-                        var vfsFile = new Bifrost.VFS.File(dentry, FileFlags.O_RDONLY);
-                        mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, fileSzLimit, "ELF_LOAD", engine);
+                        throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {filename}");
                     }
-                    else
-                    {
-                        // Fallback to anonymous mapping + MemWrite if not in VFS
-                        mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "ELF_LOAD_ANON", engine);
-                        
-                        // Map and copy data immediately
-                        for (uint p = pageStart; p < pageStart + alignedLen; p += (uint)LinuxConstants.PageSize)
-                        {
-                            engine.MemMap(p, (uint)LinuxConstants.PageSize, (byte)perms);
-                        }
 
-                        if (segment.Size > 0)
-                        {
-                            byte[] buf = new byte[segment.Size];
-                            stream.Seek((long)segment.Position, SeekOrigin.Begin);
-                            stream.ReadExactly(buf);
-                            engine.MemWrite(vaddrRaw, buf);
-                        }
-                    }
+                    long fileSzLimit = diff + (long)segment.Size;
+                    var vfsFile = new Bifrost.VFS.File(dentry, FileFlags.O_RDONLY);
+                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, fileSzLimit, "ELF_LOAD", engine);
                 }
             }
 
@@ -151,6 +148,7 @@ public class ElfLoader
         for (int i = envs.Length - 1; i >= 0; i--) envPtrs[i] = PushString(envs[i]);
 
         uint platPtr = PushString("i686");
+        uint execFnPtr = PushString(filename);
         uint randPtr = PushBytes(new byte[16]);
 
         sp &= ~0xFu;
@@ -163,6 +161,7 @@ public class ElfLoader
 
         PushAux(LinuxConstants.AT_NULL, 0);
         PushAux(LinuxConstants.AT_PLATFORM, platPtr);
+        PushAux(LinuxConstants.AT_EXECFN, execFnPtr);
         PushAux(LinuxConstants.AT_RANDOM, randPtr);
         PushAux(LinuxConstants.AT_UID, 1000);
         PushAux(LinuxConstants.AT_EUID, 1000);
@@ -173,8 +172,10 @@ public class ElfLoader
         PushAux(LinuxConstants.AT_PHDR, phdrAddr);
         PushAux(LinuxConstants.AT_PAGESZ, (uint)LinuxConstants.PageSize);
         PushAux(LinuxConstants.AT_ENTRY, (uint)elf.EntryPointAddress + loadBase);
-        PushAux(LinuxConstants.AT_BASE, loadBase);
+        PushAux(LinuxConstants.AT_BASE, 0); // For static-pie/PIE with no interpreter, this should be 0
         PushAux(LinuxConstants.AT_FLAGS, 0);
+        PushAux(LinuxConstants.AT_HWCAP, 0);
+        PushAux(LinuxConstants.AT_CLKTCK, 100);
 
         PushUint32(0);
         for (int i = envPtrs.Length - 1; i >= 0; i--) PushUint32(envPtrs[i]);
@@ -195,12 +196,14 @@ public class ElfLoader
             }
         }
 
-        return new LoaderResult
+        var res = new LoaderResult
         {
             Entry = (uint)elf.EntryPointAddress + loadBase,
             SP = sp,
             InitialStack = stackData.AsSpan((int)(sp - stackStart)).ToArray(),
             BrkAddr = brkAddr
         };
+        Console.WriteLine($"[ElfLoader] Entry=0x{res.Entry:x} SP=0x{res.SP:x} Brk=0x{res.BrkAddr:x} InitialStackLen={res.InitialStack.Length}");
+        return res;
     }
 }

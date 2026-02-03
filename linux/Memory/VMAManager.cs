@@ -206,6 +206,16 @@ public class VMAManager
         return false;
     }
 
+    public void EagerMap(uint addr, uint len, Engine engine)
+    {
+        uint startPage = addr & LinuxConstants.PageMask;
+        uint endAddr = addr + len;
+        for (uint p = startPage; p < endAddr; p += (uint)LinuxConstants.PageSize)
+        {
+            HandleFault(p, true, engine);
+        }
+    }
+
     private uint FindFreeRegion(uint size)
     {
         uint baseAddr = LinuxConstants.MinMmapAddr;
@@ -244,6 +254,7 @@ public class VMAManager
         {
             long vmaOffset = pageStart - vma.Start;
             long off = vma.Offset + vmaOffset;
+            Console.WriteLine($"[VMAManager] HandleFault mapping 0x{pageStart:x} from file {vma.Name} off=0x{off:x}");
 
             int readLen = LinuxConstants.PageSize;
             if (vma.FileSz > 0)

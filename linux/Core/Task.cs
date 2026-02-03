@@ -83,6 +83,7 @@ public class Task
     public int TID { get; set; }
     public Process Process { get; set; }
     public Engine CPU { get; set; }
+    private readonly Queue<string> _traceBuffer = new(1024);
 
     public int ExitCode { get; set; }
     public bool Exited { get; set; }
@@ -208,12 +209,32 @@ public class Task
                     // Update current task context
                     Scheduler.CurrentTask = this;
                     
-                    CPU.Run(0, 1000);
+                    Logger.LogTrace("[Task {TID}] Loop start. Status={Status}", TID, CPU.Status);
+                    if (CPU.TraceInstructions)
+                    {
+                        CPU.Step();
+                        string regStr = CPU.ToString();
+                        lock (_traceBuffer)
+                        {
+                            if (_traceBuffer.Count >= 1000) _traceBuffer.Dequeue();
+                            _traceBuffer.Enqueue(regStr);
+                        }
+                    }
+                    else
+                    {
+                        CPU.Run(0, 1000);
+                    }
                     
                     var status = CPU.Status;
                     if (status == EmuStatus.Fault)
                     {
-                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector}) - {Registers}", TID, CPU.Eip, CPU.FaultVector, CPU.ToString());
+                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector})", TID, CPU.Eip, CPU.FaultVector);
+                        Logger.LogError("[Task {TID}] Last 10 instructions:", TID);
+                        lock (_traceBuffer)
+                        {
+                            foreach (var line in _traceBuffer) Logger.LogError("  {TraceLine}", line);
+                        }
+                        Logger.LogError("[Task {TID}] Current: {Registers}", TID, CPU.ToString());
                         Process.Mem.LogVMAs();
                         Exited = true;
                     }
@@ -245,10 +266,11 @@ public class Task
                             await System.Threading.Tasks.Task.Yield();
                         }
                     }
-                    else if (status == EmuStatus.Stopped)
+                    else if (status == EmuStatus.Stopped || status == EmuStatus.Running)
                     {
-                        // Some normal stops (like voluntary yield)
-                        if (Process.Syscalls.Strace) Logger.LogTrace("[Task {TID}] Stopped.", TID);
+                        // Some normal stops (like voluntary yield) or just Step() completion
+                        if (status == EmuStatus.Stopped && Process.Syscalls.Strace) 
+                            Logger.LogTrace("[Task {TID}] Stopped.", TID);
                         await System.Threading.Tasks.Task.Yield();
                     }
                     else
@@ -290,6 +312,15 @@ public class Task
             CPU.Dispose();
         }
     }
+
+    public void DumpTrace()
+    {
+        Logger.LogError("[Task {TID}] Trace Dump (Last 1000 instructions):", TID);
+        lock (_traceBuffer)
+        {
+            foreach (var line in _traceBuffer) Logger.LogError("  {TraceLine}", line);
+        }
+    }
 }
 
 public static class Scheduler
@@ -312,6 +343,7 @@ public static class Scheduler
         {
             _tasks[t.TID] = t;
             _engineToTask[t.CPU.State] = t;
+            Console.WriteLine($"[Scheduler] Registered Task {t.TID} with Engine 0x{t.CPU.State:x}");
             _processes[t.Process.TGID] = t.Process;
         }
     }

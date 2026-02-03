@@ -10,12 +10,13 @@ EMULATOR="$SCRIPT_DIR/../../build/x86emu-linux"
 mkdir -p "$ROOTFS"
 mkdir -p "$BUILD_DIR"
 
-# Build x86emu-linux (Go Loader)
-echo "Building x86emu-linux loader..."
-(cd "$SCRIPT_DIR/../../linux" && CGO_LDFLAGS_ALLOW="-Wl,-rpath,.*" go build -o "$EMULATOR" main.go) || {
-    echo "Failed to build x86emu-linux!"
+# Build Bifrost (C# Emulator)
+echo "Building Bifrost emulator..."
+(cd "$SCRIPT_DIR/../../" && dotnet build linux/Bifrost.csproj) || {
+    echo "Failed to build Bifrost!"
     exit 1
 }
+EMULATOR="$SCRIPT_DIR/../../linux/bin/Debug/net8.0/Bifrost"
 
 # Check if we need to build Busybox
 if [ -f "$ROOTFS/bin/busybox" ]; then
@@ -70,6 +71,10 @@ if [ ! -f .config ]; then
     make defconfig
     # Enable static linking - only needed once but harmless to repeat
     sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+    # Enable debug symbols and disable stripping
+    sed -i 's/CONFIG_STRIP=y/CONFIG_STRIP=n/' .config
+    sed -i 's/# CONFIG_DEBUG is not set/CONFIG_DEBUG=y/' .config
+    sed -i 's/# CONFIG_DEBUG_PESSIMIZE is not set/CONFIG_DEBUG_PESSIMIZE=y/' .config
 fi
 
 # Force disable TC (Traffic Control) as it requires kernel headers potentially missing or incompatible

@@ -19,11 +19,17 @@ class Program
         bool trace = false;
         int argIdx = 0;
 
+        bool instrTrace = false;
         while (argIdx < args.Length && args[argIdx].StartsWith("--"))
         {
             if (args[argIdx] == "--trace")
             {
                 trace = true;
+                argIdx++;
+            }
+            else if (args[argIdx] == "--instr-trace")
+            {
+                instrTrace = true;
                 argIdx++;
             }
             else if (args[argIdx] == "--rootfs" && argIdx + 1 < args.Length)
@@ -44,13 +50,13 @@ class Program
             {
                 options.LogToStandardErrorThreshold = LogLevel.Trace;
             });
-            builder.SetMinimumLevel(trace ? LogLevel.Trace : LogLevel.Information);
+            builder.SetMinimumLevel((trace || instrTrace) ? LogLevel.Trace : LogLevel.Information);
         });
         Logger = Logging.CreateLogger<Program>();
 
         if (argIdx >= args.Length)
         {
-            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
+            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] [--instr-trace] <native_binary> [args...]");
             return 1;
         }
 
@@ -65,6 +71,7 @@ class Program
         // Note: Engine is IDisposable. We should manage its lifecycle carefully with Tasks.
         // Initial engine for loading.
         var engine = new Engine();
+        engine.TraceInstructions = instrTrace;
 
         // 2. Init VMA Manager
         var mm = new VMAManager();
@@ -77,21 +84,22 @@ class Program
         var sys = new SyscallManager(engine, mm, 0, rootfs);
         sys.Strace = trace;
 
-        // 5. Load ELF (Using VFS)
+        // 5. Create Main Task (BEFORE loading to handle any faults during load)
+        var proc = new Process(Task.NextPID(), mm, sys);
+        var mainTask = new Task(proc.TGID, proc, engine);
+        Scheduler.Add(mainTask);
+        Console.WriteLine($"[Program] Created Main Task {mainTask.TID}, Engine 0x{engine.State:x}");
+
+        // 6. Load ELF
         var res = ElfLoader.Load(exe, sys, exeArgs, envs);
         sys.BrkAddr = res.BrkAddr;
 
-        // 6. Setup CPU State (before stack write)
+        // 7. Setup CPU State
         engine.Eip = res.Entry;
         engine.RegWrite(Reg.ESP, res.SP);
         engine.Eflags = 0x202;
 
-        // 7. Create Main Task (BEFORE writing stack to avoid "Unknown Task" faults)
-        var proc = new Process(Task.NextPID(), mm, sys);
-        var mainTask = new Task(proc.TGID, proc, engine);
-        Scheduler.Add(mainTask);
-
-        // 8. Setup Stack (after Task is registered so fault handler can find it)
+        // 8. Setup Stack
         engine.MemWrite(res.SP, res.InitialStack);
 
         // 9. Setup Callbacks
@@ -185,6 +193,7 @@ class Program
             if (!t.Process.Mem.HandleFault(addr, isWrite, eng))
             {
                 Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} (Vector: {Vector}) EIP=0x{Eip:x} - {Registers}", t.TID, addr, eng.FaultVector, eng.Eip, eng.ToString());
+                t.DumpTrace();
                 t.Process.Mem.LogVMAs();
                 eng.SetStatusFault();
             }

@@ -22,12 +22,13 @@ extern "C" {
 
 static void InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     EmuState* state = static_cast<EmuState*>(opaque);
+    state->fault_vector = 14; // #PF
+    state->fault_addr = addr;
     if (state->fault_handler) {
         state->fault_handler(state, addr, is_write, state->fault_userdata);
     } else {
         // Default behavior if no user handler: Trigger Fault
         state->status = EmuStatus::Fault;
-        state->fault_vector = 14; // #PF
     }
 }
 
