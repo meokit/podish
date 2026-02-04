@@ -31,10 +31,21 @@ static inline float80& FpuTop(EmuState* state, int index) {
     return state->ctx.fpu_regs[(state->ctx.fpu_top + index) & 7];
 }
 
+static inline void UpdateFpuRoundingMode(EmuState* state) {
+    uint16_t rc = (state->ctx.fpu_cw >> 10) & 3;
+    switch (rc) {
+        case 0: f80_rounding_mode = round_to_nearest; break;
+        case 1: f80_rounding_mode = round_down; break;
+        case 2: f80_rounding_mode = round_up; break;
+        case 3: f80_rounding_mode = round_chop; break;
+    }
+}
+
 // Helper to read float32 from memory and convert to float80
 static inline float80 ReadF32(EmuState* state, DecodedOp* op) {
     uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
-    return f80_from_double((double)*(float*)&val);
+    float f = *(float*)&val;
+    return f80_from_double((double)f);
 }
 
 // Helper to read float64 from memory and convert to float80
@@ -170,6 +181,7 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
             }
             case 5:  // FLDCW m16
                 state->ctx.fpu_cw = state->mmu.read<uint16_t>(addr);
+                UpdateFpuRoundingMode(state);
                 break;
             case 7:  // FNSTCW m16
                 state->mmu.write<uint16_t>(addr, state->ctx.fpu_cw);
@@ -225,12 +237,7 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op) {
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            // Set EFLAGS (ZF, PF, CF)
-            // Unordered: ZF=1, PF=1, CF=1
-            // LT: CF=1
-            // EQ: ZF=1
-
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK);
+            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
             if (f80_uncomparable(st0, sti)) {
                 state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
             } else if (f80_eq(st0, sti)) {
@@ -238,15 +245,19 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op) {
             } else if (f80_lt(st0, sti)) {
                 state->ctx.eflags |= CF_MASK;
             }
-        } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI (Same as FUCOMI basically but treats NAN
-                                                  // diff? Using same for now)
-            // Wait, DB F0 is FCOMI? No DB F0 is 'FCOMI ST, ST(i)'?
-            // Actually DB E8+i is FUCOMI.
-            // DB F0+i is ... FCOMI? documentation varies.
-            // Let's assume unimplemented unless test hits it.
-            // But wait, test case uses FUCOMI (DB E8).
-            // And FUCOMPI (DF E9).
-            OpUd2(state, op);
+        } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI
+            int idx = op->modrm & 7;
+            float80 st0 = FpuTop(state, 0);
+            float80 sti = FpuTop(state, idx);
+
+            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            if (f80_uncomparable(st0, sti)) {
+                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+            } else if (f80_eq(st0, sti)) {
+                state->ctx.eflags |= ZF_MASK;
+            } else if (f80_lt(st0, sti)) {
+                state->ctx.eflags |= CF_MASK;
+            }
         } else {
             OpUd2(state, op);
         }
@@ -452,7 +463,21 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op) {
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK);
+            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            if (f80_uncomparable(st0, sti)) {
+                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+            } else if (f80_eq(st0, sti)) {
+                state->ctx.eflags |= ZF_MASK;
+            } else if (f80_lt(st0, sti)) {
+                state->ctx.eflags |= CF_MASK;
+            }
+            FpuPop(state);
+        } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMIP
+            int idx = op->modrm & 7;
+            float80 st0 = FpuTop(state, 0);
+            float80 sti = FpuTop(state, idx);
+
+            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
             if (f80_uncomparable(st0, sti)) {
                 state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
             } else if (f80_eq(st0, sti)) {
