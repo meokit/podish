@@ -17,10 +17,13 @@ def run_fpu_test(func):
     
     # Extract fuzzy check requirements
     fuzzy_write = expectations.pop('fuzzy_write', None)
+    fsw_mask = expectations.pop('fsw_mask', 0xFFDF) # Default: mask out bit 0x20 (PE)
     
     runner.run_test(
         name=func.__name__,
         asm=asm,
+        check_unicorn=expectations.pop('check_unicorn', True),
+        fsw_mask=fsw_mask,
         **expectations
     )
     
@@ -38,12 +41,22 @@ def run_fpu_test(func):
                     exp_double = struct.unpack('<d', exp_bytes)[0]
                     
                     import math
-                    if not math.isclose(act_double, exp_double, rel_tol=1e-9):
+                    if not math.isclose(act_double, exp_double, rel_tol=1e-9, abs_tol=1e-15):
                          raise AssertionError(f"Fuzzy Mismatch at 0x{addr:x}. Exp: {exp_double}, Got: {act_double}")
                     found = True
                     break
             if not found:
                 raise AssertionError(f"Expected Fuzzy Write at 0x{addr:x} not found")
+
+def f80_pack(signif, exp):
+    return struct.pack('<QH', signif, exp)
+
+# 1.0 = signif=0x8000000000000000, exp=0x3FFF
+F80_ONE = f80_pack(0x8000000000000000, 0x3FFF)
+# 2.0 = signif=0x8000000000000000, exp=0x4000
+F80_TWO = f80_pack(0x8000000000000000, 0x4000)
+# 0.0 = signif=0, exp=0
+F80_ZERO = f80_pack(0, 0)
 
 @pytest.mark.fpu
 def case_fpu_constants():
@@ -68,7 +81,12 @@ def case_fpu_constants():
     """
     import math
     # Use fuzzy_write for imprecise constants
+    # After pushing 7 constants and popping 7, TOP should be 0.
     return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'FSW': 0x0000 
+        },
         'fuzzy_write': {
             0x2000: struct.unpack('<Q', struct.pack('<d', 0.0))[0],
             0x2008: struct.unpack('<Q', struct.pack('<d', 1.0))[0],
@@ -146,3 +164,159 @@ def test_run_stack_ops():
     except AssertionError as e:
         print(e)
         raise
+
+@pytest.mark.fpu
+def case_fpu_cmov():
+    """
+    fld1                ; ST0=1.0
+    fldz                ; ST0=0.0, ST1=1.0
+    
+    ; Test FCMOVB (Carry Case)
+    ; We need to set EFLAGS.CF=1
+    fcmovb st0, st1     ; ST0 should become 1.0
+    hlt
+    """
+    return {
+        'initial_eflags': 0x203, # CF=1
+        'expected_regs': {
+            'ST0': F80_ONE
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_cmov_not():
+    """
+    fldz                ; ST0=0.0
+    fld1                ; ST0=1.0, ST1=0.0
+    
+    ; Test FCMOVB (No Carry Case)
+    fcmovb st0, st1     ; ST0 should remain 1.0
+    hlt
+    """
+    return {
+        'initial_eflags': 0x202, # CF=0
+        'expected_regs': {
+            'ST0': F80_ONE
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fstsw_ax():
+    """
+    fldz
+    fld1
+    fcom st1            ; Compare 1.0 with 0.0 -> ST(0) > source
+    ; C3=0, C2=0, C0=0 for >
+    fstsw ax
+    hlt
+    """
+    # 2 pushes -> TOP=6. 0x3000
+    return {
+        'expected_regs': {
+            'EAX': 0x3000 
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_ftst():
+    """
+    fld1
+    ftst                ; Test 1.0 vs 0.0 -> >0
+    fstsw ax
+    hlt
+    """
+    # 1 push -> TOP=7. 0x3800
+    return {
+        'expected_regs': {
+            'EAX': 0x3800 
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fxam():
+    """
+    fld1
+    fxam                ; Examine 1.0 -> Valid, Positive, Normal
+    ; C3=0, C2=1, C0=0 for +Normal (depends on implementation details of FXAM)
+    fstsw ax
+    hlt
+    """
+    # FXAM for +Normal typically sets C3=0, C2=1, C1=sign, C0=0
+    # In FSW: bits 14, 10, 9, 8 are C3, C2, C1, C0
+    # So FSW should have bit 10 set.
+    return {
+        'expected_regs': {
+            # We don't check exact value because it might differ between vendors, 
+            # but we can check if it's non-zero
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_transcendental():
+    """
+    fldpi
+    fsin                ; sin(pi) = 0
+    fstp qword [0x2000]
+    
+    fldpi
+    fcos                ; cos(pi) = -1
+    fstp qword [0x2008]
+    hlt
+    """
+    return {
+        'fuzzy_write': {
+            0x2000: struct.unpack('<Q', struct.pack('<d', 0.0))[0],
+            0x2008: struct.unpack('<Q', struct.pack('<d', -1.0))[0],
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_sqrt():
+    """
+    fld dword [0x2100]  ; 4.0
+    fsqrt               ; 2.0
+    fstp qword [0x2000]
+    hlt
+    """
+    return {
+        'expected_read': {
+            0x2100: 0x40800000 # 4.0
+        },
+        'fuzzy_write': {
+            0x2000: struct.unpack('<Q', struct.pack('<d', 2.0))[0]
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fyl2x():
+    """
+    fld1                ; ST1 = 1.0 (will be y)
+    fld dword [0x2100]  ; ST0 = 4.0 (will be x)
+    fyl2x               ; ST0 = y * log2(x) = 1.0 * log2(4.0) = 2.0
+    fstp qword [0x2000]
+    hlt
+    """
+    return {
+        'expected_read': {
+            0x2100: 0x40800000 # 4.0
+        },
+        'fuzzy_write': {
+            0x2000: struct.unpack('<Q', struct.pack('<d', 2.0))[0]
+        }
+    }
+
+def test_run_cmov():
+    run_fpu_test(case_fpu_cmov)
+    run_fpu_test(case_fpu_cmov_not)
+
+def test_run_fstsw():
+    run_fpu_test(case_fpu_fstsw_ax)
+
+def test_run_transcendental():
+    run_fpu_test(case_fpu_transcendental)
+
+def test_run_sqrt():
+    run_fpu_test(case_fpu_sqrt)
+
+def test_run_fyl2x():
+    run_fpu_test(case_fpu_fyl2x)

@@ -12,11 +12,16 @@
 
 namespace x86emu {
 
+static inline void UpdateFSW(EmuState* state) {
+    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x3800) | ((state->ctx.fpu_top & 7) << 11);
+}
+
 // FPU Stack Helpers
 static inline void FpuPush(EmuState* state, const float80* val) {
     state->ctx.fpu_top = (state->ctx.fpu_top - 1) & 7;
     std::memcpy(&state->ctx.fpu_regs[state->ctx.fpu_top], val, sizeof(float80));
     state->ctx.fpu_tw &= ~(3 << (state->ctx.fpu_top * 2));  // Mark valid (00)
+    UpdateFSW(state);
 }
 
 static inline float80 FpuPop(EmuState* state) {
@@ -24,6 +29,7 @@ static inline float80 FpuPop(EmuState* state) {
     std::memcpy(&val, &state->ctx.fpu_regs[state->ctx.fpu_top], sizeof(float80));
     state->ctx.fpu_tw |= (3 << (state->ctx.fpu_top * 2));  // Mark empty
     state->ctx.fpu_top = (state->ctx.fpu_top + 1) & 7;
+    UpdateFSW(state);
     return val;
 }
 
@@ -32,13 +38,7 @@ static inline float80& FpuTop(EmuState* state, int index) {
 }
 
 static inline void UpdateFpuRoundingMode(EmuState* state) {
-    uint16_t rc = (state->ctx.fpu_cw >> 10) & 3;
-    switch (rc) {
-        case 0: f80_rounding_mode = round_to_nearest; break;
-        case 1: f80_rounding_mode = round_down; break;
-        case 2: f80_rounding_mode = round_up; break;
-        case 3: f80_rounding_mode = round_chop; break;
-    }
+    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 }
 
 // Helper to read float32 from memory and convert to float80
@@ -125,6 +125,26 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
             FpuTop(state, 0) = FpuTop(state, idx);
             FpuTop(state, idx) = t;
         } else if (op_byte == 0xD0) {  // FNOP
+        } else if (op_byte == 0xE4) {  // FTST
+            float80 st0 = FpuTop(state, 0);
+            float80 zero = ConstF80_Zero();
+            state->ctx.fpu_sw &= ~0x4500;
+            if (f80_isnan(st0)) {
+                state->ctx.fpu_sw |= 0x4500; // C3=1, C2=1, C0=1
+            } else if (f80_lt(st0, zero)) {
+                state->ctx.fpu_sw |= 0x0100; // C0=1
+            } else if (f80_eq(st0, zero)) {
+                state->ctx.fpu_sw |= 0x4000; // C3=1
+            }
+        } else if (op_byte == 0xE5) {  // FXAM
+            float80 st0 = FpuTop(state, 0);
+            state->ctx.fpu_sw &= ~0x4700; // Clear C3, C2, C1, C0
+            if (st0.signExp & 0x8000) state->ctx.fpu_sw |= 0x0200; // C1=1 (Sign)
+            if (f80_isnan(st0)) state->ctx.fpu_sw |= 0x0100; // NaN (C0=1)
+            else if (f80_isinf(st0)) state->ctx.fpu_sw |= 0x0500; // Inf (C0=1, C2=1)
+            else if (f80_iszero(st0)) state->ctx.fpu_sw |= 0x4000; // Zero (C3=1)
+            else if (f80_isdenormal(st0)) state->ctx.fpu_sw |= 0x4400; // Denormal (C3=1, C2=1)
+            else state->ctx.fpu_sw |= 0x0400; // Normal (C2=1)
         } else if (op_byte == 0xE0) {  // FCHS
             FpuTop(state, 0) = f80_neg(FpuTop(state, 0));
         } else if (op_byte == 0xE1) {  // FABS
@@ -150,6 +170,29 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
         } else if (op_byte == 0xEE) {  // FLDZ
             float80 t = ConstF80_Zero();
             FpuPush(state, &t);
+        } else if (op_byte == 0xF1) {  // FYL2X: ST(1) = ST(1) * log2(ST(0)); Pop ST(0)
+            float80 x = FpuPop(state);
+            float80& y = FpuTop(state, 0);
+            y = f80_mul(y, f80_log2(x));
+        } else if (op_byte == 0xF8) {  // FPREM
+            float80& st0 = FpuTop(state, 0);
+            float80 st1 = FpuTop(state, 1);
+            st0 = f80_rem(st0, st1);
+        } else if (op_byte == 0xFA) {  // FSQRT
+            FpuTop(state, 0) = f80_sqrt(FpuTop(state, 0));
+        } else if (op_byte == 0xFB) {  // FSINCOS
+            float80 st0 = FpuTop(state, 0);
+            FpuTop(state, 0) = f80_sin(st0);
+            float80 c = f80_cos(st0);
+            FpuPush(state, &c);
+        } else if (op_byte == 0xFC) {  // FRNDINT
+            FpuTop(state, 0) = f80_round(FpuTop(state, 0));
+        } else if (op_byte == 0xFD) {  // FSCALE
+            FpuTop(state, 0) = f80_scale(FpuTop(state, 0), (int)f80_to_int(FpuTop(state, 1)));
+        } else if (op_byte == 0xFE) {  // FSIN
+            FpuTop(state, 0) = f80_sin(FpuTop(state, 0));
+        } else if (op_byte == 0xFF) {  // FCOS
+            FpuTop(state, 0) = f80_cos(FpuTop(state, 0));
         } else {
             OpUd2(state, op);
         }
@@ -194,32 +237,46 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpFpu_DA(EmuState* state, DecodedOp* op) {
     // DA: Int Arith m32
-    uint8_t subop = (op->modrm >> 3) & 7;
-    int32_t val32 = (int32_t)state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
-    float80 val = f80_from_int(val32);
-    float80& st0 = FpuTop(state, 0);
+    if ((op->modrm >> 6) == 3) {
+        // DA C0-C7: FCMOVB
+        // DA C8-CF: FCMOVE
+        // DA D0-D7: FCMOVBE
+        // DA D8-DF: FCMOVU
+        int idx = op->modrm & 7;
+        bool pass = false;
+        switch ((op->modrm >> 3) & 7) {
+            case 0: pass = (state->ctx.eflags & x86emu::CF_MASK); break; // FCMOVB
+            case 1: pass = (state->ctx.eflags & x86emu::ZF_MASK); break; // FCMOVE
+            case 2: pass = (state->ctx.eflags & (x86emu::CF_MASK | x86emu::ZF_MASK)); break; // FCMOVBE
+            case 3: pass = (state->ctx.eflags & x86emu::PF_MASK); break; // FCMOVU
+        }
+        if (pass) FpuTop(state, 0) = FpuTop(state, idx);
+    } else {
+        uint8_t subop = (op->modrm >> 3) & 7;
+        int32_t val32 = (int32_t)state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
+        float80 val = f80_from_int(val32);
+        float80& st0 = FpuTop(state, 0);
 
-    switch (subop) {
-        case 0:
-            st0 = f80_add(st0, val);
-            break;  // FIADD
-        case 1:
-            st0 = f80_mul(st0, val);
-            break;  // FIMUL
-        case 4:
-            st0 = f80_sub(st0, val);
-            break;  // FISUB
-        case 5:
-            st0 = f80_sub(val, st0);
-            break;  // FISUBR
-        case 6:
-            st0 = f80_div(st0, val);
-            break;  // FIDIV
-        case 7:
-            st0 = f80_div(val, st0);
-            break;  // FIDIVR
-        default:
-            OpUd2(state, op);
+        switch (subop) {
+            case 0: st0 = f80_add(st0, val); break;  // FIADD
+            case 1: st0 = f80_mul(st0, val); break;  // FIMUL
+            case 2: // FICOM
+                if (f80_lt(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                break;
+            case 3: // FICOMP
+                if (f80_lt(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, val)) state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                FpuPop(state);
+                break;
+            case 4: st0 = f80_sub(st0, val); break;  // FISUB
+            case 5: st0 = f80_sub(val, st0); break;  // FISUBR
+            case 6: st0 = f80_div(st0, val); break;  // FIDIV
+            case 7: st0 = f80_div(val, st0); break;  // FIDIVR
+            default: OpUd2(state, op);
+        }
     }
 }
 
@@ -228,35 +285,54 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
-        // FCMOV, etc?
-        // DB E8-EF: FUCOMI ST(i)
-        // DB F0-F7: FUCOMI ST(i) ?? P?
-        if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMI
+        // DB C0-C7: FCMOVNB
+        // DB C8-CF: FCMOVNE
+        // DB D0-D7: FCMOVNBE
+        // DB D8-DF: FCMOVNU
+        uint8_t mode = (op->modrm >> 3) & 7;
+        if (mode < 4) {
+            int idx = op->modrm & 7;
+            bool pass = false;
+            switch (mode) {
+                case 0: pass = !(state->ctx.eflags & x86emu::CF_MASK); break; // FCMOVNB
+                case 1: pass = !(state->ctx.eflags & x86emu::ZF_MASK); break; // FCMOVNE
+                case 2: pass = !(state->ctx.eflags & (x86emu::CF_MASK | x86emu::ZF_MASK)); break; // FCMOVNBE
+                case 3: pass = !(state->ctx.eflags & x86emu::PF_MASK); break; // FCMOVNU
+            }
+            if (pass) FpuTop(state, 0) = FpuTop(state, idx);
+        } else if (op->modrm == 0xE3) { // FINIT
+            state->ctx.fpu_cw = 0x037F;
+            state->ctx.fpu_sw = 0;
+            state->ctx.fpu_tw = 0xFFFF;
+            state->ctx.fpu_top = 0;
+            UpdateFpuRoundingMode(state);
+        } else if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMI
+            // ... (already implemented)
             // Compare ST0 with ST(i) and set EFLAGS
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK | x86emu::SF_MASK | x86emu::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= ZF_MASK;
+                state->ctx.eflags |= x86emu::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= CF_MASK;
+                state->ctx.eflags |= x86emu::CF_MASK;
             }
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK | x86emu::SF_MASK | x86emu::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= ZF_MASK;
+                state->ctx.eflags |= x86emu::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= CF_MASK;
+                state->ctx.eflags |= x86emu::CF_MASK;
             }
         } else {
             OpUd2(state, op);
@@ -456,20 +532,21 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
-        // DF E0 status
-        // DF E8+i: FUCOMIP ST(i) (Unordered Compare ST0 with STi, set flags, pop)
-        if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMIP
+        if (op->modrm == 0xE0) { // FNSTSW AX
+            state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFF0000) | state->ctx.fpu_sw;
+        } else if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMIP
+            // ... (already implemented)
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK | x86emu::SF_MASK | x86emu::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= ZF_MASK;
+                state->ctx.eflags |= x86emu::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= CF_MASK;
+                state->ctx.eflags |= x86emu::CF_MASK;
             }
             FpuPop(state);
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMIP
@@ -477,13 +554,13 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op) {
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | SF_MASK | AF_MASK);
+            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK | x86emu::SF_MASK | x86emu::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (ZF_MASK | PF_MASK | CF_MASK);
+                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= ZF_MASK;
+                state->ctx.eflags |= x86emu::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= CF_MASK;
+                state->ctx.eflags |= x86emu::CF_MASK;
             }
             FpuPop(state);
         } else {

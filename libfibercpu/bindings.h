@@ -34,6 +34,16 @@ extern "C" {
     void X86_ReadXMM(EmuState* state, int idx, uint8_t* val);
     void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val);
 
+    // FPU Access
+    uint16_t X86_GetFCW(EmuState* state);
+    void X86_SetFCW(EmuState* state, uint16_t val);
+    uint16_t X86_GetFSW(EmuState* state);
+    void X86_SetFSW(EmuState* state, uint16_t val);
+    uint16_t X86_GetFTW(EmuState* state);
+    void X86_SetFTW(EmuState* state, uint16_t val);
+    void X86_ReadFPUReg(EmuState* state, int idx, uint8_t* val);
+    void X86_WriteFPUReg(EmuState* state, int idx, const uint8_t* val);
+
     // Segment Base Access
     uint32_t X86_SegBaseRead(EmuState* state, int seg_index);
     void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);

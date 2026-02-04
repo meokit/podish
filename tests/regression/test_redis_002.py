@@ -377,7 +377,7 @@ def test_id_252_fnstcw_m16():
         name='ID_252: fnstcw word ptr [ebp - 0x2a]',
         code=binascii.unhexlify('d97dd6'),
         initial_regs={'EBP': 0x8000},
-        expected_write={0x7FD6: 0},
+        expected_write={0x7FD6: 0x037F},
         expected_regs={}
     )
 

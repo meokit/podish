@@ -91,6 +91,12 @@ EmuState* X86_Create() {
     state->ctx.eflags = 0x202; // IF=1, Reserved=1
     state->ctx.eflags_mask = 0x240DD5; 
     
+    // Default FPU State
+    state->ctx.fpu_cw = 0x037F;
+    state->ctx.fpu_sw = 0x0000;
+    state->ctx.fpu_tw = 0xFFFF;
+    state->ctx.fpu_top = 0;
+
     // Link pointers
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
@@ -220,6 +226,38 @@ void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val) {
 }
 
 // ----------------------------------------------------------------------------
+// FPU Access
+// ----------------------------------------------------------------------------
+
+uint16_t X86_GetFCW(EmuState* state) { return state->ctx.fpu_cw; }
+void X86_SetFCW(EmuState* state, uint16_t val) {
+    state->ctx.fpu_cw = val;
+    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+}
+uint16_t X86_GetFSW(EmuState* state) { return state->ctx.fpu_sw; }
+void X86_SetFSW(EmuState* state, uint16_t val) {
+    state->ctx.fpu_sw = val;
+    state->ctx.fpu_top = (val >> 11) & 7;
+    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+}
+uint16_t X86_GetFTW(EmuState* state) { return state->ctx.fpu_tw; }
+void X86_SetFTW(EmuState* state, uint16_t val) { state->ctx.fpu_tw = val; }
+
+void X86_ReadFPUReg(EmuState* state, int idx, uint8_t* val) {
+    if (idx >= 0 && idx < 8 && val) {
+        int phys_idx = (state->ctx.fpu_top + idx) & 7;
+        std::memcpy(val, &state->ctx.fpu_regs[phys_idx], 10);
+    }
+}
+
+void X86_WriteFPUReg(EmuState* state, int idx, const uint8_t* val) {
+    if (idx >= 0 && idx < 8 && val) {
+        int phys_idx = (state->ctx.fpu_top + idx) & 7;
+        std::memcpy(&state->ctx.fpu_regs[phys_idx], val, 10);
+    }
+}
+
+// ----------------------------------------------------------------------------
 // Segment Base Access
 // ----------------------------------------------------------------------------
 
@@ -269,6 +307,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->status = EmuStatus::Running;
     uint64_t inst_count = 0;
     
+    // Sync FPU state before starting
+    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
         
@@ -311,6 +352,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             }
         }
     }
+
+    // Sync FPU state back
+    f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 }
 
 void X86_EmuStop(EmuState* state) {
@@ -328,10 +372,16 @@ void X86_EmuYield(EmuState* state) {
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
 
+    // Sync FPU state before starting
+    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+
     uint8_t buf[16];
     for (int i=0; i<16; ++i) {
         buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i);
-        if (state->status != EmuStatus::Running) return (int)state->status;
+        if (state->status != EmuStatus::Running) {
+            f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
+            return (int)state->status;
+        }
     }
     
     DecodedOp op;
@@ -361,6 +411,9 @@ int X86_Step(EmuState* state) {
              state->fault_vector = 6;
          }
     }
+    
+    // Sync FPU state back
+    f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
     
     return (int)state->status;
 }

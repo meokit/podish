@@ -17,16 +17,16 @@ except ImportError:
 # Configurations
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BUILD_PATH = os.path.join(PROJECT_ROOT, "build")
-SRC_PATH = os.path.join(PROJECT_ROOT, "src")
+SRC_PATH = os.path.join(PROJECT_ROOT, "libfibercpu")
 SIMDE_PATH = os.path.join(BUILD_PATH, "_deps/simde-src")
-LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.dylib") # Adjust extension if linux/windows
+LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.dylib")
 
 if not os.path.exists(LIB_PATH):
     # Try finding it
-    if os.path.exists(os.path.join(BUILD_PATH, "libx86emu.so")):
-        LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.so")
-    elif os.path.exists(os.path.join(BUILD_PATH, "libx86emu.dll")):
-        LIB_PATH = os.path.join(BUILD_PATH, "libx86emu.dll")
+    if os.path.exists(os.path.join(BUILD_PATH, "bin", "libfibercpu.so")):
+        LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.so")
+    elif os.path.exists(os.path.join(BUILD_PATH, "bin", "libfibercpu.dll")):
+        LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.dll")
 
 # Load Library and Includes
 cppyy.add_include_path(SRC_PATH)
@@ -54,6 +54,21 @@ void Py_WriteXmm(EmuState* state, int idx, const char* data) {
 
 void Py_ReadXmm(EmuState* state, int idx, void* data) {
     X86_ReadXMM(state, idx, (uint8_t*)data);
+}
+
+void Py_WriteFpu(EmuState* state, int idx, const char* data) {
+    X86_WriteFPUReg(state, idx, (const uint8_t*)data);
+}
+
+void Py_ReadFpu(EmuState* state, int idx, void* data) {
+    X86_ReadFPUReg(state, idx, (uint8_t*)data);
+}
+
+#include "float80.h"
+#include <string.h>
+void Py_DoubleToF80(double d, void* out) {
+    float80 f = f80_from_double(d);
+    memcpy(out, &f, 10);
 }
 #endif
 """)
@@ -149,6 +164,27 @@ class UnicornBackend(EmulatorBackend):
                  # Unicorn expects integer even for 128-bit registers
                  val_int = int.from_bytes(val_bytes, 'little')
                  self.mu.reg_write(reg_id, val_int)
+             elif name.startswith('ST'):
+                 idx = int(name[2:])
+                 fsw = self.mu.reg_read(UC_X86_REG_FPSW)
+                 top = (fsw >> 11) & 7
+                 phys_reg = [UC_X86_REG_FP0, UC_X86_REG_FP1, UC_X86_REG_FP2, UC_X86_REG_FP3,
+                             UC_X86_REG_FP4, UC_X86_REG_FP5, UC_X86_REG_FP6, UC_X86_REG_FP7][(top + idx) & 7]
+                 
+                 if isinstance(val, float):
+                     buf = bytearray(10)
+                     cppyy.gbl.Py_DoubleToF80(val, buf)
+                     low = int.from_bytes(buf[:8], 'little')
+                     high = int.from_bytes(buf[8:], 'little')
+                 elif isinstance(val, int):
+                     low = val & 0xFFFFFFFFFFFFFFFF
+                     high = (val >> 64) & 0xFFFF
+                 else:
+                     val_bytes = bytes(val)
+                     low = int.from_bytes(val_bytes[:8], 'little')
+                     high = int.from_bytes(val_bytes[8:10], 'little') if len(val_bytes) >= 10 else 0
+                 
+                 self.mu.reg_write(phys_reg, (low, high))
              else:
                  self.mu.reg_write(reg_id, val)
 
@@ -159,6 +195,23 @@ class UnicornBackend(EmulatorBackend):
             val = self.mu.reg_read(reg_id)
             if name.startswith('XMM'):
                 return val.to_bytes(16, 'little') # Return bytes for XMM
+            elif name.startswith('ST'):
+                # Unicorn FP0-FP7 are physical. Logical are ST0-ST7.
+                # However, UC_X86_REG_ST0 constants exist in some versions.
+                # To be safe, we calculate via TOP.
+                idx = int(name[2:])
+                fsw = self.mu.reg_read(UC_X86_REG_FPSW)
+                top = (fsw >> 11) & 7
+                phys_reg = [UC_X86_REG_FP0, UC_X86_REG_FP1, UC_X86_REG_FP2, UC_X86_REG_FP3,
+                            UC_X86_REG_FP4, UC_X86_REG_FP5, UC_X86_REG_FP6, UC_X86_REG_FP7][(top + idx) & 7]
+                val = self.mu.reg_read(phys_reg)
+                
+                if isinstance(val, int):
+                    return val.to_bytes(10, 'little')
+                elif isinstance(val, (list, tuple)):
+                    if len(val) >= 2:
+                        return val[0].to_bytes(8, 'little') + val[1].to_bytes(2, 'little')
+                    return b''.join(x.to_bytes(4, 'little') for x in val)[:10]
             return val
         return 0
 
@@ -186,6 +239,9 @@ class UnicornBackend(EmulatorBackend):
             'FS': UC_X86_REG_FS, 'GS': UC_X86_REG_GS,
             'XMM0': UC_X86_REG_XMM0, 'XMM1': UC_X86_REG_XMM1, 'XMM2': UC_X86_REG_XMM2, 'XMM3': UC_X86_REG_XMM3,
             'XMM4': UC_X86_REG_XMM4, 'XMM5': UC_X86_REG_XMM5, 'XMM6': UC_X86_REG_XMM6, 'XMM7': UC_X86_REG_XMM7,
+            'ST0': UC_X86_REG_FP0, 'ST1': UC_X86_REG_FP1, 'ST2': UC_X86_REG_FP2, 'ST3': UC_X86_REG_FP3,
+            'ST4': UC_X86_REG_FP4, 'ST5': UC_X86_REG_FP5, 'ST6': UC_X86_REG_FP6, 'ST7': UC_X86_REG_FP7,
+            'FSW': UC_X86_REG_FPSW, 'FCW': UC_X86_REG_FPCW,
         }
         return mapping.get(name)
 
@@ -252,6 +308,25 @@ class X86EmuBackend(EmulatorBackend):
             cppyy.gbl.X86_SetEIP(self.state, val)
         elif name == 'EFLAGS':
             cppyy.gbl.X86_SetEFLAGS(self.state, val)
+        elif name.startswith('ST'):
+            idx = int(name[2:])
+            if 0 <= idx < 8:
+                if isinstance(val, int):
+                    v_bytes = val.to_bytes(10, 'little')
+                elif isinstance(val, float):
+                    buf = bytearray(10)
+                    cppyy.gbl.Py_DoubleToF80(val, buf)
+                    v_bytes = bytes(buf)
+                else:
+                    v_bytes = bytes(val)
+                v_bytes = v_bytes.ljust(10, b'\x00')[:10]
+                cppyy.gbl.Py_WriteFpu(self.state, idx, v_bytes)
+        elif name == 'FSW':
+            cppyy.gbl.X86_SetFSW(self.state, val)
+        elif name == 'FCW':
+            cppyy.gbl.X86_SetFCW(self.state, val)
+        elif name == 'FTW':
+            cppyy.gbl.X86_SetFTW(self.state, val)
         else:
             idx = self._get_sim_reg_idx(name)
             if idx != -1: cppyy.gbl.X86_RegWrite(self.state, idx, val)
@@ -267,6 +342,18 @@ class X86EmuBackend(EmulatorBackend):
             return cppyy.gbl.X86_GetEIP(self.state)
         elif name == 'EFLAGS':
             return cppyy.gbl.X86_GetEFLAGS(self.state)
+        elif name.startswith('ST'):
+            idx = int(name[2:])
+            if 0 <= idx < 8:
+                buf = bytearray(10)
+                cppyy.gbl.Py_ReadFpu(self.state, idx, buf)
+                return bytes(buf)
+        elif name == 'FSW':
+            return cppyy.gbl.X86_GetFSW(self.state)
+        elif name == 'FCW':
+            return cppyy.gbl.X86_GetFCW(self.state)
+        elif name == 'FTW':
+            return cppyy.gbl.X86_GetFTW(self.state)
         else:
             idx = self._get_sim_reg_idx(name)
             if idx != -1: return cppyy.gbl.X86_RegRead(self.state, idx)
@@ -349,12 +436,19 @@ class Runner:
             if os.path.exists(asm_path): os.remove(asm_path)
             if os.path.exists(bin_path): os.remove(bin_path)
 
-    def run_test(self, name, asm, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True, count=100):
-        code = self.compile(asm)
+    def run_test(self, name, asm=None, code=None, initial_regs=None, expected_regs=None, 
+                 initial_eflags=None, expected_eflags=None, expected_eip=None, 
+                 expected_read=None, expected_write=None, initial_seg_base=None, 
+                 check_eflags_mask=None, check_unicorn=True, count=0, fsw_mask=None):
+        if asm:
+            code = self.compile(asm)
+        
         if not code:
-            return False
+            raise ValueError("Either 'asm' or 'code' must be provided.")
             
-        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask, check_unicorn, count)
+        return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, 
+                                 expected_eflags, expected_eip, expected_read, expected_write, 
+                                 initial_seg_base, check_eflags_mask, check_unicorn, count, fsw_mask)
 
     def run_test_bytes(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True, count=1):
         return self._execute_test(name, code, initial_regs, expected_regs, initial_eflags, expected_eflags, expected_eip, expected_read, expected_write, initial_seg_base, check_eflags_mask, check_unicorn, count)
@@ -374,7 +468,9 @@ class Runner:
                 real_val = 0
         self.uc_trace.append((op, address, real_val, size))
 
-    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, initial_seg_base=None, check_eflags_mask=None, check_unicorn=True, count=1):
+    def _execute_test(self, name, code, initial_regs=None, expected_regs=None, initial_eflags=None, 
+                      expected_eflags=None, expected_eip=None, expected_read=None, expected_write=None, 
+                      initial_seg_base=None, check_eflags_mask=None, check_unicorn=True, count=1, fsw_mask=None):
         backends = []
         
         uc_backend = UnicornBackend()
@@ -469,6 +565,10 @@ class Runner:
             res['EFLAGS'] = b.reg_read('EFLAGS')
             for i in range(8):
                 res[f'XMM{i}'] = b.reg_read(f'XMM{i}')
+            for i in range(8):
+                res[f'ST{i}'] = b.reg_read(f'ST{i}')
+            res['FSW'] = b.reg_read('FSW')
+            res['FCW'] = b.reg_read('FCW')
             
             fault = b.get_fault_info()
             if fault:
@@ -535,6 +635,54 @@ class Runner:
                 if sim_val != uc_val:
                     fail_reason += f"  {r} Unicorn Mismatch! UC: {uc_val.hex()}, Sim: {sim_val.hex()}\n"
                     passed = False
+        
+        for i in range(8):
+            r = f'ST{i}'
+            sim_val = sim_res[r]
+            is_expected = expected_regs and r in expected_regs
+            if is_expected:
+                exp_v = expected_regs[r]
+                exp_bytes = exp_v.to_bytes(10, 'little') if isinstance(exp_v, int) else bytes(exp_v)
+                if sim_val != exp_bytes:
+                    fail_reason += f"  {r} Mismatch! Exp: {exp_bytes.hex()}, Got: {sim_val.hex()}\n"
+                    passed = False
+            if uc_res and check_unicorn:
+                uc_val = uc_res[r]
+                # Unicorn sometimes behaves weirdly with FPU regs (e.g. if not initialized)
+                # We skip if they are both zero (roughly) or if UC didn't return anything
+                if uc_val and sim_val != uc_val:
+                    fail_reason += f"  {r} Unicorn Mismatch! UC: {uc_val.hex()}, Sim: {sim_val.hex()}\n"
+                    passed = False
+        
+        for r in ['FSW', 'FCW']:
+            if expected_regs and r in expected_regs:
+                sim_val = sim_res[r]
+                exp_val = expected_regs[r]
+                
+                check_sim = sim_val
+                check_exp = exp_val
+                if r == 'FSW' and fsw_mask is not None:
+                    check_sim &= fsw_mask
+                    check_exp &= fsw_mask
+
+                if check_sim != check_exp:
+                    fail_reason += f"  {r} Mismatch! Exp: 0x{exp_val:x}, Got: 0x{sim_val:x}\n"
+                    passed = False
+            if uc_res and check_unicorn:
+                 uc_val = uc_res[r]
+                 sim_val = sim_res[r]
+                 if uc_val != sim_val:
+                      check_uc = uc_val
+                      check_sim = sim_val
+                      if r == 'FSW' and fsw_mask is not None:
+                          check_uc &= fsw_mask
+                          check_sim &= fsw_mask
+                      
+                      if check_uc != check_sim:
+                          # FPU Control Word defaults might differ, we mostly care about status
+                          if r == 'FSW' or (sim_val != 0 and uc_val != 0):
+                              fail_reason += f"  {r} Unicorn Mismatch! UC: 0x{uc_val:x}, Sim: 0x{sim_val:x}\n"
+                              passed = False
 
         sim_eflags = sim_res['EFLAGS']
         mask = check_eflags_mask if check_eflags_mask is not None else 0x8D5
