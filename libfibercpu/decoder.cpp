@@ -53,6 +53,8 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     // Reset op
     std::memset(op, 0, sizeof(DecodedOp));
+    op->prefixes.flags.ea_base = 8;
+    op->prefixes.flags.ea_index = 8;
     
     const uint8_t* start = code;
     const uint8_t* ptr = code;
@@ -114,9 +116,10 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
         uint8_t rm = modrm & 7;
         
         // SIB? (If Mod != 3 and RM == 4)
+        uint8_t sib_byte = 0;
         if (mod != 3 && rm == 4) {
             op->meta.flags.has_sib = 1;
-            op->sib = *ptr++;
+            sib_byte = *ptr++;
         }
         
         // Displacement?
@@ -131,7 +134,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
         
         // SIB Base Special Case?
         if (op->meta.flags.has_sib) {
-            uint8_t base = op->sib & 7;
+            uint8_t base = sib_byte & 7;
             if (mod == 0 && base == 5) {
                 disp_size = 4; // Disp32 (Mod=0, Base=5 -> Disp32, no Base)
             }
@@ -148,6 +151,31 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
                  ptr += 4;
             }
         }
+
+        // Pre-calculate EA components for faster execution
+        if (op->meta.flags.has_sib) {
+            uint8_t scale = (sib_byte >> 6) & 3;
+            uint8_t index = (sib_byte >> 3) & 7;
+            uint8_t base_reg = sib_byte & 7;
+            
+            if (index != 4) op->prefixes.flags.ea_index = index;
+            op->meta.flags.ea_shift = scale;
+
+            if (mod == 0 && base_reg == 5) {
+                 // Base is None (Disp32) - already initialized to 8
+            } else {
+                 op->prefixes.flags.ea_base = base_reg;
+            }
+        } else {
+            // No SIB
+            if (mod == 0 && rm == 5) {
+                 // Base is None (Disp32) - already initialized to 8
+            } else {
+                 op->prefixes.flags.ea_base = rm;
+            }
+        }
+
+        op->sib = sib_byte;
     }
     
     // 4. Immediate

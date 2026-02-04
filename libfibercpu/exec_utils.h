@@ -11,19 +11,15 @@ namespace x86emu {
 // Register Access
 // ------------------------------------------------------------------------------------------------
 
-inline uint32_t* GetRegPtr(EmuState* state, uint8_t reg_idx) {
-    if (reg_idx < 8) {
-        return &state->ctx.regs[reg_idx];
-    }
-    // Handle invalid?
-    return &state->ctx.regs[0]; // Fallback to EAX safe?
+FORCE_INLINE uint32_t* GetRegPtr(EmuState* state, uint8_t reg_idx) {
+    return &state->ctx.regs[reg_idx];
 }
 
-inline uint32_t GetReg(EmuState* state, uint8_t reg_idx) {
+FORCE_INLINE uint32_t GetReg(EmuState* state, uint8_t reg_idx) {
     return *GetRegPtr(state, reg_idx);
 }
 
-inline void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) {
+FORCE_INLINE void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) {
     *GetRegPtr(state, reg_idx) = val;
 }
 
@@ -86,22 +82,23 @@ inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
 
 inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
+    // Uses pre-calculated components from Decode stage
     uint32_t base = 0;
     
-    if (op->meta.flags.has_sib) {
-        uint8_t scale = (op->sib >> 6) & 3;
-        uint8_t index = (op->sib >> 3) & 7;
-        uint8_t base_reg = op->sib & 7;
-        uint32_t idx_val = (index != 4) ? GetReg(state, index) : 0;
-        uint32_t base_val = (mod == 0 && base_reg == 5) ? 0 : GetReg(state, base_reg);
-        base = base_val + (idx_val << scale);
-    } else {
-        if (mod == 0 && rm == 5) base = 0;
-        else base = GetReg(state, rm);
+    // Base Register
+    if (op->prefixes.flags.ea_base < 8) {
+        base = GetReg(state, op->prefixes.flags.ea_base);
     }
-    if (op->meta.flags.has_disp) base += op->disp;
+    
+    // Index Register
+    if (op->prefixes.flags.ea_index < 8) {
+        base += (GetReg(state, op->prefixes.flags.ea_index) << op->meta.flags.ea_shift);
+    }
+    
+    // Displacement
+    if (op->meta.flags.has_disp) {
+        base += op->disp;
+    }
     return base;
 }
 

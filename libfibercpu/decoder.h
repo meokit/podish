@@ -53,6 +53,8 @@ struct DecodedOp {
             uint16_t segment : 3; 
             uint16_t opsize : 1;
             uint16_t addrsize : 1;
+            uint16_t ea_base : 4;  // 0-7: Reg, 8: None
+            uint16_t ea_index : 4; // 0-7: Reg, 8: None
         } flags;
     } prefixes;
     
@@ -72,6 +74,7 @@ struct DecodedOp {
             uint8_t has_disp : 1;
             uint8_t has_imm : 1;
             uint8_t is_control_flow : 1;
+            uint8_t ea_shift : 2;
         } flags;
     } meta;
 };
