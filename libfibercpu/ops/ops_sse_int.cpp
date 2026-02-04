@@ -109,6 +109,108 @@ static FORCE_INLINE void OpPmaddwd_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_madd_epi16(dst, src));
 }
 
+// Saturated Arithmetic
+static FORCE_INLINE void OpPaddusb_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epu8(dst, src));
+}
+
+static FORCE_INLINE void OpPaddusw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epu16(dst, src));
+}
+
+static FORCE_INLINE void OpPaddsb_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epi8(dst, src));
+}
+
+static FORCE_INLINE void OpPaddsw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epi16(dst, src));
+}
+
+static FORCE_INLINE void OpPsubusb_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epu8(dst, src));
+}
+
+static FORCE_INLINE void OpPsubusw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epu16(dst, src));
+}
+
+static FORCE_INLINE void OpPsubsb_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epi8(dst, src));
+}
+
+static FORCE_INLINE void OpPsubsw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epi16(dst, src));
+}
+
+// Multiplications
+static FORCE_INLINE void OpPmullw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mullo_epi16(dst, src));
+}
+
+static FORCE_INLINE void OpPmulhw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mulhi_epi16(dst, src));
+}
+
+static FORCE_INLINE void OpPmulhuw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mulhi_epu16(dst, src));
+}
+
+// Average
+static FORCE_INLINE void OpPavgb_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_avg_epu8(dst, src));
+}
+
+static FORCE_INLINE void OpPavgw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_avg_epu16(dst, src));
+}
+
+// Sum of Absolute Differences
+static FORCE_INLINE void OpPsadbw_Sse(EmuState* state, DecodedOp* op) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sad_epu8(dst, src));
+}
+
 // Comparison
 static FORCE_INLINE void OpPcmpeqb_Sse(EmuState* state, DecodedOp* op) {
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -728,6 +830,20 @@ void RegisterSseIntOps() {
     g_Handlers[0x163] = DispatchWrapper<OpPacksswb_Sse>;
     g_Handlers[0x16B] = DispatchWrapper<OpPackssdw_Sse>;
     g_Handlers[0x167] = DispatchWrapper<OpPackuswb_Sse>;
+    g_Handlers[0x1D5] = DispatchWrapper<OpPmullw_Sse>;
+    g_Handlers[0x1E5] = DispatchWrapper<OpPmulhw_Sse>;
+    g_Handlers[0x1E4] = DispatchWrapper<OpPmulhuw_Sse>;
+    g_Handlers[0x1DC] = DispatchWrapper<OpPaddusb_Sse>;
+    g_Handlers[0x1DD] = DispatchWrapper<OpPaddusw_Sse>;
+    g_Handlers[0x1EC] = DispatchWrapper<OpPaddsb_Sse>;
+    g_Handlers[0x1ED] = DispatchWrapper<OpPaddsw_Sse>;
+    g_Handlers[0x1D8] = DispatchWrapper<OpPsubusb_Sse>;
+    g_Handlers[0x1D9] = DispatchWrapper<OpPsubusw_Sse>;
+    g_Handlers[0x1E8] = DispatchWrapper<OpPsubsb_Sse>;
+    g_Handlers[0x1E9] = DispatchWrapper<OpPsubsw_Sse>;
+    g_Handlers[0x1E0] = DispatchWrapper<OpPavgb_Sse>;
+    g_Handlers[0x1E3] = DispatchWrapper<OpPavgw_Sse>;
+    g_Handlers[0x1F6] = DispatchWrapper<OpPsadbw_Sse>;
     g_Handlers[0x1C5] = DispatchWrapper<OpPextrw_Sse>;
     g_Handlers[0x1C4] = DispatchWrapper<OpPinsrw_Sse>;
     g_Handlers[0x1D7] = DispatchWrapper<OpPmovmskb_Sse>;

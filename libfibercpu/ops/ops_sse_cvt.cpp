@@ -58,6 +58,37 @@ static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op) {
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
 }
 
+static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op) {
+    // 0F 2D: CVTSD2SI (F2) / CVTSS2SI (F3)
+    uint32_t addr = 0;
+    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
+    int32_t res = 0;
+
+    if (op->prefixes.flags.repne) {  // F2: CVTSD2SI
+        double b;
+        if (op->modrm >= 0xC0)
+            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+        else
+            b = state->mmu.read<double>(addr);
+
+        // TODO: Sync MXCSR rounding mode to host
+        res = simde_mm_cvtsd_si32(simde_mm_set_sd(b));
+    } else if (op->prefixes.flags.rep) {  // F3: CVTSS2SI
+        float b;
+        if (op->modrm >= 0xC0)
+            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+        else
+            b = state->mmu.read<float>(addr);
+
+        // TODO: Sync MXCSR rounding mode to host
+        res = simde_mm_cvtss_si32(simde_mm_set_ss(b));
+    } else {
+        OpUd2(state, op);
+        return;
+    }
+    SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
+}
+
 static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op) {
     // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -179,6 +210,7 @@ void RegisterSseCvtOps() {
     g_Handlers[0x15B] = DispatchWrapper<OpCvt_5B>;
     g_Handlers[0x1E6] = DispatchWrapper<OpCvt_E6>;
     g_Handlers[0x12C] = DispatchWrapper<OpCvt_2C>;
+    g_Handlers[0x12D] = DispatchWrapper<OpCvt_2D>;
 }
 
 }  // namespace x86emu

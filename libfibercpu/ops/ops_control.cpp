@@ -259,6 +259,50 @@ static FORCE_INLINE void OpWait(EmuState* state, DecodedOp* op) {
     // For now NOP.
 }
 
+static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op) {
+    // 0F AE /r
+    uint8_t sub = (op->modrm >> 3) & 7;
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+
+    switch (sub) {
+        case 2:  // LDMXCSR m32
+            if (mod != 3) {
+                uint32_t addr = ComputeLinearAddress(state, op);
+                state->ctx.mxcsr = state->mmu.read<uint32_t>(addr);
+            }
+            break;
+        case 3:  // STMXCSR m32
+            if (mod != 3) {
+                uint32_t addr = ComputeLinearAddress(state, op);
+                state->mmu.write<uint32_t>(addr, state->ctx.mxcsr);
+            }
+            break;
+        case 5:  // LFENCE (mod=3, rm=0)
+            if (mod == 3 && rm == 0) {
+                // Acquire fence
+                std::atomic_thread_fence(std::memory_order_acquire);
+            }
+            break;
+        case 6:  // MFENCE (mod=3, rm=0)
+            if (mod == 3 && rm == 0) {
+                // Seq_cst fence
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+            }
+            break;
+        case 7:
+            if (mod == 3 && rm == 0) {  // SFENCE
+                // Release fence
+                std::atomic_thread_fence(std::memory_order_release);
+            } else if (mod != 3) {  // CLFLUSH
+                // NOP
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 void RegisterControlOps() {
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
     g_Handlers[0x9B] = DispatchWrapper<OpWait>;
@@ -289,7 +333,8 @@ void RegisterControlOps() {
     for (int i = 0; i < 16; ++i) {
         g_Handlers[0x140 + i] = DispatchWrapper<OpCmov_GvEv>;
     }
-    g_Handlers[0x11F] = DispatchWrapper<OpNop>;  // Multi-byte NOP (0F 1F)
+    g_Handlers[0x11F] = DispatchWrapper<OpNop>;    // Multi-byte NOP (0F 1F)
+    g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
 }
 
 }  // namespace x86emu

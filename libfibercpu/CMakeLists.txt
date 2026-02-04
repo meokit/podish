@@ -45,6 +45,7 @@ endif()
 # Source files
 file(GLOB_RECURSE SOURCES "*.cpp" "*.c" "*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
+list(FILTER SOURCES EXCLUDE REGEX "build/.*")
 list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
 
 # SoftFloat library

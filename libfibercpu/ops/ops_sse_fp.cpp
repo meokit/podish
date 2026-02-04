@@ -579,6 +579,52 @@ static FORCE_INLINE void OpUcomis_Unified(EmuState* state, DecodedOp* op) {
     state->ctx.eflags = flags;
 }
 
+// Unified COMIS (Scalar Ordered Compare)
+static FORCE_INLINE void OpComis_Unified(EmuState* state, DecodedOp* op) {
+    // 0F 2F: COMISS / COMISD
+    OpUcomis_Unified(state, op);
+}
+
+// Reciprocal
+static FORCE_INLINE void OpRcp_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 53: RCPPS / RCPSS
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.rep) {  // F3: RCPSS
+        simde__m128 dst = state->ctx.xmm[reg];
+        simde__m128 src;
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
+            src = simde_mm_set_ss(*(float*)&val);
+        }
+        state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rcp_ss(src));
+    } else {  // RCPPS
+        simde__m128 src = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_rcp_ps(src);
+    }
+}
+
+// Reciprocal Sqrt
+static FORCE_INLINE void OpRsqrt_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 52: RSQRTPS / RSQRTSS
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.rep) {  // F3: RSQRTSS
+        simde__m128 dst = state->ctx.xmm[reg];
+        simde__m128 src;
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op));
+            src = simde_mm_set_ss(*(float*)&val);
+        }
+        state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rsqrt_ss(src));
+    } else {  // RSQRTPS
+        simde__m128 src = ReadModRM128(state, op);
+        state->ctx.xmm[reg] = simde_mm_rsqrt_ps(src);
+    }
+}
+
 // Unified SHUF (Packed Shuffle)
 static FORCE_INLINE void OpShuf_Unified(EmuState* state, DecodedOp* op) {
     // 0F C6: SHUFPS
@@ -669,6 +715,9 @@ void RegisterSseFpOps() {
     g_Handlers[0x1C6] = DispatchWrapper<OpShuf_Unified>;    // 0F C6: SHUFPS / SHUFPD
     g_Handlers[0x114] = DispatchWrapper<OpUnpckl_Unified>;  // 0F 14: UNPCKLPS / PD
     g_Handlers[0x115] = DispatchWrapper<OpUnpckh_Unified>;  // 0F 15: UNPCKHPS / PD
+    g_Handlers[0x12F] = DispatchWrapper<OpComis_Unified>;   // 0F 2F: COMISS / COMISD
+    g_Handlers[0x153] = DispatchWrapper<OpRcp_Sse>;         // 0F 53: RCPPS / RCPSS
+    g_Handlers[0x152] = DispatchWrapper<OpRsqrt_Sse>;       // 0F 52: RSQRTPS / RSQRTSS
 }
 
 }  // namespace x86emu

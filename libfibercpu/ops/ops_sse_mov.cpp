@@ -1,7 +1,7 @@
 // SSE/SSE2 Data Movement
 // Auto-generated from ops.cpp refactoring
 
-#include <simde/x86/sse.h>
+#include <simde/x86/sse3.h>
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
@@ -269,14 +269,83 @@ static FORCE_INLINE void OpMovlps(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMovmskps(EmuState* state, DecodedOp* op) {
-    // 0F 50: MOVMSKPS r32, xmm
-    uint8_t reg = (op->modrm >> 3) & 7;  // Dest Reg
-    uint8_t rm = op->modrm & 7;          // Src XMM
+static FORCE_INLINE void OpMovmsk_Unified(EmuState* state, DecodedOp* op) {
+    // 0F 50: MOVMSKPS / MOVMSKPD (66)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t rm = op->modrm & 7;
     simde__m128 src = state->ctx.xmm[rm];
 
-    int mask = simde_mm_movemask_ps(src);
-    SetReg(state, reg, (uint32_t)mask);
+    if (op->prefixes.flags.opsize) {  // 66: MOVMSKPD
+        int mask = simde_mm_movemask_pd(simde_mm_castps_pd(src));
+        SetReg(state, reg, (uint32_t)mask);
+    } else {  // None: MOVMSKPS
+        int mask = simde_mm_movemask_ps(src);
+        SetReg(state, reg, (uint32_t)mask);
+    }
+}
+
+static FORCE_INLINE void OpMovnt_Sse(EmuState* state, DecodedOp* op) {
+    // 0F 2B: MOVNTPS / MOVNTPD (66)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128 src = state->ctx.xmm[reg];
+    WriteModRM128(state, op, src);
+}
+
+static FORCE_INLINE void OpMovntdq(EmuState* state, DecodedOp* op) {
+    // 66 0F E7: MOVNTDQ
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128 val = state->ctx.xmm[reg];
+    WriteModRM128(state, op, val);
+}
+
+static FORCE_INLINE void OpMovnti(EmuState* state, DecodedOp* op) {
+    // 0F C3: MOVNTI m32, r32
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t r_val = GetReg(state, reg);
+    uint32_t addr = ComputeLinearAddress(state, op);
+    state->mmu.write<uint32_t>(addr, r_val);
+}
+
+static FORCE_INLINE void OpMaskmovdqu(EmuState* state, DecodedOp* op) {
+    // 66 0F F7: MASKMOVDQU xmm1, xmm2
+    simde__m128i val = simde_mm_castps_si128(state->ctx.xmm[(op->modrm >> 3) & 7]);
+    simde__m128i mask = simde_mm_castps_si128(state->ctx.xmm[op->modrm & 7]);
+
+    uint32_t addr = GetReg(state, x86emu::EDI);
+
+    alignas(16) uint8_t v[16], m[16];
+    std::memcpy(v, &val, 16);
+    std::memcpy(m, &mask, 16);
+
+    for (int i = 0; i < 16; ++i) {
+        if (m[i] & 0x80) {
+            state->mmu.write<uint8_t>(addr + i, v[i]);
+        }
+    }
+}
+
+static FORCE_INLINE void OpDup_Sse(EmuState* state, DecodedOp* op) {
+    // F3 0F 12: MOVSLDUP, F2 0F 12: MOVDDUP, F3 0F 16: MOVSHDUP
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    if (op->prefixes.flags.repne) {  // F2: MOVDDUP
+        simde__m128d src;
+        if (op->modrm >= 0xC0) {
+            src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
+            src = simde_mm_set_sd(*(double*)&val);
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_movedup_pd(src));
+    } else {  // F3: MOVSLDUP / MOVSHDUP
+        simde__m128 src = ReadModRM128(state, op);
+        uint8_t opcode = op->handler_index & 0xFF;
+        if (opcode == 0x12) {
+            state->ctx.xmm[reg] = simde_mm_moveldup_ps(src);
+        } else {  // 0x16
+            state->ctx.xmm[reg] = simde_mm_movehdup_ps(src);
+        }
+    }
 }
 
 // Groups for 0F 6F/7F etc.
@@ -303,8 +372,11 @@ static FORCE_INLINE void OpGroup_Mov7F(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpGroup_Mov12(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize) {  // 66: MOVLPD
         OpMovlpd(state, op);
-    } else {  // None: MOVLPS (or F2: MOVDDUP?)
-        // TODO: MOVDDUP (F2) check?
+    } else if (op->prefixes.flags.rep) {  // F3: MOVSLDUP
+        OpDup_Sse(state, op);
+    } else if (op->prefixes.flags.repne) {  // F2: MOVDDUP
+        OpDup_Sse(state, op);
+    } else {  // None: MOVLPS
         OpMovlps(state, op);
     }
 }
@@ -320,7 +392,9 @@ static FORCE_INLINE void OpGroup_Mov13(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpGroup_Mov16(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize) {  // 66: MOVHPD
         OpMovhpd(state, op);
-    } else {  // None: MOVHPS (or F3: MOVSHDUP?)
+    } else if (op->prefixes.flags.rep) {  // F3: MOVSHDUP
+        OpDup_Sse(state, op);
+    } else {  // None: MOVHPS
         OpMovhps(state, op);
     }
 }
@@ -340,7 +414,11 @@ void RegisterSseMovOps() {
     g_Handlers[0x113] = DispatchWrapper<OpGroup_Mov13>;
     g_Handlers[0x116] = DispatchWrapper<OpGroup_Mov16>;
     g_Handlers[0x117] = DispatchWrapper<OpGroup_Mov17>;
-    g_Handlers[0x150] = DispatchWrapper<OpMovmskps>;
+    g_Handlers[0x150] = DispatchWrapper<OpMovmsk_Unified>;
+    g_Handlers[0x12B] = DispatchWrapper<OpMovnt_Sse>;
+    g_Handlers[0x1E7] = DispatchWrapper<OpMovntdq>;
+    g_Handlers[0x1C3] = DispatchWrapper<OpMovnti>;
+    g_Handlers[0x1F7] = DispatchWrapper<OpMaskmovdqu>;
     g_Handlers[0x16E] = DispatchWrapper<OpMovd_Load>;
     g_Handlers[0x17E] = DispatchWrapper<OpMovd_Store>;
     g_Handlers[0x16F] = DispatchWrapper<OpGroup_Mov6F>;
