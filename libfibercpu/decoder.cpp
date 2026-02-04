@@ -208,10 +208,11 @@ static bool IsControlFlow(const DecodedOp* op) {
 bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block) {
     block->start_eip = start_eip;
     block->ops.clear();
+    block->inst_count = 0;
     
     uint32_t current_eip = start_eip;
-    uint64_t effective_limit = 64;
-    if (max_insts > 0 && max_insts < 64) effective_limit = max_insts;
+    uint64_t effective_limit = 128;
+    if (max_insts > 0 && max_insts < 128) effective_limit = max_insts;
     
     // Page boundary check helper
     auto is_page_cross = [](uint32_t start, uint32_t len) {
@@ -261,6 +262,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         
         // Add to block
         block->ops.push_back(op);
+        block->inst_count++;
         uint32_t inst_len = op.length;
         
         // Stop if Control Flow
@@ -277,11 +279,6 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         if (is_page_cross(current_eip, 1)) {
             break; 
         }
-    }
-    
-    // Mark Last Real Op
-    if (!block->ops.empty()) {
-        block->ops.back().meta.flags.is_last = 1;
     }
     
     // Append Sentinel Op (1023) to terminate Threaded Dispatch

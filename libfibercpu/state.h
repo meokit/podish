@@ -4,6 +4,7 @@
 #include "mem/mmu.h"
 #include "hooks.h"
 #include <ankerl/unordered_dense.h>
+#include <memory>
 #include "decoder.h" // For BasicBlock definition
 
 namespace x86emu {
@@ -20,8 +21,8 @@ struct EmuState {
     mem::Mmu mmu;
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
-    // Simple Block Cache
-    ankerl::unordered_dense::map<uint32_t, BasicBlock> block_cache;
+    // Simple Block Cache - Using unique_ptr for pointer stability (needed for chaining)
+    ankerl::unordered_dense::map<uint32_t, std::unique_ptr<BasicBlock>> block_cache;
     // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
     // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.
     ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
@@ -29,6 +30,9 @@ struct EmuState {
     // Fault Info
     uint8_t fault_vector = 0xFF; // 0xFF = No Fault
     uint32_t fault_addr = 0;
+
+    // Chaining Info
+    BasicBlock* last_block = nullptr;
 
     // Callback Storage
     FaultHandler fault_handler = nullptr;

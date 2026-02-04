@@ -5,9 +5,27 @@ namespace x86emu {
 
 // Sentinel Handler
 ATTR_PRESERVE_NONE
-void OpExitBlock(EmuState* state, DecodedOp* op) {
+int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
     // End of Threaded Dispatch Chain.
+    if (op->next_block) {
+        // Basic Block Chaining
+        if (op->next_block->start_eip == state->ctx.eip) {
+            // Check instruction limit before chaining
+            if (instr_limit > 0) {
+                // Subtract the NEXT block's size from the limit
+                instr_limit -= op->next_block->inst_count;
+                
+                state->last_block = op->next_block;
+                DecodedOp* next_head = &op->next_block->ops[0];
+                HandlerFunc h = g_Handlers[next_head->handler_index];
+                if (h) {
+                    ATTR_MUSTTAIL return h(state, next_head, instr_limit);
+                }
+            }
+        }
+    }
     // Returns to X86_Run loop.
+    return instr_limit;
 }
 
 // Global dispatch table

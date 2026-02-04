@@ -17,7 +17,17 @@ if(CMAKE_GENERATOR MATCHES "Visual Studio")
 else()
     set(CONFIG_STR "$<IF:$<CONFIG:Release>,Release,Debug>")
     # RID used for native AOT publish. Change as needed (linux-x64, osx-x64, win-x64, etc.)
+    # Default RID is osx-x64; if building on Apple Silicon, switch to osx-arm64 automatically.
     set(DOTNET_RID "osx-x64" CACHE STRING "Runtime Identifier for dotnet publish (override if needed)")
+
+    if(APPLE)
+        # Detect architecture of the host running CMake. Prefer native arm64 on Apple Silicon.
+        execute_process(COMMAND uname -m OUTPUT_VARIABLE _uname_arch OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(_uname_arch STREQUAL "arm64")
+            set(DOTNET_RID "osx-arm64" CACHE STRING "Runtime Identifier for dotnet publish (override if needed)" FORCE)
+            message(STATUS "Detected Apple Silicon (arm64) host; setting DOTNET_RID=osx-arm64 for native publish")
+        endif()
+    endif()
 
     # Use dotnet publish with PublishAot to produce a Native AOT binary. 'dotnet build' does not AOT.
     add_custom_target(Fiberish.App ALL

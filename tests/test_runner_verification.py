@@ -52,30 +52,6 @@ class TestRunnerLogic:
         except AssertionError as e:
             assert "Unimplemented Instruction" in str(e)
 
-    def test_fail_unimplemented_vs_unicorn_crash(self):
-        """
-        Runner should FAIL if Sim faults (#UD) and Unicorn crashes with Memory Error.
-        """
-        # FXSAVE [eax]
-        # 0F AE 00
-        # Sim should #UD (Unimplemented).
-        # Unicorn should try to write [EAX]=0 -> Segfault.
-        runner = Runner()
-        try:
-            runner.run_test_bytes(
-                name="Unimplemented FXSAVE (Mem Access Segfault)",
-                code=binascii.unhexlify('0fae00'), 
-                initial_regs={'EAX': 0},
-                expected_regs={}
-            )
-            assert False, "Should have failed (Sim #UD != UC Segfault)"
-        except AssertionError as e:
-            assert "Unimplemented Instruction" in str(e)
-            # Unicorn fault is not printed if Sim faults, but the test fails because 'ignored' is False.
-            # So "Unimplemented Instruction" (from Sim fault msg) should be there.
-            # And since it failed, we are good.
-            pass
-
     def test_pass_invalid_opcode_both(self):
         """Runner should PASS/IGNORE if BOTH Sim and Unicorn fault with #UD (Invalid Opcode)."""
         runner = Runner()

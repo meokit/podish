@@ -70,8 +70,8 @@ public class Process
     }
 }
 
-public class Task
-{
+    public class Task
+    {
     private static readonly ILogger Logger = Logging.CreateLogger<Task>();
 
     // Global Lock for serialization (GIL) - Now a SemaphoreSlim for async Support
@@ -93,6 +93,9 @@ public class Task
 
     // Async support: the task that is currently blocking this emulator task
     public System.Threading.Tasks.Task? BlockingTask { get; set; }
+
+    // Cooperative scheduling: a TCS that the scheduler will complete to resume this task
+    public TaskCompletionSource<bool>? ResumeTcs { get; set; }
 
     public Task(int tid, Process process, Engine cpu)
     {
@@ -209,57 +212,79 @@ public class Task
                     // Update current task context
                     Scheduler.CurrentTask = this;
 
-                    CPU.Run(0, 1000);
-
-                    var status = CPU.Status;
-                    if (status == EmuStatus.Fault)
+                    // Inner hot-loop: keep running as long as we're the only task or quantum not hit
+                    // Note: We don't want to stay in here FOREVER if we're doing syscalls, 
+                    // but for compute-heavy tasks like CoreMark, we want to minimize GIL churn.
+                    while (!Exited)
                     {
-                        Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector})", TID, CPU.Eip, CPU.FaultVector);
-                        Logger.LogError("[Task {TID}] Last 10 instructions:", TID);
-                        lock (_traceBuffer)
-                        {
-                            foreach (var line in _traceBuffer) Logger.LogError("  {TraceLine}", line);
-                        }
-                        Logger.LogError("[Task {TID}] Current: {Registers}", TID, CPU.ToString());
-                        Process.Mem.LogVMAs();
-                        Exited = true;
-                    }
-                    else if (status == EmuStatus.Yield)
-                    {
-                        if (BlockingTask != null)
-                        {
-                            var blockingTask = BlockingTask;
-                            BlockingTask = null; // Clear it
+                        // Increase instruction quantum to amortize context switch cost
+                        CPU.Run(0, 1000000);
 
-                            GIL.Release();
-                            try
+                        var status = CPU.Status;
+                        if (status == EmuStatus.Fault)
+                        {
+                            Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector})", TID, CPU.Eip, CPU.FaultVector);
+                            Logger.LogError("[Task {TID}] Last 10 instructions:", TID);
+                            lock (_traceBuffer)
                             {
-                                await blockingTask;
+                                foreach (var line in _traceBuffer) Logger.LogError("  {TraceLine}", line);
                             }
-                            finally
+                            Logger.LogError("[Task {TID}] Current: {Registers}", TID, CPU.ToString());
+                            Process.Mem.LogVMAs();
+                            Exited = true;
+                            break;
+                        }
+                        else if (status == EmuStatus.Yield)
+                        {
+                            if (BlockingTask != null)
                             {
-                                await GIL.WaitAsync();
+                                var blockingTask = BlockingTask;
+                                BlockingTask = null; // Clear it
 
-                                // Write result to EAX if it was a Task<int>
-                                if (blockingTask is System.Threading.Tasks.Task<int> intTask)
+                                GIL.Release();
+                                try
                                 {
-                                    CPU.RegWrite(Reg.EAX, (uint)intTask.Result);
+                                    await blockingTask;
                                 }
+                                finally
+                                {
+                                    await GIL.WaitAsync();
+
+                                    // Write result to EAX if it was a Task<int>
+                                    if (blockingTask is System.Threading.Tasks.Task<int> intTask)
+                                    {
+                                        CPU.RegWrite(Reg.EAX, (uint)intTask.Result);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Cooperative handoff: only yield if others are waiting
+                                if (Scheduler.ReadyCount > 0)
+                                {
+                                    await PauseAsync();
+                                }
+                            }
+                        }
+                        else if (status == EmuStatus.Stopped || status == EmuStatus.Running)
+                        {
+                            if (Scheduler.ReadyCount > 0)
+                            {
+                                await PauseAsync();
                             }
                         }
                         else
                         {
-                            await System.Threading.Tasks.Task.Yield();
+                            Exited = true;
+                            break;
                         }
-                    }
-                    else if (status == EmuStatus.Stopped || status == EmuStatus.Running)
-                    {
-                        await System.Threading.Tasks.Task.Yield();
-                    }
-                    else
-                    {
-                        if (Process.Syscalls.Strace) Logger.LogTrace("[Task {TID}] Unhandled status {Status}, exiting.", TID, status);
-                        Exited = true;
+
+                        // AGGRESSIVE OPTIMIZATION:
+                        // Only release the GIL and yield if there are other tasks waiting.
+                        if (Exited || Scheduler.ReadyCount > 0)
+                        {
+                            break;
+                        }
                     }
                 }
                 finally
@@ -268,8 +293,12 @@ public class Task
                     GIL.Release();
                 }
 
-                // Cooperative yielding
-                await System.Threading.Tasks.Task.Yield();
+                // If we're the only task, yielding here would just put us back in the same loop.
+                // But we must yield to the runtime at least occasionally.
+                if (!Exited && Scheduler.ReadyCount > 0)
+                {
+                    await System.Threading.Tasks.Task.Yield();
+                }
             }
         }
         finally
@@ -296,6 +325,48 @@ public class Task
         }
     }
 
+    // Pause this emulator task — scheduler will resume it by completing ResumeTcs
+    private async System.Threading.Tasks.Task PauseAsync()
+    {
+        // Must be called with GIL held.
+        
+        // Optimize for the common case: only one task is ready
+        if (Scheduler.ReadyCount == 0)
+        {
+            // If we're the only task, we don't even need to yield to the runtime 
+            // most of the time. The inner-loop in RunLoopAsync will keep us here.
+            // But if we're called explicitly, we can just return.
+            return;
+        }
+
+        // Prepare a new TCS for resumption
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ResumeTcs = tcs;
+
+        // Enqueue self as ready so scheduler can pick it later
+        Scheduler.Enqueue(this);
+
+        // Release GIL so other tasks can run while we're paused
+        GIL.Release();
+        
+        try
+        {
+            // Pick next task to run
+            Scheduler.ScheduleNext();
+
+            // Await the resume signal
+            await tcs.Task;
+        }
+        finally
+        {
+            // Re-acquire GIL now that we're being resumed
+            await GIL.WaitAsync();
+            
+            // Clear the ResumeTcs now that we've been resumed
+            ResumeTcs = null;
+        }
+    }
+
     public void DumpTrace()
     {
         Logger.LogError("[Task {TID}] Trace Dump (Last 1000 instructions):", TID);
@@ -308,9 +379,11 @@ public class Task
 
 public static class Scheduler
 {
+    private static readonly Queue<Task> _readyQueue = new();
     private static readonly Dictionary<int, Task> _tasks = new();
     private static readonly Dictionary<int, Process> _processes = new();
     private static readonly Dictionary<IntPtr, Task> _engineToTask = new();
+    public static int ReadyCount { get { lock (_lock) return _readyQueue.Count; } }
     private static readonly object _lock = new();
 
     public static readonly AsyncLocal<Task?> _currentTask = new();
@@ -319,7 +392,7 @@ public static class Scheduler
         get => _currentTask.Value;
         set => _currentTask.Value = value;
     }
-
+    
     public static void Add(Task t)
     {
         lock (_lock)
@@ -328,6 +401,28 @@ public static class Scheduler
             _engineToTask[t.CPU.State] = t;
             Console.WriteLine($"[Scheduler] Registered Task {t.TID} with Engine 0x{t.CPU.State:x}");
             _processes[t.Process.TGID] = t.Process;
+        }
+    }
+
+    // Enqueue a task that is ready to run.
+    public static void Enqueue(Task t)
+    {
+        lock (_lock)
+        {
+            _readyQueue.Enqueue(t);
+        }
+    }
+
+    // Pick the next task to run and signal it.
+    public static void ScheduleNext()
+    {
+        lock (_lock)
+        {
+            if (_readyQueue.Count > 0)
+            {
+                var t = _readyQueue.Dequeue();
+                try { t.ResumeTcs?.TrySetResult(true); } catch { }
+            }
         }
     }
 

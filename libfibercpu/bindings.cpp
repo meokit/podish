@@ -305,7 +305,10 @@ int X86_MemIsDirty(EmuState* state, uint32_t addr) {
 
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->status = EmuStatus::Running;
-    uint64_t inst_count = 0;
+    uint64_t total_run_insts = 0;
+
+    // Reset chaining state for this run
+    state->last_block = nullptr;
     
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
@@ -317,15 +320,15 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->status = EmuStatus::Stopped;
             break;
         }
-        if (max_insts != 0 && inst_count >= max_insts) {
+        if (max_insts != 0 && total_run_insts >= max_insts) {
             state->status = EmuStatus::Stopped;
             break;
         }
         
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
-            BasicBlock block;
-            if (!DecodeBlock(state, eip, end_eip, 0, &block)) {
+            auto block = std::make_unique<BasicBlock>();
+            if (!DecodeBlock(state, eip, end_eip, 0, block.get())) {
                 state->status = EmuStatus::Fault;
                 break;
             }
@@ -333,19 +336,35 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             it = res.first;
         }
         
-        BasicBlock& block = it->second;
-        if (!block.ops.empty()) {
-            DecodedOp* head = &block.ops[0];
+        BasicBlock* block_ptr = it->second.get();
+        
+        // Link previous block to this one for chaining
+        if (state->last_block) {
+            state->last_block->ops.back().next_block = block_ptr;
+        }
+        state->last_block = block_ptr;
+
+        if (!block_ptr->ops.empty()) {
+            DecodedOp* head = &block_ptr->ops[0];
             HandlerFunc h = nullptr;
             if (head->handler_index < 1024) h = g_Handlers[head->handler_index];
             
             if (h) {
-                // Total instructions in block (excluding sentinel)
-                size_t num_insts = block.ops.size();
-                if (num_insts > 0) num_insts--; 
+                int64_t batch_limit = 1000;
+                if (max_insts != 0) {
+                    uint64_t remaining_budget = max_insts - total_run_insts;
+                    if (remaining_budget < (uint64_t)batch_limit) {
+                        batch_limit = (int64_t)remaining_budget;
+                    }
+                }
                 
-                h(state, head); 
-                inst_count += num_insts;
+                int64_t initial_batch_limit = batch_limit;
+                // Subtract the FIRST block's size from the limit
+                batch_limit -= block_ptr->inst_count;
+
+                // h will return the remaining budget
+                int64_t remaining = h(state, head, batch_limit); 
+                total_run_insts += (initial_batch_limit - remaining);
             } else {
                 OpUd2(state, head);
                 break;
@@ -384,26 +403,29 @@ int X86_Step(EmuState* state) {
         }
     }
     
-    DecodedOp op;
-    if (!DecodeInstruction(buf, &op)) {
-        std::memset(&op, 0, sizeof(op));
-        op.length = 1;
-        op.handler_index = 0x10B; 
+    DecodedOp ops[2];
+    std::memset(ops, 0, sizeof(ops));
+    
+    if (!DecodeInstruction(buf, &ops[0])) {
+        ops[0].length = 1;
+        ops[0].handler_index = 0x10B; // UD2
     }
-    op.meta.flags.is_last = 1; 
+    
+    // Sentinel
+    ops[1].handler_index = 1023;
 
     HandlerFunc h = nullptr;
-    if (op.handler_index < 1024) {
-        h = g_Handlers[op.handler_index];
+    if (ops[0].handler_index < 1024) {
+        h = g_Handlers[ops[0].handler_index];
     }
 
     if (h) {
          uint32_t old_eip = state->ctx.eip;
-         h(state, &op);
+         h(state, &ops[0], 0); // Limit 0 ensures it returns after 1 inst + sentinel
+         
          // Advance EIP if handler didn't change it AND no fault occurred.
-         // 'Stopped' usually means syscall handled, so we MUST advance.
          if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
-             state->ctx.eip += op.length;
+             state->ctx.eip += ops[0].length;
          }
     } else {
          if (!state->hooks.on_invalid_opcode(state)) {

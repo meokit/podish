@@ -65,3 +65,40 @@ target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
 if(USE_SOFTFLOAT)
     target_link_libraries(fibercpu PRIVATE softfloat)
 endif()
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT result OUTPUT error)
+if(result)
+    #set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>" 
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
+    )
+endif()
+
+# macOS codesign support: allow providing an identity; if set to SKIP, skip signing.
+if(APPLE)
+    option(CODESIGN_IDENTITY "Codesign identity to sign the built library. Use empty for ad-hoc, SKIP to disable" "")
+
+    # CMake 'option' may set the variable to the special value "OFF" when disabled from the cache.
+    if(NOT CODESIGN_IDENTITY STREQUAL "SKIP" AND NOT CODESIGN_IDENTITY STREQUAL "OFF")
+        if(CODESIGN_IDENTITY STREQUAL "")
+            set(_codesign_identity "-")
+            message(STATUS "CODESIGN_IDENTITY empty -> using ad-hoc codesign (-) for fibercpu")
+        else()
+            set(_codesign_identity "${CODESIGN_IDENTITY}")
+            message(STATUS "Codesigning fibercpu with identity: ${CODESIGN_IDENTITY}")
+        endif()
+
+        add_custom_command(TARGET fibercpu POST_BUILD
+            COMMAND /usr/bin/codesign -f -s "${_codesign_identity}" --timestamp=none "$<TARGET_FILE:fibercpu>"
+            COMMENT "Codesigning fibercpu with identity: ${_codesign_identity}"
+            VERBATIM)
+    else()
+        message(STATUS "CODESIGN_IDENTITY=SKIP -> skipping codesign for fibercpu on macOS")
+    endif()
+endif()

@@ -21,14 +21,24 @@ struct DecodedOp;
 using LogicFunc = void(*)(EmuState* state, DecodedOp* op);
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
-using HandlerFunc = void(ATTR_PRESERVE_NONE *)(EmuState* state, DecodedOp* op);
+using HandlerFunc = int64_t(ATTR_PRESERVE_NONE *)(EmuState* state, DecodedOp* op, int64_t instr_limit);
 
-
+struct BasicBlock;
 
 struct DecodedOp {
     // Immediate and Displacement
-    uint32_t imm;
-    uint32_t disp;
+
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+    #pragma clang diagnostic ignored "-Wnested-anon-types"
+    union {
+        struct {
+            uint32_t imm;
+            uint32_t disp;
+        };
+        BasicBlock* next_block;
+    };
+    #pragma clang diagnostic pop
     
     // Handler Information
     uint16_t handler_index;
@@ -61,7 +71,6 @@ struct DecodedOp {
             uint8_t has_sib : 1;
             uint8_t has_disp : 1;
             uint8_t has_imm : 1;
-            uint8_t is_last : 1; 
             uint8_t is_control_flow : 1;
         } flags;
     } meta;
@@ -73,6 +82,7 @@ struct DecodedOp {
 struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
+    uint32_t inst_count; // Number of instructions in block (excluding sentinel)
     std::vector<DecodedOp> ops;
 };
 
