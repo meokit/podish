@@ -113,6 +113,7 @@ struct BasicBlock {
 
     // Link logic: this block is the TARGET. source is jumping TO here.
     void LinkFrom(BasicBlock* source);
+    void RemoveIncoming(BasicBlock* source);
     void UnlinkAll();
 };
 

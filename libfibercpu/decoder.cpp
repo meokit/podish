@@ -566,6 +566,18 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
 BasicBlock::BasicBlock() = default;
 
 BasicBlock::~BasicBlock() {
+    // 1. Clear outgoing links (I -> Others)
+    if (!ops.empty()) {
+        BasicBlock* target = ops.back().next_block;
+        // Check if this op is indeed a chained branch. 
+        // In our current engine, only the sentinel at the end of a block holds next_block.
+        // And it's only set during chaining in X86_Run.
+        if (target) {
+            target->RemoveIncoming(this);
+        }
+    }
+
+    // 2. Clear incoming links (Others -> I)
     UnlinkAll();
 }
 
@@ -578,6 +590,16 @@ void BasicBlock::LinkFrom(BasicBlock* source) {
     // 2. Set source's last op to point to us
     if (!source->ops.empty()) {
         source->ops.back().next_block = this;
+    }
+}
+
+void BasicBlock::RemoveIncoming(BasicBlock* source) {
+    if (!source) return;
+    auto it = std::find(incoming_jumps.begin(), incoming_jumps.end(), source);
+    if (it != incoming_jumps.end()) {
+        // Swap with last element and pop for O(1) removal (relative to search)
+        *it = incoming_jumps.back();
+        incoming_jumps.pop_back();
     }
 }
 
