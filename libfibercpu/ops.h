@@ -41,6 +41,14 @@ enum SpecializedOp : uint16_t {
     OP_FUSED_CMP_RI_JCC = 0x211, // CMP r32, imm + Jcc
     OP_FUSED_CMP_MR_JCC = 0x212, // CMP [mem], r32 + Jcc
     OP_FUSED_CMP_RM_JCC = 0x213, // CMP r32, [mem] + Jcc
+    OP_FUSED_CMP_RI8_JCC = 0x214, // CMP r32, imm8 + Jcc (from 0x83 /7)
+    OP_FUSED_CMP_AL_I8_JCC = 0x215, // CMP AL, imm8 + Jcc (0x3C)
+    OP_FUSED_CMP_I8I8_JCC = 0x216, // CMP r/m8, imm8 + Jcc (0x80 /7)
+    
+    OP_FUSED_TEST_RR_JCC = 0x220, // TEST r32, r32 + Jcc (0x85 mod=3)
+    OP_FUSED_TEST_RM_JCC = 0x221, // TEST [mem], r32 + Jcc (0x85 mod!=3)
+    OP_FUSED_TEST_I8I8_RR_JCC = 0x222, // TEST r8, r8 + Jcc (0x84 mod=3)
+    OP_FUSED_TEST_I8I8_RM_JCC = 0x223, // TEST [mem], r8 + Jcc (0x84 mod!=3)
 };
 
 // Initialization

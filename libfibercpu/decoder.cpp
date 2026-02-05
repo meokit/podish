@@ -427,11 +427,36 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
                     if (mod == 3) {
                         fusion_type = OP_FUSED_CMP_RR_JCC;
                     } else {
-                        fusion_type = (cmp_opcode == 0x3B) ? OP_FUSED_CMP_RM_JCC : OP_FUSED_CMP_MR_JCC;
+                        // RM or MR fusion only if displacement is not used, so we can use disp/imm freely?
+                        // Actually RM/MR specialized ops use ReadModRM32, which uses disp if present.
+                        // So we can only fuse if disp is NOT used by the CMP.
+                        if (!cmp_op.meta.flags.has_disp) {
+                            fusion_type = (cmp_opcode == 0x3B) ? OP_FUSED_CMP_RM_JCC : OP_FUSED_CMP_MR_JCC;
+                        }
                     }
-                } else if ((cmp_opcode == 0x81 || cmp_opcode == 0x83) && (cmp_op.modrm >> 6) == 3 &&
-                           ((cmp_op.modrm >> 3) & 7) == 7) {
-                    fusion_type = OP_FUSED_CMP_RI_JCC;
+                } else if ((cmp_opcode == 0x81 || cmp_opcode == 0x83) && ((cmp_op.modrm >> 3) & 7) == 7) {
+                    // Group 1 CMP
+                    if ((cmp_op.modrm >> 6) == 3) {
+                        fusion_type = OP_FUSED_CMP_RI_JCC;
+                    } else if (!cmp_op.meta.flags.has_disp) {
+                        // CMP [reg], imm
+                        fusion_type = OP_FUSED_CMP_RI8_JCC;
+                    }
+                } else if (cmp_opcode == 0x3C) {
+                    // CMP AL, imm8
+                    fusion_type = OP_FUSED_CMP_AL_I8_JCC;
+                } else if (cmp_opcode == 0x80 && ((cmp_op.modrm >> 3) & 7) == 7) {
+                    // CMP r/m8, imm8. Fuse if no displacement.
+                    if (!cmp_op.meta.flags.has_disp) {
+                        fusion_type = OP_FUSED_CMP_I8I8_JCC;
+                    }
+                } else if (cmp_opcode == 0x85) {
+                    // TEST r/m32, r32. Fuse if no displacement (to use imm for Jcc)
+                    // Actually we can use imm even if there is displacement.
+                    fusion_type = ((cmp_op.modrm >> 6) == 3) ? OP_FUSED_TEST_RR_JCC : OP_FUSED_TEST_RM_JCC;
+                } else if (cmp_opcode == 0x84) {
+                    // TEST r/m8, r8
+                    fusion_type = ((cmp_op.modrm >> 6) == 3) ? OP_FUSED_TEST_I8I8_RR_JCC : OP_FUSED_TEST_I8I8_RM_JCC;
                 }
             }
 
@@ -479,9 +504,9 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
                             }
 
                             // Store Jcc target.
-                            // RI uses imm for CMP immediate, so Jcc target goes to disp.
-                            // Others use imm for Jcc target.
-                            if (fusion_type == OP_FUSED_CMP_RI_JCC) {
+                            // Types that use imm for CMP immediate must use disp for Jcc target.
+                            if (fusion_type == OP_FUSED_CMP_RI_JCC || fusion_type == OP_FUSED_CMP_RI8_JCC ||
+                                fusion_type == OP_FUSED_CMP_AL_I8_JCC || fusion_type == OP_FUSED_CMP_I8I8_JCC) {
                                 cmp_op.disp = (uint32_t)jcc_rel;
                             } else {
                                 cmp_op.imm = (uint32_t)jcc_rel;

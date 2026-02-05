@@ -346,6 +346,21 @@ ATTR_PRESERVE_NONE int64_t OpFused_CmpJcc(EmuState* state, DecodedOp* op, int64_
         uint32_t v1 = ReadModRM32(state, op);
         uint32_t v2 = GetReg(state, reg);
         AluSub<uint32_t, true>(state, v1, v2);
+    } else if constexpr (Type == OP_FUSED_CMP_RI8_JCC) {
+        // Group 1 (0x83 /7) CMP r/m32, imm8
+        uint32_t v1 = ReadModRM32(state, op);
+        uint32_t v2 = (uint32_t)(int32_t)(int8_t)(op->imm & 0xFF);
+        AluSub<uint32_t, true>(state, v1, v2);
+    } else if constexpr (Type == OP_FUSED_CMP_AL_I8_JCC) {
+        // 0x3C: CMP AL, imm8
+        uint8_t v1 = GetReg8(state, EAX);
+        uint8_t v2 = (uint8_t)op->imm;
+        AluSub<uint8_t, true>(state, v1, v2);
+    } else if constexpr (Type == OP_FUSED_CMP_I8I8_JCC) {
+        // 0x80 /7: CMP r/m8, imm8
+        uint8_t v1 = ReadModRM8(state, op);
+        uint8_t v2 = (uint8_t)op->imm;
+        AluSub<uint8_t, true>(state, v1, v2);
     }
 
     // 2. Perform Jcc (Condition in extra)
@@ -353,11 +368,10 @@ ATTR_PRESERVE_NONE int64_t OpFused_CmpJcc(EmuState* state, DecodedOp* op, int64_
     if (CheckCondition(state, cond)) {
         // Jump: target relative offset is in 'disp' or 'imm'
         int32_t target_offset;
-        if constexpr (Type == OP_FUSED_CMP_RM_JCC || Type == OP_FUSED_CMP_MR_JCC) {
-            target_offset = (int32_t)op->imm;
-        } else if constexpr (Type == OP_FUSED_CMP_RR_JCC) {
+        if constexpr (Type == OP_FUSED_CMP_RM_JCC || Type == OP_FUSED_CMP_MR_JCC || Type == OP_FUSED_CMP_RR_JCC) {
             target_offset = (int32_t)op->imm;
         } else {
+            // RI, RI8, AL_I8, I8I8 use imm for CMP immediate, so Jcc target is in disp
             target_offset = (int32_t)op->disp;
         }
         state->ctx.eip += target_offset;
@@ -367,6 +381,47 @@ ATTR_PRESERVE_NONE int64_t OpFused_CmpJcc(EmuState* state, DecodedOp* op, int64_
         return 0;
     } else {
         // No jump: EIP already advanced. Threaded Dispatch to NEXT instruction
+        DecodedOp* next = op + 1;
+        if (instr_limit > 0) {
+            HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + next->handler_offset);
+            ATTR_MUSTTAIL return h(state, next, instr_limit - 1);
+        }
+    }
+    return instr_limit;
+}
+
+template <SpecializedOp Type>
+ATTR_PRESERVE_NONE int64_t OpFused_TestJcc(EmuState* state, DecodedOp* op, int64_t instr_limit) {
+    state->ctx.eip += op->length;
+
+    // 1. Perform TEST
+    if constexpr (Type == OP_FUSED_TEST_RR_JCC) {
+        uint8_t dst_reg = op->modrm & 7;
+        uint8_t src_reg = (op->modrm >> 3) & 7;
+        AluAnd<uint32_t, true>(state, GetReg(state, dst_reg), GetReg(state, src_reg));
+    } else if constexpr (Type == OP_FUSED_TEST_RM_JCC) {
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint32_t v1 = ReadModRM32(state, op);
+        uint32_t v2 = GetReg(state, reg);
+        AluAnd<uint32_t, true>(state, v1, v2);
+    } else if constexpr (Type == OP_FUSED_TEST_I8I8_RR_JCC) {
+        uint8_t dst_reg = op->modrm & 7;
+        uint8_t src_reg = (op->modrm >> 3) & 7;
+        AluAnd<uint8_t, true>(state, GetReg8(state, dst_reg), GetReg8(state, src_reg));
+    } else if constexpr (Type == OP_FUSED_TEST_I8I8_RM_JCC) {
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint8_t v1 = ReadModRM8(state, op);
+        uint8_t v2 = GetReg8(state, reg);
+        AluAnd<uint8_t, true>(state, v1, v2);
+    }
+
+    // 2. Perform Jcc
+    uint8_t cond = op->extra;
+    if (CheckCondition(state, cond)) {
+        int32_t target_offset = (int32_t)op->imm;
+        state->ctx.eip += target_offset;
+        return 0;
+    } else {
         DecodedOp* next = op + 1;
         if (instr_limit > 0) {
             HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + next->handler_offset);
@@ -414,6 +469,14 @@ void RegisterControlOps() {
     g_Handlers[OP_FUSED_CMP_RI_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RI_JCC>;
     g_Handlers[OP_FUSED_CMP_MR_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_MR_JCC>;
     g_Handlers[OP_FUSED_CMP_RM_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RM_JCC>;
+    g_Handlers[OP_FUSED_CMP_RI8_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RI8_JCC>;
+    g_Handlers[OP_FUSED_CMP_AL_I8_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_AL_I8_JCC>;
+    g_Handlers[OP_FUSED_CMP_I8I8_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_I8I8_JCC>;
+
+    g_Handlers[OP_FUSED_TEST_RR_JCC] = OpFused_TestJcc<OP_FUSED_TEST_RR_JCC>;
+    g_Handlers[OP_FUSED_TEST_RM_JCC] = OpFused_TestJcc<OP_FUSED_TEST_RM_JCC>;
+    g_Handlers[OP_FUSED_TEST_I8I8_RR_JCC] = OpFused_TestJcc<OP_FUSED_TEST_I8I8_RR_JCC>;
+    g_Handlers[OP_FUSED_TEST_I8I8_RM_JCC] = OpFused_TestJcc<OP_FUSED_TEST_I8I8_RM_JCC>;
 }
 
 }  // namespace x86emu
