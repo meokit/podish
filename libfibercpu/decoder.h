@@ -89,6 +89,31 @@ struct BasicBlock {
     uint32_t end_eip;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     std::vector<DecodedOp> ops;
+
+    // Chaining & Lifecycle
+    std::vector<BasicBlock*> incoming_jumps;
+    mutable uint32_t ref_count = 0;
+
+    BasicBlock();
+    ~BasicBlock();
+
+    void Retain() const {
+        // Assuming single-threaded emulator context or external locking.
+        // If MT execution of the *same* EmuState is needed, use atomic.
+        // Given current architecture implies single-threaded step/run per state:
+        const_cast<BasicBlock*>(this)->ref_count++;
+    }
+
+    void Release() const {
+        auto* self = const_cast<BasicBlock*>(this);
+        if (--self->ref_count == 0) {
+            delete self;
+        }
+    }
+
+    // Link logic: this block is the TARGET. source is jumping TO here.
+    void LinkFrom(BasicBlock* source);
+    void UnlinkAll();
 };
 
 // Decoder Logic

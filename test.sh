@@ -8,21 +8,21 @@ echo ">>> Building x86emu core..."
 mkdir -p build
 pushd build > /dev/null
 cmake ..
-make -j4
+cmake --build .
 popd > /dev/null
 
 # 2. Codesign (macOS)
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo ">>> Codesigning libx86emu.dylib..."
-    codesign -f -s - build/libx86emu.dylib
+    echo ">>> Codesigning libfibercpu.dylib..."
+    codesign -f -s - build/bin/libfibercpu.dylib
 fi
 
-# 3. Build C# Project (Bifrost)
-echo ">>> Building Bifrost..."
-dotnet build linux/Bifrost.csproj
+# 3. Build C# Project (Fiberish)
+echo ">>> Building Fiberish..."
+dotnet build Fiberish.App/Fiberish.App.csproj
 
 # Copy dylib to output
-cp build/libx86emu.dylib linux/bin/Debug/net8.0/
+cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net8.0/
 
 # 4. Build Linux Test Cases (Static x86 binaries)
 echo ">>> Building Linux test cases..."
@@ -56,7 +56,7 @@ run_test() {
     
     # Run Bifrost and capture output. 
     # Dotnet run --no-build will propagate the exit code of our Main method.
-    if dotnet run --project linux/Bifrost.csproj --no-build -- $args $bin > /tmp/emu_test_cs.log 2>&1; then
+    if dotnet run --project Fiberish.App/Fiberish.App.csproj --no-build -- $args $bin > /tmp/emu_test_cs.log 2>&1; then
         echo "PASSED"
     else
         local exit_code=$?
@@ -77,6 +77,10 @@ run_test "Pthread Basic" "tests/linux/assets/test_pthread" ""
 echo "Building test_fork_wait..."
 zig cc -target x86-linux-musl -static -O2 tests/test_fork_wait.c -o tests/linux/assets/test_fork_wait || exit 1
 run_test "Fork/Wait" "tests/linux/assets/test_fork_wait" ""
+
+echo "Building test_smc_linux..."
+zig cc -target x86-linux-musl -static -O0 tests/linux/test_smc_linux.c -o tests/linux/assets/test_smc_linux || exit 1
+run_test "SMC Logic" "tests/linux/assets/test_smc_linux" ""
 
 echo ""
 echo "=== Running C# Tests ==="

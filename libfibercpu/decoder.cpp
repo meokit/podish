@@ -559,4 +559,42 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     return !block->ops.empty();
 }
 
+// ----------------------------------------------------------------------------
+// BasicBlock Implementation
+// ----------------------------------------------------------------------------
+
+BasicBlock::BasicBlock() = default;
+
+BasicBlock::~BasicBlock() {
+    UnlinkAll();
+}
+
+void BasicBlock::LinkFrom(BasicBlock* source) {
+    if (!source) return;
+    
+    // 1. Add source to our incoming list
+    incoming_jumps.push_back(source);
+
+    // 2. Set source's last op to point to us
+    if (!source->ops.empty()) {
+        source->ops.back().next_block = this;
+    }
+}
+
+void BasicBlock::UnlinkAll() {
+    // For every block that jumps to us...
+    for (BasicBlock* src : incoming_jumps) {
+        if (!src->ops.empty()) {
+            // Clear the pointer in the source block
+            // Note: We assume the source block is still alive because it holds a raw pointer to us.
+            // But wait, in our new model, source does NOT hold a strong ref to us (to avoid cycles).
+            // Source holds a raw pointer. We must clear it.
+            if (src->ops.back().next_block == this) {
+                 src->ops.back().next_block = nullptr;
+            }
+        }
+    }
+    incoming_jumps.clear();
+}
+
 }  // namespace x86emu

@@ -44,11 +44,12 @@ static void X86_InvalidatePage(EmuState* state, uint32_t page_addr) {
     uint32_t page_idx = page_addr >> 12;
     auto it = state->page_to_blocks.find(page_idx);
     if (it != state->page_to_blocks.end()) {
-        // Remove all blocks
+        // Remove all referenced blocks from the cache
         for (uint32_t eip : it->second) {
             state->block_cache.erase(eip);
         }
-        // Clear list
+        // Crucial: Remove the entire mapping for this page to prevent 
+        // the vector from growing indefinitely with stale EIPs.
         state->page_to_blocks.erase(it);
     }
 }
@@ -316,25 +317,31 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
-            auto block = std::make_unique<BasicBlock>();
-            if (!DecodeBlock(state, eip, end_eip, 0, block.get())) {
+            // Use raw pointer, ownership transferred to BlockPtr in map
+            BasicBlock* new_block = new BasicBlock();
+            if (!DecodeBlock(state, eip, end_eip, 0, new_block)) {
+                delete new_block; // Failed, manual delete
                 state->status = EmuStatus::Fault;
                 break;
             }
-            auto res = state->block_cache.insert({eip, std::move(block)});
+            // Insert (constructs BlockPtr -> ref_count=1)
+            auto res = state->block_cache.insert({eip, new_block});
             it = res.first;
+
+            // Update Page Mapping (Crucial for SMC Invalidation)
+            state->page_to_blocks[eip >> 12].push_back(eip);
         }
 
-        BasicBlock* block_ptr = it->second.get();
+        // Hold a strong reference to the current block for the duration of its execution.
+        // This prevents UAF if SMC invalidates the block while it's running.
+        EmuState::BlockPtr current_block_ref = it->second;
+        BasicBlock* block_ptr = current_block_ref.get();
 
         // Link previous block to this one for chaining
         if (state->last_block) {
-            // Recalculate offset for the last block's exit to point to this new block
-            // This logic is tricky because we modify 'next_block' pointer, not handler_offset.
-            // OpExitBlock uses op->next_block.
-            state->last_block->ops.back().next_block = block_ptr;
+            block_ptr->LinkFrom(state->last_block.get());
         }
-        state->last_block = block_ptr;
+        state->last_block = current_block_ref;
 
         if (!block_ptr->ops.empty()) {
             DecodedOp* head = &block_ptr->ops[0];

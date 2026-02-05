@@ -21,8 +21,46 @@ struct EmuState {
     mem::Mmu mmu;
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
-    // Simple Block Cache - Using unique_ptr for pointer stability (needed for chaining)
-    ankerl::unordered_dense::map<uint32_t, std::unique_ptr<BasicBlock>> block_cache;
+    
+    // Intrusive Pointer Wrapper for automatic Retain/Release
+    struct BlockPtr {
+        BasicBlock* ptr = nullptr;
+        
+        BlockPtr() = default;
+        BlockPtr(BasicBlock* p) : ptr(p) { if(ptr) ptr->Retain(); }
+        BlockPtr(const BlockPtr& other) : ptr(other.ptr) { if(ptr) ptr->Retain(); }
+        BlockPtr(BlockPtr&& other) noexcept : ptr(other.ptr) { other.ptr = nullptr; }
+        
+        ~BlockPtr() { if(ptr) ptr->Release(); }
+        
+        BlockPtr& operator=(const BlockPtr& other) {
+            if (this != &other) {
+                if(ptr) ptr->Release();
+                ptr = other.ptr;
+                if(ptr) ptr->Retain();
+            }
+            return *this;
+        }
+        
+        BlockPtr& operator=(BasicBlock* p) {
+            if (ptr != p) {
+                if(ptr) ptr->Release();
+                ptr = p;
+                if(ptr) ptr->Retain();
+            }
+            return *this;
+        }
+
+        BasicBlock* get() const { return ptr; }
+        BasicBlock* operator->() const { return ptr; }
+        operator bool() const { return ptr != nullptr; }
+    };
+
+    // Block Cache - Stores raw pointers, but we treat them as "Strong Refs" owned by the map.
+    // However, std::map/unordered_map doesn't automatically call Release on raw pointers when erased.
+    // So we use our BlockPtr wrapper as the value type to ensure Release is called on erase/clear.
+    ankerl::unordered_dense::map<uint32_t, BlockPtr> block_cache;
+    
     // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
     // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.
     ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
@@ -32,7 +70,7 @@ struct EmuState {
     uint32_t fault_addr = 0;
 
     // Chaining Info
-    BasicBlock* last_block = nullptr;
+    BlockPtr last_block;
 
     // Callback Storage
     FaultHandler fault_handler = nullptr;
