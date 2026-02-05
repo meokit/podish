@@ -40,7 +40,7 @@ static FORCE_INLINE void OpImul_GvEvIz(EmuState* state, DecodedOp* op) {
     // 69: IMUL r16/32, r/m16/32, imm16/32
     // 6B: IMUL r16/32, r/m16/32, imm8
     uint8_t reg = (op->modrm >> 3) & 7;
-    bool is_imm8 = ((op->handler_index & 0xFF) == 0x6B);
+    bool is_imm8 = (op->extra == 0xB);  // 0x6B & 0xF == 0xB
 
     if (op->prefixes.flags.opsize) {
         int16_t val1 = (int16_t)ReadModRM16(state, op);

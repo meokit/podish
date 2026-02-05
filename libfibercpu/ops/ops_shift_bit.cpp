@@ -12,7 +12,8 @@ namespace x86emu {
 
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
     uint8_t subop = (op->modrm >> 3) & 7;
-    // printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count, is_byte);
+    // printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count,
+    // is_byte);
     uint32_t res = dest;
 
     // Mask count
@@ -111,7 +112,7 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
 static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
-    bool is_byte = (op->handler_index == 0xC0);
+    bool is_byte = (op->extra == 0);
     uint32_t dest = ReadModRM(state, op, is_byte);
     uint8_t count = (uint8_t)op->imm;
     Helper_Group2(state, op, dest, count, is_byte);
@@ -120,7 +121,7 @@ static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op) {
     // D0: r/m8, 1
     // D1: r/m32, 1
-    bool is_byte = (op->handler_index == 0xD0);
+    bool is_byte = (op->extra == 0);
     uint32_t dest = ReadModRM(state, op, is_byte);
     Helper_Group2(state, op, dest, 1, is_byte);
 }
@@ -128,7 +129,7 @@ static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op) {
     // D2: r/m8, CL
     // D3: r/m32, CL
-    bool is_byte = (op->handler_index == 0xD2);
+    bool is_byte = (op->extra == 2);
     uint32_t dest = ReadModRM(state, op, is_byte);
     uint8_t count = GetReg(state, ECX) & 0xFF;
     Helper_Group2(state, op, dest, count, is_byte);
@@ -152,8 +153,9 @@ static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
         int32_t signed_offset = (int32_t)offset;
         if (opsize) {
             // For 16-bit displacement, bit index is within the word?
-            // Actually, for BT r/m, reg, the bit offset is treated as a signed integer
-            // that offsets the memory address. This is the same for 16 and 32 bit.
+            // Actually, for BT r/m, reg, the bit offset is treated as a signed
+            // integer that offsets the memory address. This is the same for 16 and 32
+            // bit.
         }
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
@@ -376,7 +378,8 @@ static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op) {
     // 0F C8+rd: BSWAP r32
-    uint8_t reg = op->handler_index & 7;
+    // DecodeInstruction puts rd in op->modrm for non-ModRM ops
+    uint8_t reg = op->modrm & 7;
     uint32_t val = GetReg(state, reg);
     uint32_t res = __builtin_bswap32(val);
     SetReg(state, reg, res);

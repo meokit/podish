@@ -25,14 +25,14 @@ static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize) {
         uint16_t dest = ReadModRM16(state, op);
         uint16_t src = (uint16_t)op->imm;
-        if ((op->handler_index & 0xFF) == 0x83) {
+        if (op->extra == 0x3) {  // 0x83 & 0xF == 3
             src = (int16_t)(int8_t)src;
         }
         Helper_Group1<uint16_t>(state, op, dest, src);
     } else {
         uint32_t dest = ReadModRM32(state, op);
         uint32_t src = op->imm;
-        if ((op->handler_index & 0xFF) == 0x83) {
+        if (op->extra == 0x3) {  // 0x83 & 0xF == 3
             src = (int32_t)(int8_t)src;
         }
         Helper_Group1<uint32_t>(state, op, dest, src);
@@ -41,7 +41,7 @@ static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpGroup3_Ev(EmuState* state, DecodedOp* op) {
     // F6 (Byte) or F7 (Dword)
-    bool is_byte = (op->handler_index == 0xF6);
+    bool is_byte = (op->extra == 0x6);  // 0xF6 & 0xF == 6
     if (is_byte) {
         uint8_t val = ReadModRM8(state, op);
         Helper_Group3<uint8_t>(state, op, val);
@@ -196,7 +196,7 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op) {
     // XADD r/m, r: Exchange and Add
 
     uint32_t width = 4;
-    if (op->handler_index == 0x1C0) {  // 0F C0 -> Byte
+    if (op->extra == 0x0) {  // 0F C0 & 0xF == 0 -> Byte
         width = 1;
     } else {  // 0F C1
         if (op->prefixes.flags.opsize)

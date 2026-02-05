@@ -66,14 +66,14 @@ static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op) {
     // 0F 9x: SETcc r/m8
-    uint8_t cond = op->handler_index & 0xF;
+    uint8_t cond = op->extra;
     uint8_t val = CheckCondition(state, cond) ? 1 : 0;
     WriteModRM8(state, op, val);
 }
 
 static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op) {
     // 0F B0/B1: CMPXCHG r/m, r
-    bool is_byte = (op->handler_index == 0x1B0);
+    bool is_byte = (op->extra == 0);
 
     if (is_byte) {
         uint8_t acc = GetReg(state, EAX) & 0xFF;
@@ -88,12 +88,13 @@ static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op) {
         // Comparison is Dest - Acc? Or Acc - Dest?
         // CMP instruction does: Op1 - Op2.
         // CMPXCHG compares AL/AX/EAX with Dest.
-        // "Compares the value in the AL, AX, or EAX register with the first operand (destination
-        // operand). If the two values are equal, the second operand (source operand) is loaded into
-        // the destination operand. Otherwise, the destination operand is loaded into the AL, AX, or
-        // EAX register." Flag setting is like CMP: Acc - Dest or Dest - Acc? CMP Dest, Src -> Dest
-        // - Src. Here Dest is memory. Acc is implied source. Actually: "Compares ... EAX with ...
-        // Destination". Usually CMP A, B is A - B. So EAX - Dest.
+        // "Compares the value in the AL, AX, or EAX register with the first operand
+        // (destination operand). If the two values are equal, the second operand
+        // (source operand) is loaded into the destination operand. Otherwise, the
+        // destination operand is loaded into the AL, AX, or EAX register." Flag
+        // setting is like CMP: Acc - Dest or Dest - Acc? CMP Dest, Src -> Dest
+        // - Src. Here Dest is memory. Acc is implied source. Actually: "Compares
+        // ... EAX with ... Destination". Usually CMP A, B is A - B. So EAX - Dest.
 
         AluSub<uint8_t>(state, acc, dest);
 

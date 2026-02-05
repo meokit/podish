@@ -291,14 +291,13 @@ static FORCE_INLINE void OpPminsw_Sse(EmuState* state, DecodedOp* op) {
 // For Group opcodes, the dispatch table handles .reg.
 // For now, these handlers assume they are called for the correct operation.
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsllw_Sse(EmuState* state, DecodedOp* op) {
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     // Source can be Imm8 (if Group) or XMM/Mem (if Opcode)
-    // If we map 0F 71 /2 to this, Src is Imm8
-    // If we map 0F F1 to this, Src is XMM/Mem
     simde__m128i count;
-    if (op->handler_index == 0x1F1) {  // PSLLW xmm, xmm/m128
+    if constexpr (!IsGroup) {  // PSLLW xmm, xmm/m128
         count = simde_mm_castps_si128(ReadModRM128(state, op));
     } else {  // Group 0F 71 /6
         count = simde_mm_set_epi64x(0, op->imm);
@@ -306,22 +305,13 @@ static FORCE_INLINE void OpPsllw_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sll_epi16(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPslld_Sse(EmuState* state, DecodedOp* op) {
-    // uint8_t reg = (op->modrm >> 3) & 7; // Dest is ModRM.rm if Group? NO.
-    // Wait. For Group 0F 72 /6 (PSLLD xmm, imm8), ModRM.rm is Dest (Register).
-    // For 0F F2 (PSLLD xmm, xmm/m128), ModRM.reg is Dest.
-
     simde__m128i dst;
     simde__m128i count;
     uint8_t dst_idx;
 
-    // Check opcode to distinguish
-    uint8_t opcode = op->handler_index & 0xFF;
-
-    if (opcode == 0x72) {  // Group 13
-        // ModRM.reg is Opcode Ext (6)
-        // Dest is ModRM.rm (must be register for SSE integer shifts mostly? No, instructions are
-        // xmm, imm8)
+    if constexpr (IsGroup) {  // Group 13
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -333,12 +323,12 @@ static FORCE_INLINE void OpPslld_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi32(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsllq_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x73) {  // Group 14 /6
+    if constexpr (IsGroup) {  // Group 14 /6
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -350,12 +340,12 @@ static FORCE_INLINE void OpPsllq_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi64(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsraw_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x71) {  // Group 12 /4
+    if constexpr (IsGroup) {  // Group 12 /4
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -367,12 +357,12 @@ static FORCE_INLINE void OpPsraw_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi16(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsrad_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x72) {  // Group 13 /4
+    if constexpr (IsGroup) {  // Group 13 /4
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -384,12 +374,12 @@ static FORCE_INLINE void OpPsrad_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi32(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsrlw_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x71) {  // Group 12 /2
+    if constexpr (IsGroup) {  // Group 12 /2
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -401,12 +391,12 @@ static FORCE_INLINE void OpPsrlw_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi16(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsrld_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x72) {  // Group 13 /2
+    if constexpr (IsGroup) {  // Group 13 /2
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -418,12 +408,12 @@ static FORCE_INLINE void OpPsrld_Sse(EmuState* state, DecodedOp* op) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi32(dst, count));
 }
 
+template <bool IsGroup>
 static FORCE_INLINE void OpPsrlq_Sse(EmuState* state, DecodedOp* op) {
     uint8_t dst_idx;
     simde__m128i dst, count;
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x73) {  // Group 14 /2
+    if constexpr (IsGroup) {  // Group 14 /2
         dst_idx = op->modrm & 7;
         dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
         count = simde_mm_set_epi64x(0, op->imm);
@@ -489,7 +479,8 @@ static FORCE_INLINE void OpPshufd_Sse(EmuState* state, DecodedOp* op) {
     simde__m128i src = simde_mm_castps_si128(ReadModRM128(state, op));
     uint8_t imm = (uint8_t)op->imm;
 
-    // We must manually implement shuffle because _mm_shuffle_epi32 requires const immediate
+    // We must manually implement shuffle because _mm_shuffle_epi32 requires const
+    // immediate
     int32_t* s = (int32_t*)&src;
     int32_t res[4];
     res[0] = s[(imm >> 0) & 3];
@@ -497,8 +488,7 @@ static FORCE_INLINE void OpPshufd_Sse(EmuState* state, DecodedOp* op) {
     res[2] = s[(imm >> 4) & 3];
     res[3] = s[(imm >> 6) & 3];
 
-    state->ctx.xmm[reg] =
-        simde_mm_castsi128_ps(simde_mm_setr_epi32(res[0], res[1], res[2], res[3]));
+    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_setr_epi32(res[0], res[1], res[2], res[3]));
 }
 
 static FORCE_INLINE void OpPshufhw_Sse(EmuState* state, DecodedOp* op) {
@@ -730,13 +720,13 @@ static FORCE_INLINE void OpGroup_Sse_Shift_Imm_W(EmuState* state, DecodedOp* op)
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrlw_Sse(state, op);
+            OpPsrlw_Sse<true>(state, op);
             break;
         case 4:
-            OpPsraw_Sse(state, op);
+            OpPsraw_Sse<true>(state, op);
             break;
         case 6:
-            OpPsllw_Sse(state, op);
+            OpPsllw_Sse<true>(state, op);
             break;
         default:
             break;  // #UD
@@ -748,13 +738,13 @@ static FORCE_INLINE void OpGroup_Sse_Shift_Imm_D(EmuState* state, DecodedOp* op)
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrld_Sse(state, op);
+            OpPsrld_Sse<true>(state, op);
             break;
         case 4:
-            OpPsrad_Sse(state, op);
+            OpPsrad_Sse<true>(state, op);
             break;
         case 6:
-            OpPslld_Sse(state, op);
+            OpPslld_Sse<true>(state, op);
             break;
         default:
             break;
@@ -766,16 +756,16 @@ static FORCE_INLINE void OpGroup_Sse_Shift_Imm_Q(EmuState* state, DecodedOp* op)
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrlq_Sse(state, op);
+            OpPsrlq_Sse<true>(state, op);
             break;
         case 3:
-            OpPsrldq_Sse(state, op);
+            OpPsrldq_Sse(state, op);  // Not templated yet? It uses imm8. Logic is fine.
             break;
         case 6:
-            OpPsllq_Sse(state, op);
+            OpPsllq_Sse<true>(state, op);
             break;
         case 7:
-            OpPslldq_Sse(state, op);
+            OpPslldq_Sse(state, op);  // Not templated yet? It uses imm8. Logic is fine.
             break;
         default:
             break;
@@ -807,14 +797,14 @@ void RegisterSseIntOps() {
     g_Handlers[0x1DA] = DispatchWrapper<OpPminub_Sse>;
     g_Handlers[0x1EE] = DispatchWrapper<OpPmaxsw_Sse>;
     g_Handlers[0x1EA] = DispatchWrapper<OpPminsw_Sse>;
-    g_Handlers[0x1F1] = DispatchWrapper<OpPsllw_Sse>;
-    g_Handlers[0x1F2] = DispatchWrapper<OpPslld_Sse>;
-    g_Handlers[0x1F3] = DispatchWrapper<OpPsllq_Sse>;
-    g_Handlers[0x1E1] = DispatchWrapper<OpPsraw_Sse>;
-    g_Handlers[0x1E2] = DispatchWrapper<OpPsrad_Sse>;
-    g_Handlers[0x1D1] = DispatchWrapper<OpPsrlw_Sse>;
-    g_Handlers[0x1D2] = DispatchWrapper<OpPsrld_Sse>;
-    g_Handlers[0x1D3] = DispatchWrapper<OpPsrlq_Sse>;
+    g_Handlers[0x1F1] = DispatchWrapper<OpPsllw_Sse<false>>;
+    g_Handlers[0x1F2] = DispatchWrapper<OpPslld_Sse<false>>;
+    g_Handlers[0x1F3] = DispatchWrapper<OpPsllq_Sse<false>>;
+    g_Handlers[0x1E1] = DispatchWrapper<OpPsraw_Sse<false>>;
+    g_Handlers[0x1E2] = DispatchWrapper<OpPsrad_Sse<false>>;
+    g_Handlers[0x1D1] = DispatchWrapper<OpPsrlw_Sse<false>>;
+    g_Handlers[0x1D2] = DispatchWrapper<OpPsrld_Sse<false>>;
+    g_Handlers[0x1D3] = DispatchWrapper<OpPsrlq_Sse<false>>;
     g_Handlers[0x170] = DispatchWrapper<OpGroup_Pshuf>;
     g_Handlers[0x171] = DispatchWrapper<OpGroup_Sse_Shift_Imm_W>;
     g_Handlers[0x172] = DispatchWrapper<OpGroup_Sse_Shift_Imm_D>;

@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
-#include "common.h"
 #include <vector>
+#include "common.h"
 
 #ifdef __clang__
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
@@ -18,19 +18,19 @@ namespace x86emu {
 struct EmuState;
 struct DecodedOp;
 // Logic Function (Standard ABI, implementation)
-using LogicFunc = void(*)(EmuState* state, DecodedOp* op);
+using LogicFunc = void (*)(EmuState* state, DecodedOp* op);
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
-using HandlerFunc = int64_t(ATTR_PRESERVE_NONE *)(EmuState* state, DecodedOp* op, int64_t instr_limit);
+using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit);
 
 struct BasicBlock;
 
 struct DecodedOp {
     // Immediate and Displacement
 
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-    #pragma clang diagnostic ignored "-Wnested-anon-types"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wnested-anon-types"
     union {
         struct {
             uint32_t imm;
@@ -38,11 +38,8 @@ struct DecodedOp {
         };
         BasicBlock* next_block;
     };
-    #pragma clang diagnostic pop
-    
-    // Handler Information
-    uint16_t handler_index;
-    
+#pragma clang diagnostic pop
+
     // Prefixes
     union {
         uint16_t all;
@@ -50,21 +47,14 @@ struct DecodedOp {
             uint16_t lock : 1;
             uint16_t rep : 1;
             uint16_t repne : 1;
-            uint16_t segment : 3; 
+            uint16_t segment : 3;
             uint16_t opsize : 1;
             uint16_t addrsize : 1;
-            uint16_t ea_base : 4;  // 0-7: Reg, 8: None
-            uint16_t ea_index : 4; // 0-7: Reg, 8: None
+            uint16_t ea_base : 4;   // 0-7: Reg, 8: None
+            uint16_t ea_index : 4;  // 0-7: Reg, 8: None
         } flags;
     } prefixes;
-    
-    // ModR/M & SIB
-    uint8_t modrm;
-    uint8_t sib;
-    
-    // Meta
-    uint8_t length;
-    
+
     // Internal Flags
     union {
         uint8_t all;
@@ -77,6 +67,18 @@ struct DecodedOp {
             uint8_t ea_shift : 2;
         } flags;
     } meta;
+
+    // ModR/M
+    uint8_t modrm;
+
+    // Handler Information
+    // We use a bitfield to pack:
+    // - handler_offset (24 bits signed): +/- 8MB range for handler functions
+    // - length (4 bits): Max instruction length is 15 bytes
+    // - extra (4 bits): Opcode-specific data (Condition Code, etc.)
+    int32_t handler_offset : 24;
+    uint32_t length : 4;
+    uint32_t extra : 4;
 };
 
 // Size check
@@ -85,7 +87,7 @@ struct DecodedOp {
 struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
-    uint32_t inst_count; // Number of instructions in block (excluding sentinel)
+    uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     std::vector<DecodedOp> ops;
 };
 
@@ -95,4 +97,4 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op);
 // Decode Block
 bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block);
 
-} // namespace x86emu
+}  // namespace x86emu

@@ -20,8 +20,8 @@ static FORCE_INLINE void OpMov_Sse_Load(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             // Reg->Reg: Move low double, preserve high
             simde__m128 src_val = state->ctx.xmm[rm];
-            state->ctx.xmm[reg] = simde_mm_castpd_ps(
-                simde_mm_move_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
+            state->ctx.xmm[reg] =
+                simde_mm_castpd_ps(simde_mm_move_sd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
         } else {
             // Mem->Reg: Load double, zero high
             uint32_t addr = ComputeLinearAddress(state, op);
@@ -61,8 +61,8 @@ static FORCE_INLINE void OpMov_Sse_Store(EmuState* state, DecodedOp* op) {
         if ((op->modrm >> 6) == 3) {
             // Reg->Reg: Copy low 64 bits, upper unchanged
             uint8_t dst_reg = op->modrm & 7;
-            state->ctx.xmm[dst_reg] = simde_mm_castpd_ps(simde_mm_move_sd(
-                simde_mm_castps_pd(state->ctx.xmm[dst_reg]), simde_mm_castps_pd(src_val)));
+            state->ctx.xmm[dst_reg] = simde_mm_castpd_ps(
+                simde_mm_move_sd(simde_mm_castps_pd(state->ctx.xmm[dst_reg]), simde_mm_castps_pd(src_val)));
         } else {
             // Reg->Mem: Store 64 bits
             uint32_t addr = ComputeLinearAddress(state, op);
@@ -95,10 +95,10 @@ static FORCE_INLINE void OpMovd_Load(EmuState* state, DecodedOp* op) {
     uint8_t reg = (op->modrm >> 3) & 7;
     // xmm[reg] = (int)val, rest 0
     state->ctx.xmm[reg] = simde_mm_cvtsi32_si128((int)val);
-    // cast to ps is implicit via union? No, simde_mm_cvtsi32_si128 returns simde__m128i
-    // Need cast for type safety if we use strictly typed logic, checking binding...
-    // In simde/common.h, types might be compatible or require cast.
-    // Let's use generic cast
+    // cast to ps is implicit via union? No, simde_mm_cvtsi32_si128 returns
+    // simde__m128i Need cast for type safety if we use strictly typed logic,
+    // checking binding... In simde/common.h, types might be compatible or require
+    // cast. Let's use generic cast
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cvtsi32_si128((int)val));
 }
 
@@ -190,17 +190,10 @@ static FORCE_INLINE void OpMovdqu_Store(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpMovhpd(EmuState* state, DecodedOp* op) {
     // 66 0F 16: MOVHPD xmm, m64 (Load)
-    // 66 0F 17: MOVHPD m64, xmm (Store) -- Wait, Opcode 17 is Store?
-    // Handler mapping handles direction?
-    // Usually 16 is Load (to Reg), 17 is Store (from Reg).
-    // Standard: 66 0F 16 /r: MOVHPD xmm1, m64.
-    // 66 0F 17 /r: MOVHPD m64, xmm1.
-    // I need distinct handlers or check opcode.
+    // 66 0F 17: MOVHPD m64, xmm (Store)
+    // 16: extra=6, 17: extra=7
 
-    // Check opcode
-    uint8_t opcode = op->handler_index & 0xFF;
-
-    if (opcode == 0x16) {  // Load
+    if (op->extra == 6) {  // Load
         // Load m64 to Dest[127:64]
         uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
         uint8_t reg = (op->modrm >> 3) & 7;
@@ -218,9 +211,8 @@ static FORCE_INLINE void OpMovhpd(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpMovhps(EmuState* state, DecodedOp* op) {
     // 0F 16: MOVHPS xmm, m64 (Load)
     // 0F 17: MOVHPS m64, xmm (Store)
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x16) {  // Load
+    if (op->extra == 6) {  // Load
         uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
@@ -236,14 +228,13 @@ static FORCE_INLINE void OpMovhps(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpMovlpd(EmuState* state, DecodedOp* op) {
     // 66 0F 12: MOVLPD xmm, m64 (Load)
     // 66 0F 13: MOVLPD m64, xmm (Store)
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x12) {  // Load
+    if (op->extra == 2) {  // Load 12
         uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[0] = val;  // Low
-    } else {           // Store 0x13
+    } else {           // Store 13
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -254,18 +245,41 @@ static FORCE_INLINE void OpMovlpd(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpMovlps(EmuState* state, DecodedOp* op) {
     // 0F 12: MOVLPS xmm, m64 (Load)
     // 0F 13: MOVLPS m64, xmm (Store)
-    uint8_t opcode = op->handler_index & 0xFF;
 
-    if (opcode == 0x12) {  // Load
+    if (op->extra == 2) {  // Load 12
         uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[0] = val;  // Low
-    } else {           // Store 0x13
+    } else {           // Store 13
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
         uint32_t addr = ComputeLinearAddress(state, op);
         state->mmu.write<uint64_t>(addr, val);
+    }
+}
+
+static FORCE_INLINE void OpDup_Sse(EmuState* state, DecodedOp* op) {
+    // F3 0F 12: MOVSLDUP, F2 0F 12: MOVDDUP, F3 0F 16: MOVSHDUP
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    if (op->prefixes.flags.repne) {  // F2: MOVDDUP
+        simde__m128d src;
+        if (op->modrm >= 0xC0) {
+            src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
+            src = simde_mm_set_sd(*(double*)&val);
+        }
+        state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_movedup_pd(src));
+    } else {  // F3: MOVSLDUP / MOVSHDUP
+        simde__m128 src = ReadModRM128(state, op);
+        // 12: extra=2, 16: extra=6
+        if (op->extra == 2) {
+            state->ctx.xmm[reg] = simde_mm_moveldup_ps(src);
+        } else {  // 0x16
+            state->ctx.xmm[reg] = simde_mm_movehdup_ps(src);
+        }
     }
 }
 
@@ -320,30 +334,6 @@ static FORCE_INLINE void OpMaskmovdqu(EmuState* state, DecodedOp* op) {
     for (int i = 0; i < 16; ++i) {
         if (m[i] & 0x80) {
             state->mmu.write<uint8_t>(addr + i, v[i]);
-        }
-    }
-}
-
-static FORCE_INLINE void OpDup_Sse(EmuState* state, DecodedOp* op) {
-    // F3 0F 12: MOVSLDUP, F2 0F 12: MOVDDUP, F3 0F 16: MOVSHDUP
-    uint8_t reg = (op->modrm >> 3) & 7;
-
-    if (op->prefixes.flags.repne) {  // F2: MOVDDUP
-        simde__m128d src;
-        if (op->modrm >= 0xC0) {
-            src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
-        } else {
-            uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op));
-            src = simde_mm_set_sd(*(double*)&val);
-        }
-        state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_movedup_pd(src));
-    } else {  // F3: MOVSLDUP / MOVSHDUP
-        simde__m128 src = ReadModRM128(state, op);
-        uint8_t opcode = op->handler_index & 0xFF;
-        if (opcode == 0x12) {
-            state->ctx.xmm[reg] = simde_mm_moveldup_ps(src);
-        } else {  // 0x16
-            state->ctx.xmm[reg] = simde_mm_movehdup_ps(src);
         }
     }
 }

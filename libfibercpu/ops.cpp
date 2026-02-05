@@ -14,11 +14,14 @@ int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
             if (instr_limit > 0) {
                 // Subtract the NEXT block's size from the limit
                 instr_limit -= op->next_block->inst_count;
-                
+
                 state->last_block = op->next_block;
                 DecodedOp* next_head = &op->next_block->ops[0];
-                HandlerFunc h = g_Handlers[next_head->handler_index];
-                if (h) {
+
+                // Direct Relative Dispatch
+                int32_t offset = next_head->handler_offset;
+                if (offset != 0) {
+                    HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
                     ATTR_MUSTTAIL return h(state, next_head, instr_limit);
                 }
             }
@@ -30,14 +33,22 @@ int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
 
 // Global dispatch table
 // This is initialized by HandlerInit static constructor below
+// Anchor variable to calculate offsets against
+static uint8_t g_HandlerBaseMarker = 0;
+void* g_HandlerBase = (void*)&g_HandlerBaseMarker;
+
 HandlerFunc g_Handlers[1024] = {nullptr};
+HandlerFunc g_Handlers_NF[1024] = {nullptr};
 
 // Static initialization of dispatch table
 struct HandlerInit {
     HandlerInit() {
         // 1. Clear All
-        for (int i=0; i<1024; ++i) g_Handlers[i] = nullptr;
-        
+        for (int i = 0; i < 1024; ++i) {
+            g_Handlers[i] = nullptr;
+            g_Handlers_NF[i] = nullptr;
+        }
+
         // 2. Register all modular operations
         RegisterAluOps();
         RegisterCompareOps();
@@ -52,7 +63,7 @@ struct HandlerInit {
         RegisterSseFpOps();
         RegisterSseIntOps();
         RegisterSseMovOps();
-        
+
         // 3. Set Sentinel (1023)
         // Must match DecodeBlock sentinel index
         g_Handlers[1023] = OpExitBlock;
@@ -62,4 +73,4 @@ struct HandlerInit {
 // Static instance to trigger initialization
 static HandlerInit _init;
 
-} // namespace x86emu
+}  // namespace x86emu

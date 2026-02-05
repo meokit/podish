@@ -67,7 +67,7 @@ static FORCE_INLINE void OpMov_EbIb(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op) {
     // B8+reg: MOV r16/32, imm16/32
-    uint8_t reg = op->handler_index & 7;
+    uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)op->imm);
     } else {
@@ -78,7 +78,7 @@ static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op) {
 static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
     // B0+reg: MOV r8, imm8
     // Reg coding: 0=AL, 1=CL, 2=DL, 3=BL, 4=AH, 5=CH, 6=DH, 7=BH
-    uint8_t reg = op->handler_index & 7;
+    uint8_t reg = op->modrm & 7;
     uint32_t val = op->imm & 0xFF;
 
     // Read-Modify-Write 32-bit reg
@@ -108,7 +108,8 @@ static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
 
-    if ((op->handler_index & 1) == 0) {  // A0
+    // A0: extra=0, A1: extra=1
+    if (op->extra == 0) {  // A0
         uint8_t val = state->mmu.read<uint8_t>(linear);
         uint32_t* rptr = GetRegPtr(state, EAX);
         *rptr = (*rptr & 0xFFFFFF00) | val;
@@ -129,7 +130,8 @@ static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
 
-    if ((op->handler_index & 1) == 0) {  // A2
+    // A2: extra=2, A3: extra=3
+    if (op->extra == 2) {  // A2
         uint8_t val = GetReg8(state, EAX);
         state->mmu.write<uint8_t>(linear, val);
     } else {  // A3
@@ -153,16 +155,16 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
     }
     if (sreg_idx > 5) return;
 
-    //uint16_t selector = 0;
+    // uint16_t selector = 0;
 
     // Read Source (Rm) - always 16-bit
     if (op->modrm >= 0xC0) {
-        (void)0; // TODO
-        //uint8_t rm = op->modrm & 7;
-        //selector = (uint16_t)GetReg(state, rm);
+        (void)0;  // TODO
+                  // uint8_t rm = op->modrm & 7;
+                  // selector = (uint16_t)GetReg(state, rm);
     } else {
-        //uint32_t addr = ComputeLinearAddress(state, op);
-        //selector = state->mmu.read<uint16_t>(addr);
+        // uint32_t addr = ComputeLinearAddress(state, op);
+        // selector = state->mmu.read<uint16_t>(addr);
         if (state->status != EmuStatus::Running) return;
     }
 
@@ -200,8 +202,8 @@ static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op) {
         uint8_t rm = op->modrm & 7;
         // Write to register (16-bit or 32-bit zero ext?)
         // Operand size attribute determines? default is 32-bit for 32-bit mode?
-        // "If the destination is a 32-bit register, the 16-bit selector is zero-extended"
-        // We assume 32-bit destination unless opsize prefix.
+        // "If the destination is a 32-bit register, the 16-bit selector is
+        // zero-extended" We assume 32-bit destination unless opsize prefix.
         if (op->prefixes.flags.opsize) {
             uint32_t* rptr = GetRegPtr(state, rm);
             *rptr = (*rptr & 0xFFFF0000) | val;
@@ -225,7 +227,8 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
         if (ecx == 0) return;
 
         // Optimization for DF=0 (Forward Copy)
-        // Disable optimization if mem_hook is active to ensure proper trace granularity
+        // Disable optimization if mem_hook is active to ensure proper trace
+        // granularity
         if (!df && !state->mem_hook) {
             uint32_t total_bytes = ecx * sizeof(T);
             uint32_t esi = GetReg(state, ESI);
@@ -243,7 +246,8 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
             SetReg(state, EDI, edi + bytes_processed);
             SetReg(state, ECX, ecx - items_processed);
 
-            // If we stopped early (fault), we leave state consistent at the fault point.
+            // If we stopped early (fault), we leave state consistent at the fault
+            // point.
             return;
         }
 
@@ -281,9 +285,7 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op) {
-    Helper_Movs<uint8_t>(state, op);
-}
+static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op) { Helper_Movs<uint8_t>(state, op); }
 
 static FORCE_INLINE void OpMovs_Word(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize) {
@@ -326,9 +328,7 @@ void Helper_Stos(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op) {
-    Helper_Stos<uint8_t>(state, op);
-}
+static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op) { Helper_Stos<uint8_t>(state, op); }
 
 static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize) {
@@ -397,7 +397,7 @@ static FORCE_INLINE void OpLea(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op) {
     // PUSH r16/32 (0x50+rd)
-    uint8_t reg = op->handler_index & 7;
+    uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
         Push16(state, (uint16_t)GetReg(state, reg));
     } else {
@@ -409,7 +409,7 @@ static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op) {
     // PUSH imm32 (0x68) or PUSH imm8 (0x6A)
     // Decoder already extracted imm to op->imm
     uint32_t val = op->imm;
-    if ((op->handler_index & 0xFF) == 0x6A) {
+    if (op->extra == 0xA) {  // 6A
         val = (int32_t)(int8_t)val;
     }
     Push32(state, val);
@@ -417,7 +417,7 @@ static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op) {
     // POP r16/32 (0x58+rd)
-    uint8_t reg = op->handler_index & 7;
+    uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
         uint16_t val = Pop16(state);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
@@ -482,9 +482,7 @@ void Helper_Lods(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op) {
-    Helper_Lods<uint8_t>(state, op);
-}
+static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op) { Helper_Lods<uint8_t>(state, op); }
 static FORCE_INLINE void OpLods_Word(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize)
         Helper_Lods<uint16_t>(state, op);
@@ -534,9 +532,7 @@ void Helper_Scas(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op) {
-    Helper_Scas<uint8_t>(state, op);
-}
+static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op) { Helper_Scas<uint8_t>(state, op); }
 static FORCE_INLINE void OpScas_Word(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize)
         Helper_Scas<uint16_t>(state, op);
@@ -582,9 +578,7 @@ void Helper_Cmps(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op) {
-    Helper_Cmps<uint8_t>(state, op);
-}
+static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op) { Helper_Cmps<uint8_t>(state, op); }
 static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op) {
     if (op->prefixes.flags.opsize)
         Helper_Cmps<uint16_t>(state, op);
@@ -661,18 +655,15 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op) {
     // We might need to fetch manually or check if decoder handles this.
     // Inspect decoder.cpp for 0xC8?
     // Most decoders put 'Iw' in op->imm. The 'Ib' might be missing.
-    // Let's rely on reading from EIP if needed, or check `op->imm2` if it existed (it doesn't).
-    // For now: Assume decoder packs it or we fetch manually.
-    // If decoder sees Iw, it reads 16 bits. Then Ib?
-    // Manual fetch from instruction stream is dangerous in threaded dispatch without precise
-    // sizing. Let's assuming decoder handles it. If not, this is a bug in decoder. checking
-    // decoder_lut.h: C8 -> kImmType = Imm16 (Iw). Ib is ignored? We need to fetch 'level' manually.
-    // EIP is pointing to next instruction.
-    // Instruction length includes both.
-    // op->imm holds the 16-bit alloc size.
-    // where is the 8-bit level?
-    // It's at EIP - 1. (Instruction end - 1).
-    // Let's assume we can read it.
+    // Let's rely on reading from EIP if needed, or check `op->imm2` if it existed
+    // (it doesn't). For now: Assume decoder packs it or we fetch manually. If
+    // decoder sees Iw, it reads 16 bits. Then Ib? Manual fetch from instruction
+    // stream is dangerous in threaded dispatch without precise sizing. Let's
+    // assuming decoder handles it. If not, this is a bug in decoder. checking
+    // decoder_lut.h: C8 -> kImmType = Imm16 (Iw). Ib is ignored? We need to fetch
+    // 'level' manually. EIP is pointing to next instruction. Instruction length
+    // includes both. op->imm holds the 16-bit alloc size. where is the 8-bit
+    // level? It's at EIP - 1. (Instruction end - 1). Let's assume we can read it.
 
     // Safety fallback: Level is usually 0.
     // If we assume level 0 we are strict.
@@ -710,9 +701,8 @@ static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op) {
     uint32_t flags = state->ctx.eflags;
     uint8_t ah = (flags & 0xFF);
     // Flags: SF(7), ZF(6), 0(5), AF(4), 0(3), PF(2), 1(1), CF(0)
-    // EFLAGS low byte matches this format exactly (Reserved bits 1, 3, 5 are fixed).
-    // Bit 1 is 1. Bit 3 is 0. Bit 5 is 0.
-    // So simple copy is correct.
+    // EFLAGS low byte matches this format exactly (Reserved bits 1, 3, 5 are
+    // fixed). Bit 1 is 1. Bit 3 is 0. Bit 5 is 0. So simple copy is correct.
 
     uint32_t eax = GetReg(state, EAX);
     eax = (eax & 0xFFFF00FF) | (ah << 8);
@@ -729,12 +719,13 @@ static FORCE_INLINE void OpSahf(EmuState* state, DecodedOp* op) {
     // Mask: SF, ZF, AF, PF, CF. And reserved bits.
     // SF(7), ZF(6), AF(4), PF(2), CF(0)
     // Reserved: 5, 3, 1.
-    // Intel: "The SF, ZF, AF, PF, and CF flags are set... Reserved bits 1, 3, and 5... are
-    // unaffected" -> Wait. "LOADS SF, ZF, AF, PF, and CF ... from AH" "Bits 1, 3, and 5 of flags
-    // are set to 1, 0, 0" (In EFLAGS? Or does it say that AH has them?) Actually SAHF loads the
-    // fixed values too? "bits 1, 3, and 5 ... are unaffected" (Some sources say unaffected, some
-    // say loaded) Intel SDM: "EFLAGS(SF:ZF:0:AF:0:PF:1:CF) <- AH" ... suggests it writes fixed
-    // values? Usually it replaces the low byte entirely.
+    // Intel: "The SF, ZF, AF, PF, and CF flags are set... Reserved bits 1, 3,
+    // and 5... are unaffected" -> Wait. "LOADS SF, ZF, AF, PF, and CF ... from
+    // AH" "Bits 1, 3, and 5 of flags are set to 1, 0, 0" (In EFLAGS? Or does it
+    // say that AH has them?) Actually SAHF loads the fixed values too? "bits 1,
+    // 3, and 5 ... are unaffected" (Some sources say unaffected, some say loaded)
+    // Intel SDM: "EFLAGS(SF:ZF:0:AF:0:PF:1:CF) <- AH" ... suggests it writes
+    // fixed values? Usually it replaces the low byte entirely.
 
     // uint32_t mask = 0xD5; // Unused
     // Update only these?
@@ -766,8 +757,8 @@ static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpXchg_Reg(EmuState* state, DecodedOp* op) {
     // 90+reg: XCHG EAX, r16/32
-    uint8_t reg = op->handler_index & 7;
-    if (reg == 0) return; // NOP
+    uint8_t reg = op->modrm & 7;
+    if (reg == 0) return;  // NOP
 
     if (op->prefixes.flags.opsize) {
         uint16_t val_eax = (uint16_t)GetReg(state, EAX);

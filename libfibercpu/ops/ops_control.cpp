@@ -13,7 +13,7 @@ namespace x86emu {
 static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
-    if (op->handler_index == 0xEB) {
+    if (op->length == 2) {
         // 8-bit relative jump
         offset = (int32_t)(int8_t)(op->imm & 0xFF);
     } else {
@@ -25,13 +25,11 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
-    uint8_t cond = op->handler_index & 0xF;
+    uint8_t cond = op->extra;
 
     if (CheckCondition(state, cond)) {
-        // For 8-bit relative jumps (0x70-0x7F), need to sign-extend
-        // For 32-bit relative jumps (0x180-0x18F), imm is already 32-bit
         int32_t offset;
-        if (op->handler_index < 0x100) {
+        if (op->length == 2) {
             // 8-bit relative jump (0x7x opcodes)
             offset = (int32_t)(int8_t)(op->imm & 0xFF);
         } else {
@@ -40,12 +38,12 @@ static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op) {
         }
         state->ctx.eip += offset;
     }
-    // If not taken, EIP is already at next insn (fallthrough).
 }
 
 static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op) {
     // E8: CALL rel32
-    // Push Return Address (Current EIP is already advanced to Next Insn by Wrapper/Step)
+    // Push Return Address (Current EIP is already advanced to Next Insn by
+    // Wrapper/Step)
     Push32(state, state->ctx.eip);
     // Jump relative to Next Insn
     state->ctx.eip += (int32_t)op->imm;
@@ -111,7 +109,7 @@ static FORCE_INLINE void OpNop(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpCmov_GvEv(EmuState* state, DecodedOp* op) {
     // 0F 4x: CMOVcc r32, r/m32
-    uint8_t cond = op->handler_index & 0xF;
+    uint8_t cond = op->extra;
     bool pass = CheckCondition(state, cond);
     if (pass) {
         if (op->prefixes.flags.opsize) {
@@ -162,8 +160,9 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op) {
         uint32_t original = state->ctx.eflags;
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
-        // Reserved bits 3, 5, 15, 22..31 should strictly be preserved or zeroed depending on CPU
-        // model. But respecting mask is sufficient for user mode emulation.
+        // Reserved bits 3, 5, 15, 22..31 should strictly be preserved or zeroed
+        // depending on CPU model. But respecting mask is sufficient for user mode
+        // emulation.
         state->ctx.eflags = new_flags;
     }
 }
@@ -295,7 +294,7 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op) {
                 // Release fence
                 std::atomic_thread_fence(std::memory_order_release);
             } else if (mod != 3) {  // CLFLUSH
-                // NOP
+                                    // NOP
             }
             break;
         default:
@@ -333,7 +332,7 @@ void RegisterControlOps() {
     for (int i = 0; i < 16; ++i) {
         g_Handlers[0x140 + i] = DispatchWrapper<OpCmov_GvEv>;
     }
-    g_Handlers[0x11F] = DispatchWrapper<OpNop>;    // Multi-byte NOP (0F 1F)
+    g_Handlers[0x11F] = DispatchWrapper<OpNop>;         // Multi-byte NOP (0F 1F)
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
 }
 

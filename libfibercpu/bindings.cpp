@@ -1,21 +1,20 @@
 #include "bindings.h"
-#include "state.h"
-#include "decoder.h"
-#include "mem/mmu.h"
-#include "hooks.h"
-#include "ops.h"
-#include "dispatch.h"
-#include <cstring>
-#include <cstdio>
-#include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
+#include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include "decoder.h"
+#include "dispatch.h"
+#include "hooks.h"
+#include "mem/mmu.h"
+#include "ops.h"
+#include "state.h"
 
 using namespace x86emu;
 
 extern "C" {
-
 
 // ----------------------------------------------------------------------------
 // Internal Bridge Callbacks
@@ -23,7 +22,7 @@ extern "C" {
 
 static void InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     EmuState* state = static_cast<EmuState*>(opaque);
-    state->fault_vector = 14; // #PF
+    state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
     if (state->fault_handler) {
         state->fault_handler(state, addr, is_write, state->fault_userdata);
@@ -86,11 +85,11 @@ EmuState* X86_Create() {
     EmuState* state = new EmuState();
     // Zero entire context first
     std::memset(&state->ctx, 0, sizeof(state->ctx));
-    
+
     // Set default EFLAGS and Mask
-    state->ctx.eflags = 0x202; // IF=1, Reserved=1
-    state->ctx.eflags_mask = 0x240DD5; 
-    
+    state->ctx.eflags = 0x202;  // IF=1, Reserved=1
+    state->ctx.eflags_mask = 0x240DD5;
+
     // Default FPU State
     state->ctx.fpu_cw = 0x037F;
     state->ctx.fpu_sw = 0x0000;
@@ -100,14 +99,14 @@ EmuState* X86_Create() {
     // Link pointers
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
-    
+
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
-    
+
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
-    
+
     return state;
 }
 
@@ -115,10 +114,10 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     if (!parent) return nullptr;
 
     EmuState* state = new EmuState();
-    
+
     // 1. Copy Context (Registers, Segments, etc.)
     state->ctx = parent->ctx;
-    
+
     // 2. Memory Handling
     if (share_mem) {
         // Shared Memory (CLONE_VM) -> Threads
@@ -135,7 +134,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
-    
+
     // 4. Set Callbacks (Bridge to same handlers, but new 'state' passed)
     // Note: The UserData is pointing to whatever specific object managed the parent.
     // For Clone, we might need new userdata?
@@ -147,25 +146,25 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 
     // Reuse parent's external handlers & userdata
     state->fault_handler = parent->fault_handler;
-    state->fault_userdata = parent->fault_userdata; // This might need care in Go!
+    state->fault_userdata = parent->fault_userdata;  // This might need care in Go!
     state->mem_hook = parent->mem_hook;
     state->mem_userdata = parent->mem_userdata;
 
     // Interrupt handlers
-    for (int i=0; i<256; ++i) {
+    for (int i = 0; i < 256; ++i) {
         state->interrupt_handlers[i] = parent->interrupt_handlers[i];
         state->interrupt_userdata[i] = parent->interrupt_userdata[i];
     }
     // Re-register hooks logic
     // We need to copy the internal C++ std::function hooks too?
-    // 'state->hooks' is copy constructed from parent->hooks via `state->ctx = parent->ctx`? 
+    // 'state->hooks' is copy constructed from parent->hooks via `state->ctx = parent->ctx`?
     // Wait, ctx copies pointers. state->hooks is a separate object.
-    
+
     // Let's copy hooks explicitly
-    state->hooks = parent->hooks; 
-    
+    state->hooks = parent->hooks;
+
     // Explicitly copy segment bases (though ctx assignment should have done it, being safe)
-    for (int i=0; i<6; ++i) {
+    for (int i = 0; i < 6; ++i) {
         state->ctx.seg_base[i] = parent->ctx.seg_base[i];
     }
 
@@ -193,21 +192,13 @@ void X86_RegWrite(EmuState* state, int reg_index, uint32_t val) {
     }
 }
 
-uint32_t X86_GetEIP(EmuState* state) {
-    return state->ctx.eip;
-}
+uint32_t X86_GetEIP(EmuState* state) { return state->ctx.eip; }
 
-void X86_SetEIP(EmuState* state, uint32_t eip) {
-    state->ctx.eip = eip;
-}
+void X86_SetEIP(EmuState* state, uint32_t eip) { state->ctx.eip = eip; }
 
-uint32_t X86_GetEFLAGS(EmuState* state) {
-    return state->ctx.eflags;
-}
+uint32_t X86_GetEFLAGS(EmuState* state) { return state->ctx.eflags; }
 
-void X86_SetEFLAGS(EmuState* state, uint32_t val) {
-    state->ctx.eflags = val;
-}
+void X86_SetEFLAGS(EmuState* state, uint32_t val) { state->ctx.eflags = val; }
 
 // ----------------------------------------------------------------------------
 // XMM Access
@@ -278,9 +269,7 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 // Memory Access
 // ----------------------------------------------------------------------------
 
-void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
-    state->mmu.mmap(addr, size, perms);
-}
+void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { state->mmu.mmap(addr, size, perms); }
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
@@ -309,13 +298,13 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Reset chaining state for this run
     state->last_block = nullptr;
-    
+
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
-        
+
         if (end_eip != 0 && eip == end_eip) {
             state->status = EmuStatus::Stopped;
             break;
@@ -324,7 +313,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->status = EmuStatus::Stopped;
             break;
         }
-        
+
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
             auto block = std::make_unique<BasicBlock>();
@@ -335,11 +324,14 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             auto res = state->block_cache.insert({eip, std::move(block)});
             it = res.first;
         }
-        
+
         BasicBlock* block_ptr = it->second.get();
-        
+
         // Link previous block to this one for chaining
         if (state->last_block) {
+            // Recalculate offset for the last block's exit to point to this new block
+            // This logic is tricky because we modify 'next_block' pointer, not handler_offset.
+            // OpExitBlock uses op->next_block.
             state->last_block->ops.back().next_block = block_ptr;
         }
         state->last_block = block_ptr;
@@ -347,8 +339,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         if (!block_ptr->ops.empty()) {
             DecodedOp* head = &block_ptr->ops[0];
             HandlerFunc h = nullptr;
-            if (head->handler_index < 1024) h = g_Handlers[head->handler_index];
-            
+            int32_t offset = head->handler_offset;
+            if (offset != 0) {
+                h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
+            }
+
             if (h) {
                 int64_t batch_limit = 1000;
                 if (max_insts != 0) {
@@ -357,13 +352,13 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                         batch_limit = (int64_t)remaining_budget;
                     }
                 }
-                
+
                 int64_t initial_batch_limit = batch_limit;
                 // Subtract the FIRST block's size from the limit
                 batch_limit -= block_ptr->inst_count;
 
                 // h will return the remaining budget
-                int64_t remaining = h(state, head, batch_limit); 
+                int64_t remaining = h(state, head, batch_limit);
                 total_run_insts += (initial_batch_limit - remaining);
             } else {
                 OpUd2(state, head);
@@ -395,54 +390,57 @@ int X86_Step(EmuState* state) {
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 
     uint8_t buf[16];
-    for (int i=0; i<16; ++i) {
+    for (int i = 0; i < 16; ++i) {
         buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i);
         if (state->status != EmuStatus::Running) {
             f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
             return (int)state->status;
         }
     }
-    
+
     DecodedOp ops[2];
     std::memset(ops, 0, sizeof(ops));
-    
+
     if (!DecodeInstruction(buf, &ops[0])) {
         ops[0].length = 1;
-        ops[0].handler_index = 0x10B; // UD2
+        // 0x10B = UD2
+        HandlerFunc ud2 = g_Handlers[0x10B];
+        ops[0].handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
     }
-    
-    // Sentinel
-    ops[1].handler_index = 1023;
 
+    // Sentinel
+    HandlerFunc exit_h = g_Handlers[1023];  // OpExitBlock
+    ops[1].handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+
+    // Run first op
     HandlerFunc h = nullptr;
-    if (ops[0].handler_index < 1024) {
-        h = g_Handlers[ops[0].handler_index];
+    int32_t offset = ops[0].handler_offset;
+    if (offset != 0) {
+        h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
     }
 
     if (h) {
-         uint32_t old_eip = state->ctx.eip;
-         h(state, &ops[0], 0); // Limit 0 ensures it returns after 1 inst + sentinel
-         
-         // Advance EIP if handler didn't change it AND no fault occurred.
-         if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
-             state->ctx.eip += ops[0].length;
-         }
+        uint32_t old_eip = state->ctx.eip;
+        h(state, &ops[0], 0);  // Limit 0 ensures it returns after 1 inst + sentinel
+
+        // Advance EIP if handler didn't change it AND no fault occurred.
+        if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
+            state->ctx.eip += ops[0].length;
+        }
     } else {
-         if (!state->hooks.on_invalid_opcode(state)) {
-             state->status = EmuStatus::Fault;
-             state->fault_vector = 6;
-         }
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+        }
     }
-    
+
     // Sync FPU state back
     f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
-    
+
     return (int)state->status;
 }
 
-int X86_GetStatus(EmuState* state) {
-    return (int)state->status;
-}
+int X86_GetStatus(EmuState* state) { return (int)state->status; }
 
 // ----------------------------------------------------------------------------
 // Callbacks
@@ -461,7 +459,7 @@ void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
 void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata) {
     state->interrupt_handlers[vector] = hook;
     state->interrupt_userdata[vector] = userdata;
-    
+
     state->hooks.set_interrupt_hook(vector, [vector](EmuState* s, uint8_t v) {
         if (s->interrupt_handlers[vector]) {
             bool handled = s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
@@ -492,10 +490,10 @@ void X86_FlushCache(EmuState* state) {
 
 void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state || size == 0) return;
-    
+
     uint32_t start_page = addr >> 12;
     uint32_t end_page = (addr + size - 1) >> 12;
-    
+
     for (uint32_t p = start_page; p <= end_page; ++p) {
         auto it = state->page_to_blocks.find(p);
         if (it != state->page_to_blocks.end()) {
@@ -507,4 +505,4 @@ void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
     }
 }
 
-} // extern "C"
+}  // extern "C"
