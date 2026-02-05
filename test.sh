@@ -84,7 +84,7 @@ run_test "SMC Logic" "tests/linux/assets/test_smc_linux" ""
 
 echo ""
 echo "=== Running C# Tests ==="
-dotnet test linux-tests/Bifrost.Tests.csproj || exit 1
+dotnet test Fiberish.Tests/Fiberish.Tests.csproj || exit 1
 
 echo ""
 echo ">>> ALL BIFROST TESTS PASSED! <<<"
