@@ -72,6 +72,9 @@ struct DecodedOp {
     // ModR/M
     uint8_t modrm;
 
+    // Opcode for profiling
+    uint16_t opcode;
+
     // Handler Information
     // We use a bitfield to pack:
     // - handler_offset (24 bits signed): +/- 8MB range for handler functions

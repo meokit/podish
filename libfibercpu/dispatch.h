@@ -20,6 +20,9 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* state, DecodedOp* op, int64
     // Execute Logic
     Target(state, op);
 
+    // Update last_opcode for profiling
+    state->ctx.last_opcode = op->opcode;
+
     // Stop Chain if Fault/Stopped/Yield
     if (state->status != EmuStatus::Running) {
         // Restore EIP if Fault (Precise Exception)

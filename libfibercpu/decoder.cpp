@@ -290,6 +290,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
         }
     }
 
+    op->opcode = handler_index;
     HandlerFunc h = g_Handlers[handler_index];
     if (h) {
         op->handler_offset = (int32_t)((intptr_t)h - (intptr_t)g_HandlerBase);

@@ -10,6 +10,8 @@
 
 namespace x86emu {
 
+uint64_t g_JccPredecessorStats[1024] = {0};
+
 static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
@@ -24,6 +26,9 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op) {
+    // Profiling
+    g_JccPredecessorStats[state->ctx.last_opcode & 1023]++;
+
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     uint8_t cond = op->extra;
 

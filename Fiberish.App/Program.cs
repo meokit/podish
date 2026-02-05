@@ -175,6 +175,7 @@ class Program
         // 10. Run
         await mainTask.RunLoopAsync();
 
+        X86Native.DumpJccStats();
         return mainTask.ExitCode;
     }
 
