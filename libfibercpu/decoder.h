@@ -64,6 +64,7 @@ struct DecodedOp {
             uint8_t has_disp : 1;
             uint8_t has_imm : 1;
             uint8_t is_control_flow : 1;
+            uint8_t is_fused : 1;
             uint8_t ea_shift : 2;
         } flags;
     } meta;

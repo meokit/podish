@@ -22,6 +22,21 @@ static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op) {
     }
 }
 
+static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op) {
+    // Specialized: MOV r32, r32
+    uint8_t src = (op->modrm >> 3) & 7;
+    uint8_t dst = op->modrm & 7;
+    SetReg(state, dst, GetReg(state, src));
+}
+
+static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op) {
+    // Specialized: MOV [mem], r32
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t val = GetReg(state, reg);
+    uint32_t addr = ComputeLinearAddress(state, op);
+    state->mmu.write<uint32_t>(addr, val);
+}
+
 static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op) {
     // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -32,6 +47,20 @@ static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op) {
         uint32_t val = ReadModRM32(state, op);
         SetReg(state, reg, val);
     }
+}
+
+static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op) {
+    // Specialized: MOV r32, r32
+    uint8_t dst = (op->modrm >> 3) & 7;
+    uint8_t src = op->modrm & 7;
+    SetReg(state, dst, GetReg(state, src));
+}
+
+static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op) {
+    // Specialized: MOV r32, [mem]
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint32_t addr = ComputeLinearAddress(state, op);
+    SetReg(state, reg, state->mmu.read<uint32_t>(addr));
 }
 
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op) {
@@ -777,6 +806,13 @@ void RegisterDataMovOps() {
     g_Handlers[0x87] = DispatchWrapper<OpXchg_EvGv>;  // XCHG r/m32, r32
     g_Handlers[0x89] = DispatchWrapper<OpMov_EvGv>;
     g_Handlers[0x8B] = DispatchWrapper<OpMov_GvEv>;
+
+    // Specialized 32-bit MOV
+    g_Handlers[OP_MOV_RR_STORE] = DispatchWrapper<OpMov_EvGv_Reg>;
+    g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem>;
+    g_Handlers[OP_MOV_RR_LOAD]  = DispatchWrapper<OpMov_GvEv_Reg>;
+    g_Handlers[OP_MOV_MR_LOAD]  = DispatchWrapper<OpMov_GvEv_Mem>;
+
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8
     g_Handlers[0x8A] = DispatchWrapper<OpMov_GbEb>;  // MOV r8, r/m8
     g_Handlers[0xC6] = DispatchWrapper<OpMov_EbIb>;  // MOV r/m8, imm8

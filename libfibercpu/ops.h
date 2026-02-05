@@ -30,6 +30,19 @@ extern HandlerFunc g_Handlers[1024];
 extern HandlerFunc g_Handlers_NF[1024];
 extern HandlerFunc g_ExitHandlers[16];
 
+// Specialized and Fused Opcode Indices
+enum SpecializedOp : uint16_t {
+    OP_MOV_RR_STORE = 0x200,  // MOV r32, r32 (from 0x89)
+    OP_MOV_RM_STORE = 0x201,  // MOV [mem], r32 (from 0x89)
+    OP_MOV_RR_LOAD  = 0x202,  // MOV r32, r32 (from 0x8B)
+    OP_MOV_MR_LOAD  = 0x203,  // MOV r32, [mem] (from 0x8B)
+
+    OP_FUSED_CMP_RR_JCC = 0x210, // CMP r32, r32 + Jcc
+    OP_FUSED_CMP_RI_JCC = 0x211, // CMP r32, imm + Jcc
+    OP_FUSED_CMP_MR_JCC = 0x212, // CMP [mem], r32 + Jcc
+    OP_FUSED_CMP_RM_JCC = 0x213, // CMP r32, [mem] + Jcc
+};
+
 // Initialization
 void RegisterAluOps();
 void RegisterCompareOps();

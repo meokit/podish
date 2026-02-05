@@ -302,6 +302,75 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op) {
     }
 }
 
+// ------------------------------------------------------------------------------------------------
+// Fused Operations
+// ------------------------------------------------------------------------------------------------
+
+template <SpecializedOp Type>
+ATTR_PRESERVE_NONE int64_t OpFused_CmpJcc(EmuState* state, DecodedOp* op, int64_t instr_limit) {
+    // We must advance EIP manually as we don't use DispatchWrapper for fused ops
+    state->ctx.eip += op->length;
+
+    // 1. Perform CMP
+    if constexpr (Type == OP_FUSED_CMP_RR_JCC) {
+        uint8_t dst_reg = op->modrm & 7;
+        uint8_t src_reg = (op->modrm >> 3) & 7;
+        AluSub<uint32_t, true>(state, GetReg(state, dst_reg), GetReg(state, src_reg));
+    } else if constexpr (Type == OP_FUSED_CMP_RI_JCC) {
+        // Safety: Currently RI fusion ONLY supports mod=3 (register destination)
+        // because we use 'disp' for Jcc target.
+        uint8_t mod = (op->modrm >> 6) & 3;
+        if (mod == 3) {
+            uint8_t dst_reg = op->modrm & 7;
+            AluSub<uint32_t, true>(state, GetReg(state, dst_reg), op->imm);
+        } else {
+            // Fallback (Should not happen if decoder is correct)
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+            return 0;
+        }
+    } else if constexpr (Type == OP_FUSED_CMP_RM_JCC) {
+        // CMP Gv, Ev (0x8B variant) -> CMP reg, [mem]
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint32_t v1 = GetReg(state, reg);
+        uint32_t v2 = ReadModRM32(state, op);
+        AluSub<uint32_t, true>(state, v1, v2);
+    } else if constexpr (Type == OP_FUSED_CMP_MR_JCC) {
+        // CMP Ev, Gv (0x89 variant) -> CMP [mem], reg
+        uint8_t reg = (op->modrm >> 3) & 7;
+        uint32_t v1 = ReadModRM32(state, op);
+        uint32_t v2 = GetReg(state, reg);
+        AluSub<uint32_t, true>(state, v1, v2);
+    }
+
+    // 2. Perform Jcc (Condition in extra)
+    uint8_t cond = op->extra;
+    if (CheckCondition(state, cond)) {
+        // Jump: target relative offset is in 'disp' or 'imm'
+        int32_t target_offset;
+        if constexpr (Type == OP_FUSED_CMP_RM_JCC || Type == OP_FUSED_CMP_MR_JCC) {
+            target_offset = (int32_t)op->imm;
+        } else if constexpr (Type == OP_FUSED_CMP_RR_JCC) {
+            target_offset = (int32_t)op->imm;
+        } else {
+            target_offset = (int32_t)op->disp;
+        }
+        state->ctx.eip += target_offset;
+        
+        // IMPORTANT: When jumping, we MUST return 0 to break the current 
+        // threaded dispatch chain and return to X86_Run for a new block lookup.
+        return 0;
+    } else {
+        // No jump: EIP already advanced. Threaded Dispatch to NEXT instruction
+        DecodedOp* next = op + 1;
+        if (instr_limit > 0) {
+            HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + next->handler_offset);
+            ATTR_MUSTTAIL return h(state, next, instr_limit - 1);
+        }
+    }
+    return instr_limit;
+}
+
 void RegisterControlOps() {
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
     g_Handlers[0x9B] = DispatchWrapper<OpWait>;
@@ -334,6 +403,12 @@ void RegisterControlOps() {
     }
     g_Handlers[0x11F] = DispatchWrapper<OpNop>;         // Multi-byte NOP (0F 1F)
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
+
+    // Fused Handlers
+    g_Handlers[OP_FUSED_CMP_RR_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RR_JCC>;
+    g_Handlers[OP_FUSED_CMP_RI_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RI_JCC>;
+    g_Handlers[OP_FUSED_CMP_MR_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_MR_JCC>;
+    g_Handlers[OP_FUSED_CMP_RM_JCC] = OpFused_CmpJcc<OP_FUSED_CMP_RM_JCC>;
 }
 
 }  // namespace x86emu
