@@ -352,7 +352,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             DecodedOp sentinel;
             std::memset(&sentinel, 0, sizeof(sentinel));
 
-            HandlerFunc exit_h = g_Handlers[1023];  // OpExitBlock
+            HandlerFunc exit_h = g_ExitHandlers[0];
             sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
 
             block->ops.push_back(sentinel);
@@ -404,11 +404,16 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         }
     }
 
-    // Append Sentinel Op (1023) to terminate Threaded Dispatch
+    // Append Sentinel Op to terminate Threaded Dispatch
     DecodedOp sentinel;
     std::memset(&sentinel, 0, sizeof(sentinel));
 
-    HandlerFunc exit_h = g_Handlers[1023];  // OpExitBlock
+    // Select exit handler based on last opcode to reduce BTB pressure
+    uint8_t last_opcode = 0;
+    if (!op_indices.empty()) {
+        last_opcode = op_indices.back() & 0xFF;
+    }
+    HandlerFunc exit_h = g_ExitHandlers[last_opcode % 16];
     sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
 
     block->ops.push_back(sentinel);

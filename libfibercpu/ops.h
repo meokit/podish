@@ -27,13 +27,10 @@ extern void* g_HandlerBase;
 
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
-
-// Global No-Flags Handler Table (Shadow table for optimization)
-// If g_Handlers_NF[i] is set, it performs the same operation as g_Handlers[i]
-// but DOES NOT update CPU flags (EFLAGS).
 extern HandlerFunc g_Handlers_NF[1024];
+extern HandlerFunc g_ExitHandlers[16];
 
-// Registration Helpers
+// Initialization
 void RegisterAluOps();
 void RegisterCompareOps();
 void RegisterControlOps();

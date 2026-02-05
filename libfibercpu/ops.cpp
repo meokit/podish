@@ -4,6 +4,7 @@
 namespace x86emu {
 
 // Sentinel Handler
+template<int I>
 ATTR_PRESERVE_NONE
 int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
     // End of Threaded Dispatch Chain.
@@ -30,6 +31,15 @@ int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
     // Returns to X86_Run loop.
     return instr_limit;
 }
+
+// Instantiate 16 variants to reduce BTB pressure
+#define INSTANTIATE_EXIT(i) OpExitBlock<i>
+HandlerFunc g_ExitHandlers[16] = {
+    INSTANTIATE_EXIT(0),  INSTANTIATE_EXIT(1),  INSTANTIATE_EXIT(2),  INSTANTIATE_EXIT(3),
+    INSTANTIATE_EXIT(4),  INSTANTIATE_EXIT(5),  INSTANTIATE_EXIT(6),  INSTANTIATE_EXIT(7),
+    INSTANTIATE_EXIT(8),  INSTANTIATE_EXIT(9),  INSTANTIATE_EXIT(10), INSTANTIATE_EXIT(11),
+    INSTANTIATE_EXIT(12), INSTANTIATE_EXIT(13), INSTANTIATE_EXIT(14), INSTANTIATE_EXIT(15)
+};
 
 // Global dispatch table
 // This is initialized by HandlerInit static constructor below
@@ -63,10 +73,6 @@ struct HandlerInit {
         RegisterSseFpOps();
         RegisterSseIntOps();
         RegisterSseMovOps();
-
-        // 3. Set Sentinel (1023)
-        // Must match DecodeBlock sentinel index
-        g_Handlers[1023] = OpExitBlock;
     }
 };
 

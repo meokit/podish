@@ -416,7 +416,7 @@ int X86_Step(EmuState* state) {
     }
 
     // Sentinel
-    HandlerFunc exit_h = g_Handlers[1023];  // OpExitBlock
+    HandlerFunc exit_h = g_ExitHandlers[0];
     ops[1].handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
 
     // Run first op

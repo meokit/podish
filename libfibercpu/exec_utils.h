@@ -33,49 +33,31 @@ constexpr uint32_t OF_MASK = 0x0800;
 // ------------------------------------------------------------------------------------------------
 
 inline bool CheckCondition(EmuState* state, uint8_t cond) {
-    uint32_t flags = state->ctx.eflags;
-    bool cf = (flags & CF_MASK);
-    bool zf = (flags & ZF_MASK);
-    bool sf = (flags & SF_MASK);
-    bool of = (flags & OF_MASK);
-    bool pf = (flags & PF_MASK);
+    static const uint32_t g_ConditionLUT[16] = {
+        0xFFFF0000, // cond 0: JO
+        0x0000FFFF, // cond 1: JNO
+        0xAAAAAAAA, // cond 2: JB
+        0x55555555, // cond 3: JAE
+        0xF0F0F0F0, // cond 4: JZ
+        0x0F0F0F0F, // cond 5: JNZ
+        0xFAFAFAFA, // cond 6: JBE
+        0x05050505, // cond 7: JA
+        0xFF00FF00, // cond 8: JS
+        0x00FF00FF, // cond 9: JNS
+        0xCCCCCCCC, // cond 10: JP
+        0x33333333, // cond 11: JNP
+        0x00FFFF00, // cond 12: JL
+        0xFF0000FF, // cond 13: JGE
+        0xF0FFFFF0, // cond 14: JLE
+        0x0F00000F, // cond 15: JG
+    };
 
-    switch (cond) {
-        case 0:
-            return of;  // JO
-        case 1:
-            return !of;  // JNO
-        case 2:
-            return cf;  // JB/JNAE
-        case 3:
-            return !cf;  // JNB/JAE
-        case 4:
-            return zf;  // JE/JZ
-        case 5:
-            return !zf;  // JNE/JNZ
-        case 6:
-            return cf || zf;  // JBE/JNA
-        case 7:
-            return !cf && !zf;  // JNBE/JA
-        case 8:
-            return sf;  // JS
-        case 9:
-            return !sf;  // JNS
-        case 10:
-            return pf;  // JP/JPE
-        case 11:
-            return !pf;  // JNP/JPO
-        case 12:
-            return sf != of;  // JL/JNGE
-        case 13:
-            return sf == of;  // JNL/JGE
-        case 14:
-            return zf || (sf != of);  // JLE/JNG
-        case 15:
-            return !zf && (sf == of);  // JNLE/JG
-        default:
-            return false;
-    }
+    uint32_t f = state->ctx.eflags;
+    // Index bits: OF(bit 11) SF(bit 7) ZF(bit 6) PF(bit 2) CF(bit 0)
+    // We map them to: OF:4, SF:3, ZF:2, PF:1, CF:0
+    uint32_t index = (f & 0x1) | ((f >> 1) & 0x2) | ((f >> 4) & 0x4) | ((f >> 4) & 0x8) | ((f >> 7) & 0x10);
+
+    return (g_ConditionLUT[cond & 0xF] >> index) & 1;
 }
 
 // ------------------------------------------------------------------------------------------------
