@@ -320,3 +320,144 @@ def test_run_sqrt():
 
 def test_run_fyl2x():
     run_fpu_test(case_fpu_fyl2x)
+
+@pytest.mark.fpu
+def case_sse_ucomisd_je():
+    """
+    ; Check Equal (ZF=1)
+    ucomisd xmm0, xmm1
+    je .is_equal
+    mov eax, 0xBAD
+    hlt
+.is_equal:
+    mov eax, 0x1234
+    hlt
+    """
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<d', 1.5),
+            'XMM1': struct.pack('<d', 1.5)
+        },
+        'expected_regs': {
+            'EAX': 0x1234
+        }
+    }
+
+@pytest.mark.fpu
+def case_sse_ucomisd_jne():
+    """
+    ; Check Not Equal (ZF=0)
+    ucomisd xmm0, xmm1
+    jne .not_equal
+    mov eax, 0xBAD
+    hlt
+.not_equal:
+    mov eax, 0x5678
+    hlt
+    """
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<d', 1.5),
+            'XMM1': struct.pack('<d', 2.5)
+        },
+        'expected_regs': {
+            'EAX': 0x5678
+        }
+    }
+
+@pytest.mark.fpu
+def case_sse_ucomisd_ja():
+    """
+    ; Check Above (CF=0, ZF=0)
+    ucomisd xmm0, xmm1
+    ja .is_above
+    mov eax, 0xBAD
+    hlt
+.is_above:
+    mov eax, 0xAAAA
+    hlt
+    """
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<d', 2.5),
+            'XMM1': struct.pack('<d', 1.5)
+        },
+        'expected_regs': {
+            'EAX': 0xAAAA
+        }
+    }
+
+@pytest.mark.fpu
+def case_sse_ucomisd_jb():
+    """
+    ; Check Below (CF=1)
+    ucomisd xmm0, xmm1
+    jb .is_below
+    mov eax, 0xBAD
+    hlt
+.is_below:
+    mov eax, 0xBBBB
+    hlt
+    """
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<d', 1.5),
+            'XMM1': struct.pack('<d', 2.5)
+        },
+        'expected_regs': {
+            'EAX': 0xBBBB
+        }
+    }
+
+@pytest.mark.fpu
+def case_sse_ucomisd_jp_nan():
+    """
+    ; Check Parity (Unordered, PF=1)
+    ucomisd xmm0, xmm1
+    jp .is_unordered
+    mov eax, 0xBAD
+    hlt
+.is_unordered:
+    mov eax, 0xDEADBEEF
+    hlt
+    """
+    import math
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<d', math.nan),
+            'XMM1': struct.pack('<d', 1.0)
+        },
+        'expected_regs': {
+            'EAX': 0xDEADBEEF
+        }
+    }
+
+@pytest.mark.fpu
+def case_sse_ucomiss_ja():
+    """
+    ; Check Above Single Precision
+    ucomiss xmm0, xmm1
+    ja .is_above
+    mov eax, 0xBAD
+    hlt
+.is_above:
+    mov eax, 0xCCAA
+    hlt
+    """
+    return {
+        'initial_regs': {
+            'XMM0': struct.pack('<f', 3.14159), # float
+            'XMM1': struct.pack('<f', 2.71828)  # float
+        },
+        'expected_regs': {
+            'EAX': 0xCCAA
+        }
+    }
+
+def test_run_sse_flags():
+    run_fpu_test(case_sse_ucomisd_je)
+    run_fpu_test(case_sse_ucomisd_jne)
+    run_fpu_test(case_sse_ucomisd_ja)
+    run_fpu_test(case_sse_ucomisd_jb)
+    run_fpu_test(case_sse_ucomisd_jp_nan)
+    run_fpu_test(case_sse_ucomiss_ja)

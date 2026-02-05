@@ -2091,7 +2091,7 @@ public unsafe partial class SyscallManager
 
         var dto = DateTimeOffset.UtcNow;
         long secs = dto.ToUnixTimeSeconds();
-        int usecs = dto.Millisecond * 1000;
+        int usecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond / TimeSpan.TicksPerMicrosecond);
 
         if (tvPtr != 0)
         {
@@ -2125,7 +2125,7 @@ public unsafe partial class SyscallManager
 
         var dto = new DateTimeOffset(now);
         long secs = dto.ToUnixTimeSeconds();
-        int nsecs = (int)(dto.Millisecond * 1000000);
+        int nsecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond % 1000 * 1000000);
 
         byte[] buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
@@ -2155,7 +2155,7 @@ public unsafe partial class SyscallManager
 
         var dto = new DateTimeOffset(now);
         long secs = dto.ToUnixTimeSeconds();
-        int nsecs = (int)(dto.Millisecond * 1000000);
+        int nsecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond % 1000 * 1000000);
 
         byte[] buf = new byte[12];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);

@@ -25,3 +25,4 @@ obj/
 *.log
 *.trace/
 benchmark/coremark/
+.cache/
