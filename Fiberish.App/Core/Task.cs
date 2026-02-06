@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using Bifrost.Memory;
 using Bifrost.Syscalls;
 using Bifrost.Native;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Bifrost.Diagnostics;
 
@@ -80,7 +82,7 @@ public class Process
     }
 }
 
-    public class Task
+public partial class Task
     {
     private static readonly ILogger Logger = Logging.CreateLogger<Task>();
 
@@ -370,6 +372,12 @@ public class Process
 
             WaitEvent.Set();
             Scheduler.Remove(this);
+
+            if (Program.ShowStats)
+            {
+                PrintStats();
+            }
+
             CPU.Dispose();
         }
     }
@@ -612,6 +620,70 @@ public class Process
             CPU.MemWrite(addr, buf);
         }
         catch { }
+    }
+
+    private void PrintStats()
+    {
+        string? json = CPU.DumpStats();
+        if (string.IsNullOrEmpty(json)) return;
+
+        try
+        {
+            var stats = JsonSerializer.Deserialize(json, TlbStatsContext.Default.TlbStatsJson);
+            if (stats == null) return;
+
+            Console.WriteLine($"\n--- [Task {TID}] TLB Statistics ---");
+            Console.WriteLine($"  Total Reads:  {stats.TotalReads:N0}");
+            Console.WriteLine($"  Total Writes: {stats.TotalWrites:N0}");
+            Console.WriteLine("");
+            
+            double l1ReadHitRate = stats.TotalReads > 0 ? (double)stats.L1ReadHits / stats.TotalReads * 100 : 0;
+            double l2ReadHitRate = stats.TotalReads > 0 ? (double)stats.L2ReadHits / stats.TotalReads * 100 : 0;
+            double readMissRate = stats.TotalReads > 0 ? (double)stats.ReadMisses / stats.TotalReads * 100 : 0;
+
+            Console.WriteLine($"  Read L1 Hit:  {stats.L1ReadHits,12:N0} ({l1ReadHitRate,6:F2}%)");
+            Console.WriteLine($"  Read L2 Hit:  {stats.L2ReadHits,12:N0} ({l2ReadHitRate,6:F2}%)");
+            Console.WriteLine($"  Read Miss:    {stats.ReadMisses,12:N0} ({readMissRate,6:F2}%)");
+            Console.WriteLine("");
+
+            double l1WriteHitRate = stats.TotalWrites > 0 ? (double)stats.L1WriteHits / stats.TotalWrites * 100 : 0;
+            double l2WriteHitRate = stats.TotalWrites > 0 ? (double)stats.L2WriteHits / stats.TotalWrites * 100 : 0;
+            double writeMissRate = stats.TotalWrites > 0 ? (double)stats.WriteMisses / stats.TotalWrites * 100 : 0;
+
+            Console.WriteLine($"  Write L1 Hit: {stats.L1WriteHits,12:N0} ({l1WriteHitRate,6:F2}%)");
+            Console.WriteLine($"  Write L2 Hit: {stats.L2WriteHits,12:N0} ({l2WriteHitRate,6:F2}%)");
+            Console.WriteLine($"  Write Miss:   {stats.WriteMisses,12:N0} ({writeMissRate,6:F2}%)");
+            Console.WriteLine("---------------------------------\n");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to parse or print TLB stats");
+        }
+    }
+
+    [JsonSerializable(typeof(TlbStatsJson))]
+    internal partial class TlbStatsContext : JsonSerializerContext
+    {
+    }
+
+    internal class TlbStatsJson
+    {
+        [JsonPropertyName("l1_read_hits")]
+        public ulong L1ReadHits { get; set; }
+        [JsonPropertyName("l1_write_hits")]
+        public ulong L1WriteHits { get; set; }
+        [JsonPropertyName("l2_read_hits")]
+        public ulong L2ReadHits { get; set; }
+        [JsonPropertyName("l2_write_hits")]
+        public ulong L2WriteHits { get; set; }
+        [JsonPropertyName("read_misses")]
+        public ulong ReadMisses { get; set; }
+        [JsonPropertyName("write_misses")]
+        public ulong WriteMisses { get; set; }
+        [JsonPropertyName("total_reads")]
+        public ulong TotalReads { get; set; }
+        [JsonPropertyName("total_writes")]
+        public ulong TotalWrites { get; set; }
     }
 
     public void RestoreSigContext(uint addr)

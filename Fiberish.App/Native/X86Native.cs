@@ -149,4 +149,7 @@ public unsafe partial class X86Native
 
     [LibraryImport(LibName, EntryPoint = "X86_InvalidateRange")]
     public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DumpStats")]
+    public static partial int DumpStats(IntPtr state, byte* buffer, nuint bufferSize);
 }

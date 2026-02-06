@@ -173,10 +173,13 @@ private:
     }
 
 public:
-    Mmu() { page_dir = std::make_shared<PageDirectory>(); }
+    Mmu() { 
+        page_dir = std::make_shared<PageDirectory>(); 
+    }
 
     // Explicitly share memory with another MMU
-    explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {}
+    explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {
+    }
 
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {
@@ -281,10 +284,18 @@ public:
         const auto entry = tlb.read_tlb[idx];
 
         if (entry.tag == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l2_read_hits++;
+            stats.total_reads++;
+#endif
             auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
             return ptr;
         }
 
+#ifdef ENABLE_TLB_STATS
+        stats.read_misses++;
+        stats.total_reads++;
+#endif
         // Fallback: TLB Miss OR Cross-page access
         return read_slow<T>(addr);
     }
@@ -301,10 +312,18 @@ public:
         const auto entry = tlb.write_tlb[idx];
 
         if (entry.tag == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l2_write_hits++;
+            stats.total_writes++;
+#endif
             *reinterpret_cast<T*>(entry.addend + addr) = val;
             return;
         }
 
+#ifdef ENABLE_TLB_STATS
+        stats.write_misses++;
+        stats.total_writes++;
+#endif
         // Fallback: TLB Miss OR Cross-page access OR Read-only page
         write_slow<T>(addr, val);
     }
@@ -319,6 +338,10 @@ public:
 
         // L1 TLB
         if (utlb->tag_r == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l1_read_hits++;
+            stats.total_reads++;
+#endif
             return *reinterpret_cast<T*>(utlb->addend + addr);
         }
 
@@ -326,6 +349,10 @@ public:
         const auto entry = tlb.read_tlb[idx];
 
         if (entry.tag == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l2_read_hits++;
+            stats.total_reads++;
+#endif
             auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
             utlb->tag_r = target_tag;
             utlb->addend = entry.addend;
@@ -336,6 +363,10 @@ public:
         // Invalidate L1 TLB
         utlb->invalidate();
 
+#ifdef ENABLE_TLB_STATS
+        stats.read_misses++;
+        stats.total_reads++;
+#endif
         // Fallback: TLB Miss OR Cross-page access
         return read_slow<T>(addr);
     }
@@ -349,6 +380,10 @@ public:
 
         // L1 TLB
         if (utlb->tag_w == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l1_write_hits++;
+            stats.total_writes++;
+#endif
             *reinterpret_cast<T*>(utlb->addend + addr) = val;
             return;
         }
@@ -357,6 +392,10 @@ public:
         const auto entry = tlb.write_tlb[idx];
 
         if (entry.tag == target_tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l2_write_hits++;
+            stats.total_writes++;
+#endif
             *reinterpret_cast<T*>(entry.addend + addr) = val;
             utlb->tag_w = target_tag;
             utlb->addend = entry.addend;
@@ -366,6 +405,10 @@ public:
 
         // Invalidate L1 TLB
         utlb->tag_w = std::numeric_limits<decltype(utlb->tag_w)>::max();
+#ifdef ENABLE_TLB_STATS
+        stats.write_misses++;
+        stats.total_writes++;
+#endif
         // Fallback: TLB Miss OR Cross-page access OR Read-only page
         write_slow<T>(addr, val);
     }
@@ -553,5 +596,23 @@ public:
         // No hooks for exec
         return *reinterpret_cast<T*>(ptr);
     }
+#ifdef ENABLE_TLB_STATS
+public:
+    struct TlbStats {
+        uint64_t l1_read_hits = 0;
+        uint64_t l1_write_hits = 0;
+        uint64_t l2_read_hits = 0;
+        uint64_t l2_write_hits = 0;
+        uint64_t read_misses = 0;
+        uint64_t write_misses = 0;
+        uint64_t total_reads = 0;
+        uint64_t total_writes = 0;
+
+        void reset() {
+            l1_read_hits = l1_write_hits = l2_read_hits = l2_write_hits = 0;
+            read_misses = write_misses = total_reads = total_writes = 0;
+        }
+    } stats;
+#endif
 };
 }  // namespace x86emu::mem

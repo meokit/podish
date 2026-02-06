@@ -12,6 +12,7 @@ namespace Bifrost;
 class Program
 {
     private static ILogger Logger = null!;
+    public static bool ShowStats { get; private set; } = false;
 
     static async Task<int> Main(string[] args)
     {
@@ -30,6 +31,11 @@ class Program
             {
                 rootfs = args[argIdx + 1];
                 argIdx += 2;
+            }
+            else if (args[argIdx] == "--stats")
+            {
+                ShowStats = true;
+                argIdx++;
             }
             else
             {

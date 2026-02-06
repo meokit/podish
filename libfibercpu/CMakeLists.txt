@@ -32,6 +32,7 @@ CPMAddPackage(
 )
 
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
+option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
 
 # Compiler warnings and options
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -64,6 +65,10 @@ target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
 # If SoftFloat is used, link it
 if(USE_SOFTFLOAT)
     target_link_libraries(fibercpu PRIVATE softfloat)
+endif()
+
+if(ENABLE_TLB_STATS)
+    target_compile_definitions(fibercpu PRIVATE ENABLE_TLB_STATS)
 endif()
 
 include(CheckIPOSupported)

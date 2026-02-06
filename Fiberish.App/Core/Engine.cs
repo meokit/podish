@@ -127,6 +127,17 @@ public class Engine : IDisposable
     public void InvalidateRange(uint addr, uint size) => X86Native.InvalidateRange(State, addr, size);
     public void FlushCache() => X86Native.FlushCache(State);
 
+    public unsafe string? DumpStats()
+    {
+        byte[] buf = new byte[1024];
+        fixed (byte* p = buf)
+        {
+            int n = X86Native.DumpStats(State, p, 1024);
+            if (n < 0) return null;
+            return System.Text.Encoding.UTF8.GetString(buf, 0, n);
+        }
+    }
+
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)

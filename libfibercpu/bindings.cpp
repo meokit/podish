@@ -558,4 +558,50 @@ void X86_SetTscOffset(EmuState* state, uint64_t offset) {
     if (state) state->tsc_offset = offset;
 }
 
+void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats) {
+#ifdef ENABLE_TLB_STATS
+    if (state && stats) {
+        stats->l1_read_hits = state->mmu.stats.l1_read_hits;
+        stats->l1_write_hits = state->mmu.stats.l1_write_hits;
+        stats->l2_read_hits = state->mmu.stats.l2_read_hits;
+        stats->l2_write_hits = state->mmu.stats.l2_write_hits;
+        stats->read_misses = state->mmu.stats.read_misses;
+        stats->write_misses = state->mmu.stats.write_misses;
+        stats->total_reads = state->mmu.stats.total_reads;
+        stats->total_writes = state->mmu.stats.total_writes;
+    }
+#else
+    if (stats) std::memset(stats, 0, sizeof(X86_TlbStats));
+#endif
+}
+
+void X86_ResetTlbStats(EmuState* state) {
+#ifdef ENABLE_TLB_STATS
+    if (state) state->mmu.stats.reset();
+#endif
+}
+
+int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
+#ifdef ENABLE_TLB_STATS
+    if (!state || !buffer || buffer_size == 0) return -1;
+    auto& s = state->mmu.stats;
+    int n = snprintf(buffer, buffer_size,
+        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+        "\"read_misses\":%llu,\"write_misses\":%llu,"
+        "\"total_reads\":%llu,\"total_writes\":%llu}",
+        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
+        (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
+        (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes);
+    return n;
+#else
+    if (buffer && buffer_size > 0) {
+        strncpy(buffer, "{}", buffer_size);
+        return 2;
+    }
+    return -1;
+#endif
+}
+
 }  // extern "C"

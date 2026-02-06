@@ -3,12 +3,14 @@
 
 #ifdef __cplusplus
 #include <cstdint>
+#include <cstddef>
 namespace x86emu {
 struct EmuState;
 }
 typedef x86emu::EmuState EmuState;
 #else
 #include <stdint.h>
+#include <stddef.h>
 typedef struct EmuState EmuState;
 #endif
 
@@ -85,6 +87,22 @@ int32_t X86_GetFaultVector(EmuState* state);
 void X86_SetTscFrequency(EmuState* state, uint64_t freq);
 void X86_SetTscMode(EmuState* state, int mode);
 void X86_SetTscOffset(EmuState* state, uint64_t offset);
+
+// TLB Statistics
+typedef struct {
+    uint64_t l1_read_hits;
+    uint64_t l1_write_hits;
+    uint64_t l2_read_hits;
+    uint64_t l2_write_hits;
+    uint64_t read_misses;
+    uint64_t write_misses;
+    uint64_t total_reads;
+    uint64_t total_writes;
+} X86_TlbStats;
+
+void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats);
+void X86_ResetTlbStats(EmuState* state);
+int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size);
 
 #ifdef __cplusplus
 }
