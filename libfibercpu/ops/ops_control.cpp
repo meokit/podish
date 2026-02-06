@@ -2,6 +2,7 @@
 // Auto-generated from ops.cpp refactoring
 
 #include <simde/x86/sse.h>
+#include <chrono>
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
@@ -246,9 +247,20 @@ static FORCE_INLINE void OpCpuid(EmuState* state, DecodedOp* op) {
 
 static FORCE_INLINE void OpRdtsc(EmuState* state, DecodedOp* op) {
     // 0F 31: RDTSC
-    // For now return 0 or a mock counter
-    static uint64_t tsc = 0;
-    tsc += 1000;
+    uint64_t tsc = 0;
+    if (state->tsc_mode == 1) {
+        // Real-time mode
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - state->tsc_start_time).count();
+        // tsc = offset + (elapsed_ns * frequency) / 1,000,000,000
+        // We use __int128 to prevent overflow during intermediate calculation if frequency is high
+        unsigned __int128 val = (unsigned __int128)elapsed * state->tsc_frequency;
+        tsc = state->tsc_offset + (uint64_t)(val / 1000000000ULL);
+    } else {
+        // Fixed increment mode
+        tsc = state->tsc_offset + state->tsc_fixed_counter;
+        state->tsc_fixed_counter += 1000; // Mock increment per call
+    }
 
     uint32_t low = (uint32_t)tsc;
     uint32_t high = (uint32_t)(tsc >> 32);

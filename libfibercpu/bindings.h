@@ -82,6 +82,11 @@ void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size);
 int32_t X86_GetFaultVector(EmuState* state);
 void X86_DumpJccStats();
 
+// TSC Control
+void X86_SetTscFrequency(EmuState* state, uint64_t freq);
+void X86_SetTscMode(EmuState* state, int mode);
+void X86_SetTscOffset(EmuState* state, uint64_t offset);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ankerl/unordered_dense.h>
+#include <chrono>
 #include <memory>
 #include "common.h"
 #include "decoder.h"  // For BasicBlock definition
@@ -81,6 +82,13 @@ struct EmuState {
 
     InterruptHandler interrupt_handlers[256] = {nullptr};
     void* interrupt_userdata[256] = {nullptr};
+
+    // TSC State
+    uint64_t tsc_frequency = 1000000000; // Default 1GHz
+    uint64_t tsc_offset = 0;
+    int tsc_mode = 1; // 0: Fixed Increment, 1: Real-time
+    uint64_t tsc_fixed_counter = 0; // For mode 0
+    std::chrono::steady_clock::time_point tsc_start_time;
 };
 
 }  // namespace x86emu

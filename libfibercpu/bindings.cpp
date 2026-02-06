@@ -114,6 +114,8 @@ EmuState* X86_Create() {
     state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
+    state->tsc_start_time = std::chrono::steady_clock::now();
+
     return state;
 }
 
@@ -553,6 +555,18 @@ void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
             state->page_to_blocks.erase(it);
         }
     }
+}
+
+void X86_SetTscFrequency(EmuState* state, uint64_t freq) {
+    if (state) state->tsc_frequency = freq;
+}
+
+void X86_SetTscMode(EmuState* state, int mode) {
+    if (state) state->tsc_mode = mode;
+}
+
+void X86_SetTscOffset(EmuState* state, uint64_t offset) {
+    if (state) state->tsc_offset = offset;
 }
 
 }  // extern "C"

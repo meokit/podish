@@ -580,6 +580,14 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         uint32_t writes = 0;
         uint32_t reads = 0;
 
+        // [Safety] Never optimize fused instructions - they have special handlers
+        if (op.meta.flags.is_fused) {
+            // Fused ops (e.g., CMP+Jcc) kill flags and handle jumps internally.
+            // They act as producers, so we reset live_flags.
+            live_flags = 0;
+            continue;
+        }
+
         // 1. Determine Read/Write sets for common ALU opcodes
         if (map == 0) {
             // Check ranges first
@@ -592,14 +600,44 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             } else if (opcode >= 0x80 && opcode <= 0x83) {
                 // Group 1 (80-83)
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 7)
-                    reads = ALL_FLAGS;  // CMP
-                else if (reg == 2 || reg == 3) {
+                if (reg == 7) {
+                    // CMP: Writes flags, reads none (producer)
+                    writes = ALL_FLAGS;
+                } else if (reg == 2 || reg == 3) {
+                    // ADC, SBB: Reads CF, Writes all
                     reads = CF_MASK;
                     writes = ALL_FLAGS;
-                }  // ADC, SBB
-                else
+                } else {
+                    // ADD, OR, AND, SUB, XOR
                     writes = ALL_FLAGS;
+                }
+            } else if (opcode == 0xC0 || opcode == 0xC1 || (opcode >= 0xD0 && opcode <= 0xD3)) {
+                // Shift/Rotate: Writes flags
+                writes = ALL_FLAGS;
+            } else if (opcode == 0xF6 || opcode == 0xF7) {
+                // Group 3: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV
+                uint8_t reg = (op.modrm >> 3) & 7;
+                if (reg == 0 || reg == 1) {
+                    // TEST: Writes flags, reads none
+                    writes = ALL_FLAGS;
+                } else if (reg == 2) {
+                    // NOT: No flags affected
+                } else {
+                    // NEG, MUL, IMUL, DIV, IDIV: Writes flags
+                    writes = ALL_FLAGS;
+                }
+            } else if (opcode == 0x9D) {
+                // POPF: Writes all flags
+                writes = ALL_FLAGS;
+            } else if (opcode == 0x9C) {
+                // PUSHF: Reads all flags
+                reads = ALL_FLAGS;
+            } else if (opcode == 0x9E) {
+                // SAHF: Writes SF, ZF, AF, PF, CF
+                writes = ALL_FLAGS;
+            } else if (opcode == 0x9F) {
+                // LAHF: Reads SF, ZF, AF, PF, CF
+                reads = ALL_FLAGS;
             } else {
                 switch (opcode) {
                     // Group 1: ADD, OR, ADC, SBB, AND, SUB, XOR, CMP
@@ -667,20 +705,25 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
                     case 0x3B:
                     case 0x3C:
                     case 0x3D:
-                        reads = ALL_FLAGS;
-                        break;  // CMP (Actually writes, but treated as read here to prevent
-                                // elimination since its only purpose IS flags)
+                        // CMP: Writes flags, reads none (producer)
+                        writes = ALL_FLAGS;
+                        break;
                     case 0x84:
                     case 0x85:
                     case 0xA8:
                     case 0xA9:
-                        reads = ALL_FLAGS;
-                        break;  // TEST
+                        // TEST: Writes flags, reads none (producer)
+                        writes = ALL_FLAGS;
+                        break;
                 }
             }
         } else if (map == 1) {
-            if (opcode >= 0x80 && opcode <= 0x8F) {
+            if (opcode >= 0x40 && opcode <= 0x4F) {
+                reads = ALL_FLAGS;  // CMOVcc
+            } else if (opcode >= 0x80 && opcode <= 0x8F) {
                 reads = ALL_FLAGS;  // Jcc near
+            } else if (opcode >= 0x90 && opcode <= 0x9F) {
+                reads = ALL_FLAGS;  // SETcc
             }
         }
 

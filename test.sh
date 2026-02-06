@@ -116,6 +116,10 @@ echo "Building test_smc_linux..."
 zig cc -target x86-linux-musl -static -O0 tests/linux/test_smc_linux.c -o tests/linux/assets/test_smc_linux || exit 1
 run_test "SMC Logic" "tests/linux/assets/test_smc_linux" ""
 
+echo "Building test_rdtsc..."
+zig cc -target x86-linux-musl -static -O2 tests/linux/test_rdtsc.c -o tests/linux/assets/test_rdtsc || exit 1
+run_test "RDTSC Insn" "tests/linux/assets/test_rdtsc" ""
+
 echo ""
 # echo ">>> Running Unit Tests..."
 # dotnet test Fiberish.Tests/Fiberish.Tests.csproj --logger "console;verbosity=detailed" || exit 1
