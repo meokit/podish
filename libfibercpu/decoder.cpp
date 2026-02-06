@@ -6,6 +6,7 @@
 #include "exec_utils.h"  // For Flag Masks
 #include "ops.h"         // For g_Handlers
 #include "state.h"
+#include "specialization.h"
 
 namespace x86emu {
 
@@ -376,6 +377,14 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             block->end_eip = current_eip + 1;
             return true;  // Return true to execute what we have (including the fault)
         }
+
+        // --- SPECIALIZATION ---
+        // Check if a specialized handler exists for this opcode + modrm/etc.
+        HandlerFunc specialized_h = FindSpecializedHandler(op.opcode, &op);
+        if (specialized_h) {
+            op.handler_offset = (int32_t)((intptr_t)specialized_h - (intptr_t)g_HandlerBase);
+        }
+        // ----------------------
 
         // Recover index logic (to keep op_indices in sync)
         uint8_t map = 0;
@@ -777,6 +786,11 @@ BasicBlock::~BasicBlock() {
 
 void BasicBlock::LinkFrom(BasicBlock* source) {
     if (!source) return;
+    
+    // Check if source is already linked to us (Idempotency check)
+    if (!source->ops.empty() && source->ops.back().next_block == this) {
+        return;
+    }
     
     // 1. Add source to our incoming list
     incoming_jumps.push_back(source);

@@ -29,10 +29,27 @@ static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::Mic
     SetReg(state, dst, GetReg(state, src));
 }
 
+template <Specialized S = Specialized::None>
 static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV [mem], r32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t val = GetReg(state, reg);
+    // ModRM.Reg is the Source Register
+    uint32_t val;
+    if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
+        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
+        // Compiler optimization: GetReg(state, FixedReg) becomes pure structure access
+        if constexpr (FixedReg == 0) val = state->ctx.regs[0]; // EAX
+        else if constexpr (FixedReg == 1) val = state->ctx.regs[1]; // ECX
+        else if constexpr (FixedReg == 2) val = state->ctx.regs[2]; // EDX
+        else if constexpr (FixedReg == 3) val = state->ctx.regs[3]; // EBX
+        else if constexpr (FixedReg == 4) val = state->ctx.regs[4]; // ESP
+        else if constexpr (FixedReg == 5) val = state->ctx.regs[5]; // EBP
+        else if constexpr (FixedReg == 6) val = state->ctx.regs[6]; // ESI
+        else if constexpr (FixedReg == 7) val = state->ctx.regs[7]; // EDI
+    } else {
+        uint8_t reg = (op->modrm >> 3) & 7;
+        val = GetReg(state, reg);
+    }
+    
     uint32_t addr = ComputeLinearAddress(state, op);
     state->mmu.write<uint32_t>(addr, val, utlb);
 }
@@ -56,11 +73,27 @@ static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::Mic
     SetReg(state, dst, GetReg(state, src));
 }
 
+template <Specialized S = Specialized::None>
 static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
-    uint8_t reg = (op->modrm >> 3) & 7;
+    // ModRM.Reg is the Destination Register
     uint32_t addr = ComputeLinearAddress(state, op);
-    SetReg(state, reg, state->mmu.read<uint32_t>(addr, utlb));
+    uint32_t val = state->mmu.read<uint32_t>(addr, utlb);
+    
+    if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
+        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
+        if constexpr (FixedReg == 0) state->ctx.regs[0] = val; // EAX
+        else if constexpr (FixedReg == 1) state->ctx.regs[1] = val;
+        else if constexpr (FixedReg == 2) state->ctx.regs[2] = val;
+        else if constexpr (FixedReg == 3) state->ctx.regs[3] = val;
+        else if constexpr (FixedReg == 4) state->ctx.regs[4] = val;
+        else if constexpr (FixedReg == 5) state->ctx.regs[5] = val;
+        else if constexpr (FixedReg == 6) state->ctx.regs[6] = val;
+        else if constexpr (FixedReg == 7) state->ctx.regs[7] = val;
+    } else {
+        uint8_t reg = (op->modrm >> 3) & 7;
+        SetReg(state, reg, val);
+    }
 }
 
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -809,9 +842,74 @@ void RegisterDataMovOps() {
 
     // Specialized 32-bit MOV
     g_Handlers[OP_MOV_RR_STORE] = DispatchWrapper<OpMov_EvGv_Reg>;
-    g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem>;
+    g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem<>>;
     g_Handlers[OP_MOV_RR_LOAD]  = DispatchWrapper<OpMov_GvEv_Reg>;
-    g_Handlers[OP_MOV_MR_LOAD]  = DispatchWrapper<OpMov_GvEv_Mem>;
+    g_Handlers[OP_MOV_MR_LOAD]  = DispatchWrapper<OpMov_GvEv_Mem<>>;
+
+    // Specialize MOV Load/Store for all 8 registers
+    // OP_MOV_MR_LOAD (Load): Reg is Dest, RM is Mem
+    // OP_MOV_RM_STORE (Store): Reg is Src, RM is Mem
+    /*
+    auto RegisterMovSpecs = [](uint8_t reg_idx, Specialized s) {
+        SpecCriteria c;
+        c.reg_mask = 0x7;
+        c.reg_val = reg_idx;
+        // ...
+    };
+    */
+    
+    // Register EAX (Most common)
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 0;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEax>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEax>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    /*
+    // ECX
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 1;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEcx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEcx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    // EDX
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 2;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEdx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEdx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    // EBX
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 3;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEbx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEbx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    */
+    /*
+    // ESP
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 4;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEsp>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEsp>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    // EBP
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 5;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEbp>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEbp>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    // ESI
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 6;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEsi>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEsi>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    // EDI
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 7;
+        DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEdi>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEdi>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
+    */
 
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8
     g_Handlers[0x8A] = DispatchWrapper<OpMov_GbEb>;  // MOV r8, r/m8

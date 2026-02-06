@@ -10,8 +10,14 @@
 
 namespace x86emu {
 
+template <uint8_t FixedSubOp = 0xFF>
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte, mem::MicroTLB* utlb) {
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop;
+    if constexpr (FixedSubOp != 0xFF) {
+        subop = FixedSubOp;
+    } else {
+        subop = (op->modrm >> 3) & 7;
+    }
     uint32_t res = dest;
 
     // Mask count
@@ -107,42 +113,85 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
     }
 }
 
+template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     bool is_byte = (op->extra == 0);
     uint32_t dest;
-    if (is_byte) dest = ReadModRM8(state, op, utlb);
-    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
-    else dest = ReadModRM32(state, op, utlb);
+    if constexpr (S == Specialized::ModReg) {
+         // Optimization: Skip ReadModRM call for Reg
+         uint8_t rm = op->modrm & 7;
+         if (is_byte) {
+            uint32_t* rptr = GetRegPtr(state, rm & 3);
+            if (rm < 4) dest = (*rptr) & 0xFF;
+            else dest = ((*rptr) >> 8) & 0xFF;
+         } else if (op->prefixes.flags.opsize) {
+            dest = GetReg(state, rm) & 0xFFFF;
+         } else {
+            dest = GetReg(state, rm);
+         }
+    } else {
+        if (is_byte) dest = ReadModRM8(state, op, utlb);
+        else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+        else dest = ReadModRM32(state, op, utlb);
+    }
 
     uint8_t count = (uint8_t)op->imm;
-    Helper_Group2(state, op, dest, count, is_byte, utlb);
+    Helper_Group2<FixedSubOp>(state, op, dest, count, is_byte, utlb);
 }
 
+template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D0: r/m8, 1
     // D1: r/m32, 1
     bool is_byte = (op->extra == 0);
     uint32_t dest;
-    if (is_byte) dest = ReadModRM8(state, op, utlb);
-    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
-    else dest = ReadModRM32(state, op, utlb);
+    if constexpr (S == Specialized::ModReg) {
+         uint8_t rm = op->modrm & 7;
+         if (is_byte) {
+            uint32_t* rptr = GetRegPtr(state, rm & 3);
+            if (rm < 4) dest = (*rptr) & 0xFF;
+            else dest = ((*rptr) >> 8) & 0xFF;
+         } else if (op->prefixes.flags.opsize) {
+            dest = GetReg(state, rm) & 0xFFFF;
+         } else {
+            dest = GetReg(state, rm);
+         }
+    } else {
+        if (is_byte) dest = ReadModRM8(state, op, utlb);
+        else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+        else dest = ReadModRM32(state, op, utlb);
+    }
 
-    Helper_Group2(state, op, dest, 1, is_byte, utlb);
+    Helper_Group2<FixedSubOp>(state, op, dest, 1, is_byte, utlb);
 }
 
+template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     bool is_byte = (op->extra == 2);
     uint32_t dest;
-    if (is_byte) dest = ReadModRM8(state, op, utlb);
-    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
-    else dest = ReadModRM32(state, op, utlb);
+    if constexpr (S == Specialized::ModReg) {
+         uint8_t rm = op->modrm & 7;
+         if (is_byte) {
+            uint32_t* rptr = GetRegPtr(state, rm & 3);
+            if (rm < 4) dest = (*rptr) & 0xFF;
+            else dest = ((*rptr) >> 8) & 0xFF;
+         } else if (op->prefixes.flags.opsize) {
+            dest = GetReg(state, rm) & 0xFFFF;
+         } else {
+            dest = GetReg(state, rm);
+         }
+    } else {
+        if (is_byte) dest = ReadModRM8(state, op, utlb);
+        else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+        else dest = ReadModRM32(state, op, utlb);
+    }
 
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    Helper_Group2(state, op, dest, count, is_byte, utlb);
+    Helper_Group2<FixedSubOp>(state, op, dest, count, is_byte, utlb);
 }
 
 static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -396,12 +445,60 @@ static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroT
 }
 
 void RegisterShiftBitOps() {
-    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb>;
-    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb>;
-    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1>;
-    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1>;
-    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl>;
-    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
+    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb<>>;
+    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb<>>;
+    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1<>>;
+    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1<>>;
+    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl<>>;
+    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl<>>;
+
+    // Specializations for SHL (4), SHR (5), SAR (7)
+    // Target 0xC1 (Imm8) and 0xD3 (CL), 32-bit (Ev)
+    // Target 0xD1 (1) - Common for simple doubling
+    
+    // lambda to register for a specific opcode
+    auto RegisterShiftSpecs = [](uint16_t opcode) {
+        SpecCriteria c; 
+        
+        // SHL (SubOp 4)
+        c.reg_mask = 0x7; c.reg_val = 4;
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<4>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<4>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<4>>::RegisterSpecialized(opcode, c);
+        
+        c.mod_mask = 0xC0; c.mod_val = 0xC0; // ModReg
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+
+        // SHR (SubOp 5)
+        c.reg_mask = 0x7; c.reg_val = 5; c.mod_mask = 0;
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<5>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<5>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<5>>::RegisterSpecialized(opcode, c);
+
+        c.mod_mask = 0xC0; c.mod_val = 0xC0; // ModReg
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+
+        // SAR (SubOp 7)
+        c.reg_mask = 0x7; c.reg_val = 7; c.mod_mask = 0;
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<7>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<7>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<7>>::RegisterSpecialized(opcode, c);
+
+        c.mod_mask = 0xC0; c.mod_val = 0xC0; // ModReg
+        if (opcode == 0xC1 || opcode == 0xC0) DispatchRegistrar<OpGroup2_EvIb<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD1 || opcode == 0xD0) DispatchRegistrar<OpGroup2_Ev1<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+        else if (opcode == 0xD3 || opcode == 0xD2) DispatchRegistrar<OpGroup2_EvCl<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
+    };
+
+    RegisterShiftSpecs(0xC1); // r/m32, imm8 (Most common)
+    RegisterShiftSpecs(0xD1); // r/m32, 1
+    RegisterShiftSpecs(0xD3); // r/m32, CL
+    // 0xC0, 0xD0, 0xD2 are byte versions, less critical but included in logic if needed, 
+    // but maybe skip to save binary size? Let's just do dword ones (C1, D1, D3).
     g_Handlers[0x1A3] = DispatchWrapper<OpBt_EvGv>;
     g_Handlers[0x1AB] = DispatchWrapper<OpBts_EvGv>;  // 0F AB
     g_Handlers[0x1B3] = DispatchWrapper<OpBtr_EvGv>;

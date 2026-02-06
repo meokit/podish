@@ -1,6 +1,7 @@
 #pragma once
 #include "decoder.h"
 #include "state.h"
+#include "specialization.h"
 
 #include <cstdio>
 
@@ -50,6 +51,16 @@ struct DispatchRegistrar {
     static void Register(int idx) { g_Handlers[idx] = DispatchWrapper<Target>; }
 
     static void RegisterNF(int idx) { g_Handlers_NF[idx] = DispatchWrapper<Target>; }
+
+    // Specialization Registration
+    static void RegisterSpecialized(int opcode, SpecCriteria criteria) {
+        // We register the Wrapper as the handler, because that is what the dispatch loop calls.
+        // The wrapper internally calls Target().
+        // LogicFunc (the raw logic) is NOT what is stored in the offset, the wrapper is.
+        // Wait, SpecializedEntry stores LogicFunc? No, it should store HandlerFunc.
+        // Let's cast DispatchWrapper<Target> to HandlerFunc (which it is compatible with).
+        RegisterSpecializedHandler(opcode, criteria, (HandlerFunc)DispatchWrapper<Target>); 
+    }
 };
 
 // Simplified Macro for ops registration

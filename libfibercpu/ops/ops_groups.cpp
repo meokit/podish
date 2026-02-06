@@ -11,13 +11,15 @@
 
 namespace x86emu {
 
+template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 80: Arith r/m8, imm8
     uint8_t dest = ReadModRM8(state, op, utlb);
     uint8_t src = (uint8_t)op->imm;
-    Helper_Group1<uint8_t>(state, op, dest, src, utlb);
+    Helper_Group1<uint8_t, FixedSubOp>(state, op, dest, src, utlb);
 }
 
+template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 81: Arith r/m32, imm32
     // 83: Arith r/m32, imm8 (sign-extended)
@@ -28,14 +30,14 @@ static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op, mem::Micr
         if (op->extra == 0x3) {  // 0x83 & 0xF == 3
             src = (int16_t)(int8_t)src;
         }
-        Helper_Group1<uint16_t>(state, op, dest, src, utlb);
+        Helper_Group1<uint16_t, FixedSubOp>(state, op, dest, src, utlb);
     } else {
         uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = op->imm;
         if (op->extra == 0x3) {  // 0x83 & 0xF == 3
             src = (int32_t)(int8_t)src;
         }
-        Helper_Group1<uint32_t>(state, op, dest, src, utlb);
+        Helper_Group1<uint32_t, FixedSubOp>(state, op, dest, src, utlb);
     }
 }
 
@@ -82,9 +84,15 @@ static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroT
     }
 }
 
+template <uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup5_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FF: Group 5
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop;
+    if constexpr (FixedSubOp != 0xFF) {
+        subop = FixedSubOp;
+    } else {
+        subop = (op->modrm >> 3) & 7;
+    }
 
     switch (subop) {
         case 0:  // INC Ev
@@ -337,12 +345,66 @@ void OpUd2(EmuState* state, DecodedOp* op) {
 }
 
 void RegisterGroupOps() {
-    g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb>;
-    g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz>;
-    g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz>;
+    g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb<>>;
+    g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz<>>;
+    g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz<>>;
+
+    // Specializations for Group 1 (0x83: r/m32, imm8) - Heavily used (ADD, SUB, CMP)
+    // SubOp 0: ADD
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 0; // Reg=0 (ADD)
+        DispatchRegistrar<OpGroup1_EvIz<0>>::RegisterSpecialized(0x83, c);
+        
+        // Mod=3 (Reg) specialized
+        c.mod_mask = 0xC0; c.mod_val = 0xC0; 
+        DispatchRegistrar<OpGroup1_EvIz<0, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
+    }
+    // SubOp 5: SUB
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 5; // Reg=5 (SUB)
+        DispatchRegistrar<OpGroup1_EvIz<5>>::RegisterSpecialized(0x83, c);
+
+        c.mod_mask = 0xC0; c.mod_val = 0xC0;
+        DispatchRegistrar<OpGroup1_EvIz<5, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
+    }
+    // SubOp 7: CMP
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 7; // Reg=7 (CMP)
+        DispatchRegistrar<OpGroup1_EvIz<7>>::RegisterSpecialized(0x83, c);
+        
+        c.mod_mask = 0xC0; c.mod_val = 0xC0;
+        DispatchRegistrar<OpGroup1_EvIz<7, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
+    }
     g_Handlers[0x98] = DispatchWrapper<OpCwde>;
     g_Handlers[0x99] = DispatchWrapper<OpCdq>;
-    g_Handlers[0xFF] = DispatchWrapper<OpGroup5_Ev>;
+    g_Handlers[0xFF] = DispatchWrapper<OpGroup5_Ev<>>;
+    
+    // Group 5 Specializations
+    // SubOp 0: INC
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 0;
+        DispatchRegistrar<OpGroup5_Ev<0>>::RegisterSpecialized(0xFF, c);
+    }
+    // SubOp 1: DEC
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 1;
+        DispatchRegistrar<OpGroup5_Ev<1>>::RegisterSpecialized(0xFF, c);
+    }
+    // SubOp 2: CALL (Near Indirect)
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 2;
+        DispatchRegistrar<OpGroup5_Ev<2>>::RegisterSpecialized(0xFF, c);
+    }
+    // SubOp 4: JMP (Near Indirect)
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 4;
+        DispatchRegistrar<OpGroup5_Ev<4>>::RegisterSpecialized(0xFF, c);
+    }
+    // SubOp 6: PUSH
+    {
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 6;
+        DispatchRegistrar<OpGroup5_Ev<6>>::RegisterSpecialized(0xFF, c);
+    }
     g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
     g_Handlers[0xF6] = DispatchWrapper<OpGroup3_Ev>;
     g_Handlers[0xF7] = DispatchWrapper<OpGroup3_Ev>;

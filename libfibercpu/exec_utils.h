@@ -17,6 +17,14 @@ FORCE_INLINE uint32_t GetReg(EmuState* state, uint8_t reg_idx) { return *GetRegP
 
 FORCE_INLINE void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) { *GetRegPtr(state, reg_idx) = val; }
 
+FORCE_INLINE uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
+    uint32_t val = GetReg(state, reg_idx & 3);
+    if (reg_idx < 4)
+        return val & 0xFF;
+    else
+        return (val >> 8) & 0xFF;
+}
+
 // ------------------------------------------------------------------------------------------------
 // EFLAGS Masks
 // ------------------------------------------------------------------------------------------------
@@ -31,6 +39,28 @@ constexpr uint32_t OF_MASK = 0x0800;
 // ------------------------------------------------------------------------------------------------
 // Condition Checking (for Jcc, CMOVcc)
 // ------------------------------------------------------------------------------------------------
+
+template <uint8_t Cond>
+inline bool CheckConditionFixed(EmuState* state) {
+    uint32_t f = state->ctx.eflags;
+    if constexpr (Cond == 0) return (f & OF_MASK) != 0; // JO
+    else if constexpr (Cond == 1) return (f & OF_MASK) == 0; // JNO
+    else if constexpr (Cond == 2) return (f & CF_MASK) != 0; // JB/JC
+    else if constexpr (Cond == 3) return (f & CF_MASK) == 0; // JNB/JNC
+    else if constexpr (Cond == 4) return (f & ZF_MASK) != 0; // JZ/JE
+    else if constexpr (Cond == 5) return (f & ZF_MASK) == 0; // JNZ/JNE
+    else if constexpr (Cond == 6) return (f & (CF_MASK | ZF_MASK)) != 0; // JBE
+    else if constexpr (Cond == 7) return (f & (CF_MASK | ZF_MASK)) == 0; // JA
+    else if constexpr (Cond == 8) return (f & SF_MASK) != 0; // JS
+    else if constexpr (Cond == 9) return (f & SF_MASK) == 0; // JNS
+    else if constexpr (Cond == 10) return (f & PF_MASK) != 0; // JP/JPE
+    else if constexpr (Cond == 11) return (f & PF_MASK) == 0; // JNP/JPO
+    else if constexpr (Cond == 12) return ((f & SF_MASK) != 0) != ((f & OF_MASK) != 0); // JL
+    else if constexpr (Cond == 13) return ((f & SF_MASK) != 0) == ((f & OF_MASK) != 0); // JGE
+    else if constexpr (Cond == 14) return (f & ZF_MASK) || (((f & SF_MASK) != 0) != ((f & OF_MASK) != 0)); // JLE
+    else if constexpr (Cond == 15) return !(f & ZF_MASK) && (((f & SF_MASK) != 0) == ((f & OF_MASK) != 0)); // JG
+    else return false;
+}
 
 inline bool CheckCondition(EmuState* state, uint8_t cond) {
     static const uint32_t g_ConditionLUT[16] = {

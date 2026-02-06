@@ -24,11 +24,12 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
     state->ctx.eip += offset;
 }
 
+template <uint8_t Cond>
 static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
-    uint8_t cond = op->extra;
+    // Condition check is compile-time specialized
     
-    if (CheckCondition(state, cond)) {
+    if (CheckConditionFixed<Cond>(state)) {
         int32_t offset;
         if (op->length == 2) {
             // 8-bit relative jump (0x7x opcodes)
@@ -112,10 +113,12 @@ static FORCE_INLINE void OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     }
 }
 
+template <uint8_t Cond>
 static FORCE_INLINE void OpCmov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 4x: CMOVcc r32, r/m32
-    uint8_t cond = op->extra;
-    bool pass = CheckCondition(state, cond);
+    // Condition check is compile-time specialized
+    
+    bool pass = CheckConditionFixed<Cond>(state);
     if (pass) {
         if (op->prefixes.flags.opsize) {
             uint16_t val = ReadModRM16(state, op, utlb);
@@ -442,6 +445,19 @@ ATTR_PRESERVE_NONE int64_t OpFused_TestJcc(EmuState* state, DecodedOp* op, int64
     return instr_limit;
 }
 
+template<int I>
+static void RegisterCmov() {
+    g_Handlers[0x140 + I] = DispatchWrapper<OpCmov_GvEv<I>>;
+    if constexpr (I + 1 < 16) RegisterCmov<I + 1>();
+}
+
+template<int I>
+static void RegisterJcc() {
+    g_Handlers[0x70 + I] = DispatchWrapper<OpJcc_Rel<I>>;   // Jcc rel8
+    g_Handlers[0x180 + I] = DispatchWrapper<OpJcc_Rel<I>>;  // Jcc rel32 (0F 8x)
+    if constexpr (I + 1 < 16) RegisterJcc<I + 1>();
+}
+
 void RegisterControlOps() {
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
     g_Handlers[0x9B] = DispatchWrapper<OpWait>;
@@ -462,16 +478,11 @@ void RegisterControlOps() {
     g_Handlers[0xFB] = DispatchWrapper<OpSti>;        // STI
     g_Handlers[0xFC] = DispatchWrapper<OpCld>;        // CLD
     g_Handlers[0xFD] = DispatchWrapper<OpStd>;        // STD
-    for (int i = 0; i < 16; ++i) {
-        g_Handlers[0x70 + i] = DispatchWrapper<OpJcc_Rel>;   // Jcc rel8
-        g_Handlers[0x180 + i] = DispatchWrapper<OpJcc_Rel>;  // Jcc rel32 (0F 8x)
-    }
+    RegisterJcc<0>();
     g_Handlers[0xCE] = DispatchWrapper<OpInto>;
     g_Handlers[0x131] = DispatchWrapper<OpRdtsc>;  // 0F 31
     g_Handlers[0x1A2] = DispatchWrapper<OpCpuid>;  // 0F A2
-    for (int i = 0; i < 16; ++i) {
-        g_Handlers[0x140 + i] = DispatchWrapper<OpCmov_GvEv>;
-    }
+    RegisterCmov<0>();
     g_Handlers[0x11F] = DispatchWrapper<OpNop>;         // Multi-byte NOP (0F 1F)
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
 

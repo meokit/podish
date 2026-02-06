@@ -79,4 +79,56 @@ struct HandlerInit {
 // Static instance to trigger initialization
 static HandlerInit _init;
 
+// Specialization Registry
+static std::vector<SpecializedEntry> g_SpecializedRegistry;
+
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
+    g_SpecializedRegistry.push_back({opcode, criteria, handler});
+}
+
+HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
+    for (const auto& entry : g_SpecializedRegistry) {
+        if (entry.opcode == opcode) {
+            // Check ModRM constraints
+            // If op doesn't have modrm but criteria requires it -> fail? 
+            // The criteria.Matches takes modrm uint8.
+            // DecodedOp has modrm field always, valid if flags.has_modrm is true.
+            // If specialized entry requires modrm (mask != 0) and op doesn't have it, we should probably fail?
+            // SpecCriteria::Matches logic: checks masks. If mask is 0, it matches anything (including garbage if not present).
+            // Usually we specialize precisely.
+            
+            if (op->meta.flags.has_modrm) {
+                if (entry.criteria.Matches(op->modrm, op->prefixes.all)) return entry.handler;
+            } else {
+                // If op has no ModRM...
+                // But wait, if criteria has a prefix constraint but NO modrm constraint, we should check it.
+                // My logic above was simplistic.
+                // Let's create a dummy modrm=0 if not present, but ensure mask checks fail if they were set?
+                // Actually, if has_modrm is false, modrm field is undefined/garbage (or 0).
+                
+                // Better logic:
+                // 1. Prefix Check always
+                if (entry.criteria.prefix_mask) {
+                    if ((op->prefixes.all & entry.criteria.prefix_mask) != entry.criteria.prefix_val) continue;
+                }
+                
+                // 2. ModRM Check
+                if (op->meta.flags.has_modrm) {
+                    // Standard check
+                    if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) {
+                        if (!entry.criteria.Matches(op->modrm, op->prefixes.all)) continue;
+                    }
+                } else {
+                    // No ModRM in instruction.
+                    // If criteria REQUIRES ModRM specific values (mask != 0), then it's a mismatch.
+                    if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) continue;
+                }
+                
+                return entry.handler;
+            }
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace x86emu

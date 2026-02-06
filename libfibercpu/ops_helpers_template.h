@@ -12,9 +12,15 @@ void OpUd2(EmuState* state, DecodedOp* op);
 void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 
 // Template Helper for Group 1 (ALU operations with immediate)
-template <typename T>
+template <typename T, uint8_t FixedSubOp = 0xFF>
 void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb) {
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop;
+    if constexpr (FixedSubOp != 0xFF) {
+        subop = FixedSubOp;
+    } else {
+        subop = (op->modrm >> 3) & 7;
+    }
+    
     T res = 0;
 
     switch (subop) {

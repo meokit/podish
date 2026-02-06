@@ -19,7 +19,7 @@ static FORCE_INLINE void OpAdd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTL
     WriteModRM8(state, op, res, utlb);
 }
 
-template <bool UpdateFlags>
+template <bool UpdateFlags, Specialized S = Specialized::None>
 static FORCE_INLINE void OpAdd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 01: ADD r/m16/32, r16/32
     if (op->prefixes.flags.opsize) {
@@ -729,8 +729,16 @@ void RegisterAluOps() {
     g_Handlers[0x00] = DispatchWrapper<OpAdd_EbGb<true>>;
     g_Handlers_NF[0x00] = DispatchWrapper<OpAdd_EbGb<false>>;
 
-    g_Handlers[0x01] = DispatchWrapper<OpAdd_EvGv<true>>;
-    g_Handlers_NF[0x01] = DispatchWrapper<OpAdd_EvGv<false>>;
+    // 01: ADD r/m16/32, r16/32
+    DispatchRegistrar<OpAdd_EvGv<true>>::Register(0x01);
+    DispatchRegistrar<OpAdd_EvGv<false>>::RegisterNF(0x01);
+    
+    // Specialization: ADD EAX, r32 (Mod=3, RM=0)
+    // OpAdd_EvGv<true, Specialized::RegEax>
+    SpecCriteria criteria;
+    criteria.mod_mask = 0xC0; criteria.mod_val = 0xC0; // Mod=3 (Reg)
+    criteria.rm_mask = 0x07; criteria.rm_val = 0x00;   // RM=0 (EAX)
+    DispatchRegistrar<OpAdd_EvGv<true, Specialized::RegEax>>::RegisterSpecialized(0x01, criteria);
 
     g_Handlers[0x02] = DispatchWrapper<OpAdd_GbEb<true>>;
     g_Handlers_NF[0x02] = DispatchWrapper<OpAdd_GbEb<false>>;

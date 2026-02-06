@@ -3,6 +3,7 @@
 #include "common.h"
 #include "decoder.h"
 #include "state.h"
+#include "specialization.h"
 
 // Include all modular operation headers
 #include "ops/ops_alu.h"
