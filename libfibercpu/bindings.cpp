@@ -16,9 +16,6 @@
 
 using namespace x86emu;
 
-namespace x86emu {
-extern uint64_t g_JccPredecessorStats[1024];
-}
 
 extern "C" {
 
@@ -503,29 +500,6 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
         }
         return false;
     });
-}
-
-// ----------------------------------------------------------------------------
-// Diagnostics
-// ----------------------------------------------------------------------------
-
-void X86_DumpJccStats() {
-    printf("\n--- Jcc Predecessor Statistics (Top 20) ---\n");
-    struct Entry { uint16_t opcode; uint64_t count; };
-    std::vector<Entry> sorted;
-    for (int i = 0; i < 1024; ++i) {
-        if (x86emu::g_JccPredecessorStats[i] > 0) {
-            sorted.push_back({(uint16_t)i, x86emu::g_JccPredecessorStats[i]});
-        }
-    }
-    std::sort(sorted.begin(), sorted.end(), [](const Entry& a, const Entry& b) {
-        return b.count < a.count;
-    });
-
-    for (size_t i = 0; i < sorted.size() && i < 20; ++i) {
-        printf("Opcode 0x%03X: %llu\n", sorted[i].opcode, (unsigned long long)sorted[i].count);
-    }
-    printf("-------------------------------------------\n");
 }
 
 int32_t X86_GetFaultVector(EmuState* state) {

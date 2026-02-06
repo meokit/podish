@@ -11,8 +11,6 @@
 
 namespace x86emu {
 
-uint64_t g_JccPredecessorStats[1024] = {0};
-
 static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
@@ -27,12 +25,9 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op) {
 }
 
 static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op) {
-    // Profiling
-    g_JccPredecessorStats[state->ctx.last_opcode & 1023]++;
-
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     uint8_t cond = op->extra;
-
+    
     if (CheckCondition(state, cond)) {
         int32_t offset;
         if (op->length == 2) {
@@ -390,7 +385,7 @@ ATTR_PRESERVE_NONE int64_t OpFused_CmpJcc(EmuState* state, DecodedOp* op, int64_
         
         // IMPORTANT: When jumping, we MUST return 0 to break the current 
         // threaded dispatch chain and return to X86_Run for a new block lookup.
-        return 0;
+        return instr_limit;
     } else {
         // No jump: EIP already advanced. Threaded Dispatch to NEXT instruction
         DecodedOp* next = op + 1;
@@ -432,7 +427,7 @@ ATTR_PRESERVE_NONE int64_t OpFused_TestJcc(EmuState* state, DecodedOp* op, int64
     if (CheckCondition(state, cond)) {
         int32_t target_offset = (int32_t)op->imm;
         state->ctx.eip += target_offset;
-        return 0;
+        return instr_limit;
     } else {
         DecodedOp* next = op + 1;
         if (instr_limit > 0) {

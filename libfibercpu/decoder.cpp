@@ -411,6 +411,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         // Advance
         current_eip += inst_len;
 
+#if 1
         // --- CMP + Jcc Fusion ---
         // If the current instruction is a CMP (various forms) and the NEXT is a Jcc,
         // we can fuse them into a single handler that does both.
@@ -530,6 +531,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
                 }
             }
         }
+#endif
 
         // Stop if Control Flow
         if (IsControlFlow(&block->ops.back())) {
@@ -557,6 +559,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
 
     block->ops.push_back(sentinel);
 
+#if 1
     // Optimization: Dead Flag Elimination (Backward Pass)
     // We analyze the def-use chain of EFLAGS within the block.
     // If an instruction writes flags that are never used (or overwritten),
@@ -741,6 +744,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         live_flags &= ~writes;
         live_flags |= reads;
     }
+#endif
 
     block->end_eip = current_eip;
     return !block->ops.empty();

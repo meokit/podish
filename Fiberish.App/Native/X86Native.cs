@@ -149,7 +149,4 @@ public unsafe partial class X86Native
 
     [LibraryImport(LibName, EntryPoint = "X86_InvalidateRange")]
     public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
-
-    [LibraryImport(LibName, EntryPoint = "X86_DumpJccStats")]
-    public static partial void DumpJccStats();
 }

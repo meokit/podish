@@ -77,10 +77,10 @@ struct DecodedOp {
 
     // Handler Information
     // We use a bitfield to pack:
-    // - handler_offset (24 bits signed): +/- 8MB range for handler functions
+    // - handler_offset (32 bits signed): +/- 8MB range for handler functions
     // - length (4 bits): Max instruction length is 15 bytes
     // - extra (4 bits): Opcode-specific data (Condition Code, etc.)
-    int32_t handler_offset : 24;
+    int32_t handler_offset;
     uint32_t length : 4;
     uint32_t extra : 4;
 };

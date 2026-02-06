@@ -725,9 +725,32 @@ class Runner:
 
     def _find_in_trace(self, op_type, addr, val, size):
         for op, t_addr, t_val, t_size in self.sim_trace:
-            if op == op_type and t_addr == addr:
-                if size and t_size != size: continue
-                if t_val == val: return True
+            if op == op_type:
+                # Direct match
+                if t_addr == addr:
+                    if size and t_size != size:
+                         # Fall through to overlap check
+                         pass
+                    elif t_val == val:
+                        return True
+                
+                # Overlap check: Is [addr, addr+size) contained within [t_addr, t_addr+t_size)?
+                # We only support this for small values (up to 8 bytes) stored in t_val
+                # 'size' being None usually means we're checking a typical int (4 or 8 bytes)
+                check_size = size if size else (val.bit_length() + 7) // 8
+                if check_size < 1: check_size = 1
+                
+                if t_addr <= addr and (t_addr + t_size) >= (addr + check_size):
+                    # It's contained. Extract the relevant bytes from t_val.
+                    offset = addr - t_addr
+                    # Extract 'check_size' bytes from t_val starting at 'offset'
+                    # t_val is an integer (little endian)
+                    shifted = t_val >> (offset * 8)
+                    mask = (1 << (check_size * 8)) - 1
+                    extracted = shifted & mask
+                    
+                    if extracted == val:
+                        return True
         return False
 
     def _get_sim_reg_idx(self, name):

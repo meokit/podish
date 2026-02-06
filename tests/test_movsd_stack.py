@@ -51,8 +51,8 @@ def case_movsd_stack_read():
     mov esp, 0x8000
     
     ; Push 1.722 onto stack (0x3FFBB851EB851EB8)
-    push 0xEB851EB8
-    push 0x3FFBB851
+    push 0x3FFBB851  ; High 32 bits
+    push 0xEB851EB8  ; Low 32 bits
     
     ; Read with MOVSD
     movsd xmm0, [esp]
@@ -85,6 +85,7 @@ def case_movsd_param_passing():
     mov esp, 0x8000
     push 0x3FFBB851  ; High 32 bits
     push 0xEB851EB8  ; Low 32 bits
+    push 0x0         ; Simulate return address
     
     ; Simulate function prologue
     push ebp
