@@ -90,6 +90,10 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial void MemMap(IntPtr state, uint addr, uint size, byte perms);
 
+    [LibraryImport(LibName, EntryPoint = "X86_MemUnmap")]
+    [SuppressGCTransition]
+    public static partial void MemUnmap(IntPtr state, uint addr, uint size);
+
     [LibraryImport(LibName, EntryPoint = "X86_MemWrite")]
     public static partial void MemWrite(IntPtr state, uint addr, byte* data, uint size);
 

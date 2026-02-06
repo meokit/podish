@@ -29,6 +29,14 @@ public class UTSNamespace
     public UTSNamespace Clone() => (UTSNamespace)MemberwiseClone();
 }
 
+public struct SigAction
+{
+    public uint Handler;
+    public uint Flags;
+    public uint Restorer;
+    public ulong Mask;
+}
+
 public class Process
 {
     public int TGID { get; set; }
@@ -57,6 +65,8 @@ public class Process
     public ProcessState State { get; set; } = ProcessState.Running;
     public int ExitStatus { get; set; } = 0;
     public ManualResetEventSlim ZombieEvent { get; } = new(false);  // Signaled when process becomes zombie
+
+    public Dictionary<int, SigAction> SignalActions { get; } = new();
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
@@ -95,7 +105,15 @@ public class Process
     public System.Threading.Tasks.Task? BlockingTask { get; set; }
 
     // Cooperative scheduling: a TCS that the scheduler will complete to resume this task
+    // Cooperative scheduling: a TCS that the scheduler will complete to resume this task
     public TaskCompletionSource<bool>? ResumeTcs { get; set; }
+
+    // Signals
+    public ulong SignalMask { get; set; }
+    public ulong PendingSignals { get; set; }
+    public uint AltStackSp { get; set; }
+    public uint AltStackSize { get; set; }
+    public int AltStackFlags { get; set; }
 
     public Task(int tid, Process process, Engine cpu)
     {
@@ -279,6 +297,37 @@ public class Process
                             break;
                         }
 
+                        // Check for signals
+                        if (!Exited && (PendingSignals & ~SignalMask) != 0)
+                        {
+                            // Find the first unblocked pending signal
+                            int sig = -1;
+                            ulong pending = PendingSignals & ~SignalMask;
+                            for (int i = 1; i < 64; i++)
+                            {
+                                if ((pending & (1UL << (i - 1))) != 0)
+                                {
+                                    sig = i;
+                                    break;
+                                }
+                            }
+
+                            if (sig != -1)
+                            {
+                                // Clear pending bit
+                                PendingSignals &= ~(1UL << (sig - 1));
+                                
+                                // Reset Stopped state if SIGCONT
+                                if (sig == 18) // SIGCONT
+                                {
+                                    if(Process.State == ProcessState.Stopped) Process.State = ProcessState.Running;
+                                }
+                                
+                                // Handle it
+                                HandleSignal(sig);
+                            }
+                        }
+
                         // AGGRESSIVE OPTIMIZATION:
                         // Only release the GIL and yield if there are other tasks waiting.
                         if (Exited || Scheduler.ReadyCount > 0)
@@ -374,6 +423,220 @@ public class Process
         {
             foreach (var line in _traceBuffer) Logger.LogError("  {TraceLine}", line);
         }
+    }
+
+    private void HandleSignal(int sig)
+    {
+        // 1. Check if ignored
+        if (Process.SignalActions.TryGetValue(sig, out var action))
+        {
+            if (action.Handler == 1) // SIG_IGN
+            {
+                return;
+            }
+            if (action.Handler == 0) // SIG_DFL
+            {
+                // Default actions (simplified)
+                if (sig == 9 || sig == 15 || sig == 2 || sig == 3 || sig == 6 || sig == 11) // KILL, TERM, INT, QUIT, ABRT, SEGV
+                {
+                     Exited = true;
+                     ExitCode = 128 + sig;
+                     Console.WriteLine($"[Task {TID}] Terminated by signal {sig}");
+                     return;
+                }
+                // Ignore others for now
+                return;
+            }
+
+            // 2. Setup frame for handler
+            // Push SigContext/StackFrame
+            uint sp = CPU.RegRead(Reg.ESP);
+
+            // Redzone check? x86 doesn't strictly have one like x64, but Sys V ABI aligns stack.
+            // Check altstack
+            if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
+            {
+                 sp = AltStackSp + AltStackSize;
+            }
+
+            // Return address (restorer or some trampoline)
+            // If SA_RESTORER is set, we push that as return address.
+            // If not, we must provide a trampoline. Linux kernel puts one on stack (vdso or legacy stack).
+            // We will inject a legacy-style trampoline on the stack if Restorer is 0.
+            uint retAddr = action.Restorer;
+            uint frameEsp = sp; // Initialize frameEsp here
+            if (retAddr == 0)
+            {
+                 // Align 
+                 frameEsp = (frameEsp - 4u) & ~0xFu;
+                 
+                 // Allocate space for trampoline (mov eax, 173; int 0x80) -> 7 bytes
+                 frameEsp -= 8u; 
+                 // 0xB8 0xAD 0x00 0x00 0x00 (mov eax, 173)
+                 // 0xCD 0x80 (int 0x80)
+                 byte[] trampoline = { 0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80 };
+                 CPU.MemWrite(frameEsp, trampoline);
+                 retAddr = frameEsp;
+            }
+
+            // Setup Stack with SA_SIGINFO support
+            SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
+            CPU.RegWrite(Reg.ESP, frameEsp);
+            CPU.Eip = action.Handler;
+            
+            // SA_RESTART Logic
+            // If the process was interrupted in a syscall that supports restart, EAX will be -ERESTARTSYS.
+            int eax = (int)CPU.RegRead(Reg.EAX);
+            if (eax == -512) // -ERESTARTSYS
+            {
+                 if ((action.Flags & LinuxConstants.SA_RESTART) != 0)
+                 {
+                     // Restart: rewind EIP to re-execute 'int 0x80' (CD 80)
+                     CPU.Eip -= 2; // Assuming int 0x80 sequence
+                     // Restore EAX to the syscall number?
+                     // Linux kernel does this. But we don't track original syscall number in EAX easily here
+                     // unless SyscallManager preserved it?
+                     // Or we assume the guest saved it?
+                     // For now, let's just implement EINTR conversion which is safer if we can't fully restart.
+                     // IF we can't restore EAX, we can't restart.
+                     
+                     // Fallback: convert to EINTR even if SA_RESTART, unless we can recover syscall nr.
+                     // TODO: Implement full restart support by saving syscall number.
+                     CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                 }
+                 else
+                 {
+                     // Interrupted: return -EINTR
+                     CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                 }
+            }
+            
+            // Mask signals during handler execution if SA_NODEFER not set?
+            // (Assuming Block blocked signals, simplified)
+        }
+    }
+
+    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr)
+    {
+         // If SA_SIGINFO is set, we need to setup ucontext and siginfo
+         bool useSigInfo = (action.Flags & LinuxConstants.SA_SIGINFO) != 0;
+
+         // Layout:
+         // [Arguments (sig, ptr, ptr)] (if SA_SIGINFO)
+         // [Arguments (sig)]           (if !SA_SIGINFO)
+         // [RetAddr]
+         // [SigInfo] (always for rt_sigaction)
+         // [UContext] (always for rt_sigaction)
+
+         // We always setup UContext and SigInfo because sys_rt_sigreturn expects them.
+         // (Linux kernel always pushes rt_sigframe for rt_sigaction)
+         
+         uint ucontextAddr = 0;
+         uint siginfoAddr = 0;
+
+         // Push UContext (approx 400 bytes inc fpstate)
+         // Align to 16 bytes
+         esp = (esp - 512u) & ~0xFu; 
+         ucontextAddr = esp;
+         
+         // Populate UContext
+         // uc_flags, uc_link, uc_stack, uc_mcontext, uc_sigmask
+         // mcontext is at offset 20 (4+4+12)
+         uint mcontextOffset = 4 + 4 + 12;
+         
+         // Save registers to mcontext
+         // GS, FS, ES, DS, EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX, TRAPNO, ERR, EIP, CS, EFL, UESP, SS
+         // Registers are at mcontextOffset usually.
+         // We use a simplified write.
+         WriteSigContext(esp + mcontextOffset);
+         
+         // Push SigInfo (128 bytes)
+         esp = (esp - 128u) & ~0xFu;
+         siginfoAddr = esp;
+         
+         // Populate SigInfo
+         // si_signo, si_errno, si_code
+         byte[] siBuf = new byte[12];
+         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), sig);
+         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
+         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
+         CPU.MemWrite(siginfoAddr, siBuf);
+
+         // Align stack for arguments
+         esp = (esp - 4u) & ~0xFu;
+         
+         // Check if we force 3 args?
+         // Push 3 args: sig, siginfo_ptr, ucontext_ptr
+         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(ucontextAddr));
+         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(siginfoAddr));
+         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(sig));
+         
+         // Push Return Address
+         // retAddr points to trampoline or restorer that calls sys_rt_sigreturn
+         esp -= 4u;
+         CPU.MemWrite(esp, BitConverter.GetBytes(retAddr));
+    }
+
+    private void WriteSigContext(uint addr)
+    {
+        // offset 0: gs, fs, es, ds
+        // offset 16: edi, esi, ebp, esp, ebx, edx, ecx, eax
+        // offset 48: trapno, err
+        // offset 56: eip, cs, efl, uesp, ss
+        try
+        {
+            byte[] buf = new byte[80];
+            var s = buf.AsSpan();
+            
+            // Segments (dummy for now)
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(0), 0); // GS
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(4), 0); // FS
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(8), 0); // ES
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(12), 0x2B); // DS (user data)
+            
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(16), CPU.RegRead(Reg.EDI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(20), CPU.RegRead(Reg.ESI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(24), CPU.RegRead(Reg.EBP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(28), CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(32), CPU.RegRead(Reg.EBX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(36), CPU.RegRead(Reg.EDX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(40), CPU.RegRead(Reg.ECX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(44), CPU.RegRead(Reg.EAX));
+            
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(56), CPU.Eip);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(60), 0x23); // CS (user code)
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(64), CPU.Eflags);
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(68), CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(72), 0x2B); // SS
+            
+            CPU.MemWrite(addr, buf);
+        }
+        catch { }
+    }
+
+    public void RestoreSigContext(uint addr)
+    {
+        // Reverse of WriteSigContext
+        // offset 16: edi, esi, ebp, esp, ebx, edx, ecx, eax
+        // offset 56: eip, cs, efl, uesp, ss
+        try
+        {
+            byte[] buf = CPU.MemRead(addr, 80);
+            var s = buf.AsSpan();
+            
+            CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(16)));
+            CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(20)));
+            CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(24)));
+            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(28))); // This overwrites current ESP
+            CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(32)));
+            CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(36)));
+            CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(40)));
+            CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(44)));
+            
+            CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(56));
+            CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(64));
+        }
+        catch { }
     }
 }
 

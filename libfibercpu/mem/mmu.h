@@ -229,6 +229,29 @@ public:
         tlb.flush();
     }
 
+    // API: munmap - Clear pages and permissions
+    void munmap(GuestAddr addr, uint32_t size) {
+        uint32_t start = addr & ~PAGE_MASK;
+        uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
+
+        for (uint32_t curr = start; curr < end_addr; curr += PAGE_SIZE) {
+            uint32_t l1_idx = curr >> 22;
+            uint32_t l2_idx = (curr >> 12) & 0x3FF;
+
+            auto& chunk = page_dir->l1_directory[l1_idx];
+            if (chunk) {
+                // Delete the page data
+                if (chunk->pages[l2_idx]) {
+                    delete[] chunk->pages[l2_idx];
+                    chunk->pages[l2_idx] = nullptr;
+                }
+                // Clear permissions
+                chunk->permissions[l2_idx] = Property::None;
+            }
+        }
+        tlb.flush();
+    }
+
     // Internal helper for resolution (TLB or Slow) without hooks
     [[nodiscard]] inline HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;

@@ -36,5 +36,6 @@ int main() {
     pthread_join(t2, NULL);
 
     print_str("All threads joined. Exiting.\n");
+    print_str("PASS: Pthread Basic\n");
     return 0;
 }

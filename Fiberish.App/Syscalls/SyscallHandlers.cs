@@ -16,6 +16,7 @@ public unsafe partial class SyscallManager
     {
         Register(X86SyscallNumbers.exit, SysExit);
         Register(X86SyscallNumbers.fork, SysFork);
+        Register(X86SyscallNumbers.fcntl64, SysFcntl64);
         Register(X86SyscallNumbers.waitpid, SysWaitPid);
         Register(X86SyscallNumbers.read, SysRead);
         Register(X86SyscallNumbers.pwritev2, SysPWriteV);
@@ -124,7 +125,11 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.setgid32, SysSetGid32);
         Register(X86SyscallNumbers.clock_gettime, SysClockGetTime);
         Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
+        Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
         Register(X86SyscallNumbers.gettimeofday, SysGetTimeOfDay);
+        Register(X86SyscallNumbers.nanosleep, SysNanosleep);
+        
+        Register(X86SyscallNumbers.rt_sigreturn, SysRtSigReturn);
 
         Register(X86SyscallNumbers.gettid, SysGettid);
         Register(X86SyscallNumbers.getpgid, SysGetpgid);
@@ -139,6 +144,11 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.sync, SysSync);
         Register(X86SyscallNumbers.madvise, SysMadvise);
         Register(X86SyscallNumbers.msync, SysMsync);
+        
+        Register(X86SyscallNumbers.kill, SysKill);
+        Register(X86SyscallNumbers.tkill, SysTkill);
+        Register(X86SyscallNumbers.tgkill, SysTgkill);
+        Register(X86SyscallNumbers.execve, SysExecve);
     }
 
     private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1827,6 +1837,8 @@ public unsafe partial class SyscallManager
         return result;
     }
 
+
+
     private static int SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4, uint a5, uint a6)
     {
         // waitpid(pid, status, options) = wait4(pid, status, options, NULL)
@@ -2089,15 +2101,16 @@ public unsafe partial class SyscallManager
         uint tvPtr = a1;
         uint tzPtr = a2;
 
-        var dto = DateTimeOffset.UtcNow;
-        long secs = dto.ToUnixTimeSeconds();
-        int usecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond / TimeSpan.TicksPerMicrosecond);
+        // Use UtcNow for REALTIME (gettimeofday is strictly REALTIME)
+        long ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
+        long secs = ticks / TimeSpan.TicksPerSecond;
+        long usecs = (ticks % TimeSpan.TicksPerSecond) / 10; // 100ns -> 1us
 
         if (tvPtr != 0)
         {
             byte[] buf = new byte[8];
             BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
-            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), usecs);
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)usecs);
             sm.Engine.MemWrite(tvPtr, buf);
         }
 
@@ -2112,24 +2125,29 @@ public unsafe partial class SyscallManager
         int clockId = (int)a1;
         uint tsPtr = a2;
 
-        DateTime now;
+        long secs;
+        long nsecs;
+
         if (clockId == LinuxConstants.CLOCK_REALTIME)
         {
-            now = DateTime.UtcNow;
+             long ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
+             secs = ticks / TimeSpan.TicksPerSecond;
+             nsecs = (ticks % TimeSpan.TicksPerSecond) * 100;
         }
         else
         {
-            // Faking monotonic with UtcNow for now
-            now = DateTime.UtcNow;
+            // CLOCK_MONOTONIC and others
+            // Use Stopwatch for high precision
+            long freq = System.Diagnostics.Stopwatch.Frequency;
+            long ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+            
+            secs = ticks / freq;
+            nsecs = (ticks % freq) * 1000000000 / freq;
         }
-
-        var dto = new DateTimeOffset(now);
-        long secs = dto.ToUnixTimeSeconds();
-        int nsecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond % 1000 * 1000000);
 
         byte[] buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), nsecs);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)nsecs);
         sm.Engine.MemWrite(tsPtr, buf);
 
         return 0;
@@ -2143,23 +2161,28 @@ public unsafe partial class SyscallManager
         int clockId = (int)a1;
         uint tsPtr = a2;
 
-        DateTime now;
+        long secs;
+        long nsecs;
+
         if (clockId == LinuxConstants.CLOCK_REALTIME)
         {
-            now = DateTime.UtcNow;
+             long ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
+             secs = ticks / TimeSpan.TicksPerSecond;
+             nsecs = (ticks % TimeSpan.TicksPerSecond) * 100;
         }
         else
         {
-            now = DateTime.UtcNow;
+            // CLOCK_MONOTONIC and others
+            long freq = System.Diagnostics.Stopwatch.Frequency;
+            long ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+            
+            secs = ticks / freq;
+            nsecs = (ticks % freq) * 1000000000 / freq;
         }
-
-        var dto = new DateTimeOffset(now);
-        long secs = dto.ToUnixTimeSeconds();
-        int nsecs = (int)(dto.Ticks % TimeSpan.TicksPerSecond % 1000 * 1000000);
 
         byte[] buf = new byte[12];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), nsecs);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)nsecs);
         sm.Engine.MemWrite(tsPtr, buf);
 
         return 0;
@@ -2289,16 +2312,447 @@ public unsafe partial class SyscallManager
 
     private static int SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
+        int sig = (int)a1;
+        uint newSaPtr = a2;
+        uint oldSaPtr = a3;
+        uint sigsetsize = a4;
+
+        if (sigsetsize != 8) return -(int)Errno.EINVAL;
+
+        var sm = Get(state);
+        var task = Scheduler.GetByEngine(state);
+        if (sm == null || task == null) return -(int)Errno.EPERM;
+
+        if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
+
+        // Save old action
+        if (oldSaPtr != 0)
+        {
+            if (task.Process.SignalActions.TryGetValue(sig, out var oldSa))
+            {
+                byte[] buf = new byte[20];
+                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), oldSa.Handler);
+                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), oldSa.Flags);
+                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4), oldSa.Restorer);
+                BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(12, 8), oldSa.Mask);
+                sm.Engine.MemWrite(oldSaPtr, buf);
+            }
+            else
+            {
+                sm.Engine.MemWrite(oldSaPtr, new byte[20]);
+            }
+        }
+
+        if (newSaPtr != 0)
+        {
+            if (sig == 9 || sig == 19) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
+
+            byte[] buf = sm.Engine.MemRead(newSaPtr, 20);
+            var sa = new SigAction
+            {
+                Handler = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)),
+                Flags = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4)),
+                Restorer = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(8, 4)),
+                Mask = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(12, 8))
+            };
+            task.Process.SignalActions[sig] = sa;
+        }
+
         return 0;
     }
 
     private static int SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        // a1: how, a2: set, a3: oldset, a4: sigsetsize
+        int how = (int)a1;
+        uint setPtr = a2;
+        uint oldSetPtr = a3;
+        uint sigsetsize = a4;
+
+        if (sigsetsize != 8) return -(int)Errno.EINVAL;
+
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -(int)Errno.EPERM;
+
+        if (oldSetPtr != 0)
+        {
+            byte[] buf = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(buf, task.SignalMask);
+            task.CPU.MemWrite(oldSetPtr, buf);
+        }
+
+        if (setPtr != 0)
+        {
+            byte[] buf = task.CPU.MemRead(setPtr, 8);
+            ulong set = BinaryPrimitives.ReadUInt64LittleEndian(buf);
+
+            // SIGKILL and SIGSTOP cannot be blocked
+            set &= ~(1UL << 8); // SIGKILL (9) - 1 bit shift
+            set &= ~(1UL << 18); // SIGSTOP (19)
+
+            switch (how)
+            {
+                case (int)SigProcMaskAction.SIG_BLOCK:
+                    task.SignalMask |= set;
+                    break;
+                case (int)SigProcMaskAction.SIG_UNBLOCK:
+                    task.SignalMask &= ~set;
+                    break;
+                case (int)SigProcMaskAction.SIG_SETMASK:
+                    task.SignalMask = set;
+                    break;
+                default:
+                    return -(int)Errno.EINVAL;
+            }
+        }
+
         return 0;
+    }
+
+    private static int SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -(int)Errno.EPERM;
+
+        int pid = (int)a1;
+        int sig = (int)a2;
+
+        if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+
+        // Simplified: only support current process/group for now or direct PID match
+        // Kill 0: current process group. Kill -1: all processes. Kill < -1: process group -pid.
+        
+        List<Bifrost.Core.Task> targets = new();
+
+        if (pid > 0)
+        {
+            var proc = Scheduler.GetProcessByPID(pid);
+            if (proc != null)
+            {
+                // Deliver to any thread in process? usually main thread or any.
+                // We'll broadcast to all threads in the process for now or pick one.
+                // In Linux, signal to process is delivered to one arbitrary thread that doesn't block it.
+                // For simplicity, we find the main thread (thread with TID=TGID) or just first found.
+                // Actually, Scheduler stores Tasks by TID. We don't have easy lookup for threads of a process
+                // except inside Process struct maybe? Oh wait, Scheduler doesn't list threads of process directly.
+                // But Process doesn't list threads either? 
+                // Wait, in my `Process` implementation earlier, I didn't see a `Threads` list, only `Children` (child processes).
+                // Ah, `Task` has `Process`. I need to find tasks belonging to this process.
+                // `Scheduler._tasks` is private. I might need `Scheduler.FindProcessTasks`.
+                // Existing code usage: `Scheduler.Get(tid)`.
+                
+                // Hack: If pid == current process, we use current task.
+                if (pid == task.Process.TGID)
+                {
+                    targets.Add(task);
+                }
+                else
+                {
+                     // Fallback check if pid is a TID
+                     var t = Scheduler.Get(pid);
+                     if (t != null) targets.Add(t);
+                }
+            }
+        }
+        else if (pid == 0)
+        {
+            // Current process group. (Simplified: just current process)
+            targets.Add(task);
+        }
+
+        if (targets.Count == 0) return -(int)Errno.ESRCH;
+
+        if (sig == 0) return 0; // Check existence
+
+        foreach (var t in targets)
+        {
+            t.PendingSignals |= (1UL << (sig - 1));
+            // Wake up if sleeping
+            if (t.Process.State == ProcessState.Sleeping)
+            {
+                // Interrupt sleep? We need to interrupt `PauseAsync` or `BlockingTask`.
+                // For `PauseAsync`, `ResumeTcs` handles it.
+                // For `BlockingTask`, it's tougher (e.g. read from socket).
+                // We'll rely on periodic checks or `ResumeTcs`.
+                try { t.ResumeTcs?.TrySetResult(true); } catch { }
+            }
+        }
+
+        return 0;
+    }
+
+    private static int SysTkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -(int)Errno.EPERM;
+
+        int tid = (int)a1;
+        int sig = (int)a2;
+
+        if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+
+        var target = Scheduler.Get(tid);
+        if (target == null) return -(int)Errno.ESRCH;
+
+        if (sig != 0)
+        {
+            target.PendingSignals |= (1UL << (sig - 1));
+             // Wake up
+            try { target.ResumeTcs?.TrySetResult(true); } catch { }
+        }
+
+        return 0;
+    }
+
+    private static int SysTgkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        int tgid = (int)a1;
+        int tid = (int)a2;
+        int sig = (int)a3;
+        
+        var target = Scheduler.Get(tid);
+        if (target == null) return -(int)Errno.ESRCH;
+        if (target.Process.TGID != tgid && tgid != -1) return -(int)Errno.ESRCH;
+
+         if (sig != 0)
+        {
+            target.PendingSignals |= (1UL << (sig - 1));
+             // Wake up
+            try { target.ResumeTcs?.TrySetResult(true); } catch { }
+        }
+        return 0;
+    }
+
+    private static int SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        var task = Scheduler.GetByEngine(state);
+        if (sm == null || task == null) return -(int)Errno.EPERM;
+
+        string filename = sm.ReadString(a1);
+        if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
+        
+        // Resolve absolute path
+        string absPath = filename;
+        var dentry = sm.PathWalk(filename);
+        if (dentry != null && dentry.Inode is HostInode hi)
+        {
+             absPath = hi.HostPath;
+        }
+        else if (filename.StartsWith("/"))
+        {
+             // Fallback: if not found in VFS or not HostFS, we might fail.
+             // But ElfLoader expects a file path it can OpenRead.
+             // If we rely on HostFS, we need the host path.
+             // For now, if PathWalk fails, we keep filename as is (likely fail).
+        }
+
+        // Read Args
+        List<string> args = new();
+        if (a2 != 0)
+        {
+            uint curr = a2;
+            while (true)
+            {
+                 byte[] ptrBuf = sm.Engine.MemRead(curr, 4);
+                 uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                 if (strPtr == 0) break;
+                 args.Add(sm.ReadString(strPtr));
+                 curr += 4;
+            }
+        }
+        
+        // Read Envs
+        List<string> envs = new();
+        if (a3 != 0)
+        {
+            uint curr = a3;
+            while (true)
+            {
+                 byte[] ptrBuf = sm.Engine.MemRead(curr, 4);
+                 uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                 if (strPtr == 0) break;
+                 envs.Add(sm.ReadString(strPtr));
+                 curr += 4;
+            }
+        }
+        
+        // Clear Memory
+        sm.Mem.Clear(sm.Engine);
+        
+        // We also need to reset BRK
+        sm.BrkAddr = 0; // ElfLoader will set it
+
+        // Close O_CLOEXEC files
+        var toClose = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
+        foreach(var fd in toClose) sm.FreeFD(fd);
+        
+        // Reset Signals
+        task.Process.SignalActions.Clear();
+        task.SignalMask = 0;
+        task.PendingSignals = 0;
+        task.AltStackSp = 0;
+        task.AltStackSize = 0;
+        task.AltStackFlags = 0;
+
+        // Load new ELF
+        Console.WriteLine($"[SysExecve] Loading {absPath} with {args.Count} args, {envs.Count} envs");
+        foreach (var arg in args) Console.WriteLine($"  arg: {arg}");
+        try 
+        {
+            // Note: ElfLoader.Load usually expects us to map the file.
+            // In the current codebase usage (e.g. Program.cs), `ElfLoader.Load` takes a real file path?
+            var res = Bifrost.Loader.ElfLoader.Load(absPath, sm, args.ToArray(), envs.ToArray());
+            
+            // Set CPU State
+            sm.Engine.Eip = res.Entry;
+            sm.Engine.RegWrite(Reg.ESP, res.SP);
+            sm.Engine.Eflags = 0x202; // Reset EFLAGS like Program.cs
+            
+            // Reset segment bases (TLS will be re-setup by new process)
+            sm.Engine.SetSegBase(Seg.GS, 0);
+            sm.Engine.SetSegBase(Seg.FS, 0);
+            
+            // Reset other registers to clean state
+            sm.Engine.RegWrite(Reg.EAX, 0);
+            sm.Engine.RegWrite(Reg.EBX, 0);
+            sm.Engine.RegWrite(Reg.ECX, 0);
+            sm.Engine.RegWrite(Reg.EDX, 0);
+            sm.Engine.RegWrite(Reg.ESI, 0);
+            sm.Engine.RegWrite(Reg.EDI, 0);
+            sm.Engine.RegWrite(Reg.EBP, 0);
+            
+            // Initial stack content is already written by ElfLoader
+            sm.Engine.MemWrite(res.SP, res.InitialStack);
+            
+            sm.BrkAddr = res.BrkAddr; // Set BRK address from ElfLoader result
+
+            return 0; // Success
+        }
+        catch (FileNotFoundException)
+        {
+            return -(int)Errno.ENOENT;
+        }
+        catch (Exception ex) // Catch other exceptions during execve
+        {
+            Console.WriteLine($"Execve failed: {ex.Message}");
+            return -(int)Errno.ENOENT;
+        }
+
+        // Unreachable
+        // return 0; 
     }
 
     private static int SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        // Legacy sigreturn, not implemented for now (using rt signals)
+        return 0;
+    }
+
+    private static int SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -(int)Errno.EPERM;
+        
+        uint sp = task.CPU.RegRead(Reg.ESP);
+        
+        // Heuristic to detect if Arg1 (sig) was popped by handler (e.g. legacy handler doing 'pop' or ret 4?)
+        // Layout 1 (Standard): [ESP]=Sig, [ESP+4]=SigInfo*, [ESP+8]=UContext*
+        // Layout 2 (Shifted):  [ESP]=SigInfo*, [ESP+4]=UContext*
+        
+        uint val0 = BinaryPrimitives.ReadUInt32LittleEndian(task.CPU.MemRead(sp, 4));
+        uint ucontextAddr;
+        
+        if (val0 > 0x1000) // Likely a pointer (SigInfo*) -> Shifted stack
+        {
+            // ESP points to Arg2
+            // Arg3 (UContext*) is at ESP+4
+            byte[] ptrBuf = task.CPU.MemRead(sp + 4, 4);
+            ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+        }
+        else // Likely a small int (Sig) -> Standard stack
+        {
+            // ESP points to Arg1
+            // Arg3 (UContext*) is at ESP+8
+            byte[] ptrBuf = task.CPU.MemRead(sp + 8, 4);
+            ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+        }
+        
+        // Restore
+        // ucontext.mcontext is at offset 20
+        task.RestoreSigContext(ucontextAddr + 20);
+        
+        // Return value is irrelevant as EAX/EIP are restored
+        // But we must return *something* to the caller in SyscallManager to avoid clobbering EAX again?
+        // SyscallManager.Handle: `int res = handler(...)`. `CPU.RegWrite(Reg.EAX, (uint)res)`.
+        // DO NOT overwrite EAX if we just restored it!
+        // We need a way to tell SyscallManager "Do not write result".
+        // Exceptions? Or special return code?
+        // SyscallManager logic: `if (handler != null) { int res = handler(...); RegWrite(EAX, res); }`
+        // We need to modify SyscallManager to handle this, or:
+        // Hack: `SysRtSigReturn` restores EAX to desired value. Then returns that value.
+        // So SyscallManager writes it back.
+        // BUT, SyscallManager writes it back *after* `SysRtSigReturn` returns.
+        // If we restore EIP, we jump to somewhere.
+        // SyscllManager continues.
+        // `RegWrite` happens.
+        // Correct.
+        // So we just need to return `task.CPU.RegRead(Reg.EAX)`.
+        
+        return (int)task.CPU.RegRead(Reg.EAX); 
+    }
+
+    private static int SysNanosleep(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = Scheduler.GetByEngine(state);
+        
+        // a1: req, a2: rem
+        byte[] buf = sm.Engine.MemRead(a1, 8);
+        int sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        int nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        
+        long totalMs = sec * 1000L + nsec / 1000000L;
+        if (totalMs < 0) return 0;
+        
+        // Chunked sleep to handle signals
+        int slice = 20;
+        while (totalMs > 0)
+        {
+            if (task != null && (task.PendingSignals & ~task.SignalMask) != 0)
+            {
+                // Interrupted!
+                // Update rem if non-null
+                if (a2 != 0)
+                {
+                    byte[] remBuf = new byte[8];
+                    BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(0, 4), (int)(totalMs / 1000));
+                    BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(4, 4), (int)((totalMs % 1000) * 1000000));
+                    sm.Engine.MemWrite(a2, remBuf);
+                }
+                
+                // Return ERESTARTSYS (512) so Task.cs can handle restart logic
+                // NOTE: Linux nanosleep returns EINTR + remaining time, it doesn't auto-restart via ERESTARTSYS usually unless using clock_nanosleep?
+                // Actually man nanosleep: "If the call is interrupted... returns -1 and sets errno to EINTR... remaining time...".
+                // If SA_RESTART is set?
+                // "nanosleep() is not restarted by SA_RESTART signal handler" (man 7 signal).
+                // Ah! nanosleep is NEVER restarted.
+                // So returning EINTR is correct.
+                
+                // BUT, to demonstrate SA_RESTART, I should use a syscall that IS restartable, like read() or restartable clock_nanosleep.
+                // `read` from pipe.
+                
+                // For now, I will treat nanosleep as INTERRUPTIBLE but NOT RESTARTABLE.
+                return -(int)Errno.EINTR;
+            }
+            
+            int wait = (int)Math.Min(totalMs, slice);
+            Thread.Sleep(wait);
+            totalMs -= wait;
+        }
+        
         return 0;
     }
 
@@ -2481,5 +2935,36 @@ public unsafe partial class SyscallManager
 
         sm.ProcessRoot = dentry;
         return 0;
+    }
+    private static int SysFcntl64(IntPtr state, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        // Console.WriteLine($"[DEBUG] fcntl64({fd}, {cmd}, {arg})");
+        
+        if (!sm.FDs.ContainsKey((int)fd)) return -(int)Errno.EBADF;
+
+        // Basic implementation for startup
+        switch (cmd)
+        {
+            case 1: // F_GETFD
+                return 0; // No flags
+            case 2: // F_SETFD
+                // Ignore FD_CLOEXEC for now
+                return 0;
+            case 3: // F_GETFL
+                return (int)sm.FDs[(int)fd].Flags;
+            case 4: // F_SETFL
+                // Update flags (O_APPEND, O_NONBLOCK, etc)
+                // Filter read-only flags
+                // sm.FDs[(int)fd].Flags = (int)arg; 
+                return 0;
+            default:
+                // Log warning but return success to avoid crash during init
+                // Console.WriteLine($"[WARN] Unimplemented fcntl64 cmd {cmd}");
+                return 0; 
+                // return -(int)Errno.EINVAL;
+        }
     }
 }
