@@ -104,7 +104,7 @@ inline uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
 // ModRM Read/Write (32-bit only for now)
 // ------------------------------------------------------------------------------------------------
 
-inline uint32_t ReadModRM32(EmuState* state, const DecodedOp* op) {
+inline uint32_t ReadModRM32(EmuState* state, const DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -114,11 +114,11 @@ inline uint32_t ReadModRM32(EmuState* state, const DecodedOp* op) {
     } else {
         // Memory Operand
         uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint32_t>(addr);
+        return state->mmu.read<uint32_t>(addr, utlb);
     }
 }
 
-inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val) {
+inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -128,11 +128,11 @@ inline void WriteModRM32(EmuState* state, const DecodedOp* op, uint32_t val) {
     } else {
         // Memory Operand
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint32_t>(addr, val);
+        state->mmu.write<uint32_t>(addr, val, utlb);
     }
 }
 
-inline void WriteModRM8(EmuState* state, const DecodedOp* op, uint8_t val) {
+inline void WriteModRM8(EmuState* state, const DecodedOp* op, uint8_t val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -148,11 +148,11 @@ inline void WriteModRM8(EmuState* state, const DecodedOp* op, uint8_t val) {
         *rptr = curr;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint8_t>(addr, val);
+        state->mmu.write<uint8_t>(addr, val, utlb);
     }
 }
 
-inline void WriteModRM16(EmuState* state, const DecodedOp* op, uint16_t val) {
+inline void WriteModRM16(EmuState* state, const DecodedOp* op, uint16_t val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -162,11 +162,11 @@ inline void WriteModRM16(EmuState* state, const DecodedOp* op, uint16_t val) {
         *rptr = (*rptr & 0xFFFF0000) | val;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint16_t>(addr, val);
+        state->mmu.write<uint16_t>(addr, val, utlb);
     }
 }
 
-inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op) {
+inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -179,11 +179,11 @@ inline uint8_t ReadModRM8(EmuState* state, const DecodedOp* op) {
             return (val >> 8) & 0xFF;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint8_t>(addr);
+        return state->mmu.read<uint8_t>(addr, utlb);
     }
 }
 
-inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op) {
+inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -192,11 +192,11 @@ inline uint16_t ReadModRM16(EmuState* state, const DecodedOp* op) {
         return GetReg(state, rm) & 0xFFFF;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint16_t>(addr);
+        return state->mmu.read<uint16_t>(addr, utlb);
     }
 }
 
-inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
+inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -204,8 +204,8 @@ inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
         return state->ctx.xmm[rm];
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t low = state->mmu.read<uint64_t>(addr);
-        uint64_t high = state->mmu.read<uint64_t>(addr + 8);
+        uint64_t low = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t high = state->mmu.read<uint64_t>(addr + 8, utlb);
 
         // Combine into simde__m128
         // Assuming little endian host and target
@@ -217,7 +217,7 @@ inline simde__m128 ReadModRM128(EmuState* state, const DecodedOp* op) {
     }
 }
 
-inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val) {
+inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -226,8 +226,8 @@ inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val)
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         uint64_t* ptr = (uint64_t*)&val;
-        state->mmu.write<uint64_t>(addr, ptr[0]);
-        state->mmu.write<uint64_t>(addr + 8, ptr[1]);
+        state->mmu.write<uint64_t>(addr, ptr[0], utlb);
+        state->mmu.write<uint64_t>(addr + 8, ptr[1], utlb);
     }
 }
 
@@ -235,35 +235,35 @@ inline void WriteModRM128(EmuState* state, const DecodedOp* op, simde__m128 val)
 // Stack Operations
 // ------------------------------------------------------------------------------------------------
 
-inline void Push16(EmuState* state, uint16_t val) {
+inline void Push16(EmuState* state, uint16_t val, mem::MicroTLB* utlb) {
     uint32_t esp = GetReg(state, ESP);
     esp -= 2;
     SetReg(state, ESP, esp);
-    state->mmu.write<uint16_t>(esp, val);
+    state->mmu.write<uint16_t>(esp, val, utlb);
 }
 
-inline uint16_t Pop16(EmuState* state) {
+inline uint16_t Pop16(EmuState* state, mem::MicroTLB* utlb) {
     uint32_t esp = GetReg(state, ESP);
-    uint16_t val = state->mmu.read<uint16_t>(esp);
+    uint16_t val = state->mmu.read<uint16_t>(esp, utlb);
     esp += 2;
     SetReg(state, ESP, esp);
     return val;
 }
 
-inline void Push32(EmuState* state, uint32_t val) {
+inline void Push32(EmuState* state, uint32_t val, mem::MicroTLB* utlb) {
     uint32_t esp = GetReg(state, ESP);
     esp -= 4;
     SetReg(state, ESP, esp);
 
     // Optimization: Assume Flat Stack (ignore SS base)
-    state->mmu.write<uint32_t>(esp, val);
+    state->mmu.write<uint32_t>(esp, val, utlb);
 }
 
-inline uint32_t Pop32(EmuState* state) {
+inline uint32_t Pop32(EmuState* state, mem::MicroTLB* utlb) {
     uint32_t esp = GetReg(state, ESP);
 
     // Optimization: Assume Flat Stack (ignore SS base)
-    uint32_t val = state->mmu.read<uint32_t>(esp);
+    uint32_t val = state->mmu.read<uint32_t>(esp, utlb);
 
     esp += 4;
     SetReg(state, ESP, esp);

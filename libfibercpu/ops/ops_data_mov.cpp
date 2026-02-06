@@ -10,71 +10,71 @@
 
 namespace x86emu {
 
-static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m16/32, r16/32 (0x89)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
-        WriteModRM16(state, op, val);
+        WriteModRM16(state, op, val, utlb);
     } else {
         uint32_t val = GetReg(state, reg);
-        WriteModRM32(state, op, val);
+        WriteModRM32(state, op, val, utlb);
     }
 }
 
-static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
     uint8_t src = (op->modrm >> 3) & 7;
     uint8_t dst = op->modrm & 7;
     SetReg(state, dst, GetReg(state, src));
 }
 
-static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV [mem], r32
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t val = GetReg(state, reg);
     uint32_t addr = ComputeLinearAddress(state, op);
-    state->mmu.write<uint32_t>(addr, val);
+    state->mmu.write<uint32_t>(addr, val, utlb);
 }
 
-static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t val = ReadModRM16(state, op);
+        uint16_t val = ReadModRM16(state, op, utlb);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
     } else {
-        uint32_t val = ReadModRM32(state, op);
+        uint32_t val = ReadModRM32(state, op, utlb);
         SetReg(state, reg, val);
     }
 }
 
-static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
     uint8_t dst = (op->modrm >> 3) & 7;
     uint8_t src = op->modrm & 7;
     SetReg(state, dst, GetReg(state, src));
 }
 
-static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t addr = ComputeLinearAddress(state, op);
-    SetReg(state, reg, state->mmu.read<uint32_t>(addr));
+    SetReg(state, reg, state->mmu.read<uint32_t>(addr, utlb));
 }
 
-static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, r8 (0x88)
     // Store 8-bit Reg into ModRM
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t val = GetReg8(state, reg);
-    WriteModRM8(state, op, val);
+    WriteModRM8(state, op, val, utlb);
 }
 
-static FORCE_INLINE void OpMov_GbEb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r8, r/m8 (0x8A)
     // Load 8-bit ModRM into Reg
-    uint8_t val = ReadModRM8(state, op);
+    uint8_t val = ReadModRM8(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
 
     // Write to 8-bit register
@@ -88,13 +88,13 @@ static FORCE_INLINE void OpMov_GbEb(EmuState* state, DecodedOp* op) {
     *rptr = curr;
 }
 
-static FORCE_INLINE void OpMov_EbIb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, imm8 (0xC6)
     uint8_t val = (uint8_t)op->imm;
-    WriteModRM8(state, op, val);
+    WriteModRM8(state, op, val, utlb);
 }
 
-static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // B8+reg: MOV r16/32, imm16/32
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -104,7 +104,7 @@ static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // B0+reg: MOV r8, imm8
     // Reg coding: 0=AL, 1=CL, 2=DL, 3=BL, 4=AH, 5=CH, 6=DH, 7=BH
     uint8_t reg = op->modrm & 7;
@@ -122,16 +122,16 @@ static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op) {
     *rptr = curr;
 }
 
-static FORCE_INLINE void OpMov_EvIz(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C7: MOV r/m16/32, imm16/32
     if (op->prefixes.flags.opsize) {
-        WriteModRM16(state, op, (uint16_t)op->imm);
+        WriteModRM16(state, op, (uint16_t)op->imm, utlb);
     } else {
-        WriteModRM32(state, op, op->imm);
+        WriteModRM32(state, op, op->imm, utlb);
     }
 }
 
-static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A0: MOV AL, moffs8 (Byte)
     // A1: MOV EAX, moffs32 (Word/Dword)
     uint32_t offset = op->imm;
@@ -139,21 +139,21 @@ static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op) {
 
     // A0: extra=0, A1: extra=1
     if (op->extra == 0) {  // A0
-        uint8_t val = state->mmu.read<uint8_t>(linear);
+        uint8_t val = state->mmu.read<uint8_t>(linear, utlb);
         uint32_t* rptr = GetRegPtr(state, EAX);
         *rptr = (*rptr & 0xFFFFFF00) | val;
     } else {  // A1
         if (op->prefixes.flags.opsize) {
-            uint16_t val = state->mmu.read<uint16_t>(linear);
+            uint16_t val = state->mmu.read<uint16_t>(linear, utlb);
             SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | val);
         } else {
-            uint32_t val = state->mmu.read<uint32_t>(linear);
+            uint32_t val = state->mmu.read<uint32_t>(linear, utlb);
             SetReg(state, EAX, val);
         }
     }
 }
 
-static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A2: MOV moffs8, AL
     // A3: MOV moffs32, EAX
     uint32_t offset = op->imm;
@@ -162,19 +162,19 @@ static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op) {
     // A2: extra=2, A3: extra=3
     if (op->extra == 2) {  // A2
         uint8_t val = GetReg8(state, EAX);
-        state->mmu.write<uint8_t>(linear, val);
+        state->mmu.write<uint8_t>(linear, val, utlb);
     } else {  // A3
         if (op->prefixes.flags.opsize) {
             uint16_t val = (uint16_t)GetReg(state, EAX);
-            state->mmu.write<uint16_t>(linear, val);
+            state->mmu.write<uint16_t>(linear, val, utlb);
         } else {
             uint32_t val = GetReg(state, EAX);
-            state->mmu.write<uint32_t>(linear, val);
+            state->mmu.write<uint32_t>(linear, val, utlb);
         }
     }
 }
 
-static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8E /r: MOV Sreg, r/m16
     uint8_t sreg_idx = (op->modrm >> 3) & 7;
     // 0=ES, 1=CS, 2=SS, 3=DS, 4=FS, 5=GS
@@ -193,7 +193,7 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
                   // selector = (uint16_t)GetReg(state, rm);
     } else {
         // uint32_t addr = ComputeLinearAddress(state, op);
-        // selector = state->mmu.read<uint16_t>(addr);
+        // selector = state->mmu.read<uint16_t>(addr, utlb);
         if (state->status != EmuStatus::Running) return;
     }
 
@@ -202,7 +202,7 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op) {
     // Base is preserved (assumed set by syscall).
 }
 
-static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8C /r: MOV r/m16, Sreg
     uint8_t sreg_idx = (op->modrm >> 3) & 7;
     if (sreg_idx > 5) return;
@@ -241,12 +241,12 @@ static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op) {
         }
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint16_t>(addr, val);
+        state->mmu.write<uint16_t>(addr, val, utlb);
     }
 }
 
 template <typename T>
-void Helper_Movs(EmuState* state, DecodedOp* op) {
+void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -289,10 +289,10 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
             // For now assume flat model (DS=0, ES=0)
             uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-            T val = state->mmu.read<T>(src_addr);
+            T val = state->mmu.read<T>(src_addr, utlb);
             if (state->status != EmuStatus::Running) break;
 
-            state->mmu.write<T>(edi, val);
+            state->mmu.write<T>(edi, val, utlb);
             if (state->status != EmuStatus::Running) break;
 
             SetReg(state, ESI, esi + step);
@@ -306,26 +306,26 @@ void Helper_Movs(EmuState* state, DecodedOp* op) {
         uint32_t edi = GetReg(state, EDI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-        T val = state->mmu.read<T>(src_addr);
-        state->mmu.write<T>(edi, val);
+        T val = state->mmu.read<T>(src_addr, utlb);
+        state->mmu.write<T>(edi, val, utlb);
 
         SetReg(state, ESI, esi + step);
         SetReg(state, EDI, edi + step);
     }
 }
 
-static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op) { Helper_Movs<uint8_t>(state, op); }
+static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Movs<uint8_t>(state, op, utlb); }
 
-static FORCE_INLINE void OpMovs_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMovs_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize) {
-        Helper_Movs<uint16_t>(state, op);
+        Helper_Movs<uint16_t>(state, op, utlb);
     } else {
-        Helper_Movs<uint32_t>(state, op);
+        Helper_Movs<uint32_t>(state, op, utlb);
     }
 }
 
 template <typename T>
-void Helper_Stos(EmuState* state, DecodedOp* op) {
+void Helper_Stos(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -343,7 +343,7 @@ void Helper_Stos(EmuState* state, DecodedOp* op) {
         while (ecx > 0) {
             uint32_t edi = GetReg(state, EDI);
             // Dest ES:EDI
-            state->mmu.write<T>(edi, val);
+            state->mmu.write<T>(edi, val, utlb);
 
             SetReg(state, EDI, edi + step);
 
@@ -352,24 +352,24 @@ void Helper_Stos(EmuState* state, DecodedOp* op) {
         }
     } else {
         uint32_t edi = GetReg(state, EDI);
-        state->mmu.write<T>(edi, val);
+        state->mmu.write<T>(edi, val, utlb);
         SetReg(state, EDI, edi + step);
     }
 }
 
-static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op) { Helper_Stos<uint8_t>(state, op); }
+static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Stos<uint8_t>(state, op, utlb); }
 
-static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize) {
-        Helper_Stos<uint16_t>(state, op);
+        Helper_Stos<uint16_t>(state, op, utlb);
     } else {
-        Helper_Stos<uint32_t>(state, op);
+        Helper_Stos<uint32_t>(state, op, utlb);
     }
 }
 
-static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B6: MOVZX r16/32, r/m8
-    uint8_t val = ReadModRM8(state, op);
+    uint8_t val = ReadModRM8(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
@@ -378,10 +378,10 @@ static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B7: MOVZX r16/32, r/m16
     // Note: MOVZX r16, m16 is effectively MOV r16, m16
-    uint16_t val = ReadModRM16(state, op);
+    uint16_t val = ReadModRM16(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
@@ -390,9 +390,9 @@ static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMovsx_Byte(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BE: MOVSX r16/32, r/m8
-    uint8_t val = ReadModRM8(state, op);
+    uint8_t val = ReadModRM8(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)(int16_t)(int8_t)val);
@@ -401,10 +401,10 @@ static FORCE_INLINE void OpMovsx_Byte(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpMovsx_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BF: MOVSX r16/32, r/m16
     // Note: MOVSX r16, m16 is effectively MOV r16, m16
-    uint16_t val = ReadModRM16(state, op);
+    uint16_t val = ReadModRM16(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
@@ -413,7 +413,7 @@ static FORCE_INLINE void OpMovsx_Word(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpLea(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpLea(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // LEA r16/32, m (0x8D)
     uint32_t addr = ComputeEA(state, op);
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -424,50 +424,50 @@ static FORCE_INLINE void OpLea(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // PUSH r16/32 (0x50+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        Push16(state, (uint16_t)GetReg(state, reg));
+        Push16(state, (uint16_t)GetReg(state, reg), utlb);
     } else {
-        Push32(state, GetReg(state, reg));
+        Push32(state, GetReg(state, reg), utlb);
     }
 }
 
-static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // PUSH imm32 (0x68) or PUSH imm8 (0x6A)
     // Decoder already extracted imm to op->imm
     uint32_t val = op->imm;
     if (op->extra == 0xA) {  // 6A
         val = (int32_t)(int8_t)val;
     }
-    Push32(state, val);
+    Push32(state, val, utlb);
 }
 
-static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // POP r16/32 (0x58+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t val = Pop16(state);
+        uint16_t val = Pop16(state, utlb);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
     } else {
-        uint32_t val = Pop32(state);
+        uint32_t val = Pop32(state, utlb);
         SetReg(state, reg, val);
     }
 }
 
-static FORCE_INLINE void OpXchg_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // XCHG r/m16/32, r16/32 (0x87)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         uint16_t reg_val = (uint16_t)GetReg(state, reg);
-        uint16_t rm_val = ReadModRM16(state, op);
-        WriteModRM16(state, op, reg_val);
+        uint16_t rm_val = ReadModRM16(state, op, utlb);
+        WriteModRM16(state, op, reg_val, utlb);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | rm_val);
     } else {
         uint32_t reg_val = GetReg(state, reg);
-        uint32_t rm_val = ReadModRM32(state, op);
-        WriteModRM32(state, op, reg_val);
+        uint32_t rm_val = ReadModRM32(state, op, utlb);
+        WriteModRM32(state, op, reg_val, utlb);
         SetReg(state, reg, rm_val);
     }
 }
@@ -477,14 +477,14 @@ static FORCE_INLINE void OpXchg_EvGv(EmuState* state, DecodedOp* op) {
 // ------------------------------------------------------------------------------------------------
 
 template <typename T>
-void Helper_Lods(EmuState* state, DecodedOp* op) {
+void Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&](uint32_t& ecx_ref) {
         uint32_t esi = GetReg(state, ESI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T val = state->mmu.read<T>(src_addr);
+        T val = state->mmu.read<T>(src_addr, utlb);
 
         if constexpr (sizeof(T) == 1) {
             uint32_t* rptr = GetRegPtr(state, EAX);
@@ -511,23 +511,23 @@ void Helper_Lods(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op) { Helper_Lods<uint8_t>(state, op); }
-static FORCE_INLINE void OpLods_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Lods<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpLods_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        Helper_Lods<uint16_t>(state, op);
+        Helper_Lods<uint16_t>(state, op, utlb);
     else
-        Helper_Lods<uint32_t>(state, op);
+        Helper_Lods<uint32_t>(state, op, utlb);
 }
 
 template <typename T>
-void Helper_Scas(EmuState* state, DecodedOp* op) {
+void Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() {
         uint32_t edi = GetReg(state, EDI);
         // ES:[EDI]
-        T mem_val = state->mmu.read<T>(edi);
+        T mem_val = state->mmu.read<T>(edi, utlb);
         T acc;
         if constexpr (sizeof(T) == 1)
             acc = (T)GetReg(state, EAX);
@@ -561,16 +561,16 @@ void Helper_Scas(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op) { Helper_Scas<uint8_t>(state, op); }
-static FORCE_INLINE void OpScas_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Scas<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpScas_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        Helper_Scas<uint16_t>(state, op);
+        Helper_Scas<uint16_t>(state, op, utlb);
     else
-        Helper_Scas<uint32_t>(state, op);
+        Helper_Scas<uint32_t>(state, op, utlb);
 }
 
 template <typename T>
-void Helper_Cmps(EmuState* state, DecodedOp* op) {
+void Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -579,8 +579,8 @@ void Helper_Cmps(EmuState* state, DecodedOp* op) {
         uint32_t edi = GetReg(state, EDI);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T src_val = state->mmu.read<T>(src_addr);
-        T dst_val = state->mmu.read<T>(edi);  // ES:EDI
+        T src_val = state->mmu.read<T>(src_addr, utlb);
+        T dst_val = state->mmu.read<T>(edi, utlb);  // ES:EDI
 
         AluSub<T>(state, src_val, dst_val);
 
@@ -607,71 +607,71 @@ void Helper_Cmps(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op) { Helper_Cmps<uint8_t>(state, op); }
-static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Cmps<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        Helper_Cmps<uint16_t>(state, op);
+        Helper_Cmps<uint16_t>(state, op, utlb);
     else
-        Helper_Cmps<uint32_t>(state, op);
+        Helper_Cmps<uint32_t>(state, op, utlb);
 }
 
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (PUSHA, POPA, ENTER, LEAVE)
 // ------------------------------------------------------------------------------------------------
 
-static FORCE_INLINE void OpPusha(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 60: PUSHA/PUSHAD
     if (op->prefixes.flags.opsize) {
         // PUSHA (16-bit)
         uint16_t temp = GetReg(state, ESP) & 0xFFFF;
-        Push16(state, (uint16_t)GetReg(state, EAX));
-        Push16(state, (uint16_t)GetReg(state, ECX));
-        Push16(state, (uint16_t)GetReg(state, EDX));
-        Push16(state, (uint16_t)GetReg(state, EBX));
-        Push16(state, temp);
-        Push16(state, (uint16_t)GetReg(state, EBP));
-        Push16(state, (uint16_t)GetReg(state, ESI));
-        Push16(state, (uint16_t)GetReg(state, EDI));
+        Push16(state, (uint16_t)GetReg(state, EAX), utlb);
+        Push16(state, (uint16_t)GetReg(state, ECX), utlb);
+        Push16(state, (uint16_t)GetReg(state, EDX), utlb);
+        Push16(state, (uint16_t)GetReg(state, EBX), utlb);
+        Push16(state, temp, utlb);
+        Push16(state, (uint16_t)GetReg(state, EBP), utlb);
+        Push16(state, (uint16_t)GetReg(state, ESI), utlb);
+        Push16(state, (uint16_t)GetReg(state, EDI), utlb);
     } else {
         // PUSHAD (32-bit)
         uint32_t temp = GetReg(state, ESP);
-        Push32(state, GetReg(state, EAX));
-        Push32(state, GetReg(state, ECX));
-        Push32(state, GetReg(state, EDX));
-        Push32(state, GetReg(state, EBX));
-        Push32(state, temp);
-        Push32(state, GetReg(state, EBP));
-        Push32(state, GetReg(state, ESI));
-        Push32(state, GetReg(state, EDI));
+        Push32(state, GetReg(state, EAX), utlb);
+        Push32(state, GetReg(state, ECX), utlb);
+        Push32(state, GetReg(state, EDX), utlb);
+        Push32(state, GetReg(state, EBX), utlb);
+        Push32(state, temp, utlb);
+        Push32(state, GetReg(state, EBP), utlb);
+        Push32(state, GetReg(state, ESI), utlb);
+        Push32(state, GetReg(state, EDI), utlb);
     }
 }
 
-static FORCE_INLINE void OpPopa(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 61: POPA/POPAD
     if (op->prefixes.flags.opsize) {
         // POPA (16-bit)
-        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | Pop16(state));
-        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | Pop16(state));
-        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | Pop16(state));
-        Pop16(state);  // Skip SP
-        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | Pop16(state));
-        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | Pop16(state));
-        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | Pop16(state));
-        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | Pop16(state));
+        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | Pop16(state, utlb));
+        Pop16(state, utlb);  // Skip SP
+        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | Pop16(state, utlb));
     } else {
         // POPAD (32-bit)
-        SetReg(state, EDI, Pop32(state));
-        SetReg(state, ESI, Pop32(state));
-        SetReg(state, EBP, Pop32(state));
-        Pop32(state);  // Skip ESP
-        SetReg(state, EBX, Pop32(state));
-        SetReg(state, EDX, Pop32(state));
-        SetReg(state, ECX, Pop32(state));
-        SetReg(state, EAX, Pop32(state));
+        SetReg(state, EDI, Pop32(state, utlb));
+        SetReg(state, ESI, Pop32(state, utlb));
+        SetReg(state, EBP, Pop32(state, utlb));
+        Pop32(state, utlb);  // Skip ESP
+        SetReg(state, EBX, Pop32(state, utlb));
+        SetReg(state, EDX, Pop32(state, utlb));
+        SetReg(state, ECX, Pop32(state, utlb));
+        SetReg(state, EAX, Pop32(state, utlb));
     }
 }
 
-static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
     uint16_t size = op->imm & 0xFFFF;
@@ -699,7 +699,7 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op) {
     // Let's implement Level 0 logic first.
 
     // Standard ENTER:
-    Push32(state, GetReg(state, EBP));
+    Push32(state, GetReg(state, EBP), utlb);
     uint32_t frame_ptr = GetReg(state, ESP);
 
     if (level > 0) {
@@ -711,20 +711,20 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op) {
     SetReg(state, ESP, frame_ptr - size);
 }
 
-static FORCE_INLINE void OpLeave(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C9: LEAVE
     // MOV ESP, EBP
     uint32_t ebp = GetReg(state, EBP);
     SetReg(state, ESP, ebp);
     // POP EBP
-    SetReg(state, EBP, Pop32(state));
+    SetReg(state, EBP, Pop32(state, utlb));
 }
 
 // ------------------------------------------------------------------------------------------------
 // Flag/Misc Operations (LAHF, SAHF, XCHG)
 // ------------------------------------------------------------------------------------------------
 
-static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9F: LAHF
     // AH <- EFLAGS(SF:ZF:0:AF:0:PF:1:CF)
     uint32_t flags = state->ctx.eflags;
@@ -738,7 +738,7 @@ static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op) {
     SetReg(state, EAX, eax);
 }
 
-static FORCE_INLINE void OpSahf(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9E: SAHF
     // EFLAGS(SF:ZF:0:AF:0:PF:1:CF) <- AH
     uint32_t eax = GetReg(state, EAX);
@@ -767,16 +767,16 @@ static FORCE_INLINE void OpSahf(EmuState* state, DecodedOp* op) {
     state->ctx.eflags = flags;
 }
 
-static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 86: XCHG r/m8, r8
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t* rptr = GetRegPtr(state, reg & 3);
     uint8_t reg_val = (reg < 4) ? (*rptr & 0xFF) : ((*rptr >> 8) & 0xFF);
 
-    uint8_t rm_val = ReadModRM8(state, op);
+    uint8_t rm_val = ReadModRM8(state, op, utlb);
 
     // Write reg_val to RM
-    WriteModRM8(state, op, reg_val);
+    WriteModRM8(state, op, reg_val, utlb);
 
     // Write rm_val to Reg
     uint32_t mask = (reg < 4) ? 0xFF : 0xFF00;
@@ -784,7 +784,7 @@ static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op) {
     *rptr = (*rptr & ~mask) | (rm_val << shift);
 }
 
-static FORCE_INLINE void OpXchg_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 90+reg: XCHG EAX, r16/32
     uint8_t reg = op->modrm & 7;
     if (reg == 0) return;  // NOP

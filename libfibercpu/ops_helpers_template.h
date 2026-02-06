@@ -9,10 +9,11 @@ namespace x86emu {
 
 // Forward declarations (from ops/ops_groups.h)
 void OpUd2(EmuState* state, DecodedOp* op);
+void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 
 // Template Helper for Group 1 (ALU operations with immediate)
 template <typename T>
-void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src) {
+void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb) {
     uint8_t subop = (op->modrm >> 3) & 7;
     T res = 0;
 
@@ -47,17 +48,17 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src) {
     }
 
     if constexpr (sizeof(T) == 1) {
-        WriteModRM8(state, op, (uint8_t)res);
+        WriteModRM8(state, op, (uint8_t)res, utlb);
     } else if constexpr (sizeof(T) == 2) {
-        WriteModRM16(state, op, (uint16_t)res);
+        WriteModRM16(state, op, (uint16_t)res, utlb);
     } else {
-        WriteModRM32(state, op, (uint32_t)res);
+        WriteModRM32(state, op, (uint32_t)res, utlb);
     }
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
 template <typename T>
-void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
+void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     switch (subop) {
@@ -69,11 +70,11 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
         }
         case 2:  // NOT
             if constexpr (sizeof(T) == 1)
-                WriteModRM8(state, op, ~val);
+                WriteModRM8(state, op, ~val, utlb);
             else if constexpr (sizeof(T) == 2)
-                WriteModRM16(state, op, ~val);
+                WriteModRM16(state, op, ~val, utlb);
             else
-                WriteModRM32(state, op, ~val);
+                WriteModRM32(state, op, ~val, utlb);
             break;
         case 3:  // NEG
         {
@@ -84,11 +85,11 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val) {
                 state->ctx.eflags &= ~CF_MASK;
 
             if constexpr (sizeof(T) == 1)
-                WriteModRM8(state, op, res);
+                WriteModRM8(state, op, res, utlb);
             else if constexpr (sizeof(T) == 2)
-                WriteModRM16(state, op, res);
+                WriteModRM16(state, op, res, utlb);
             else
-                WriteModRM32(state, op, res);
+                WriteModRM32(state, op, res, utlb);
             break;
         }
         case 4:  // MUL (Unsigned)

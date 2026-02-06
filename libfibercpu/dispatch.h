@@ -12,13 +12,13 @@ extern HandlerFunc g_Handlers[1024];
 extern HandlerFunc g_Handlers_NF[1024];
 
 template <LogicFunc Target>
-ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* state, DecodedOp* op, int64_t instr_limit) {
+ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {
     uint32_t original_eip = state->ctx.eip;
     // Advance EIP before execution
     state->ctx.eip += op->length;
 
     // Execute Logic
-    Target(state, op);
+    Target(state, op, &utlb);
 
     // Update last_opcode for profiling
     state->ctx.last_opcode = op->opcode;
@@ -40,7 +40,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* state, DecodedOp* op, int64
     // Note: We don't check for 0 here for speed, assuming well-formed blocks
     // (sentinel always valid)
     HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-    ATTR_MUSTTAIL return h(state, next, instr_limit);
+    ATTR_MUSTTAIL return h(state, next, instr_limit, utlb);
 }
 
 // Registration Helper

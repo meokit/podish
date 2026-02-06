@@ -10,10 +10,8 @@
 
 namespace x86emu {
 
-void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte) {
+void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte, mem::MicroTLB* utlb) {
     uint8_t subop = (op->modrm >> 3) & 7;
-    // printf("[Group2] Sub=%d Dest=%08X Count=%d Byte=%d\n", subop, dest, count,
-    // is_byte);
     uint32_t res = dest;
 
     // Mask count
@@ -100,42 +98,54 @@ void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
 
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            state->mmu.write<uint8_t>(addr, (uint8_t)res);
+            state->mmu.write<uint8_t>(addr, (uint8_t)res, utlb);
         }
     } else if (is_opsize) {
-        WriteModRM16(state, op, (uint16_t)res);
+        WriteModRM16(state, op, (uint16_t)res, utlb);
     } else {
-        WriteModRM32(state, op, res);
+        WriteModRM32(state, op, res, utlb);
     }
 }
 
-static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     bool is_byte = (op->extra == 0);
-    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint32_t dest;
+    if (is_byte) dest = ReadModRM8(state, op, utlb);
+    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+    else dest = ReadModRM32(state, op, utlb);
+
     uint8_t count = (uint8_t)op->imm;
-    Helper_Group2(state, op, dest, count, is_byte);
+    Helper_Group2(state, op, dest, count, is_byte, utlb);
 }
 
-static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D0: r/m8, 1
     // D1: r/m32, 1
     bool is_byte = (op->extra == 0);
-    uint32_t dest = ReadModRM(state, op, is_byte);
-    Helper_Group2(state, op, dest, 1, is_byte);
+    uint32_t dest;
+    if (is_byte) dest = ReadModRM8(state, op, utlb);
+    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+    else dest = ReadModRM32(state, op, utlb);
+
+    Helper_Group2(state, op, dest, 1, is_byte, utlb);
 }
 
-static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     bool is_byte = (op->extra == 2);
-    uint32_t dest = ReadModRM(state, op, is_byte);
+    uint32_t dest;
+    if (is_byte) dest = ReadModRM8(state, op, utlb);
+    else if (op->prefixes.flags.opsize) dest = ReadModRM16(state, op, utlb);
+    else dest = ReadModRM32(state, op, utlb);
+
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    Helper_Group2(state, op, dest, count, is_byte);
+    Helper_Group2(state, op, dest, count, is_byte, utlb);
 }
 
-static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A3: BT r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -159,7 +169,7 @@ static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
         }
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
-        bit_val = (state->mmu.read<uint8_t>(addr) >> bit_idx) & 1;
+        bit_val = (state->mmu.read<uint8_t>(addr, utlb) >> bit_idx) & 1;
     }
 
     if (bit_val)
@@ -168,7 +178,7 @@ static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op) {
         state->ctx.eflags &= ~CF_MASK;
 }
 
-static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BA /4: BT  r/m16/32, imm8
     // 0F BA /5: BTS r/m16/32, imm8
     // 0F BA /6: BTR r/m16/32, imm8
@@ -185,9 +195,9 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
     if (is_mem) {
         addr = ComputeLinearAddress(state, op);
         if (opsize) {
-            base = state->mmu.read<uint16_t>(addr);
+            base = state->mmu.read<uint16_t>(addr, utlb);
         } else {
-            base = state->mmu.read<uint32_t>(addr);
+            base = state->mmu.read<uint32_t>(addr, utlb);
         }
     } else {
         if (opsize) {
@@ -219,9 +229,9 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
 
         if (is_mem) {
             if (opsize)
-                state->mmu.write<uint16_t>(addr, (uint16_t)res);
+                state->mmu.write<uint16_t>(addr, (uint16_t)res, utlb);
             else
-                state->mmu.write<uint32_t>(addr, res);
+                state->mmu.write<uint32_t>(addr, res, utlb);
         } else {
             if (opsize)
                 SetReg(state, op->modrm & 7, (GetReg(state, op->modrm & 7) & 0xFFFF0000) | (uint16_t)res);
@@ -233,7 +243,7 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B3: BTR r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -252,9 +262,9 @@ static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
 
-        uint8_t byte = state->mmu.read<uint8_t>(addr);
+        uint8_t byte = state->mmu.read<uint8_t>(addr, utlb);
         bit_val = (byte >> bit_idx) & 1;
-        state->mmu.write<uint8_t>(addr, byte & ~(1 << bit_idx));
+        state->mmu.write<uint8_t>(addr, byte & ~(1 << bit_idx), utlb);
     }
 
     if (bit_val)
@@ -263,7 +273,7 @@ static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op) {
         state->ctx.eflags &= ~CF_MASK;
 }
 
-static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AB: BTS r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -282,9 +292,9 @@ static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op) {
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
 
-        uint8_t byte = state->mmu.read<uint8_t>(addr);
+        uint8_t byte = state->mmu.read<uint8_t>(addr, utlb);
         bit_val = (byte >> bit_idx) & 1;
-        state->mmu.write<uint8_t>(addr, byte | (1 << bit_idx));
+        state->mmu.write<uint8_t>(addr, byte | (1 << bit_idx), utlb);
     }
 
     if (bit_val)
@@ -293,7 +303,7 @@ static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op) {
         state->ctx.eflags &= ~CF_MASK;
 }
 
-static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BB: BTC r/m16/32, r16/32
     uint32_t offset = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -312,9 +322,9 @@ static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op) {
         addr += (signed_offset >> 3);
         uint8_t bit_idx = signed_offset & 7;
 
-        uint8_t byte = state->mmu.read<uint8_t>(addr);
+        uint8_t byte = state->mmu.read<uint8_t>(addr, utlb);
         bit_val = (byte >> bit_idx) & 1;
-        state->mmu.write<uint8_t>(addr, byte ^ (1 << bit_idx));
+        state->mmu.write<uint8_t>(addr, byte ^ (1 << bit_idx), utlb);
     }
 
     if (bit_val)
@@ -323,9 +333,9 @@ static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op) {
         state->ctx.eflags &= ~CF_MASK;
 }
 
-static FORCE_INLINE void OpBsr_GvEv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BD: BSR r32, r/m32
-    uint32_t src = ReadModRM32(state, op);
+    uint32_t src = ReadModRM32(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
 
     if (src == 0) {
@@ -341,11 +351,11 @@ static FORCE_INLINE void OpBsr_GvEv(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BC: BSF r32, r/m32
     // F3 0F BC: TZCNT r32, r/m32
 
-    uint32_t src = ReadModRM32(state, op);
+    uint32_t src = ReadModRM32(state, op, utlb);
     uint8_t reg = (op->modrm >> 3) & 7;
 
     if (op->prefixes.flags.rep) {
@@ -376,7 +386,7 @@ static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op) {
     }
 }
 
-static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F C8+rd: BSWAP r32
     // DecodeInstruction puts rd in op->modrm for non-ModRM ops
     uint8_t reg = op->modrm & 7;

@@ -6,7 +6,7 @@ namespace x86emu {
 // Sentinel Handler
 template<int I>
 ATTR_PRESERVE_NONE
-int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
+int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {
     // End of Threaded Dispatch Chain.
     if (op->next_block) {
         // Basic Block Chaining
@@ -23,7 +23,7 @@ int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit) {
                 int32_t offset = next_head->handler_offset;
                 if (offset != 0) {
                     HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-                    ATTR_MUSTTAIL return h(state, next_head, instr_limit);
+                    ATTR_MUSTTAIL return h(state, next_head, instr_limit, utlb);
                 }
             }
         }

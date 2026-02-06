@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include "common.h"
+#include "mem/tlb.h"
 
 #ifdef __clang__
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
@@ -19,10 +20,10 @@ struct EmuState;
 struct DecodedOp;
 
 // Logic Function (Standard ABI, implementation)
-using LogicFunc = void (*)(EmuState* state, DecodedOp* op);
+using LogicFunc = void (*)(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
-using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit);
+using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb);
 
 struct BasicBlock;
 

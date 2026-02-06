@@ -10,75 +10,75 @@
 
 namespace x86emu {
 
-static FORCE_INLINE void OpCmp_EbGb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 38: CMP r/m8, r8
-    uint8_t dest = ReadModRM8(state, op);
+    uint8_t dest = ReadModRM8(state, op, utlb);
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     AluSub(state, dest, src);
 }
 
-static FORCE_INLINE void OpCmp_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 39: CMP r/m32, r32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op);
+        uint16_t dest = ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         AluSub(state, dest, src);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         AluSub(state, dest, src);
     }
 }
 
-static FORCE_INLINE void OpCmp_GbEb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3A: CMP r8, r/m8
     uint8_t dest = GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t src = ReadModRM8(state, op);
+    uint8_t src = ReadModRM8(state, op, utlb);
     AluSub(state, dest, src);
 }
 
-static FORCE_INLINE void OpCmp_GvEv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3B: CMP r32, r/m32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
-        uint16_t src = ReadModRM16(state, op);
+        uint16_t src = ReadModRM16(state, op, utlb);
         AluSub(state, dest, src);
     } else {
         uint32_t dest = GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t src = ReadModRM32(state, op);
+        uint32_t src = ReadModRM32(state, op, utlb);
         AluSub(state, dest, src);
     }
 }
 
-static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 85: TEST r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op);
+        uint16_t dest = ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, reg);
         AluAnd<uint16_t>(state, dest, src);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, reg);
         AluAnd<uint32_t>(state, dest, src);
     }
 }
 
-static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 9x: SETcc r/m8
     uint8_t cond = op->extra;
     uint8_t val = CheckCondition(state, cond) ? 1 : 0;
-    WriteModRM8(state, op, val);
+    WriteModRM8(state, op, val, utlb);
 }
 
-static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B0/B1: CMPXCHG r/m, r
     bool is_byte = (op->extra == 0);
 
     if (is_byte) {
         uint8_t acc = GetReg(state, EAX) & 0xFF;
         uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);  // Reg
-        uint8_t dest = ReadModRM8(state, op);                // Mem/Reg
+        uint8_t dest = ReadModRM8(state, op, utlb);                // Mem/Reg
 
         // Temp = Dest - Acc
         AluSub<uint8_t>(state, acc, dest);  // Sets flags based on ACC - DEST?
@@ -99,7 +99,7 @@ static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op) {
         AluSub<uint8_t>(state, acc, dest);
 
         if (state->ctx.eflags & ZF_MASK) {
-            WriteModRM8(state, op, src);
+            WriteModRM8(state, op, src, utlb);
         } else {
             // Load Dest into AL
             uint32_t val = GetReg(state, EAX);
@@ -113,23 +113,23 @@ static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op) {
         if (op->prefixes.flags.opsize) {
             uint16_t acc16 = (uint16_t)acc;
             uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
-            uint16_t dest = ReadModRM16(state, op);
+            uint16_t dest = ReadModRM16(state, op, utlb);
 
             AluSub<uint16_t>(state, acc16, dest);
 
             if (state->ctx.eflags & ZF_MASK) {
-                WriteModRM16(state, op, src);
+                WriteModRM16(state, op, src, utlb);
             } else {
                 SetReg(state, EAX, (acc & 0xFFFF0000) | dest);
             }
         } else {
             uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
-            uint32_t dest = ReadModRM32(state, op);
+            uint32_t dest = ReadModRM32(state, op, utlb);
 
             AluSub<uint32_t>(state, acc, dest);
 
             if (state->ctx.eflags & ZF_MASK) {
-                WriteModRM32(state, op, src);
+                WriteModRM32(state, op, src, utlb);
             } else {
                 SetReg(state, EAX, dest);
             }

@@ -6,10 +6,22 @@
 #include "types.h"
 
 namespace x86emu::mem {
+    
+struct alignas(16) MicroTLB {
+    uint32_t tag_r = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
+    uint32_t tag_w = std::numeric_limits<uint32_t>::max(); 
+    std::uintptr_t addend = 0;
+
+    void invalidate() {
+        tag_r = std::numeric_limits<decltype(tag_r)>::max();
+        tag_w = std::numeric_limits<decltype(tag_w)>::max();
+        addend = 0;
+    }
+};
 
 struct alignas(16) TlbEntry {
-    uint32_t tag = 1;  // Mismatch by default (odd value for even aligned vars)
-    uint32_t padding = 0;
+    uint32_t tag = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
+    Property perm = Property::None; 
     std::uintptr_t addend = 0;
 };
 
@@ -30,7 +42,7 @@ public:
     void flush() {
         auto invalidate = [&](auto& arr) {
             for (auto& entry : arr) {
-                entry.tag = 1; // Impossible tag for aligned address
+                entry.tag = std::numeric_limits<decltype(entry.tag)>::max();
                 entry.addend = 0;
             }
         };
@@ -46,16 +58,16 @@ public:
         const std::uintptr_t addend = reinterpret_cast<std::uintptr_t>(hptr) - static_cast<std::uintptr_t>(tag);
 
         if (has_property(property, Property::Read)) {
-            read_tlb[idx] = {tag, 0, addend};
+            read_tlb[idx] = {tag, property, addend};
         }
         
         // Write TLB: Only if Write AND Dirty are set
         if (has_property(property, Property::Write) && has_property(property, Property::Dirty)) {
-            write_tlb[idx] = {tag, 0, addend};
+            write_tlb[idx] = {tag, property, addend};
         }
         
         if (has_property(property, Property::Exec)) {
-            exec_tlb[idx] = {tag, 0, addend};
+            exec_tlb[idx] = {tag, property, addend};
         }
     }
 };

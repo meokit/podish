@@ -10,13 +10,13 @@ namespace x86emu {
 
 // SHLD: Double Precision Shift Left
 // dest = (dest << count) | (src >> (32 - count))
-static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A4: SHLD r/m16/32, r16/32, imm8
     uint8_t count = op->imm & 0x1F;
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op);
+        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -29,9 +29,9 @@ static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM16(state, op, res);
+        WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -41,17 +41,17 @@ static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM32(state, op, res);
+        WriteModRM32(state, op, res, utlb);
     }
 }
 
-static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A5: SHLD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op);
+        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -64,9 +64,9 @@ static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM16(state, op, res);
+        WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -76,19 +76,19 @@ static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM32(state, op, res);
+        WriteModRM32(state, op, res, utlb);
     }
 }
 
 // SHRD: Double Precision Shift Right
 // dest = (dest >> count) | (src << (32 - count))
-static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AC: SHRD r/m16/32, r16/32, imm8
     uint8_t count = op->imm & 0x1F;
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op);
+        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -101,9 +101,9 @@ static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM16(state, op, res);
+        WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -113,17 +113,17 @@ static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM32(state, op, res);
+        WriteModRM32(state, op, res, utlb);
     }
 }
 
-static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op) {
+static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AD: SHRD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op);
+        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -136,9 +136,9 @@ static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM16(state, op, res);
+        WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op);
+        uint32_t dest = ReadModRM32(state, op, utlb);
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -148,7 +148,7 @@ static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op) {
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
         state->ctx.eflags = flags;
-        WriteModRM32(state, op, res);
+        WriteModRM32(state, op, res, utlb);
     }
 }
 

@@ -255,58 +255,118 @@ public:
     // Internal helper for resolution (TLB or Slow) without hooks
     [[nodiscard]] FORCE_INLINE HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-        const uint32_t tag = addr & ~PAGE_MASK;
+        const uint32_t tag = addr & ~PAGE_MASK; // Standard tag (page base)
         
-        if (req_perm == Property::Read) {
-            const auto& entry = tlb.read_tlb[idx];
-            if (entry.tag == tag)
-                return reinterpret_cast<HostAddr>(entry.addend + addr);
-            return resolve_slow(addr, Property::Read);
-        } else {
-            const auto& entry = tlb.write_tlb[idx];
-            // Hit only if Valid (Write implied) and Dirty (Implied by presence in write_tlb)
-            if (entry.tag == tag)
-                return reinterpret_cast<HostAddr>(entry.addend + addr);
-            return resolve_slow(addr, Property::Write);
+        // Select the appropriate TLB array based on permission
+        const auto& tlb_array = (req_perm == Property::Read) ? tlb.read_tlb : tlb.write_tlb;
+        const auto entry = tlb_array[idx];
+
+        // Check if the TLB entry matches the requested address
+        if (entry.tag == tag) [[likely]] {
+            return reinterpret_cast<HostAddr>(entry.addend + addr);
         }
+
+        return resolve_slow(addr, req_perm);
     }
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE T read(GuestAddr addr) {
-        // Fast Path: Check Cross Page -> Check TLB -> Return
-        if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
-            return read_slow<T>(addr);
-        }
+    [[nodiscard]] FORCE_INLINE T read_no_utlb(GuestAddr addr) {
+        // We calculate the address of the *last* byte accessed.
+        const GuestAddr end_addr = addr + sizeof(T) - 1;
+
+        // If it crosses a page, this calculated tag will differ, causing a mismatch.
+        const uint32_t target_tag = end_addr & ~PAGE_MASK;
 
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-        const auto& entry = tlb.read_tlb[idx];
-        const uint32_t tag = addr & ~PAGE_MASK;
+        const auto entry = tlb.read_tlb[idx];
 
-        if (entry.tag == tag) {
-            // Hit
-            return *reinterpret_cast<T*>(entry.addend + addr);
+        if (entry.tag == target_tag) [[likely]] {
+            auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
+            return ptr;
         }
 
+        // Fallback: TLB Miss OR Cross-page access
         return read_slow<T>(addr);
     }
 
     template <typename T>
-    FORCE_INLINE void write(GuestAddr addr, T val) {
-        if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
-            write_slow<T>(addr, val);
-            return;
-        }
+    FORCE_INLINE void write_no_utlb(GuestAddr addr, T val) {
+        // Identical logic to read(), but uses the write_tlb.
+        const GuestAddr end_addr = addr + sizeof(T) - 1;
+
+        // A match guarantees the write is contained entirely within a valid, writable, dirty page.
+        const uint32_t target_tag = end_addr & ~PAGE_MASK;
 
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-        const auto& entry = tlb.write_tlb[idx];
-        const uint32_t tag = addr & ~PAGE_MASK;
+        const auto entry = tlb.write_tlb[idx];
 
-        // Hit only if in Write TLB (Implies Write + Dirty + Valid)
-        if (entry.tag == tag) {
+        if (entry.tag == target_tag) [[likely]] {
             *reinterpret_cast<T*>(entry.addend + addr) = val;
             return;
         }
 
+        // Fallback: TLB Miss OR Cross-page access OR Read-only page
+        write_slow<T>(addr, val);
+    }
+
+    template <typename T>
+    [[nodiscard]] FORCE_INLINE T read(GuestAddr addr, MicroTLB* utlb) {
+        // We calculate the address of the *last* byte accessed.
+        const GuestAddr end_addr = addr + sizeof(T) - 1;
+
+        // If it crosses a page, this calculated tag will differ, causing a mismatch.
+        const uint32_t target_tag = end_addr & ~PAGE_MASK;
+
+        // L1 TLB
+        if (utlb->tag_r == target_tag) [[likely]] {
+            return *reinterpret_cast<T*>(utlb->addend + addr);
+        }
+
+        const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const auto entry = tlb.read_tlb[idx];
+
+        if (entry.tag == target_tag) [[likely]] {
+            auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
+            utlb->tag_r = target_tag;
+            utlb->addend = entry.addend;
+            utlb->tag_w = has_property(entry.perm, Property::Write) ? target_tag : std::numeric_limits<decltype(utlb->tag_w)>::max();
+            return ptr;
+        }
+
+        // Invalidate L1 TLB
+        utlb->invalidate();
+
+        // Fallback: TLB Miss OR Cross-page access
+        return read_slow<T>(addr);
+    }
+
+    template <typename T>
+    FORCE_INLINE void write(GuestAddr addr, T val, MicroTLB* utlb) {
+        // Identical logic to read(), but uses the write_tlb.
+        const GuestAddr end_addr = addr + sizeof(T) - 1;
+        // A match guarantees the write is contained entirely within a valid, writable, dirty page.
+        const uint32_t target_tag = end_addr & ~PAGE_MASK;
+
+        // L1 TLB
+        if (utlb->tag_w == target_tag) [[likely]] {
+            *reinterpret_cast<T*>(utlb->addend + addr) = val;
+            return;
+        }
+
+        const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const auto entry = tlb.write_tlb[idx];
+
+        if (entry.tag == target_tag) [[likely]] {
+            *reinterpret_cast<T*>(entry.addend + addr) = val;
+            utlb->tag_w = target_tag;
+            utlb->addend = entry.addend;
+            utlb->tag_r = has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
+            return;
+        }
+
+        // Invalidate L1 TLB
+        utlb->tag_w = std::numeric_limits<decltype(utlb->tag_w)>::max();
+        // Fallback: TLB Miss OR Cross-page access OR Read-only page
         write_slow<T>(addr, val);
     }
 
@@ -429,9 +489,9 @@ public:
     uint32_t copy_block(GuestAddr src_addr, GuestAddr dst_addr, uint32_t size) {
         if (mem_hook) {
             for (uint32_t i = 0; i < size; ++i) {
-                uint8_t val = this->read<uint8_t>(src_addr + i);
+                uint8_t val = this->read_no_utlb<uint8_t>(src_addr + i);
                 if (emu_status && *emu_status != EmuStatus::Running) return i;
-                this->write<uint8_t>(dst_addr + i, val);
+                this->write_no_utlb<uint8_t>(dst_addr + i, val);
                 if (emu_status && *emu_status != EmuStatus::Running) return i;
             }
             return size;

@@ -15,6 +15,7 @@
 #include "state.h"
 
 using namespace x86emu;
+using MicroTLB = mem::MicroTLB;
 
 
 extern "C" {
@@ -300,13 +301,15 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
-        state->mmu.write<uint8_t>(addr + i, data[i]);
+        mem::MicroTLB utlb;
+        state->mmu.write<uint8_t>(addr + i, data[i], &utlb);
     }
 }
 
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
-        val[i] = state->mmu.read<uint8_t>(addr + i);
+        mem::MicroTLB utlb;
+        val[i] = state->mmu.read<uint8_t>(addr + i, &utlb);
     }
 }
 
@@ -391,7 +394,8 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 batch_limit -= block_ptr->inst_count;
 
                 // h will return the remaining budget
-                int64_t remaining = h(state, head, batch_limit);
+                MicroTLB utlb;
+                int64_t remaining = h(state, head, batch_limit, utlb);
                 total_run_insts += (initial_batch_limit - remaining);
             } else {
                 OpUd2(state, head);
@@ -424,7 +428,8 @@ int X86_Step(EmuState* state) {
 
     uint8_t buf[16];
     for (int i = 0; i < 16; ++i) {
-        buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i);
+        mem::MicroTLB utlb;
+        buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i, &utlb);
         if (state->status != EmuStatus::Running) {
             f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
             return (int)state->status;
@@ -454,7 +459,8 @@ int X86_Step(EmuState* state) {
 
     if (h) {
         uint32_t old_eip = state->ctx.eip;
-        h(state, &ops[0], 0);  // Limit 0 ensures it returns after 1 inst + sentinel
+        MicroTLB utlb;
+        h(state, &ops[0], 0, utlb);  // Limit 0 ensures it returns after 1 inst + sentinel
 
         // Advance EIP if handler didn't change it AND no fault occurred.
         if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
