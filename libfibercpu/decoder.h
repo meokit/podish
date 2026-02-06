@@ -17,6 +17,7 @@ namespace x86emu {
 
 struct EmuState;
 struct DecodedOp;
+
 // Logic Function (Standard ABI, implementation)
 using LogicFunc = void (*)(EmuState* state, DecodedOp* op);
 
@@ -81,8 +82,10 @@ struct DecodedOp {
     // - length (4 bits): Max instruction length is 15 bytes
     // - extra (4 bits): Opcode-specific data (Condition Code, etc.)
     int32_t handler_offset;
-    uint32_t length : 4;
+    uint32_t length : 8;
     uint32_t extra : 4;
+    uint32_t reserved : 4;
+    uint32_t eip_offset : 16;
 };
 
 // Size check

@@ -159,13 +159,13 @@ private:
         if (!mem_hook) {
             bool is_exec = has_property(current_perm, Property::Exec);
 
-            tlb.fill(addr, page_base, current_perm, [this](GuestAddr v) { this->sync_dirty(v); });
+            tlb.fill(addr, page_base, current_perm);
 
             // If it was Exec, ensure Write TLB entry is invalid, effectively creating a "Trap on Write"
             if (is_exec) {
                 const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-                // Preserve the tag but clear Valid/Dirty bits or just zero it
-                tlb.write_tlb[idx].tag_page = 0;
+                // Invalidate Write TLB to force slow path on write (triggering SMC check)
+                tlb.write_tlb[idx].tag = 1;
             }
         }
 
@@ -253,27 +253,26 @@ public:
     }
 
     // Internal helper for resolution (TLB or Slow) without hooks
-    [[nodiscard]] inline HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
+    [[nodiscard]] FORCE_INLINE HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const uint32_t tag = addr & ~PAGE_MASK;
+        
         if (req_perm == Property::Read) {
-            if ((tlb.read_tlb[idx].tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) ==
-                (tag | (uint32_t)Property::Valid))
-                return reinterpret_cast<HostAddr>(tlb.read_tlb[idx].addend + addr);
+            const auto& entry = tlb.read_tlb[idx];
+            if (entry.tag == tag)
+                return reinterpret_cast<HostAddr>(entry.addend + addr);
             return resolve_slow(addr, Property::Read);
-        } else {  // Write
+        } else {
             const auto& entry = tlb.write_tlb[idx];
-            // Hit only if Valid and Dirty bits are set
-            const uint32_t mask =
-                ~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
-            const uint32_t expected = tag | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
-            if ((entry.tag_page & mask) == expected) return reinterpret_cast<HostAddr>(entry.addend + addr);
+            // Hit only if Valid (Write implied) and Dirty (Implied by presence in write_tlb)
+            if (entry.tag == tag)
+                return reinterpret_cast<HostAddr>(entry.addend + addr);
             return resolve_slow(addr, Property::Write);
         }
     }
 
     template <typename T>
-    [[nodiscard]] inline T read(GuestAddr addr) {
+    [[nodiscard]] FORCE_INLINE T read(GuestAddr addr) {
         // Fast Path: Check Cross Page -> Check TLB -> Return
         if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
             return read_slow<T>(addr);
@@ -283,8 +282,7 @@ public:
         const auto& entry = tlb.read_tlb[idx];
         const uint32_t tag = addr & ~PAGE_MASK;
 
-        if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) ==
-            (tag | (uint32_t)Property::Valid)) {
+        if (entry.tag == tag) {
             // Hit
             return *reinterpret_cast<T*>(entry.addend + addr);
         }
@@ -293,7 +291,7 @@ public:
     }
 
     template <typename T>
-    inline void write(GuestAddr addr, T val) {
+    FORCE_INLINE void write(GuestAddr addr, T val) {
         if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
             write_slow<T>(addr, val);
             return;
@@ -303,10 +301,8 @@ public:
         const auto& entry = tlb.write_tlb[idx];
         const uint32_t tag = addr & ~PAGE_MASK;
 
-        // Hit only if Valid and Dirty bit are set
-        const uint32_t mask = ~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
-        const uint32_t expected = tag | (uint32_t)Property::Valid | (uint32_t)Property::Dirty;
-        if ((entry.tag_page & mask) == expected) {
+        // Hit only if in Write TLB (Implies Write + Dirty + Valid)
+        if (entry.tag == tag) {
             *reinterpret_cast<T*>(entry.addend + addr) = val;
             return;
         }
@@ -472,8 +468,7 @@ public:
         const auto& entry = tlb.exec_tlb[idx];
         const uint32_t tag = addr & ~PAGE_MASK;
 
-        if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) ==
-            (tag | (uint32_t)Property::Valid)) {
+        if (entry.tag == tag) {
             return reinterpret_cast<const std::byte*>(entry.addend + addr);
         }
 
@@ -488,8 +483,7 @@ public:
         const uint32_t tag = addr & ~PAGE_MASK;
 
         HostAddr ptr = nullptr;
-        if ((entry.tag_page & (~static_cast<uint32_t>(PAGE_MASK) | (uint32_t)Property::Valid)) ==
-            (tag | (uint32_t)Property::Valid)) {
+        if (entry.tag == tag) {
             ptr = reinterpret_cast<HostAddr>(entry.addend + addr);
         } else {
             ptr = resolve_slow(addr, Property::Exec);

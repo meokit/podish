@@ -8,7 +8,8 @@
 namespace x86emu::mem {
 
 struct alignas(16) TlbEntry {
-    uint32_t tag_page = 0;  // Low bits store Property (Valid bit determines if entry is active)
+    uint32_t tag = 1;  // Mismatch by default (odd value for even aligned vars)
+    uint32_t padding = 0;
     std::uintptr_t addend = 0;
 };
 
@@ -26,15 +27,10 @@ public:
     SoftTlb() { flush(); }
 
     // Clear TLB
-    void flush(std::function<void(GuestAddr)> sync_cb = nullptr) {
+    void flush() {
         auto invalidate = [&](auto& arr) {
-            for (size_t i = 0; i < TLB_ENTRIES; ++i) {
-                auto& entry = arr[i];
-                if (sync_cb && (entry.tag_page & (uint32_t)Property::Valid) &&
-                    (entry.tag_page & (uint32_t)Property::Dirty)) {
-                    sync_cb(entry.tag_page & ~PAGE_MASK);
-                }
-                entry.tag_page = 0;
+            for (auto& entry : arr) {
+                entry.tag = 1; // Impossible tag for aligned address
                 entry.addend = 0;
             }
         };
@@ -44,28 +40,23 @@ public:
     }
 
     // Fill TLB (called from Slow Path)
-    void fill(GuestAddr vaddr, HostAddr hptr, Property property, std::function<void(GuestAddr)> sync_cb = nullptr) {
-        const uint32_t tag_with_prop = (vaddr & ~PAGE_MASK) | (uint32_t)property | (uint32_t)Property::Valid;
+    void fill(GuestAddr vaddr, HostAddr hptr, Property property) {
+        const uint32_t tag = vaddr & ~PAGE_MASK; // Low bits 0
         const size_t idx = (vaddr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const std::uintptr_t addend = reinterpret_cast<std::uintptr_t>(hptr) - static_cast<std::uintptr_t>(tag);
 
-        // Calculate addend: hptr - vaddr
-        const std::uintptr_t addend = reinterpret_cast<std::uintptr_t>(hptr) - static_cast<std::uintptr_t>(vaddr);
-
-        auto fill_entry = [&](auto& arr, Property req_perm) {
-            if (has_property(property, req_perm)) {
-                auto& entry = arr[idx];
-                // Check for eviction of a dirty entry
-                if (sync_cb && (entry.tag_page & (uint32_t)Property::Valid) &&
-                    (entry.tag_page & (uint32_t)Property::Dirty)) {
-                    sync_cb(entry.tag_page & ~PAGE_MASK);
-                }
-                entry = {tag_with_prop, addend};
-            }
-        };
-
-        fill_entry(read_tlb, Property::Read);
-        fill_entry(write_tlb, Property::Write);
-        fill_entry(exec_tlb, Property::Exec);
+        if (has_property(property, Property::Read)) {
+            read_tlb[idx] = {tag, 0, addend};
+        }
+        
+        // Write TLB: Only if Write AND Dirty are set
+        if (has_property(property, Property::Write) && has_property(property, Property::Dirty)) {
+            write_tlb[idx] = {tag, 0, addend};
+        }
+        
+        if (has_property(property, Property::Exec)) {
+            exec_tlb[idx] = {tag, 0, addend};
+        }
     }
 };
 }  // namespace x86emu::mem

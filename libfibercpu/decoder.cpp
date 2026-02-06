@@ -360,6 +360,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
             op.handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
 
+            op.eip_offset = (uint32_t)(current_eip - start_eip);
             block->ops.push_back(op);
 
             // Append Sentinel for dispatch safety
@@ -368,6 +369,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
 
             HandlerFunc exit_h = g_ExitHandlers[0];
             sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+            sentinel.eip_offset = (uint32_t)(current_eip + 1 - start_eip);
 
             block->ops.push_back(sentinel);
 
@@ -397,6 +399,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         }
         op_indices.push_back((map << 8) | opcode);
 
+        op.eip_offset = (uint32_t)(current_eip - start_eip);
         // Add to block
         block->ops.push_back(op);
         block->inst_count++;
@@ -556,7 +559,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     }
     HandlerFunc exit_h = g_ExitHandlers[last_opcode % 16];
     sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
-
+    sentinel.eip_offset = (uint32_t)(current_eip - start_eip);
     block->ops.push_back(sentinel);
 
 #if 1

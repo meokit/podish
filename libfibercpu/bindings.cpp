@@ -106,9 +106,8 @@ EmuState* X86_Create() {
 
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
-
+    
     state->mmu.set_fault_callback(InternalFaultBridge, state);
-    state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
     state->tsc_start_time = std::chrono::steady_clock::now();
@@ -147,7 +146,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // In our Go implementation, we use global wrappers or map state->Task.
     // So copying userdata is strictly correct for now (same logic applies).
     state->mmu.set_fault_callback(InternalFaultBridge, state);
-    state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    // state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
     // Reuse parent's external handlers & userdata
@@ -155,6 +154,10 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     state->fault_userdata = parent->fault_userdata;  // This might need care in Go!
     state->mem_hook = parent->mem_hook;
     state->mem_userdata = parent->mem_userdata;
+
+    if (state->mem_hook) {
+        state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    }
 
     // Interrupt handlers
     for (int i = 0; i < 256; ++i) {
@@ -484,6 +487,12 @@ void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata)
 void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
     state->mem_hook = hook;
     state->mem_userdata = userdata;
+    
+    if (hook) {
+        state->mmu.set_mem_hook(InternalMemHookBridge, state);
+    } else {
+        state->mmu.set_mem_hook(nullptr, nullptr);
+    }
 }
 
 void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata) {
