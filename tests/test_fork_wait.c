@@ -129,6 +129,6 @@ int main() {
         return 1;
     }
     
-    printf("\nAll tests passed!\n");
+    printf("PASS: Fork/Wait Tests\n");
     return 0;
 }

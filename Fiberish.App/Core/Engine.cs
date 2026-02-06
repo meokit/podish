@@ -75,6 +75,8 @@ public class Engine : IDisposable
 
     public void MemMap(uint addr, uint size, byte perms) => X86Native.MemMap(State, addr, size, perms);
 
+    public void MemUnmap(uint addr, uint size) => X86Native.MemUnmap(State, addr, size);
+
     public unsafe void MemWrite(uint addr, ReadOnlySpan<byte> data)
     {
         fixed (byte* p = data)

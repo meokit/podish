@@ -45,6 +45,7 @@ public static class X86SyscallNumbers
     public const int @lock = 53;
     public const int ioctl = 54;
     public const int fcntl = 55;
+    public const int fcntl64 = 221;
     public const int mpx = 56;
     public const int setpgid = 57;
     public const int ulimit = 58;
@@ -114,6 +115,7 @@ public static class X86SyscallNumbers
     public const int fchown32 = 207;
     public const int getdents64 = 220;
     public const int futex = 240;
+    public const int tkill = 238;
     public const int set_thread_area = 243;
     public const int exit_group = 252;
     public const int tgkill = 270;
@@ -159,6 +161,7 @@ public static class X86SyscallNumbers
     public const int clock_gettime = 265;
     public const int clock_gettime64 = 403;
     public const int gettimeofday = 78; // Standard 78
+    public const int nanosleep = 162;
 
     public const int gettid = 224;
     public const int getpgid = 132;

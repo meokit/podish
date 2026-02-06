@@ -275,5 +275,6 @@ int main() {
          return 1;
     }
 
+    printf("PASS: SMC Logic\n");
     return 0;
 }

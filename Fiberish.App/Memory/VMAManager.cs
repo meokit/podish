@@ -196,6 +196,17 @@ public class VMAManager
         }
     }
 
+    public void Clear(Engine engine)
+    {
+        foreach (var vma in _vmas)
+        {
+            SyncVMA(vma, engine);
+            // Clear native memory pages and JIT cache (done in C++ side)
+            engine.MemUnmap(vma.Start, vma.End - vma.Start);
+        }
+        _vmas.Clear();
+    }
+
     private bool CheckOverlap(uint start, uint end)
     {
         foreach (var vma in _vmas)

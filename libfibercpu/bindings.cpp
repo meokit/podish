@@ -278,6 +278,24 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { state->mmu.mmap(addr, size, perms); }
 
+void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
+    state->mmu.munmap(addr, size);
+    
+    // Also invalidate JIT cache for this range (code may have been translated from these pages)
+    uint32_t start_page = addr >> 12;
+    uint32_t end_page = (addr + size + 0xFFF) >> 12;
+    for (uint32_t p = start_page; p < end_page; ++p) {
+        auto it = state->page_to_blocks.find(p);
+        if (it != state->page_to_blocks.end()) {
+            for (uint32_t block_eip : it->second) {
+                // Remove from block cache if it exists
+                state->block_cache.erase(block_eip);
+            }
+            state->page_to_blocks.erase(it);
+        }
+    }
+}
+
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         state->mmu.write<uint8_t>(addr + i, data[i]);
