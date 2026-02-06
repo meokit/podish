@@ -34,6 +34,25 @@ CPMAddPackage(
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
 option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
 
+set(PGO_MODE "OFF" CACHE STRING "PGO build mode (OFF, GENERATE, USE)")
+set_property(CACHE PGO_MODE PROPERTY STRINGS "OFF" "GENERATE" "USE")
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    if(PGO_MODE STREQUAL "GENERATE")
+        message(STATUS "PGO: Profile Generate mode enabled")
+        add_compile_options("-fprofile-instr-generate")
+        add_link_options("-fprofile-instr-generate")
+    elseif(PGO_MODE STREQUAL "USE")
+        message(STATUS "PGO: Profile Use mode enabled")
+        if(EXISTS "${CMAKE_BINARY_DIR}/pgo_data/default.profdata")
+             add_compile_options("-fprofile-instr-use=${CMAKE_BINARY_DIR}/pgo_data/default.profdata")
+             add_link_options("-fprofile-instr-use=${CMAKE_BINARY_DIR}/pgo_data/default.profdata")
+        else()
+             message(FATAL_ERROR "PGO: ${CMAKE_BINARY_DIR}/pgo_data/default.profdata not found. Run training and merge profiles first.")
+        endif()
+    endif()
+endif()
+
 # Compiler warnings and options
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
