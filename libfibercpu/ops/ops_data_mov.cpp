@@ -827,40 +827,41 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
     uint16_t size = op->imm & 0xFFFF;
-    uint8_t level = (op->imm >> 16) & 0x1F;  // Decoder puts both imms?
-    // Wait, decoder for C8 handles 'Iw Ib'.
-    // Decoder logic: if (has_imm16 && has_imm8) ->
-    // Standard decoder usually puts main imm in op->imm.
-    // But for ENTER, it has 2 immediates.
-    // Let's assume standard decoder doesn't support 2 imms nicely in `op->imm`.
-    // We might need to fetch manually or check if decoder handles this.
-    // Inspect decoder.cpp for 0xC8?
-    // Most decoders put 'Iw' in op->imm. The 'Ib' might be missing.
-    // Let's rely on reading from EIP if needed, or check `op->imm2` if it existed
-    // (it doesn't). For now: Assume decoder packs it or we fetch manually. If
-    // decoder sees Iw, it reads 16 bits. Then Ib? Manual fetch from instruction
-    // stream is dangerous in threaded dispatch without precise sizing. Let's
-    // assuming decoder handles it. If not, this is a bug in decoder. checking
-    // decoder_lut.h: C8 -> kImmType = Imm16 (Iw). Ib is ignored? We need to fetch
-    // 'level' manually. EIP is pointing to next instruction. Instruction length
-    // includes both. op->imm holds the 16-bit alloc size. where is the 8-bit
-    // level? It's at EIP - 1. (Instruction end - 1). Let's assume we can read it.
-
-    // Safety fallback: Level is usually 0.
-    // If we assume level 0 we are strict.
-    // Let's implement Level 0 logic first.
-
-    // Standard ENTER:
+    uint8_t level = (op->imm >> 16) & 0x1F;
+    
+    // 1. Push EBP
     Push32(state, GetReg(state, EBP), utlb);
-    uint32_t frame_ptr = GetReg(state, ESP);
+    uint32_t frame_temp = GetReg(state, ESP); // ESP after push
 
+    // 2. If Level > 0, push previous frame pointers
     if (level > 0) {
-        // Complex ENTER
-        // Not implemented fully yet.
+        // We need to read from the *current* EBP (which points to start of previous frame)
+        // and follow the chain 'level-1' times.
+        uint32_t ebp = GetReg(state, EBP);
+        
+        for (uint8_t i = 1; i < level; ++i) {
+            ebp -= 4; // Point to pointer to prev frame? 
+            // On stack: [OldEBP] [RetAddr]
+            // ENTER L, 1: Push EBP. FrameTemp = ESP. 
+            // If Level > 0:
+            //   For i=1 to Level-1:
+            //     EBP = EBP - 4
+            //     Push [EBP]
+            //   Push FrameTemp
+            
+            ebp -= 4;
+            uint32_t val = state->mmu.read<uint32_t>(ebp, utlb);
+            Push32(state, val, utlb);
+        }
+        // Push FrameTemp
+        Push32(state, frame_temp, utlb);
     }
-
-    SetReg(state, EBP, frame_ptr);
-    SetReg(state, ESP, frame_ptr - size);
+    
+    // 3. MOV EBP, FrameTemp
+    SetReg(state, EBP, frame_temp);
+    
+    // 4. SUB ESP, Size
+    SetReg(state, ESP, GetReg(state, ESP) - size);
 }
 
 static FORCE_INLINE void OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
