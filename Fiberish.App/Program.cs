@@ -100,33 +100,32 @@ class Program
         // 3. Setup Fault Handler Wrapper
         engine.FaultHandler = GlobalFaultHandler;
 
-        // 4. Setup Syscalls (Init VFS)
-        var sys = new SyscallManager(engine, mm, 0, rootfs);
-        sys.Strace = trace;
-        ProcFsManager.Init(sys);
-
-        // 5. Create Main Task
-        var proc = new Process(Task.NextPID(), mm, sys);
-        var mainTask = new Task(proc.TGID, proc, engine);
-        Scheduler.Add(mainTask);
-        ProcFsManager.OnProcessStart(sys, proc.TGID);
-        Logger.LogInformation("Created Main Task {TID}, Engine 0x{Engine:x}", mainTask.TID, engine.State);
-
-        // 6. Load ELF
-        var res = ElfLoader.Load(exe, sys, fullArgs, envs);
-        sys.BrkAddr = res.BrkAddr;
-
-        // 7. Setup CPU State
-        engine.Eip = res.Entry;
-        engine.RegWrite(Reg.ESP, res.SP);
-        engine.Eflags = 0x202;
-
-        // 8. Setup Stack - Allocate pages first, then use CopyToUser for safety
+        // 4. Setup Syscalls (Init VFS) & 5. Create Main Task & 6. Load ELF
+        SyscallManager sys;
+        Task mainTask;
+        try
         {
+            sys = new SyscallManager(engine, mm, 0, rootfs);
+            sys.Strace = trace;
+            ProcFsManager.Init(sys);
+
+            var proc = new Process(Task.NextPID(), mm, sys);
+            mainTask = new Task(proc.TGID, proc, engine);
+            Scheduler.Add(mainTask);
+            ProcFsManager.OnProcessStart(sys, proc.TGID);
+            Logger.LogInformation("Created Main Task {TID}, Engine 0x{Engine:x}", mainTask.TID, engine.State);
+
+            var res = ElfLoader.Load(exe, sys, fullArgs, envs);
+            sys.BrkAddr = res.BrkAddr;
+
+            // 7. Setup CPU State
+            engine.Eip = res.Entry;
+            engine.RegWrite(Reg.ESP, res.SP);
+            engine.Eflags = 0x202;
+
+            // 8. Setup Stack
             uint spBase = res.SP;
             byte[] stackData = res.InitialStack;
-            
-            // Explicitly allocate pages since no PageFaultResolver is active yet
             for (uint addr = spBase & LinuxConstants.PageMask; 
                  addr < ((spBase + (uint)stackData.Length + (uint)LinuxConstants.PageSize - 1) & LinuxConstants.PageMask); 
                  addr += (uint)LinuxConstants.PageSize)
@@ -137,6 +136,25 @@ class Program
 
             if (!engine.CopyToUser(spBase, stackData))
                 throw new InvalidOperationException("Failed to write initial stack content to guest memory");
+        }
+        catch (FileNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            Logger.LogCritical("Error: {Message}", ex.Message);
+            return 127;
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            Logger.LogCritical("Error: {Message}", ex.Message);
+            return 127;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Critical Error: {ex.Message}");
+            Logger.LogCritical("Critical Error: {Message}", ex.Message);
+            if (verbose) Logger.LogCritical(ex.StackTrace);
+            return 1;
         }
 
         // 9. Setup Callbacks
