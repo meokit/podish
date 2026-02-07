@@ -194,6 +194,13 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
         state->ctx.seg_base[i] = parent->ctx.seg_base[i];
     }
 
+    // Initialize Dummy Invalid Block (same as X86_Create)
+    // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
+    void* mem = state->block_pool.allocate(sizeof(BasicBlock));
+    state->dummy_invalid_block = new (mem) BasicBlock;
+    state->dummy_invalid_block->is_valid = false;
+    state->dummy_invalid_block->inst_count = 0;
+
     return state;
 }
 
