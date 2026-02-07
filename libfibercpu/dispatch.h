@@ -17,7 +17,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                                            mem::MicroTLB utlb) {
     uint32_t original_eip = state->ctx.eip;
     // Advance EIP before execution
-    state->ctx.eip += op->length;
+    state->ctx.eip = op->next_eip;
 
     DecodedOp* RESTRICT next = op + 1;
     int32_t offset = next->handler_offset;

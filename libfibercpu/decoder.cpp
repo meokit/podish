@@ -376,6 +376,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
             op.handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
 
+            op.next_eip = current_eip;
             temp_ops.push_back(op);
 
             // Append Sentinel for dispatch safety
@@ -387,6 +388,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
             // Sentinel next_block initialization to dummy
             sentinel.next_block = state->dummy_invalid_block;
+            sentinel.next_eip = current_eip;
 
             temp_ops.push_back(sentinel);
 
@@ -420,6 +422,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             opcode = *ptr;
         }
         op_indices.push_back((map << 8) | opcode);
+        op.next_eip = current_eip + op.length;
 
         temp_ops.push_back(op);
         inst_count++;
