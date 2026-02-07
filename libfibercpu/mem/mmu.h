@@ -173,13 +173,42 @@ private:
     }
 
 public:
-    Mmu() { 
-        page_dir = std::make_shared<PageDirectory>(); 
+    // Safe resolution without faulting
+    [[nodiscard]] HostAddr resolve_safe(GuestAddr addr, Property req_perm) {
+        if (!page_dir) return nullptr;
+
+        const uint32_t l1_idx = addr >> 22;
+        const uint32_t l2_idx = (addr >> 12) & 0x3FF;
+        const uint32_t offset = addr & 0xFFF;
+
+        // 1. Check L1
+        auto& chunk = page_dir->l1_directory[l1_idx];
+        if (!chunk) return nullptr;
+
+        // 2. Check Permissions
+        Property current_perm = chunk->permissions[l2_idx];
+        if (!has_property(current_perm, req_perm)) return nullptr;
+
+        // --- Triggered Dirty Bit Update ---
+        if (has_property(req_perm, Property::Write) && !has_property(current_perm, Property::Dirty)) {
+            current_perm = current_perm | Property::Dirty;
+            chunk->permissions[l2_idx] = current_perm;
+        }
+
+        // 3. Return existing page only (no lazy allocation for safe resolution)
+        if (!chunk->pages[l2_idx]) {
+            return nullptr;  // Page not populated, caller should trigger fault handling
+        }
+
+        HostAddr page_base = chunk->pages[l2_idx];
+        return page_base + offset;
     }
 
+public:
+    Mmu() { page_dir = std::make_shared<PageDirectory>(); }
+
     // Explicitly share memory with another MMU
-    explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {
-    }
+    explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {}
 
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {
@@ -258,8 +287,8 @@ public:
     // Internal helper for resolution (TLB or Slow) without hooks
     [[nodiscard]] FORCE_INLINE HostAddr resolve_ptr(GuestAddr addr, Property req_perm) {
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-        const uint32_t tag = addr & ~PAGE_MASK; // Standard tag (page base)
-        
+        const uint32_t tag = addr & ~PAGE_MASK;  // Standard tag (page base)
+
         // Select the appropriate TLB array based on permission
         const auto& tlb_array = (req_perm == Property::Read) ? tlb.read_tlb : tlb.write_tlb;
         const auto entry = tlb_array[idx];
@@ -356,7 +385,8 @@ public:
             auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
             utlb->tag_r = target_tag;
             utlb->addend = entry.addend;
-            utlb->tag_w = has_property(entry.perm, Property::Write) ? target_tag : std::numeric_limits<decltype(utlb->tag_w)>::max();
+            utlb->tag_w = has_property(entry.perm, Property::Write) ? target_tag
+                                                                    : std::numeric_limits<decltype(utlb->tag_w)>::max();
             return ptr;
         }
 
@@ -399,7 +429,8 @@ public:
             *reinterpret_cast<T*>(entry.addend + addr) = val;
             utlb->tag_w = target_tag;
             utlb->addend = entry.addend;
-            utlb->tag_r = has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
+            utlb->tag_r = has_property(entry.perm, Property::Read) ? target_tag
+                                                                   : std::numeric_limits<decltype(utlb->tag_r)>::max();
             return;
         }
 
@@ -615,4 +646,4 @@ public:
     } stats;
 #endif
 };
-}  // namespace x86emu::mem
+}  // namespace fiberish::mem

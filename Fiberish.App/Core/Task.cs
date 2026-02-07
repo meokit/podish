@@ -122,6 +122,9 @@ public partial class Task
         TID = tid;
         Process = process;
         CPU = cpu;
+        
+        // Wire up safe access fault handling
+        CPU.PageFaultResolver = (addr, isWrite) => Process.Mem.HandleFault(addr, isWrite, CPU);
     }
 
     public Task Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)

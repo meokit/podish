@@ -2,15 +2,15 @@
 #define EMU86_BINDINGS_H
 
 #ifdef __cplusplus
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 namespace fiberish {
 struct EmuState;
 }
 typedef fiberish::EmuState EmuState;
 #else
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 typedef struct EmuState EmuState;
 #endif
 
@@ -58,6 +58,8 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
 int X86_MemIsDirty(EmuState* state, uint32_t addr);
+// Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
+void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write);
 
 // Execution
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);

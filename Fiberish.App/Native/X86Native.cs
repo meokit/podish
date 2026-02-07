@@ -144,6 +144,10 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int IsDirty(IntPtr state, uint addr);
 
+    [LibraryImport(LibName, EntryPoint = "X86_ResolvePtr")]
+    [SuppressGCTransition]
+    public static partial void* ResolvePtr(IntPtr state, uint addr, int isWrite);
+
     [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
     public static partial void FlushCache(IntPtr state);
 

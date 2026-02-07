@@ -30,6 +30,7 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.chmod, SysChmod);
         Register(X86SyscallNumbers.chown, SysChown);
         Register(X86SyscallNumbers.lseek, SysLseek);
+        Register(140, SysLlseek);
         Register(X86SyscallNumbers.getpid, SysGetPid);
         Register(X86SyscallNumbers.mount, SysMount);
         Register(X86SyscallNumbers.umount, SysUmount);
@@ -189,7 +190,8 @@ public unsafe partial class SyscallManager
             long initialOffset = -1;
             if (offsetPtr != 0)
             {
-                byte[] offsetBytes = sm.Engine.MemRead(offsetPtr, 8);
+                byte[] offsetBytes = new byte[8];
+                if (!sm.Engine.CopyFromUser(offsetPtr, offsetBytes)) return -(int)Errno.EFAULT;
                 initialOffset = BitConverter.ToInt64(offsetBytes);
             }
 
@@ -247,7 +249,8 @@ public unsafe partial class SyscallManager
 
             if (offsetPtr != 0)
             {
-                sm.Engine.MemWrite(offsetPtr, BitConverter.GetBytes(initialOffset + totalWritten));
+                if (!sm.Engine.CopyToUser(offsetPtr, BitConverter.GetBytes(initialOffset + totalWritten)))
+                    return -(int)Errno.EFAULT;
             }
 
             return totalWritten;
@@ -283,8 +286,10 @@ public unsafe partial class SyscallManager
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
             // Write FDs to user memory
-            sm.Engine.MemWrite(fdsAddr, BitConverter.GetBytes(rFd));
-            sm.Engine.MemWrite(fdsAddr + 4, BitConverter.GetBytes(wFd));
+            // Write FDs to user memory
+            var fds = new int[] { rFd, wFd };
+            if (!sm.Engine.CopyToUser(fdsAddr, MemoryMarshal.AsBytes(fds.AsSpan())))
+                return -(int)Errno.EFAULT;
 
             return 0;
         }
@@ -366,6 +371,7 @@ public unsafe partial class SyscallManager
 
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
     {
+        Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null)
         {
@@ -422,7 +428,11 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        return ImplOpen(sm, sm.ReadString(a1), a2, a3);
+        
+        string? path = sm.Engine.ReadStringSafe(a1);
+        if (path == null) return -(int)Errno.EFAULT;
+
+        return ImplOpen(sm, path, a2, a3);
     }
 
     private static int SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -431,7 +441,9 @@ public unsafe partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
+        string? path = sm.Engine.ReadStringSafe(a2);
+        if (path == null) return -(int)Errno.EFAULT;
+
         uint flags = a3;
         uint mode = a4;
 
@@ -452,13 +464,17 @@ public unsafe partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
+        string? path = sm.Engine.ReadStringSafe(a2);
+        if (path == null) return -(int)Errno.EFAULT;
+
         uint howPtr = a3;
         uint howSize = a4;
 
         if (howSize < 24) return -(int)Errno.EINVAL;
 
-        byte[] howBuf = sm.Engine.MemRead(howPtr, 24);
+        byte[] howBuf = new byte[24];
+        if (!sm.Engine.CopyFromUser(howPtr, howBuf)) return -(int)Errno.EFAULT;
+
         ulong flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
         ulong mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
 
@@ -1264,7 +1280,11 @@ public unsafe partial class SyscallManager
                     }
                 }
 
-                if (n > 0) sm.Engine.MemWrite(bufAddr, buf.AsSpan(0, n));
+                if (n > 0) 
+                {
+                    if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
+                        return -(int)Errno.EFAULT;
+                }
                 return n;
             }
         }
@@ -1281,7 +1301,10 @@ public unsafe partial class SyscallManager
         uint bufAddr = a2;
         int count = (int)a3;
 
-        var data = sm.Engine.MemRead(bufAddr, (uint)count);
+        // Verify read access to buffer before writing
+        var data = new byte[count];
+        if (!sm.Engine.CopyFromUser(bufAddr, data))
+            return -(int)Errno.EFAULT;
 
         var f = sm.GetFD(fd);
         if (f != null)
@@ -1298,6 +1321,7 @@ public unsafe partial class SyscallManager
                         var waitTask = task.BlockingTask;
                         task.BlockingTask = SyscallAsyncHelpers.ContinueWrite(waitTask, state, a1, a2, a3, a4, a5, a6);
                         return 0;
+
                     }
                 }
 
@@ -1333,6 +1357,35 @@ public unsafe partial class SyscallManager
         if (newPos < 0) return -(int)Errno.EINVAL;
         f.Position = newPos;
         return (int)newPos;
+    }
+
+    private static int SysLlseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -1;
+        int fd = (int)a1;
+        long offset = ((long)a2 << 32) | a3;
+        uint resultPtr = a4;
+        int whence = (int)a5;
+
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        long newPos = whence switch
+        {
+            0 => offset, // SEEK_SET
+            1 => f.Position + offset, // SEEK_CUR
+            2 => (long)f.Dentry.Inode!.Size + offset, // SEEK_END
+            _ => -1
+        };
+
+        if (newPos < 0) return -(int)Errno.EINVAL;
+        f.Position = newPos;
+        
+        if (!sm.Engine.CopyToUser(resultPtr, BitConverter.GetBytes(newPos)))
+            return -(int)Errno.EFAULT;
+
+        return 0;
     }
 
     private static int SysClose(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -2330,9 +2383,16 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(ptrPath);
+        string? path = sm.Engine.ReadStringSafe(ptrPath);
+        if (path == null) return -(int)Errno.EFAULT;
+
+        Logger.LogInformation($"[Stat64] Path='{path}'");
         var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (dentry == null || dentry.Inode == null) 
+        {
+            Logger.LogWarning($"[Stat64] PathWalk failed for '{path}'");
+            return -(int)Errno.ENOENT;
+        }
 
         WriteStat64(sm, ptrStat, dentry.Inode);
         return 0;

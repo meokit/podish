@@ -243,7 +243,7 @@ public class VMAManager
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
-        // Logger.LogInformation("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
+        Logger.LogInformation("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
         var vma = FindVMA(addr);
         if (vma == null)
         {
@@ -260,68 +260,11 @@ public class VMAManager
         uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
 
-        // COW Logic
-        byte[]? existingData = null;
-        if (isWrite && (vma.Flags & MapFlags.Private) != 0)
-        {
-             try
-             {
-                 existingData = engine.MemRead(pageStart, (uint)LinuxConstants.PageSize);
-             }
-             catch (Exception ex)
-             {
-                 Logger.LogWarning("Failed to read existing data for COW at 0x{Addr:x}: {Message}", pageStart, ex.Message);
-             }
-        }
-
+        // Allocate page first
         engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)tempPerms);
 
-        if (existingData != null)
-        {
-             // Restore the data we just read (COW copy)
-             // This takes precedence over File loading for COW.
-             engine.MemWrite(pageStart, existingData);
-        }
-        // Only load from file if we didn't preserve data? 
-        // OR if preserved data was just "empty unmapped space"?
-        // If Parent had modified the page, existingData has modifications.
-        // If Parent hadn't modified, existingData has File Content (from Parent's mapping).
-        // So 'existingData' should ALWAYS be correct for COW!
-        // The only case it is wrong is if the page was NOT mapped at all (Demand Load).
-        // If not mapped, MemRead returns what?
-        // If MemRead returns 0s (Safe), then we have 0s.
-        // If we write 0s back, we get 0s.
-        // THEN if vma.File != null, we load from file.
-        // BUT we should NOT overwrite modified data with file data!
-        // This is tricky.
-        
-        // Revised Strategy:
-        // Use 'existingData' ONLY.
-        // If 'existingData' was read from unmapped page (0s), and it was supposed to be File...
-        // Then we end up with 0s. Bad.
-        
-        // We really need 'IsMapped'.
-        
-        // Fallback Strategy for now:
-        // Assume if VMA.File is NULL, use ExistingData (Anon memory COW).
-        // If VMA.File is NOT NULL, we are trickier.
-        // But for 'simple_fork' failure, it's Stack (Anon).
-        // So fixing Anon path helps.
-        
-        // Implementation:
-        // Only trigger COW copy for Anon logic for now?
-        // Or if we trust X86_Clone maps everything.
-        
-        // If X86_Clone maps everything, then MemRead is ALWAYS valid data.
-        // So we should Write it back, and SKIP File Loading?
-        // YES. If we have data, we don't reload from disk.
-        
-        if (existingData != null)
-        {
-             // We restored data.
-             // Do NOT load from file again (it would overwrite modifications).
-        }
-        else if (vma.File != null)
+        // Load from file if file-backed VMA
+        if (vma.File != null)
         {
             long vmaOffset = pageStart - vma.Start;
             long off = vma.Offset + vmaOffset;
@@ -336,17 +279,28 @@ public class VMAManager
                     readLen = (int)remainingFile;
             }
 
+            string filePath = vma.File.Dentry?.Inode is HostInode hi ? hi.HostPath : "unknown";
+            Logger.LogInformation("HandleFault: Loading from {FilePath} for 0x{PageStart:x} off={Off} readLen={ReadLen}", filePath, pageStart, off, readLen);
+
             if (readLen > 0)
             {
                 Span<byte> buf = stackalloc byte[LinuxConstants.PageSize];
                 int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
+                Logger.LogInformation("HandleFault: Read {N} bytes for page 0x{PageStart:x}, first bytes: {B0:x2} {B1:x2} {B2:x2} {B3:x2}", 
+                    n, pageStart, n > 0 ? buf[0] : 0, n > 1 ? buf[1] : 0, n > 2 ? buf[2] : 0, n > 3 ? buf[3] : 0);
                 if (n > 0)
                 {
                     engine.MemWrite(pageStart, buf.Slice(0, n));
+                    
+                    // Verify write by reading back
+                    var verify = engine.MemRead(pageStart, 4);
+                    Logger.LogInformation("HandleFault: Verify after write at 0x{PageStart:x}: {V0:x2} {V1:x2} {V2:x2} {V3:x2}", 
+                        pageStart, verify[0], verify[1], verify[2], verify[3]);
                 }
             }
         }
 
+        // Set final permissions
         if (tempPerms != vma.Perms)
         {
             engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)vma.Perms);

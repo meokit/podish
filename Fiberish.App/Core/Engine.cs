@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Bifrost.Native;
 
 namespace Bifrost.Core;
@@ -12,6 +13,9 @@ public class Engine : IDisposable
     // Callbacks
     public Action<Engine, uint, bool>? FaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
+    // New resolver for synchronous fault handling during safe access
+    public Func<uint, bool, bool>? PageFaultResolver { get; set; }
+
     public bool TraceInstructions { get; set; } = false;
 
     public unsafe Engine()
@@ -68,7 +72,9 @@ public class Engine : IDisposable
         var newEngine = new Engine(newState)
         {
             FaultHandler = FaultHandler,
-            InterruptHandler = InterruptHandler
+            InterruptHandler = InterruptHandler,
+            PageFaultResolver = PageFaultResolver,
+            TraceInstructions = TraceInstructions
         };
         return newEngine;
     }
@@ -93,6 +99,119 @@ public class Engine : IDisposable
             X86Native.MemRead(State, addr, p, size);
         }
         return buf;
+    }
+
+    public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
+    {
+        return (IntPtr)X86Native.ResolvePtr(State, vaddr, isWrite ? 1 : 0);
+    }
+    
+    public IntPtr GetPhysicalAddress(uint vaddr)
+    {
+        return GetPhysicalAddressSafe(vaddr, false);
+    }
+
+    public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
+    {
+        int len = data.Length;
+        int written = 0;
+        
+        fixed (byte* pData = data)
+        {
+            while (written < len)
+            {
+                uint currAddr = vaddr + (uint)written;
+                void* ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
+                if (ptr == null) 
+                {
+                    if (PageFaultResolver != null && PageFaultResolver(currAddr, true))
+                    {
+                        ptr = X86Native.ResolvePtr(State, currAddr, 1);
+                    }
+                }
+                if (ptr == null) return false;
+
+                uint pageOffset = currAddr & 0xFFF;
+                int chunk = Math.Min(len - written, 4096 - (int)pageOffset);
+
+                Buffer.MemoryCopy(pData + written, (byte*)ptr, chunk, chunk);
+                written += chunk;
+            }
+        }
+        return true;
+    }
+
+    public unsafe bool CopyFromUser(uint vaddr, Span<byte> data)
+    {
+        int len = data.Length;
+        int read = 0;
+
+        fixed (byte* pData = data)
+        {
+            while (read < len)
+            {
+                uint currAddr = vaddr + (uint)read;
+                void* ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
+                if (ptr == null) 
+                {
+                    if (PageFaultResolver != null && PageFaultResolver(currAddr, false))
+                    {
+                        ptr = X86Native.ResolvePtr(State, currAddr, 0);
+                    }
+                }
+                if (ptr == null) return false;
+
+                uint pageOffset = currAddr & 0xFFF;
+                int chunk = Math.Min(len - read, 4096 - (int)pageOffset);
+
+                Buffer.MemoryCopy(ptr, pData + read, chunk, chunk);
+                read += chunk;
+            }
+        }
+        return true;
+    }
+
+    public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
+    {
+        if (addr == 0) return ""; 
+
+        var sb = new StringBuilder();
+        uint current = addr;
+        
+        Console.WriteLine($"[ReadStringSafe] Entering addr=0x{addr:x}");
+        
+        while (sb.Length < limit)
+        {
+            void* ptr = X86Native.ResolvePtr(State, current, 0); // Read
+            Console.WriteLine($"[ReadStringSafe] ResolvePtr(0x{current:x}) returned {(ptr != null ? "valid" : "null")}");
+            if (ptr == null) 
+            {
+                if (PageFaultResolver != null && PageFaultResolver(current, false))
+                {
+                    Console.WriteLine($"[ReadStringSafe] Resolved fault for 0x{current:x}");
+                    ptr = X86Native.ResolvePtr(State, current, 0);
+                }
+            }
+            if (ptr == null) return null; // Fault
+
+            // NOTE: X86_ResolvePtr/resolve_safe returns pointer with offset already applied
+            // So ptr is the exact byte pointer for 'current' address
+            uint pageOffset = current & 0xFFF;
+            byte* p = (byte*)ptr;  // Already includes offset
+            int remainingInPage = 4096 - (int)pageOffset;
+            
+            for (int i = 0; i < remainingInPage; i++)
+            {
+                byte b = p[i];
+                if (b == 0) return sb.ToString();
+                sb.Append((char)b);
+                if (sb.Length >= limit) break;
+            }
+            
+            current += (uint)remainingInPage;
+        }
+        
+        return sb.ToString();
     }
 
     public uint RegRead(Reg reg) => X86Native.RegRead(State, (int)reg);
