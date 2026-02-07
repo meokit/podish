@@ -314,8 +314,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     block->inst_count = 0;
 
     uint32_t current_eip = start_eip;
-    uint64_t effective_limit = 128;
-    if (max_insts > 0 && max_insts < 128) effective_limit = max_insts;
+    uint64_t effective_limit = std::min((uint64_t)32, max_insts);
 
     // Temporary storage for indices to support DFE (since DecodedOp doesn't store
     // them anymore)
@@ -423,128 +422,6 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         // Advance
         current_eip += inst_len;
 
-#if 0
-        // --- CMP + Jcc Fusion ---
-        // If the current instruction is a CMP (various forms) and the NEXT is a Jcc,
-        // we can fuse them into a single handler that does both.
-        if (block->inst_count > 0 && !block->ops.empty()) {
-            DecodedOp& cmp_op = block->ops.back();
-            uint16_t cmp_idx = op_indices.back();
-            uint8_t cmp_map = (cmp_idx >> 8) & 0xFF;
-            uint8_t cmp_opcode = cmp_idx & 0xFF;
-
-            SpecializedOp fusion_type = (SpecializedOp)0;
-            if (cmp_map == 0 && !cmp_op.prefixes.flags.opsize) {
-                if (cmp_opcode == 0x39 || cmp_opcode == 0x3B) {
-                    uint8_t mod = (cmp_op.modrm >> 6) & 3;
-                    if (mod == 3) {
-                        fusion_type = OP_FUSED_CMP_RR_JCC;
-                    } else {
-                        // RM or MR fusion only if displacement is not used, so we can use disp/imm freely?
-                        // Actually RM/MR specialized ops use ReadModRM32, which uses disp if present.
-                        // So we can only fuse if disp is NOT used by the CMP.
-                        if (!cmp_op.meta.flags.has_disp) {
-                            fusion_type = (cmp_opcode == 0x3B) ? OP_FUSED_CMP_RM_JCC : OP_FUSED_CMP_MR_JCC;
-                        }
-                    }
-                } else if ((cmp_opcode == 0x81 || cmp_opcode == 0x83) && ((cmp_op.modrm >> 3) & 7) == 7) {
-                    // Group 1 CMP
-                    if ((cmp_op.modrm >> 6) == 3) {
-                        fusion_type = OP_FUSED_CMP_RI_JCC;
-                    } else if (!cmp_op.meta.flags.has_disp) {
-                        // CMP [reg], imm
-                        fusion_type = OP_FUSED_CMP_RI8_JCC;
-                    }
-                } else if (cmp_opcode == 0x3C) {
-                    // CMP AL, imm8
-                    fusion_type = OP_FUSED_CMP_AL_I8_JCC;
-                } else if (cmp_opcode == 0x80 && ((cmp_op.modrm >> 3) & 7) == 7) {
-                    // CMP r/m8, imm8. Fuse if no displacement.
-                    if (!cmp_op.meta.flags.has_disp) {
-                        fusion_type = OP_FUSED_CMP_I8I8_JCC;
-                    }
-                } else if (cmp_opcode == 0x85) {
-                    // TEST r/m32, r32. Fuse if no displacement (to use imm for Jcc)
-                    // Actually we can use imm even if there is displacement.
-                    fusion_type = ((cmp_op.modrm >> 6) == 3) ? OP_FUSED_TEST_RR_JCC : OP_FUSED_TEST_RM_JCC;
-                } else if (cmp_opcode == 0x84) {
-                    // TEST r/m8, r8
-                    fusion_type = ((cmp_op.modrm >> 6) == 3) ? OP_FUSED_TEST_I8I8_RR_JCC : OP_FUSED_TEST_I8I8_RM_JCC;
-                }
-            }
-
-            if (fusion_type != 0) {
-                // Peek next instruction
-                uint8_t next_buf[16];
-                bool fetch_ok = true;
-                for (int i = 0; i < 16; ++i) {
-                    next_buf[i] = state->mmu.read_for_exec<uint8_t>(current_eip + i);
-                    if (state->status != EmuStatus::Running) {
-                        fetch_ok = false;
-                        break;
-                    }
-                }
-
-                if (fetch_ok) {
-                    DecodedOp jcc_op;
-                    if (DecodeInstruction(next_buf, &jcc_op)) {
-                        uint8_t j_opcode = next_buf[0];
-                        uint8_t j_map = 0;
-                        const uint8_t* j_ptr = next_buf;
-                        while (*j_ptr == 0x66 || *j_ptr == 0x67) j_ptr++;  // Skip prefixes
-                        j_opcode = *j_ptr;
-                        if (j_opcode == 0x0F) {
-                            j_map = 1;
-                            j_opcode = *(j_ptr + 1);
-                        }
-
-                        bool is_jcc = false;
-                        if (j_map == 0 && j_opcode >= 0x70 && j_opcode <= 0x7F)
-                            is_jcc = true;
-                        else if (j_map == 1 && j_opcode >= 0x80 && j_opcode <= 0x8F)
-                            is_jcc = true;
-
-                        if (is_jcc) {
-                            // FUSE!
-                            cmp_op.meta.flags.is_fused = 1;
-                            cmp_op.meta.flags.is_control_flow = 1;
-
-                            int32_t jcc_rel = 0;
-                            if (j_map == 0) {
-                                jcc_rel = (int32_t)(int8_t)(jcc_op.imm & 0xFF);
-                            } else {
-                                jcc_rel = (int32_t)jcc_op.imm;
-                            }
-
-                            // Store Jcc target.
-                            // Types that use imm for CMP immediate must use disp for Jcc target.
-                            if (fusion_type == OP_FUSED_CMP_RI_JCC || fusion_type == OP_FUSED_CMP_RI8_JCC ||
-                                fusion_type == OP_FUSED_CMP_AL_I8_JCC || fusion_type == OP_FUSED_CMP_I8I8_JCC) {
-                                cmp_op.disp = (uint32_t)jcc_rel;
-                            } else {
-                                cmp_op.imm = (uint32_t)jcc_rel;
-                            }
-                            cmp_op.extra = j_opcode & 0xF;
-
-                            uint32_t total_len = cmp_op.length + jcc_op.length;
-                            if (total_len <= 15) {
-                                cmp_op.length = total_len;
-                                current_eip += jcc_op.length;
-
-                                // Update Handler to Fused variant
-                                HandlerFunc fused_h = g_Handlers[fusion_type];
-                                cmp_op.handler_offset = (int32_t)((intptr_t)fused_h - (intptr_t)g_HandlerBase);
-                            } else {
-                                cmp_op.meta.flags.is_fused = 0;
-                                cmp_op.meta.flags.is_control_flow = 0;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-#endif
-
         // Stop if Control Flow
         if (IsControlFlow(&block->ops.back())) {
             break;
@@ -585,14 +462,6 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     for (int i = (int)block->ops.size() - 2; i >= 0; --i) {
         DecodedOp& op = block->ops[i];
         if (i >= (int)op_indices.size()) break;  // Should not happen
-
-        // [Safety] Never optimize fused instructions - they have special handlers
-        if (op.meta.flags.is_fused) {
-            // Fused ops (e.g., CMP+Jcc) kill flags and handle jumps internally.
-            // They act as producers, so we reset live_flags.
-            live_flags = 0;
-            continue;
-        }
 
         uint16_t h_idx = op_indices[i];
         uint16_t flat_idx = h_idx & 0x1FF; // Map bit + Opcode
