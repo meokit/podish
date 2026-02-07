@@ -22,11 +22,57 @@ static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     }
 }
 
-static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+template <Specialized SrcSpec = Specialized::None, Specialized DstSpec = Specialized::None>
+static FORCE_INLINE void OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
-    uint8_t src = (op->modrm >> 3) & 7;
-    uint8_t dst = op->modrm & 7;
-    SetReg(state, dst, GetReg(state, src));
+    // Dst = Src
+    uint32_t val;
+
+    // Read Source (ModRM.Reg)
+    if constexpr (SrcSpec >= Specialized::Reg0 && SrcSpec <= Specialized::Reg7) {
+        constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)Specialized::Reg0;
+        if constexpr (FixedSrc == 0) val = state->ctx.regs[0];
+        else if constexpr (FixedSrc == 1) val = state->ctx.regs[1];
+        else if constexpr (FixedSrc == 2) val = state->ctx.regs[2];
+        else if constexpr (FixedSrc == 3) val = state->ctx.regs[3];
+        else if constexpr (FixedSrc == 4) val = state->ctx.regs[4];
+        else if constexpr (FixedSrc == 5) val = state->ctx.regs[5];
+        else if constexpr (FixedSrc == 6) val = state->ctx.regs[6];
+        else if constexpr (FixedSrc == 7) val = state->ctx.regs[7];
+    } else {
+        uint8_t src = (op->modrm >> 3) & 7;
+        val = GetReg(state, src);
+    }
+
+    // Write Destination (ModRM.RM)
+    if constexpr (DstSpec >= Specialized::Reg0 && DstSpec <= Specialized::Reg7) {
+        constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)Specialized::Reg0;
+        if constexpr (FixedDst == 0) state->ctx.regs[0] = val;
+        else if constexpr (FixedDst == 1) state->ctx.regs[1] = val;
+        else if constexpr (FixedDst == 2) state->ctx.regs[2] = val;
+        else if constexpr (FixedDst == 3) state->ctx.regs[3] = val;
+        else if constexpr (FixedDst == 4) state->ctx.regs[4] = val;
+        else if constexpr (FixedDst == 5) state->ctx.regs[5] = val;
+        else if constexpr (FixedDst == 6) state->ctx.regs[6] = val;
+        else if constexpr (FixedDst == 7) state->ctx.regs[7] = val;
+    } else {
+        uint8_t dst = op->modrm & 7;
+        SetReg(state, dst, val);
+    }
+}
+
+// Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
+static void OpMov_EvGv_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEax>(s, o, u); }
+static void OpMov_EvGv_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEcx>(s, o, u); }
+static void OpMov_EvGv_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEdx>(s, o, u); }
+static void OpMov_EvGv_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEbx>(s, o, u); }
+static void OpMov_EvGv_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEsp>(s, o, u); }
+static void OpMov_EvGv_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEbp>(s, o, u); }
+static void OpMov_EvGv_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEsi>(s, o, u); }
+static void OpMov_EvGv_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEdi>(s, o, u); }
+
+static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMov_EvGv_Reg_Template<>(state, op, utlb);
 }
 
 template <Specialized S = Specialized::None>
@@ -986,6 +1032,36 @@ void RegisterDataMovOps() {
         c.mod_mask = 3;   c.mod_val = 3;
         DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
+
+
+    #define REG_EVGV(ridx, FuncName) \
+    { \
+        SpecCriteria c; \
+        c.reg_mask = 0x7; c.reg_val = ridx; \
+        c.mod_mask = 3;   c.mod_val = 3; \
+        DispatchRegistrar<FuncName>::RegisterSpecialized(OP_MOV_RR_STORE, c); \
+    }
+
+    REG_EVGV(0, OpMov_EvGv_Eax);
+    REG_EVGV(1, OpMov_EvGv_Ecx);
+    REG_EVGV(2, OpMov_EvGv_Edx);
+    REG_EVGV(3, OpMov_EvGv_Ebx);
+    REG_EVGV(4, OpMov_EvGv_Esp);
+    REG_EVGV(5, OpMov_EvGv_Ebp);
+    REG_EVGV(6, OpMov_EvGv_Esi);
+    REG_EVGV(7, OpMov_EvGv_Edi);
+    
+    // Fix index 2 and 7 duplication in macro above (wrote Edi twice)
+    // Let's rewrite cleaner without macro to be safe and explicit.
+    
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Eax>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ecx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Edx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ebx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Esp>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ebp>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Esi>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Edi>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8
     g_Handlers[0x8A] = DispatchWrapper<OpMov_GbEb>;  // MOV r8, r/m8
     g_Handlers[0xC6] = DispatchWrapper<OpMov_EbIb>;  // MOV r/m8, imm8
