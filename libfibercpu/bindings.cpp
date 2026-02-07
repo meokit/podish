@@ -502,6 +502,7 @@ int X86_Step(EmuState* state) {
     // Sentinel
     HandlerFunc exit_h = g_ExitHandlers[0];
     ops[1].handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+    ops[1].next_block = state->dummy_invalid_block;
 
     // Run first op
     HandlerFunc h = nullptr;
