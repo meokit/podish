@@ -212,8 +212,12 @@ class Program
             {
                 Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} (Vector: {Vector}) EIP=0x{Eip:x} - {Registers}", t.TID, addr, eng.FaultVector, eng.Eip, eng.ToString());
                 try {
-                    var code = eng.MemRead(eng.Eip, 16);
-                    Logger.LogError("Code at EIP: {Code}", BitConverter.ToString(code).Replace("-", " "));
+                    // Use CopyFromUser instead of MemRead to avoid recursive fault
+                    byte[] code = new byte[16];
+                    if (eng.CopyFromUser(eng.Eip, code))
+                    {
+                        Logger.LogError("Code at EIP: {Code}", BitConverter.ToString(code).Replace("-", " "));
+                    }
                 } catch { }
 
                 t.DumpTrace();

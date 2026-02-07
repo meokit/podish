@@ -2893,6 +2893,13 @@ public unsafe partial class SyscallManager
             }
         }
         
+        // CRITICAL: Verify file exists BEFORE clearing any state!
+        // Otherwise, a failed execve will leave the process in an invalid state.
+        if (!System.IO.File.Exists(absPath))
+        {
+            return -(int)Errno.ENOENT;
+        }
+
         // Clear Memory
         sm.Mem.Clear(sm.Engine);
         
@@ -2939,7 +2946,8 @@ public unsafe partial class SyscallManager
             sm.Engine.RegWrite(Reg.EBP, 0);
             
             // Initial stack content is already written by ElfLoader
-            sm.Engine.MemWrite(res.SP, res.InitialStack);
+            // Use CopyToUser instead of MemWrite to avoid recursive fault handler
+            sm.Engine.CopyToUser(res.SP, res.InitialStack);
             
             sm.BrkAddr = res.BrkAddr; // Set BRK address from ElfLoader result
 
