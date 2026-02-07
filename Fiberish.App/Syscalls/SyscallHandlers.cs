@@ -155,6 +155,144 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.select, SysSelect);
         Register(X86SyscallNumbers._newselect, SysNewSelect);
         Register(X86SyscallNumbers.poll, SysPoll);
+        Register(X86SyscallNumbers.pipe, SysPipe);
+        Register(239, SysSendfile64);
+    }
+
+    internal static int SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        int outFd = (int)a1;
+        int inFd = (int)a2;
+        uint offsetPtr = a3;
+        int count = (int)a4;
+
+        if (!sm.FDs.ContainsKey(inFd) || !sm.FDs.ContainsKey(outFd)) return -(int)Errno.EBADF;
+        var inFile = sm.FDs[inFd];
+        var outFile = sm.FDs[outFd];
+
+        if (inFile == null || outFile == null) return -(int)Errno.EBADF;
+
+        // Verify modes
+        const int O_ACCMODE = 3;
+        if (((int)inFile.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY) return -(int)Errno.EBADF;
+        if (((int)outFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY) return -(int)Errno.EBADF;
+
+        // Use a buffer
+        byte[] buffer = new byte[Math.Min(count, 32768)];
+        int totalWritten = 0;
+
+        try 
+        {
+            long initialOffset = -1;
+            if (offsetPtr != 0)
+            {
+                byte[] offsetBytes = sm.Engine.MemRead(offsetPtr, 8);
+                initialOffset = BitConverter.ToInt64(offsetBytes);
+            }
+
+            int remaining = count;
+            while (remaining > 0)
+            {
+                int toRead = Math.Min(remaining, buffer.Length);
+                int bytesRead = 0;
+                
+                if (offsetPtr != 0)
+                {
+                    // Read from specific offset directly from inode
+                    bytesRead = inFile.Dentry.Inode!.Read(inFile, buffer.AsSpan(0, toRead), initialOffset + totalWritten);
+                }
+                else
+                {
+                    // Read from current position via File object
+                    bytesRead = inFile.Read(buffer.AsSpan(0, toRead));
+                }
+
+                if (bytesRead <= 0) 
+                {
+                    var task = Scheduler.GetCurrent();
+                    if (bytesRead == 0 && task?.BlockingTask != null)
+                    {
+                        if (totalWritten > 0)
+                        {
+                            task.BlockingTask = null;
+                            break; 
+                        }
+                        else
+                        {
+                            var waitTask = task.BlockingTask;
+                            task.BlockingTask = SyscallAsyncHelpers.ContinueSendfile(waitTask, state, a1, a2, a3, a4, a5, a6);
+                            return 0; 
+                        }
+                    }
+                    break; 
+                }
+
+                // Write to out_fd
+                int bytesWritten = outFile.Write(buffer.AsSpan(0, bytesRead));
+                
+                if (bytesWritten < 0) 
+                {
+                   if (totalWritten > 0) break; 
+                   return bytesWritten;
+                }
+                
+                totalWritten += bytesWritten;
+                remaining -= bytesWritten;
+                
+                if (bytesWritten < bytesRead) break;
+            }
+
+            if (offsetPtr != 0)
+            {
+                sm.Engine.MemWrite(offsetPtr, BitConverter.GetBytes(initialOffset + totalWritten));
+            }
+
+            return totalWritten;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "SysSendfile64 failed");
+            return -(int)Errno.EIO;
+        }
+    }
+
+    private static int SysPipe(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        uint fdsAddr = a1;
+
+        try
+        {
+            var pipe = new PipeInode();
+            
+            // Reader
+            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root, sm.Root.SuperBlock);
+            var rFile = new Bifrost.VFS.File(rDentry, FileFlags.O_RDONLY);
+            int rFd = sm.AllocFD(rFile);
+            // pipe.AddReader(); // Handled by File ctor -> Inode.Open
+
+            // Writer
+            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root, sm.Root.SuperBlock);
+            var wFile = new Bifrost.VFS.File(wDentry, FileFlags.O_WRONLY);
+            int wFd = sm.AllocFD(wFile);
+            // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
+
+            // Write FDs to user memory
+            sm.Engine.MemWrite(fdsAddr, BitConverter.GetBytes(rFd));
+            sm.Engine.MemWrite(fdsAddr + 4, BitConverter.GetBytes(wFd));
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "SysPipe failed");
+            return -(int)Errno.ENFILE;
+        }
     }
 
     private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1099,13 +1237,13 @@ public unsafe partial class SyscallManager
         return tid;
     }
 
-    private static int SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static int SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         uint bufAddr = a2;
-        uint count = a3;
+        int count = (int)a3;
 
         try
         {
@@ -1113,7 +1251,19 @@ public unsafe partial class SyscallManager
             if (f != null)
             {
                 byte[] buf = new byte[count];
-                int n = f.Read(buf.AsSpan(0, (int)count));
+                int n = f.Read(buf.AsSpan(0, count));
+                
+                if (n == 0 && count > 0)
+                {
+                    var task = Scheduler.GetCurrent();
+                    if (task?.BlockingTask != null)
+                    {
+                        var waitTask = task.BlockingTask;
+                        task.BlockingTask = SyscallAsyncHelpers.ContinueRead(waitTask, state, a1, a2, a3, a4, a5, a6);
+                        return 0;
+                    }
+                }
+
                 if (n > 0) sm.Engine.MemWrite(bufAddr, buf.AsSpan(0, n));
                 return n;
             }
@@ -1123,15 +1273,15 @@ public unsafe partial class SyscallManager
         return -(int)Errno.EBADF;
     }
 
-    private static int SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static int SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         uint bufAddr = a2;
-        uint count = a3;
+        int count = (int)a3;
 
-        var data = sm.Engine.MemRead(bufAddr, count);
+        var data = sm.Engine.MemRead(bufAddr, (uint)count);
 
         var f = sm.GetFD(fd);
         if (f != null)
@@ -1139,6 +1289,18 @@ public unsafe partial class SyscallManager
             try
             {
                 int n = f.Write(data);
+                
+                if (n == 0 && count > 0)
+                {
+                    var task = Scheduler.GetCurrent();
+                    if (task?.BlockingTask != null)
+                    {
+                        var waitTask = task.BlockingTask;
+                        task.BlockingTask = SyscallAsyncHelpers.ContinueWrite(waitTask, state, a1, a2, a3, a4, a5, a6);
+                        return 0;
+                    }
+                }
+
                 return n;
             }
             catch { return -(int)Errno.EIO; }
@@ -3100,5 +3262,26 @@ public unsafe partial class SyscallManager
                 Console.WriteLine($"[WARN] Unimplemented fcntl64 cmd {cmd}");
                 return -(int)Errno.EINVAL;
         }
+    }
+}
+
+internal static class SyscallAsyncHelpers
+{
+    public static async System.Threading.Tasks.Task<int> ContinueRead(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        await waitTask;
+        return SyscallManager.SysRead(state, a1, a2, a3, a4, a5, a6);
+    }
+
+    public static async System.Threading.Tasks.Task<int> ContinueWrite(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        await waitTask;
+        return SyscallManager.SysWrite(state, a1, a2, a3, a4, a5, a6);
+    }
+
+    public static async System.Threading.Tasks.Task<int> ContinueSendfile(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        await waitTask;
+        return SyscallManager.SysSendfile64(state, a1, a2, a3, a4, a5, a6);
     }
 }

@@ -464,6 +464,23 @@ static FORCE_INLINE void OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 1:
                 st0 = f80_mul(st0, val);
                 break;  // FMUL
+            case 2:     // FCOM m64
+                if (f80_lt(st0, val))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, val))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                break;
+            case 3:  // FCOMP m64
+                if (f80_lt(st0, val))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, val))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                FpuPop(state);
+                break;
             case 4:
                 st0 = f80_sub(st0, val);
                 break;  // FSUB

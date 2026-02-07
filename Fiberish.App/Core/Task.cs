@@ -238,7 +238,24 @@ public partial class Task
                     while (!Exited)
                     {
                         // Increase instruction quantum to amortize context switch cost
-                        CPU.Run(0, 1000000);
+                        if (Process.Syscalls.Strace)
+                        {
+                            // Slow path with tracing
+                            int stepRet = CPU.Step();
+                            if (stepRet == 0) // Normal step
+                            {
+                                lock (_traceBuffer)
+                                {
+                                    if (_traceBuffer.Count >= 1000) _traceBuffer.Dequeue();
+                                    _traceBuffer.Enqueue($"0x{CPU.Eip:x}");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Fast path
+                            CPU.Run(0, 1000000);
+                        }
 
                         var status = CPU.Status;
                         
