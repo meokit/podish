@@ -199,7 +199,8 @@ public class VFSTests
             SetArgs(engine, 3, (uint)fd, readBufAddr, 4); // read(fd, buf, 4)
             sys.Handle(engine, 0x80);
             
-            byte[] readBack = engine.MemRead(readBufAddr, 4);
+            byte[] readBack = new byte[4];
+            engine.CopyFromUser(readBufAddr, readBack);
             // Note: If private, the write to memory won't reflect in file read()
             // If shared, it would. Let's use Private and check that we can still read the original 'A'
             Assert.Equal(0x41, readBack[0]);
@@ -229,8 +230,8 @@ public class VFSTests
             mm.Mmap(mntAddr, 8192, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(mntAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mntAddr, Encoding.ASCII.GetBytes("/mnt_adv\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mntAddr, Encoding.ASCII.GetBytes("/mnt_adv\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             System.IO.Directory.CreateDirectory("mnt_adv");
             SetArgs(engine, 21, 0, mntAddr, fsTypeAddr, 0, 0); // mount
             sys.Handle(engine, 0x80);
@@ -242,8 +243,8 @@ public class VFSTests
             mm.Mmap(oldNameAddr, 8192, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(oldNameAddr, true, engine);
             mm.HandleFault(newNameAddr, true, engine);
-            engine.MemWrite(oldNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/old.txt\0"));
-            engine.MemWrite(newNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/new.txt\0"));
+            engine.CopyToUser(oldNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/old.txt\0"));
+            engine.CopyToUser(newNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/new.txt\0"));
 
             // Create old.txt
             SetArgs(engine, 5, oldNameAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
@@ -263,7 +264,7 @@ public class VFSTests
             uint linkNameAddr = 0x20004000;
             mm.Mmap(linkNameAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(linkNameAddr, true, engine);
-            engine.MemWrite(linkNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/link.txt\0"));
+            engine.CopyToUser(linkNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/link.txt\0"));
 
             // link(old, new) - 9
             SetArgs(engine, 9, newNameAddr, linkNameAddr);
@@ -291,8 +292,8 @@ public class VFSTests
             mm.Mmap(symNameAddr, 8192, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(symNameAddr, true, engine);
             mm.HandleFault(targetAddr, true, engine);
-            engine.MemWrite(symNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/sym.link\0"));
-            engine.MemWrite(targetAddr, Encoding.ASCII.GetBytes("new.txt\0")); // Relative symlink
+            engine.CopyToUser(symNameAddr, Encoding.ASCII.GetBytes("/mnt_adv/sym.link\0"));
+            engine.CopyToUser(targetAddr, Encoding.ASCII.GetBytes("new.txt\0")); // Relative symlink
 
             // symlink(target, linkpath) - 83
             SetArgs(engine, 83, targetAddr, symNameAddr);
@@ -307,13 +308,15 @@ public class VFSTests
             sys.Handle(engine, 0x80);
             int rlLen = (int)engine.RegRead(Reg.EAX);
             Assert.Equal(7, rlLen); // "new.txt"
-            Assert.Equal("new.txt", Encoding.ASCII.GetString(engine.MemRead(readlinkBuf, (uint)rlLen)));
+            byte[] rlBuf = new byte[rlLen];
+            engine.CopyFromUser(readlinkBuf, rlBuf);
+            Assert.Equal("new.txt", Encoding.ASCII.GetString(rlBuf));
 
             // 4. Getdents Test
             uint dirNameAddr = 0x20008000;
             mm.Mmap(dirNameAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(dirNameAddr, true, engine);
-            engine.MemWrite(dirNameAddr, Encoding.ASCII.GetBytes("/mnt_adv\0"));
+            engine.CopyToUser(dirNameAddr, Encoding.ASCII.GetBytes("/mnt_adv\0"));
 
             SetArgs(engine, 5, dirNameAddr, (uint)FileFlags.O_RDONLY, 0); // open dir
             sys.Handle(engine, 0x80);
@@ -336,8 +339,13 @@ public class VFSTests
             int pos = 0;
             while (pos < nread)
             {
-                ushort reclen = BinaryPrimitives.ReadUInt16LittleEndian(engine.MemRead(dentsBuf + (uint)pos + 8, 2));
-                string name = Encoding.ASCII.GetString(engine.MemRead(dentsBuf + (uint)pos + 10, (uint)(reclen - 11))).TrimEnd('\0');
+                byte[] recBuf = new byte[2];
+                engine.CopyFromUser(dentsBuf + (uint)pos + 8, recBuf);
+                ushort reclen = BinaryPrimitives.ReadUInt16LittleEndian(recBuf);
+                
+                byte[] nameBuf = new byte[reclen - 11];
+                engine.CopyFromUser(dentsBuf + (uint)pos + 10, nameBuf);
+                string name = Encoding.ASCII.GetString(nameBuf).TrimEnd('\0');
                 if (name == "new.txt") foundNew = true;
                 pos += reclen;
             }
@@ -372,20 +380,20 @@ public class VFSTests
             mm.HandleFault(bufAddr + 8192, true, engine);
 
             // Create circular symlinks: a -> b, b -> a
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("b\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_loop/a\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("b\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_loop/a\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256); // symlink("b", "/mnt_loop/a")
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("a\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_loop/b\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("a\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_loop/b\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256); // symlink("a", "/mnt_loop/b")
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
             // Try to open through the loop - should fail with ELOOP (or return null)
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_loop/a\0"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_loop/a\0"));
             SetArgs(engine, 5, bufAddr + 4096, 0, 0); // open("/mnt_loop/a", O_RDONLY)
             sys.Handle(engine, 0x80);
             int result = (int)engine.RegRead(Reg.EAX);
@@ -413,13 +421,13 @@ public class VFSTests
             mm.HandleFault(bufAddr + 4096, true, engine);
 
             // Create subdir
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_rmdir/subdir\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_rmdir/subdir\0"));
             SetArgs(engine, 39, bufAddr, 0755); // mkdir("/mnt_rmdir/subdir", 0755)
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
             // Create file in subdir
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_rmdir/subdir/file.txt\0"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_rmdir/subdir/file.txt\0"));
             SetArgs(engine, 5, bufAddr + 4096, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
@@ -454,7 +462,7 @@ public class VFSTests
             mm.HandleFault(bufAddr, true, engine);
 
             // Create file
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_exist/file.txt\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_exist/file.txt\0"));
             SetArgs(engine, 5, bufAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
@@ -565,8 +573,9 @@ public class VFSTests
             sys.Handle(engine, 0x80);
             Assert.Equal(data.Length, (int)engine.RegRead(Reg.EAX));
 
-            var readData = engine.MemRead(bufAddr + 4096, (uint)data.Length);
-            Assert.Equal("Hello, World!", Encoding.ASCII.GetString(readData));
+            byte[] actualData = new byte[data.Length];
+            engine.CopyFromUser(bufAddr + 4096, actualData);
+            Assert.Equal("Hello, World!", Encoding.ASCII.GetString(actualData));
 
             // Close
             SetArgs(engine, 6, (uint)fd);
@@ -594,21 +603,21 @@ public class VFSTests
             mm.HandleFault(bufAddr + 4096, true, engine);
 
             // Create original file
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_link/original\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_link/original\0"));
             SetArgs(engine, 5, bufAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
             Assert.True(fd >= 0);
 
             byte[] data = Encoding.ASCII.GetBytes("shared content");
-            engine.MemWrite(bufAddr + 4096, data);
+            engine.CopyToUser(bufAddr + 4096, data);
             SetArgs(engine, 4, (uint)fd, bufAddr + 4096, (uint)data.Length);
             sys.Handle(engine, 0x80);
             SetArgs(engine, 6, (uint)fd);
             sys.Handle(engine, 0x80);
 
             // Create hard link
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_link/hardlink\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_link/hardlink\0"));
             SetArgs(engine, 9, bufAddr, bufAddr + 256); // link(original, hardlink)
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
@@ -639,8 +648,9 @@ public class VFSTests
 
             SetArgs(engine, 3, (uint)fd, bufAddr + 4096, (uint)data.Length);
             sys.Handle(engine, 0x80);
-            var readData = engine.MemRead(bufAddr + 4096, (uint)data.Length);
-            Assert.Equal("shared content", Encoding.ASCII.GetString(readData));
+            byte[] linkData = new byte[data.Length];
+            engine.CopyFromUser(bufAddr + 4096, linkData);
+            Assert.Equal("shared content", Encoding.ASCII.GetString(linkData));
 
             SetArgs(engine, 6, (uint)fd);
             sys.Handle(engine, 0x80);
@@ -668,31 +678,31 @@ public class VFSTests
             for (uint i = 0; i < 4; i++) mm.HandleFault(bufAddr + i * 4096, true, engine);
 
             // Create directory structure
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_sym/dir\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_sym/dir\0"));
             SetArgs(engine, 39, bufAddr, 0755);
             sys.Handle(engine, 0x80);
 
             // Create target file
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_sym/dir/target.txt\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_sym/dir/target.txt\0"));
             SetArgs(engine, 5, bufAddr + 256, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("target content"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("target content"));
             SetArgs(engine, 4, (uint)fd, bufAddr + 4096, 14);
             sys.Handle(engine, 0x80);
             SetArgs(engine, 6, (uint)fd);
             sys.Handle(engine, 0x80);
 
             // Absolute symlink
-            engine.MemWrite(bufAddr + 512, Encoding.ASCII.GetBytes("/mnt_sym/dir/target.txt\0")); // target
-            engine.MemWrite(bufAddr + 768, Encoding.ASCII.GetBytes("/mnt_sym/abs_link\0")); // path
+            engine.CopyToUser(bufAddr + 512, Encoding.ASCII.GetBytes("/mnt_sym/dir/target.txt\0")); // target
+            engine.CopyToUser(bufAddr + 768, Encoding.ASCII.GetBytes("/mnt_sym/abs_link\0")); // path
             SetArgs(engine, 83, bufAddr + 512, bufAddr + 768);
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
             // Relative symlink
-            engine.MemWrite(bufAddr + 512, Encoding.ASCII.GetBytes("dir/target.txt\0"));
-            engine.MemWrite(bufAddr + 768, Encoding.ASCII.GetBytes("/mnt_sym/rel_link\0"));
+            engine.CopyToUser(bufAddr + 512, Encoding.ASCII.GetBytes("dir/target.txt\0"));
+            engine.CopyToUser(bufAddr + 768, Encoding.ASCII.GetBytes("/mnt_sym/rel_link\0"));
             SetArgs(engine, 83, bufAddr + 512, bufAddr + 768);
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
@@ -700,7 +710,7 @@ public class VFSTests
             // Both should resolve to same content
             foreach (var link in new[] { "/mnt_sym/abs_link", "/mnt_sym/rel_link" })
             {
-                engine.MemWrite(bufAddr + 1024, Encoding.ASCII.GetBytes(link + "\0"));
+                engine.CopyToUser(bufAddr + 1024, Encoding.ASCII.GetBytes(link + "\0"));
                 SetArgs(engine, 5, bufAddr + 1024, (uint)FileFlags.O_RDONLY, 0);
                 sys.Handle(engine, 0x80);
                 fd = (int)engine.RegRead(Reg.EAX);
@@ -708,7 +718,9 @@ public class VFSTests
 
                 SetArgs(engine, 3, (uint)fd, bufAddr + 8192, 14);
                 sys.Handle(engine, 0x80);
-                var content = Encoding.ASCII.GetString(engine.MemRead(bufAddr + 8192, 14));
+                byte[] cBuf = new byte[14];
+                engine.CopyFromUser(bufAddr + 8192, cBuf);
+                var content = Encoding.ASCII.GetString(cBuf);
                 Assert.Equal("target content", content);
 
                 SetArgs(engine, 6, (uint)fd);
@@ -737,34 +749,34 @@ public class VFSTests
             mm.HandleFault(bufAddr + 4096, true, engine);
 
             // Create real file
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_chain/real.txt\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_chain/real.txt\0"));
             SetArgs(engine, 5, bufAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("chain test"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("chain test"));
             SetArgs(engine, 4, (uint)fd, bufAddr + 4096, 10);
             sys.Handle(engine, 0x80);
             SetArgs(engine, 6, (uint)fd);
             sys.Handle(engine, 0x80);
 
             // Create chain: link_a -> link_b -> link_c -> real.txt
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("real.txt\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_c\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("real.txt\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_c\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256);
             sys.Handle(engine, 0x80);
 
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("link_c\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_b\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("link_c\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_b\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256);
             sys.Handle(engine, 0x80);
 
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("link_b\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_a\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("link_b\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_chain/link_a\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256);
             sys.Handle(engine, 0x80);
 
             // Open through the chain
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_chain/link_a\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_chain/link_a\0"));
             SetArgs(engine, 5, bufAddr, (uint)FileFlags.O_RDONLY, 0);
             sys.Handle(engine, 0x80);
             fd = (int)engine.RegRead(Reg.EAX);
@@ -772,7 +784,9 @@ public class VFSTests
 
             SetArgs(engine, 3, (uint)fd, bufAddr + 4096, 10);
             sys.Handle(engine, 0x80);
-            var content = Encoding.ASCII.GetString(engine.MemRead(bufAddr + 4096, 10));
+            byte[] chBuf = new byte[10];
+            engine.CopyFromUser(bufAddr + 4096, chBuf);
+            var content = Encoding.ASCII.GetString(chBuf);
             Assert.Equal("chain test", content);
 
             SetArgs(engine, 6, (uint)fd);
@@ -799,8 +813,8 @@ public class VFSTests
             mm.HandleFault(bufAddr, true, engine);
 
             // Create symlink to nonexistent target
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("nonexistent.txt\0"));
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_dangle/broken\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("nonexistent.txt\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_dangle/broken\0"));
             SetArgs(engine, 83, bufAddr, bufAddr + 256);
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
@@ -840,22 +854,22 @@ public class VFSTests
             mm.HandleFault(bufAddr + 4096, true, engine);
 
             // Create source file with new content
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_rename/src\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_rename/src\0"));
             SetArgs(engine, 5, bufAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("new content"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("new content"));
             SetArgs(engine, 4, (uint)fd, bufAddr + 4096, 11);
             sys.Handle(engine, 0x80);
             SetArgs(engine, 6, (uint)fd);
             sys.Handle(engine, 0x80);
 
             // Create destination file with old content
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_rename/dst\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_rename/dst\0"));
             SetArgs(engine, 5, bufAddr + 256, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             fd = (int)engine.RegRead(Reg.EAX);
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("old content"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("old content"));
             SetArgs(engine, 4, (uint)fd, bufAddr + 4096, 11);
             sys.Handle(engine, 0x80);
             SetArgs(engine, 6, (uint)fd);
@@ -877,7 +891,9 @@ public class VFSTests
 
             SetArgs(engine, 3, (uint)fd, bufAddr + 4096, 11);
             sys.Handle(engine, 0x80);
-            var content = Encoding.ASCII.GetString(engine.MemRead(bufAddr + 4096, 11));
+            byte[] rBuf = new byte[11];
+            engine.CopyFromUser(bufAddr + 4096, rBuf);
+            var content = Encoding.ASCII.GetString(rBuf);
             Assert.Equal("new content", content);
 
             SetArgs(engine, 6, (uint)fd);
@@ -905,11 +921,11 @@ public class VFSTests
             mm.HandleFault(bufAddr + 4096, true, engine);
 
             // Create source dir with file inside
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_rendir/src_dir\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_rendir/src_dir\0"));
             SetArgs(engine, 39, bufAddr, 0755);
             sys.Handle(engine, 0x80);
 
-            engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_rendir/src_dir/file.txt\0"));
+            engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("/mnt_rendir/src_dir/file.txt\0"));
             SetArgs(engine, 5, bufAddr + 4096, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
@@ -917,7 +933,7 @@ public class VFSTests
             sys.Handle(engine, 0x80);
 
             // Create empty destination dir
-            engine.MemWrite(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_rendir/dst_dir\0"));
+            engine.CopyToUser(bufAddr + 256, Encoding.ASCII.GetBytes("/mnt_rendir/dst_dir\0"));
             SetArgs(engine, 39, bufAddr + 256, 0755);
             sys.Handle(engine, 0x80);
 
@@ -960,7 +976,7 @@ public class VFSTests
             for (int i = 0; i < fileCount; i++)
             {
                 string name = $"/mnt_dents/file_{i:D3}.txt";
-                engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes(name + "\0"));
+                engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes(name + "\0"));
                 SetArgs(engine, 5, bufAddr, (uint)(FileFlags.O_CREAT | FileFlags.O_RDWR), 0644);
                 sys.Handle(engine, 0x80);
                 int fd = (int)engine.RegRead(Reg.EAX);
@@ -970,7 +986,7 @@ public class VFSTests
             }
 
             // Open directory
-            engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes("/mnt_dents\0"));
+            engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes("/mnt_dents\0"));
             SetArgs(engine, 5, bufAddr, (uint)FileFlags.O_RDONLY, 0);
             sys.Handle(engine, 0x80);
             int dirFd = (int)engine.RegRead(Reg.EAX);
@@ -1066,8 +1082,8 @@ public class VFSTests
         mm.HandleFault(bufAddr, true, engine);
         mm.HandleFault(bufAddr + 4096, true, engine);
 
-        engine.MemWrite(bufAddr, Encoding.ASCII.GetBytes(mountPoint + "\0"));
-        engine.MemWrite(bufAddr + 4096, Encoding.ASCII.GetBytes("tmpfs\0"));
+        engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes(mountPoint + "\0"));
+        engine.CopyToUser(bufAddr + 4096, Encoding.ASCII.GetBytes("tmpfs\0"));
         SetArgs(engine, 21, 0, bufAddr, bufAddr + 4096, 0, 0);
         sys.Handle(engine, 0x80);
         Assert.Equal(0, (int)engine.RegRead(Reg.EAX));

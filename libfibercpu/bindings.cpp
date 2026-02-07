@@ -308,6 +308,12 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { state->mmu.mmap(addr, size, perms); }
 
+void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms) { return state->mmu.allocate_page(addr, perms); }
+
+int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms) {
+    return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(external_page), perms) ? 1 : 0;
+}
+
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     state->mmu.munmap(addr, size);
 

@@ -188,8 +188,10 @@ public partial class Task
         // TLS
         if (cloneSetTls && tlsPtr != 0)
         {
-            var buf = child.CPU.MemRead(tlsPtr + 4, 4);
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf);
+            byte[] tlsBuf = new byte[4];
+            if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf)) 
+                throw new InvalidOperationException("Failed to read TLS base from child address space");
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
             child.CPU.SetSegBase(Seg.GS, baseAddr);
         }
 
@@ -198,14 +200,16 @@ public partial class Task
         {
             byte[] tidBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
-            CPU.MemWrite(ptidPtr, tidBuf);
+            if (!CPU.CopyToUser(ptidPtr, tidBuf))
+                throw new InvalidOperationException("Failed to write TID to parent address space");
         }
 
         if (cloneChildSetTid && ctidPtr != 0)
         {
             byte[] tidBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
-            child.CPU.MemWrite(ctidPtr, tidBuf);
+            if (!child.CPU.CopyToUser(ctidPtr, tidBuf))
+                throw new InvalidOperationException("Failed to write TID to child address space");
         }
 
         if (cloneChildClearTid)
@@ -390,8 +394,10 @@ public partial class Task
                 try
                 {
                     byte[] zero = new byte[4];
-                    CPU.MemWrite(ChildClearTidPtr, zero);
-                    Process.Syscalls.Futex.Wake(ChildClearTidPtr, 1);
+                    if (CPU.CopyToUser(ChildClearTidPtr, zero))
+                    {
+                        Process.Syscalls.Futex.Wake(ChildClearTidPtr, 1);
+                    }
                 }
                 catch { }
                 finally { GIL.Release(); }
@@ -510,7 +516,7 @@ public partial class Task
                  // 0xB8 0xAD 0x00 0x00 0x00 (mov eax, 173)
                  // 0xCD 0x80 (int 0x80)
                  byte[] trampoline = { 0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80 };
-                 CPU.MemWrite(frameEsp, trampoline);
+                 if (!CPU.CopyToUser(frameEsp, trampoline)) return;
                  retAddr = frameEsp;
             }
 
@@ -595,21 +601,22 @@ public partial class Task
          BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), sig);
          BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
          BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
-         CPU.MemWrite(siginfoAddr, siBuf);
+         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
 
          // Align stack for arguments
          esp = (esp - 4u) & ~0xFu;
          
          // Check if we force 3 args?
          // Push 3 args: sig, siginfo_ptr, ucontext_ptr
-         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(ucontextAddr));
-         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(siginfoAddr));
-         esp -= 4u; CPU.MemWrite(esp, BitConverter.GetBytes(sig));
+         if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(ucontextAddr))) return;
+         if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
+         if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(sig))) return;
+         esp -= 12u;
          
          // Push Return Address
          // retAddr points to trampoline or restorer that calls sys_rt_sigreturn
          esp -= 4u;
-         CPU.MemWrite(esp, BitConverter.GetBytes(retAddr));
+         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
     }
 
     private void WriteSigContext(uint addr)
@@ -644,7 +651,7 @@ public partial class Task
             BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(68), CPU.RegRead(Reg.ESP));
             BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(72), 0x2B); // SS
             
-            CPU.MemWrite(addr, buf);
+            if (!CPU.CopyToUser(addr, buf)) { }
         }
         catch { }
     }
@@ -718,7 +725,8 @@ public partial class Task
         // offset 56: eip, cs, efl, uesp, ss
         try
         {
-            byte[] buf = CPU.MemRead(addr, 80);
+            byte[] buf = new byte[80];
+            if (!CPU.CopyFromUser(addr, buf)) return;
             var s = buf.AsSpan();
             
             CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(16)));

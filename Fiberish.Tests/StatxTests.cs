@@ -56,8 +56,8 @@ public class StatxTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_statx\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_statx\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0); // mount
             sys.Handle(engine, 0x80);
@@ -67,7 +67,7 @@ public class StatxTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_statx/test.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_statx/test.txt\0"));
             
             SetArgs(engine, 5, fileAddr, 0x42, 0x1A4); // open(O_CREAT)
             sys.Handle(engine, 0x80);
@@ -79,7 +79,7 @@ public class StatxTests
             uint dataAddr = 0x20003000;
             mm.Mmap(dataAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(dataAddr, true, engine);
-            engine.MemWrite(dataAddr, data);
+            engine.CopyToUser(dataAddr, data);
             SetArgs(engine, 4, (uint)fd, dataAddr, (uint)data.Length); // write
             sys.Handle(engine, 0x80);
             Assert.Equal(data.Length, (int)engine.RegRead(Reg.EAX));
@@ -94,7 +94,8 @@ public class StatxTests
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
-            byte[] statxBuf = engine.MemRead(statxAddr, 256);
+            byte[] statxBuf = new byte[256];
+            engine.CopyFromUser(statxAddr, statxBuf);
             uint mask = BinaryPrimitives.ReadUInt32LittleEndian(statxBuf.AsSpan(0x00, 4));
             ulong size = BinaryPrimitives.ReadUInt64LittleEndian(statxBuf.AsSpan(0x28, 8));
             ushort mode = BinaryPrimitives.ReadUInt16LittleEndian(statxBuf.AsSpan(0x1C, 2));
@@ -128,8 +129,8 @@ public class StatxTests
             mm.Mmap(mountAddr, 8192, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_statx_empty\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_statx_empty\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
 
@@ -137,7 +138,7 @@ public class StatxTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_statx_empty/emptyfile\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_statx_empty/emptyfile\0"));
             SetArgs(engine, 5, fileAddr, 0x42, 0x1A4);
             sys.Handle(engine, 0x80);
             int fd = (int)engine.RegRead(Reg.EAX);
@@ -148,14 +149,15 @@ public class StatxTests
             mm.Mmap(statxAddr, 8192, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(statxAddr, true, engine);
             mm.HandleFault(emptyPathAddr, true, engine);
-            engine.MemWrite(emptyPathAddr, new byte[] { 0 }); // ""
+            engine.CopyToUser(emptyPathAddr, new byte[] { 0 }); // ""
 
             SetArgs(engine, 383, (uint)fd, emptyPathAddr, (uint)LinuxConstants.AT_EMPTY_PATH, (uint)LinuxConstants.STATX_BASIC_STATS, statxAddr);
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
-            byte[] statxBuf = engine.MemRead(statxAddr, 256);
-            ushort mode = BinaryPrimitives.ReadUInt16LittleEndian(statxBuf.AsSpan(0x1C, 2));
+            byte[] sBuf = new byte[256];
+            engine.CopyFromUser(statxAddr, sBuf);
+            ushort mode = BinaryPrimitives.ReadUInt16LittleEndian(sBuf.AsSpan(0x1C, 2));
             Assert.Equal(0x81A4u, (uint)mode);
 
             SetArgs(engine, 6, (uint)fd);
@@ -191,7 +193,8 @@ public class StatxTests
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
 
-            byte[] tsBuf = engine.MemRead(tsPtr, 8);
+            byte[] tsBuf = new byte[8];
+            engine.CopyFromUser(tsPtr, tsBuf);
             int secs = BitConverter.ToInt32(tsBuf, 0);
             Assert.True(secs > 1700000000); // Check for reasonable unix timestamp
         }

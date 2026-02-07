@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Bifrost.Core;
+using Bifrost.Native;
 using Task = Bifrost.Core.Task;
 
 namespace Bifrost.Syscalls;
@@ -29,7 +30,10 @@ public static class SyscallAsyncWrappers
                 int status = (info.si_status & 0xFF) << 8;
                 byte[] statusBuf = new byte[4];
                 BinaryPrimitives.WriteInt32LittleEndian(statusBuf, status);
-                sm.Engine.MemWrite(statusPtr, statusBuf);
+                if (!sm.Engine.CopyToUser(statusPtr, statusBuf))
+                {
+                    return -(int)Errno.EFAULT;
+                }
             }
             return pid;
         }
@@ -52,7 +56,7 @@ public static class SyscallAsyncWrappers
 
             if (pid >= 0 && infop != 0)
             {
-                WriteSigInfo(sm, infop, info);
+                if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
             }
             return pid >= 0 ? 0 : pid;
         }
@@ -62,7 +66,7 @@ public static class SyscallAsyncWrappers
         }
     }
 
-    private static void WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
+    private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
     {
         var buf = new byte[128];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.si_signo);
@@ -71,6 +75,6 @@ public static class SyscallAsyncWrappers
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.si_pid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(16, 4), info.si_uid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.si_status);
-        sm.Engine.MemWrite(addr, buf);
+        return sm.Engine.CopyToUser(addr, buf);
     }
 }

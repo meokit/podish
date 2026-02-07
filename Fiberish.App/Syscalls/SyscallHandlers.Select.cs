@@ -22,7 +22,8 @@ public unsafe partial class SyscallManager
         uint argsAddr = a1;
         if (argsAddr == 0) return -(int)Errno.EFAULT;
 
-        byte[] args = sm.Engine.MemRead(argsAddr, 20);
+        byte[] args = new byte[20];
+        if (!sm.Engine.CopyFromUser(argsAddr, args)) return -(int)Errno.EFAULT;
         int n = System.BitConverter.ToInt32(args, 0);
         uint inp = System.BitConverter.ToUInt32(args, 4);
         uint outp = System.BitConverter.ToUInt32(args, 8);

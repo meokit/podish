@@ -243,7 +243,6 @@ public class VMAManager
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
-        Logger.LogDebug("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
         var vma = FindVMA(addr);
         if (vma == null)
         {
@@ -260,8 +259,14 @@ public class VMAManager
         uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
 
-        // Allocate page first
-        engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)tempPerms);
+        // Allocate page and get host pointer in one call
+        IntPtr hostPtr = engine.AllocatePage(pageStart, (byte)tempPerms);
+        if (hostPtr == IntPtr.Zero)
+        {
+            Logger.LogError("HandleFault: AllocatePage failed for 0x{PageStart:x}", pageStart);
+            return false;
+        }
+
 
         // Load from file if file-backed VMA
         if (vma.File != null)
@@ -281,11 +286,12 @@ public class VMAManager
 
             if (readLen > 0)
             {
-                Span<byte> buf = stackalloc byte[LinuxConstants.PageSize];
-                int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
-                if (n > 0)
+                // Read directly into allocated page memory (no MemWrite call needed)
+                unsafe
                 {
-                    engine.MemWrite(pageStart, buf.Slice(0, n));
+                    Span<byte> buf = new Span<byte>((void*)hostPtr, LinuxConstants.PageSize);
+                    int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
+                    Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
                 }
             }
         }
@@ -309,7 +315,8 @@ public class VMAManager
             if (engine.IsDirty(page))
             {
                 // Write back dirty page
-                byte[] data = engine.MemRead(page, (uint)LinuxConstants.PageSize);
+                byte[] data = new byte[LinuxConstants.PageSize];
+                if (!engine.CopyFromUser(page, data)) continue; // Skip if fault? Or handle error?
 
                 long vmaOffset = page - vma.Start;
                 long off = vma.Offset + vmaOffset;

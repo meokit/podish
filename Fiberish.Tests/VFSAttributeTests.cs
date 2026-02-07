@@ -59,8 +59,8 @@ public class VFSAttributeTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_mount\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_mount\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
@@ -70,7 +70,7 @@ public class VFSAttributeTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_mount/test.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_mount/test.txt\0"));
             
             // open(path, O_CREAT | O_RDWR, 0644)
             SetArgs(engine, 5, fileAddr, 0x42, 0644);
@@ -87,7 +87,8 @@ public class VFSAttributeTests
             sys.Handle(engine, 0x80);
             Assert.Equal(0, (int)engine.RegRead(Reg.EAX));
             
-            byte[] statBuf = engine.MemRead(statAddr, 96);
+            byte[] statBuf = new byte[96];
+            engine.CopyFromUser(statAddr, statBuf);
             uint uid = BinaryPrimitives.ReadUInt32LittleEndian(statBuf.AsSpan(24, 4));
             uint gid = BinaryPrimitives.ReadUInt32LittleEndian(statBuf.AsSpan(28, 4));
             
@@ -122,8 +123,8 @@ public class VFSAttributeTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_chmod\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_chmod\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
@@ -131,7 +132,7 @@ public class VFSAttributeTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_chmod/file.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_chmod/file.txt\0"));
             
             SetArgs(engine, 5, fileAddr, 0x42, 0644);  // open O_CREAT
             sys.Handle(engine, 0x80);
@@ -151,8 +152,9 @@ public class VFSAttributeTests
             SetArgs(engine, 195, fileAddr, statAddr);  // stat64
             sys.Handle(engine, 0x80);
             
-            byte[] statBuf = engine.MemRead(statAddr, 96);
-            uint mode = BinaryPrimitives.ReadUInt32LittleEndian(statBuf.AsSpan(16, 4));
+            byte[] sBuf = new byte[96];
+            engine.CopyFromUser(statAddr, sBuf);
+            uint mode = BinaryPrimitives.ReadUInt32LittleEndian(sBuf.AsSpan(16, 4));
             
             // Should have 0x1ff (0777 octal) permissions (plus S_IFREG)
             Assert.Equal(0x81ffu, mode & 0x8FFF);
@@ -185,8 +187,8 @@ public class VFSAttributeTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_perm\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_perm\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
@@ -194,7 +196,7 @@ public class VFSAttributeTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_perm/file.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_perm/file.txt\0"));
             
             SetArgs(engine, 5, fileAddr, 0x42, 0644);
             sys.Handle(engine, 0x80);
@@ -235,8 +237,8 @@ public class VFSAttributeTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_chown\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_chown\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
@@ -244,7 +246,7 @@ public class VFSAttributeTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_chown/file.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_chown/file.txt\0"));
             
             SetArgs(engine, 5, fileAddr, 0x42, 0644);
             sys.Handle(engine, 0x80);
@@ -264,7 +266,8 @@ public class VFSAttributeTests
             SetArgs(engine, 195, fileAddr, statAddr);
             sys.Handle(engine, 0x80);
             
-            byte[] statBuf = engine.MemRead(statAddr, 96);
+            byte[] statBuf = new byte[96];
+            engine.CopyFromUser(statAddr, statBuf);
             uint uid = BinaryPrimitives.ReadUInt32LittleEndian(statBuf.AsSpan(24, 4));
             uint gid = BinaryPrimitives.ReadUInt32LittleEndian(statBuf.AsSpan(28, 4));
             
@@ -298,8 +301,8 @@ public class VFSAttributeTests
             
             mm.HandleFault(mountAddr, true, engine);
             mm.HandleFault(fsTypeAddr, true, engine);
-            engine.MemWrite(mountAddr, Encoding.ASCII.GetBytes("/test_chown_fail\0"));
-            engine.MemWrite(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
+            engine.CopyToUser(mountAddr, Encoding.ASCII.GetBytes("/test_chown_fail\0"));
+            engine.CopyToUser(fsTypeAddr, Encoding.ASCII.GetBytes("tmpfs\0"));
             
             SetArgs(engine, 21, 0, mountAddr, fsTypeAddr, 0, 0);
             sys.Handle(engine, 0x80);
@@ -307,7 +310,7 @@ public class VFSAttributeTests
             uint fileAddr = 0x20002000;
             mm.Mmap(fileAddr, 4096, Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "test", engine);
             mm.HandleFault(fileAddr, true, engine);
-            engine.MemWrite(fileAddr, Encoding.ASCII.GetBytes("/test_chown_fail/file.txt\0"));
+            engine.CopyToUser(fileAddr, Encoding.ASCII.GetBytes("/test_chown_fail/file.txt\0"));
             
             SetArgs(engine, 5, fileAddr, 0x42, 0644);
             sys.Handle(engine, 0x80);

@@ -148,6 +148,14 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial void* ResolvePtr(IntPtr state, uint addr, int isWrite);
 
+    [LibraryImport(LibName, EntryPoint = "X86_AllocatePage")]
+    [SuppressGCTransition]
+    public static partial void* AllocatePage(IntPtr state, uint addr, byte perms);
+
+    [LibraryImport(LibName, EntryPoint = "X86_MapExternalPage")]
+    [SuppressGCTransition]
+    public static partial int MapExternalPage(IntPtr state, uint addr, void* externalPage, byte perms);
+
     [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
     public static partial void FlushCache(IntPtr state);
 

@@ -261,6 +261,62 @@ public:
         tlb.flush();
     }
 
+    // API: allocate_page - Allocate a single page and return host pointer
+    // Sets permissions and allocates memory in one call
+    // Returns the host address of the allocated page, or nullptr on failure
+    [[nodiscard]] HostAddr allocate_page(GuestAddr addr, uint8_t perms_raw) {
+        Property perms = static_cast<Property>(perms_raw);
+        uint32_t page_addr = addr & ~PAGE_MASK;
+        uint32_t l1_idx = page_addr >> 22;
+        uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
+
+        if (!page_dir->l1_directory[l1_idx]) {
+            page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+        }
+
+        auto& chunk = page_dir->l1_directory[l1_idx];
+
+        // Allocate page if not already allocated
+        if (!chunk->pages[l2_idx]) {
+            chunk->pages[l2_idx] = new std::byte[PAGE_SIZE];
+            std::memset(chunk->pages[l2_idx], 0, PAGE_SIZE);
+        }
+
+        chunk->permissions[l2_idx] = perms;
+        tlb.flush_page(page_addr);
+
+        return chunk->pages[l2_idx];
+    }
+
+    // API: map_external_page - Map an external memory page to guest address
+    // The external memory is NOT owned by the MMU (will not be freed on munmap)
+    // For mmap passthrough, shared memory, etc.
+    // Returns true on success
+    bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
+        Property perms = static_cast<Property>(perms_raw);
+        uint32_t page_addr = addr & ~PAGE_MASK;
+        uint32_t l1_idx = page_addr >> 22;
+        uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
+
+        if (!page_dir->l1_directory[l1_idx]) {
+            page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+        }
+
+        auto& chunk = page_dir->l1_directory[l1_idx];
+
+        // Free existing page if owned
+        if (chunk->pages[l2_idx]) {
+            delete[] chunk->pages[l2_idx];
+        }
+
+        // Set external page (caller owns this memory)
+        chunk->pages[l2_idx] = external_page;
+        chunk->permissions[l2_idx] = perms | Property::External;  // Mark as external
+        tlb.flush_page(page_addr);
+
+        return true;
+    }
+
     // API: munmap - Clear pages and permissions
     void munmap(GuestAddr addr, uint32_t size) {
         uint32_t start = addr & ~PAGE_MASK;
@@ -272,11 +328,11 @@ public:
 
             auto& chunk = page_dir->l1_directory[l1_idx];
             if (chunk) {
-                // Delete the page data
-                if (chunk->pages[l2_idx]) {
+                // Delete the page data only if not external
+                if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
                     delete[] chunk->pages[l2_idx];
-                    chunk->pages[l2_idx] = nullptr;
                 }
+                chunk->pages[l2_idx] = nullptr;
                 // Clear permissions
                 chunk->permissions[l2_idx] = Property::None;
             }

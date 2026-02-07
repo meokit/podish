@@ -64,7 +64,7 @@ namespace Bifrost.Syscalls
                 if (pfd.Fd >= 0)
                 {
                     // Access FDs carefully (thread safe because GIL held)
-                    Bifrost.VFS.File file = null;
+                    Bifrost.VFS.File? file = null;
                     if (sm.FDs.TryGetValue(pfd.Fd, out file))
                     {
                         short revents = file.Poll(pfd.Events);
@@ -179,7 +179,7 @@ namespace Bifrost.Syscalls
 
                 if (!checkRead && !checkWrite && !checkEx) continue;
 
-                Bifrost.VFS.File file = null;
+                Bifrost.VFS.File? file = null;
                 if (!sm.FDs.TryGetValue(i, out file))
                 {
                     return -(int)Errno.EBADF; 
@@ -220,10 +220,13 @@ namespace Bifrost.Syscalls
         }
 
         // --- Memory Helpers ---
-        private static T ReadStruct<T>(Engine engine, uint addr) where T : struct
+        private static T ReadStruct<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>(Engine engine, uint addr) where T : struct
         {
             int size = Marshal.SizeOf<T>();
-            byte[] buf = engine.MemRead(addr, (uint)size);
+            byte[] buf = new byte[size];
+            if (!engine.CopyFromUser(addr, buf))
+                throw new InvalidOperationException($"EFAULT: Failed to read struct {typeof(T).Name} from 0x{addr:x}");
+            
             GCHandle handle = GCHandle.Alloc(buf, GCHandleType.Pinned);
             try {
                 return Marshal.PtrToStructure<T>(handle.AddrOfPinnedObject());
@@ -232,7 +235,7 @@ namespace Bifrost.Syscalls
             }
         }
 
-        private static void WriteStruct<T>(Engine engine, uint addr, T val) where T : struct
+        private static void WriteStruct<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>(Engine engine, uint addr, T val) where T : struct
         {
             int size = Marshal.SizeOf<T>();
             byte[] buf = new byte[size];
@@ -243,13 +246,16 @@ namespace Bifrost.Syscalls
             } finally {
                 Marshal.FreeHGlobal(ptr);
             }
-            engine.MemWrite(addr, buf);
+            if (!engine.CopyToUser(addr, buf))
+                throw new InvalidOperationException($"EFAULT: Failed to write struct {typeof(T).Name} to 0x{addr:x}");
         }
 
         private static void ReadSpan(Engine engine, uint addr, uint[] dest)
         {
             int bytes = dest.Length * 4;
-            byte[] buf = engine.MemRead(addr, (uint)bytes);
+            byte[] buf = new byte[bytes];
+            if (!engine.CopyFromUser(addr, buf))
+                throw new InvalidOperationException($"EFAULT: Failed to read span from 0x{addr:x}");
             Buffer.BlockCopy(buf, 0, dest, 0, bytes);
         }
 
@@ -258,7 +264,8 @@ namespace Bifrost.Syscalls
             int bytes = src.Length * 4;
             byte[] buf = new byte[bytes];
             Buffer.BlockCopy(src, 0, buf, 0, bytes);
-            engine.MemWrite(addr, buf);
+            if (!engine.CopyToUser(addr, buf))
+                 throw new InvalidOperationException($"EFAULT: Failed to write span to 0x{addr:x}");
         }
     }
 }

@@ -364,7 +364,7 @@ public unsafe partial class SyscallManager
         long t = DateTimeOffset.Now.ToUnixTimeSeconds();
         if (a1 != 0)
         {
-            sm.Engine.MemWrite(a1, BitConverter.GetBytes((uint)t));
+            if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes((uint)t))) return -(int)Errno.EFAULT;
         }
         return (int)t;
     }
@@ -546,7 +546,11 @@ public unsafe partial class SyscallManager
         {
             byte[] buf = new byte[count];
             int n = f.Dentry.Inode!.Read(f, buf.AsSpan(), offset);
-            if (n > 0) sm.Engine.MemWrite(bufAddr, buf.AsSpan(0, n));
+            if (n > 0) 
+            {
+                if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
+                    return -(int)Errno.EFAULT;
+            }
             return n;
         }
         catch { return -(int)Errno.EIO; }
@@ -561,7 +565,9 @@ public unsafe partial class SyscallManager
         uint count = a3;
         long offset = (long)a4 | ((long)a5 << 32);
 
-        var data = sm.Engine.MemRead(bufAddr, count);
+        byte[] data = new byte[count];
+        if (!sm.Engine.CopyFromUser(bufAddr, data)) return -(int)Errno.EFAULT;
+
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
@@ -587,10 +593,11 @@ public unsafe partial class SyscallManager
         int totalRead = 0;
         for (int i = 0; i < iovCnt; i++)
         {
-            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8, 4);
-            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8 + 4, 4);
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            byte[] iovBuf = new byte[8];
+            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
+            
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
@@ -598,8 +605,8 @@ public unsafe partial class SyscallManager
                 int n = f.Read(buf);
                 if (n > 0)
                 {
-                    sm.Engine.MemWrite(baseAddr, buf.AsSpan(0, n));
-                    totalRead += n;
+                if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
+                totalRead += n;
                     if (n < (int)len) break; // EOF or short read
                 }
                 else break;
@@ -623,10 +630,10 @@ public unsafe partial class SyscallManager
         int totalRead = 0;
         for (int i = 0; i < iovCnt; i++)
         {
-            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8, 4);
-            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8 + 4, 4);
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            byte[] iovBuf = new byte[8];
+            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
@@ -634,8 +641,8 @@ public unsafe partial class SyscallManager
                 int n = f.Dentry.Inode!.Read(f, buf, offset + totalRead);
                 if (n > 0)
                 {
-                    sm.Engine.MemWrite(baseAddr, buf.AsSpan(0, n));
-                    totalRead += n;
+                if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
+                totalRead += n;
                     if (n < (int)len) break;
                 }
                 else break;
@@ -659,14 +666,16 @@ public unsafe partial class SyscallManager
         int totalWritten = 0;
         for (int i = 0; i < iovCnt; i++)
         {
-            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8, 4);
-            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8 + 4, 4);
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            byte[] iovBuf = new byte[8];
+            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
+            
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                var data = sm.Engine.MemRead(baseAddr, len);
+                byte[] data = new byte[len];
+                if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
                 int n = f.Dentry.Inode!.Write(f, data, offset + totalWritten);
                 if (n > 0)
                 {
@@ -872,7 +881,8 @@ public unsafe partial class SyscallManager
                 };
                 buf[reclen - 1] = dType;
 
-                sm.Engine.MemWrite(baseAddr, buf);
+                if (!sm.Engine.CopyToUser(baseAddr, buf))
+                    return -(int)Errno.EFAULT;
                 writeOffset += reclen;
                 f.Position = i + 1;
             }
@@ -1444,8 +1454,9 @@ public unsafe partial class SyscallManager
 
         if (opCode == 0) // WAIT
         {
-            var buf = sm.Engine.MemRead(uaddr, 4);
-            uint currentVal = BinaryPrimitives.ReadUInt32LittleEndian(buf);
+            byte[] tidBuf = new byte[4];
+            if (!sm.Engine.CopyFromUser(uaddr, tidBuf)) return -(int)Errno.EFAULT;
+            uint currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
             if (currentVal != val) return -(int)Errno.EAGAIN; // EWOULDBLOCK
 
             var waiter = sm.Futex.PrepareWait(uaddr);
@@ -1476,7 +1487,8 @@ public unsafe partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         uint uInfoAddr = a1;
-        var buf = sm.Engine.MemRead(uInfoAddr, 16);
+        byte[] buf = new byte[16];
+        if (!sm.Engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
 
         uint entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
         uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
@@ -1488,7 +1500,7 @@ public unsafe partial class SyscallManager
         if (entry == 0xFFFFFFFF)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), 12);
-            sm.Engine.MemWrite(uInfoAddr, buf.AsSpan(0, 4));
+            if (!sm.Engine.CopyToUser(uInfoAddr, buf.AsSpan(0, 4))) return -(int)Errno.EFAULT;
         }
 
         return 0;
@@ -1516,7 +1528,7 @@ public unsafe partial class SyscallManager
             byte[] buf = new byte[65];
             var bytes = System.Text.Encoding.ASCII.GetBytes(s);
             Array.Copy(bytes, buf, Math.Min(bytes.Length, 64));
-            sm.Engine.MemWrite(addr, buf);
+            if (!sm.Engine.CopyToUser(addr, buf)) return;
         }
 
         WriteUnameString(a1, uts.SysName);
@@ -1563,7 +1575,7 @@ public unsafe partial class SyscallManager
             } finally {
                 Marshal.FreeHGlobal(ptr);
             }
-            sm.Engine.MemWrite(sysinfoAddr, buffer);
+            if (!sm.Engine.CopyToUser(sysinfoAddr, buffer)) return -(int)Errno.EFAULT;
         }
         
         return 0;
@@ -1670,9 +1682,9 @@ public unsafe partial class SyscallManager
         var t = Scheduler.GetByEngine(state);
         if (t != null && sm != null)
         {
-            sm.Engine.MemWrite(a1, BitConverter.GetBytes(t.Process.UID));
-            sm.Engine.MemWrite(a2, BitConverter.GetBytes(t.Process.EUID));
-            sm.Engine.MemWrite(a3, BitConverter.GetBytes(t.Process.SUID));
+            if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes(t.Process.UID))) return -(int)Errno.EFAULT;
+            if (!sm.Engine.CopyToUser(a2, BitConverter.GetBytes(t.Process.EUID))) return -(int)Errno.EFAULT;
+            if (!sm.Engine.CopyToUser(a3, BitConverter.GetBytes(t.Process.SUID))) return -(int)Errno.EFAULT;
         }
         return 0;
     }
@@ -1696,9 +1708,9 @@ public unsafe partial class SyscallManager
         var t = Scheduler.GetByEngine(state);
         if (t != null && sm != null)
         {
-            sm.Engine.MemWrite(a1, BitConverter.GetBytes(t.Process.GID));
-            sm.Engine.MemWrite(a2, BitConverter.GetBytes(t.Process.EGID));
-            sm.Engine.MemWrite(a3, BitConverter.GetBytes(t.Process.SGID));
+            if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes(t.Process.GID))) return -(int)Errno.EFAULT;
+            if (!sm.Engine.CopyToUser(a2, BitConverter.GetBytes(t.Process.EGID))) return -(int)Errno.EFAULT;
+            if (!sm.Engine.CopyToUser(a3, BitConverter.GetBytes(t.Process.SGID))) return -(int)Errno.EFAULT;
         }
         return 0;
     }
@@ -1846,7 +1858,7 @@ public unsafe partial class SyscallManager
         string cwd = "/" + string.Join("/", parts);
         if (cwd.Length + 1 > size) return -(int)Errno.ERANGE;
 
-        sm.Engine.MemWrite(bufAddr, System.Text.Encoding.ASCII.GetBytes(cwd + "\0"));
+        if (!sm.Engine.CopyToUser(bufAddr, System.Text.Encoding.ASCII.GetBytes(cwd + "\0"))) return -(int)Errno.EFAULT;
         return cwd.Length + 1;
     }
 
@@ -1864,14 +1876,15 @@ public unsafe partial class SyscallManager
         int total = 0;
         for (int i = 0; i < iovCnt; i++)
         {
-            var baseBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8, 4);
-            var lenBytes = sm.Engine.MemRead(iovAddr + (uint)i * 8 + 4, 4);
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(baseBytes);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
+            byte[] iovBuf = new byte[8];
+            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
+            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                var data = sm.Engine.MemRead(baseAddr, len);
+                byte[] data = new byte[len];
+                if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
                 f.Write(data);
                 total += (int)len;
             }
@@ -2125,7 +2138,7 @@ public unsafe partial class SyscallManager
             int status = (infop.si_status & 0xFF) << 8;
             byte[] statusBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(statusBuf, status);
-            sm.Engine.MemWrite(statusPtr, statusBuf);
+            if (!sm.Engine.CopyToUser(statusPtr, statusBuf)) return -(int)Errno.EFAULT;
         }
 
         // rusagePtr ignored for now
@@ -2163,13 +2176,13 @@ public unsafe partial class SyscallManager
         if (result >= 0 && infop != 0)
         {
             // Write siginfo_t structure
-            WriteSigInfo(sm, infop, info);
+            if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
         }
 
         return result >= 0 ? 0 : result;
     }
 
-    private static void WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
+    private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
     {
         var buf = new byte[128];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.si_signo);
@@ -2178,7 +2191,7 @@ public unsafe partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.si_pid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(16, 4), info.si_uid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.si_status);
-        sm.Engine.MemWrite(addr, buf);
+        return sm.Engine.CopyToUser(addr, buf);
     }
 
     private static int SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -2261,7 +2274,7 @@ public unsafe partial class SyscallManager
                 Array.Copy(nameBytes, 0, buf, 19, nameBytes.Length);
                 buf[19 + nameBytes.Length] = 0;
 
-                sm.Engine.MemWrite(baseAddr, buf);
+                if (!sm.Engine.CopyToUser(baseAddr, buf)) return -(int)Errno.EFAULT;
                 writeOffset += recLen;
                 f.Position = i + 1;
             }
@@ -2297,7 +2310,7 @@ public unsafe partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(80), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(88), inode.Ino);
 
-        sm.Engine.MemWrite(addr, buf);
+        if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
 
     private static void WriteStat(SyscallManager sm, uint addr, Inode inode)
@@ -2324,7 +2337,7 @@ public unsafe partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(40), (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(48), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
 
-        sm.Engine.MemWrite(addr, buf);
+        if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
 
     private static void WriteStatx(SyscallManager sm, uint addr, Inode inode, uint mask)
@@ -2364,7 +2377,7 @@ public unsafe partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), 0x8); // dev_major (faked)
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), 0x0); // dev_minor (faked)
 
-        sm.Engine.MemWrite(addr, buf);
+        if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
 
     private static int SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -2414,7 +2427,7 @@ public unsafe partial class SyscallManager
             byte[] buf = new byte[8];
             BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
             BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)usecs);
-            sm.Engine.MemWrite(tvPtr, buf);
+            if (!sm.Engine.CopyToUser(tvPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         return 0;
@@ -2451,7 +2464,7 @@ public unsafe partial class SyscallManager
         byte[] buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)nsecs);
-        sm.Engine.MemWrite(tsPtr, buf);
+        if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
@@ -2486,7 +2499,7 @@ public unsafe partial class SyscallManager
         byte[] buf = new byte[12];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)nsecs);
-        sm.Engine.MemWrite(tsPtr, buf);
+        if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
@@ -2545,7 +2558,7 @@ public unsafe partial class SyscallManager
         string target = dentry.Inode.Readlink();
         byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
         int len = Math.Min(bytes.Length, bufSize);
-        sm.Engine.MemWrite(bufAddr, bytes.AsSpan(0, len));
+        if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
         return len;
     }
 
@@ -2573,7 +2586,7 @@ public unsafe partial class SyscallManager
         string target = dentry.Inode.Readlink();
         byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
         int len = Math.Min(bytes.Length, bufSize);
-        sm.Engine.MemWrite(bufAddr, bytes.AsSpan(0, len));
+        if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
         return len;
     }
 
@@ -2639,11 +2652,11 @@ public unsafe partial class SyscallManager
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), oldSa.Flags);
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4), oldSa.Restorer);
                 BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(12, 8), oldSa.Mask);
-                sm.Engine.MemWrite(oldSaPtr, buf);
+                if (!sm.Engine.CopyToUser(oldSaPtr, buf)) return -(int)Errno.EFAULT;
             }
             else
             {
-                sm.Engine.MemWrite(oldSaPtr, new byte[20]);
+                if (!sm.Engine.CopyToUser(oldSaPtr, new byte[20])) return -(int)Errno.EFAULT;
             }
         }
 
@@ -2651,7 +2664,8 @@ public unsafe partial class SyscallManager
         {
             if (sig == 9 || sig == 19) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
 
-            byte[] buf = sm.Engine.MemRead(newSaPtr, 20);
+            byte[] buf = new byte[20];
+            if (!sm.Engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
             var sa = new SigAction
             {
                 Handler = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)),
@@ -2682,13 +2696,14 @@ public unsafe partial class SyscallManager
         {
             byte[] buf = new byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(buf, task.SignalMask);
-            task.CPU.MemWrite(oldSetPtr, buf);
+            if (!task.CPU.CopyToUser(oldSetPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         if (setPtr != 0)
         {
-            byte[] buf = task.CPU.MemRead(setPtr, 8);
-            ulong set = BinaryPrimitives.ReadUInt64LittleEndian(buf);
+            byte[] setBuf = new byte[8];
+            if (!task.CPU.CopyFromUser(setPtr, setBuf)) return -(int)Errno.EFAULT;
+            ulong set = BinaryPrimitives.ReadUInt64LittleEndian(setBuf);
 
             // SIGKILL and SIGSTOP cannot be blocked
             set &= ~(1UL << 8); // SIGKILL (9) - 1 bit shift
@@ -2832,45 +2847,49 @@ public unsafe partial class SyscallManager
         var sm = Get(state);
         var task = Scheduler.GetByEngine(state);
         if (sm == null || task == null) return -(int)Errno.EPERM;
+        
+        Logger.LogDebug("[SysExecve] sm.Engine==task.CPU? {Same}, sm.Engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}", 
+            object.ReferenceEquals(sm.Engine, task.CPU), sm.Engine.State, task.CPU.State);
 
         string filename = sm.ReadString(a1);
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
-        
-        // Resolve absolute path
-        string absPath = filename;
+        // Resolve path via VFS
         var dentry = sm.PathWalk(filename);
-        if (dentry != null)
+        string? hostPath = null;
+
+        if (dentry?.Inode is HostInode hi)
         {
-             if (dentry.Inode is HostInode hi)
-             {
-                  absPath = hi.HostPath;
-             }
-             else if (dentry.Inode is OverlayInode oi)
-             {
-                  // Try to get HostPath from Lower if Upper is not present (COW)
-                  // If Upper is present (Tmpfs), we currently fail as ElfLoader needs a file path.
-                  if (oi.UpperInode == null && oi.LowerInode is HostInode lhi)
-                  {
-                       absPath = lhi.HostPath;
-                  }
-             }
+            hostPath = hi.HostPath;
         }
-        else if (filename.StartsWith("/"))
+        else if (dentry?.Inode is OverlayInode oi && oi.UpperInode == null && oi.LowerInode is HostInode lhi)
         {
-             // Fallback: if not found in VFS or not HostFS, we might fail.
-             // But ElfLoader expects a file path it can OpenRead.
-             // If we rely on HostFS, we need the host path.
-             // For now, if PathWalk fails, we keep filename as is (likely fail).
+            hostPath = lhi.HostPath;
         }
 
-        // Read Args
+        if (hostPath == null)
+        {
+            Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' to a host-backed file in VFS", filename);
+            return -(int)Errno.ENOENT;
+        }
+
+        if (!System.IO.File.Exists(hostPath))
+        {
+            Logger.LogWarning("[SysExecve] VFS resolved '{Filename}' to '{HostPath}', but file does not exist on host", filename, hostPath);
+            return -(int)Errno.ENOENT;
+        }
+
+        // We use the host path for loading
+        string absPath = hostPath;
+
+        // Read Args (must be done BEFORE clearing memory)
         List<string> args = new();
         if (a2 != 0)
         {
             uint curr = a2;
+            byte[] ptrBuf = new byte[4];
             while (true)
             {
-                 byte[] ptrBuf = sm.Engine.MemRead(curr, 4);
+                 if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
                  uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
                  if (strPtr == 0) break;
                  args.Add(sm.ReadString(strPtr));
@@ -2878,26 +2897,20 @@ public unsafe partial class SyscallManager
             }
         }
         
-        // Read Envs
+        // Read Envs (must be done BEFORE clearing memory)
         List<string> envs = new();
         if (a3 != 0)
         {
             uint curr = a3;
+            byte[] ptrBuf = new byte[4];
             while (true)
             {
-                 byte[] ptrBuf = sm.Engine.MemRead(curr, 4);
+                 if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
                  uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
                  if (strPtr == 0) break;
                  envs.Add(sm.ReadString(strPtr));
                  curr += 4;
             }
-        }
-        
-        // CRITICAL: Verify file exists BEFORE clearing any state!
-        // Otherwise, a failed execve will leave the process in an invalid state.
-        if (!System.IO.File.Exists(absPath))
-        {
-            return -(int)Errno.ENOENT;
         }
 
         // Clear Memory
@@ -2945,9 +2958,15 @@ public unsafe partial class SyscallManager
             sm.Engine.RegWrite(Reg.EDI, 0);
             sm.Engine.RegWrite(Reg.EBP, 0);
             
-            // Initial stack content is already written by ElfLoader
+            // Initial stack content must be written to memory
             // Use CopyToUser instead of MemWrite to avoid recursive fault handler
-            sm.Engine.CopyToUser(res.SP, res.InitialStack);
+            bool stackWritten = sm.Engine.CopyToUser(res.SP, res.InitialStack);
+            Logger.LogDebug("[SysExecve] Stack write to 0x{SP:x} len={Len} success={Success}", res.SP, res.InitialStack.Length, stackWritten);
+            if (!stackWritten)
+            {
+                Logger.LogError("[SysExecve] Failed to write initial stack!");
+                return -(int)Errno.EFAULT;
+            }
             
             sm.BrkAddr = res.BrkAddr; // Set BRK address from ElfLoader result
 
@@ -2984,21 +3003,25 @@ public unsafe partial class SyscallManager
         // Layout 1 (Standard): [ESP]=Sig, [ESP+4]=SigInfo*, [ESP+8]=UContext*
         // Layout 2 (Shifted):  [ESP]=SigInfo*, [ESP+4]=UContext*
         
-        uint val0 = BinaryPrimitives.ReadUInt32LittleEndian(task.CPU.MemRead(sp, 4));
+        byte[] spBuf = new byte[4];
+        if (!task.CPU.CopyFromUser(sp, spBuf)) return -(int)Errno.EFAULT;
+        uint val0 = BinaryPrimitives.ReadUInt32LittleEndian(spBuf);
         uint ucontextAddr;
         
         if (val0 > 0x1000) // Likely a pointer (SigInfo*) -> Shifted stack
         {
             // ESP points to Arg2
             // Arg3 (UContext*) is at ESP+4
-            byte[] ptrBuf = task.CPU.MemRead(sp + 4, 4);
+            byte[] ptrBuf = new byte[4];
+            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) return -(int)Errno.EFAULT;
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
         else // Likely a small int (Sig) -> Standard stack
         {
             // ESP points to Arg1
             // Arg3 (UContext*) is at ESP+8
-            byte[] ptrBuf = task.CPU.MemRead(sp + 8, 4);
+            byte[] ptrBuf = new byte[4];
+            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
         
@@ -3033,9 +3056,10 @@ public unsafe partial class SyscallManager
         var task = Scheduler.GetByEngine(state);
         
         // a1: req, a2: rem
-        byte[] buf = sm.Engine.MemRead(a1, 8);
-        int sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        int nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        byte[] reqBuf = new byte[8];
+        if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
+        int sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
+        int nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
         
         long totalMs = sec * 1000L + nsec / 1000000L;
         if (totalMs < 0) return 0;
@@ -3053,7 +3077,7 @@ public unsafe partial class SyscallManager
                     byte[] remBuf = new byte[8];
                     BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(0, 4), (int)(totalMs / 1000));
                     BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(4, 4), (int)((totalMs % 1000) * 1000000));
-                    sm.Engine.MemWrite(a2, remBuf);
+                    if (!sm.Engine.CopyToUser(a2, remBuf)) return -(int)Errno.EFAULT;
                 }
                 
                 // Return ERESTARTSYS (512) so Task.cs can handle restart logic

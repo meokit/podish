@@ -121,8 +121,23 @@ class Program
         engine.RegWrite(Reg.ESP, res.SP);
         engine.Eflags = 0x202;
 
-        // 8. Setup Stack
-        engine.MemWrite(res.SP, res.InitialStack);
+        // 8. Setup Stack - Allocate pages first, then use CopyToUser for safety
+        {
+            uint spBase = res.SP;
+            byte[] stackData = res.InitialStack;
+            
+            // Explicitly allocate pages since no PageFaultResolver is active yet
+            for (uint addr = spBase & LinuxConstants.PageMask; 
+                 addr < ((spBase + (uint)stackData.Length + (uint)LinuxConstants.PageSize - 1) & LinuxConstants.PageMask); 
+                 addr += (uint)LinuxConstants.PageSize)
+            {
+                if (engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
+                    throw new InvalidOperationException($"Failed to allocate stack page at 0x{addr:x}");
+            }
+
+            if (!engine.CopyToUser(spBase, stackData))
+                throw new InvalidOperationException("Failed to write initial stack content to guest memory");
+        }
 
         // 9. Setup Callbacks
         sys.ExitHandler = (eng, code, group) =>

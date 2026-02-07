@@ -20,6 +20,7 @@ enum class Property : uint32_t {
     Write = 1 << 1,
     Exec = 1 << 2,
     Dirty = 1 << 3,
+    External = 1 << 4,  // Page memory is not owned by MMU (for mmap passthrough)
     Valid = 1 << 11,
     // Combinations
     RW = Read | Write,
@@ -40,4 +41,4 @@ constexpr bool has_property(Property target, Property check) {
 
 // Keep has_perm as an alias
 constexpr bool has_perm(Property target, Property check) { return has_property(target, check); }
-}  // namespace x86emu::mem
+}  // namespace fiberish::mem

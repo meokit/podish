@@ -83,6 +83,28 @@ public class Engine : IDisposable
 
     public void MemUnmap(uint addr, uint size) => X86Native.MemUnmap(State, addr, size);
 
+    /// <summary>
+    /// Allocate a single page with given permissions and return host pointer.
+    /// Unlike MemMap, this also allocates the actual page memory.
+    /// </summary>
+    public unsafe IntPtr AllocatePage(uint addr, byte perms)
+    {
+        return (IntPtr)X86Native.AllocatePage(State, addr, perms);
+    }
+
+    /// <summary>
+    /// Map external memory to guest address. Caller owns the memory.
+    /// Useful for mmap passthrough, shared memory, etc.
+    /// </summary>
+    public unsafe bool MapExternalPage(uint addr, IntPtr externalPage, byte perms)
+    {
+        return X86Native.MapExternalPage(State, addr, (void*)externalPage, perms) != 0;
+    }
+
+    /// <summary>
+    /// DEPRECATED: Use CopyToUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
+    /// </summary>
+    [Obsolete("Use CopyToUser instead. MemWrite is slow and risks recursive faults.")]
     public unsafe void MemWrite(uint addr, ReadOnlySpan<byte> data)
     {
         fixed (byte* p = data)
@@ -91,6 +113,10 @@ public class Engine : IDisposable
         }
     }
 
+    /// <summary>
+    /// DEPRECATED: Use CopyFromUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
+    /// </summary>
+    [Obsolete("Use CopyFromUser instead. MemRead is slow and risks recursive faults.")]
     public unsafe byte[] MemRead(uint addr, uint size)
     {
         var buf = new byte[size];

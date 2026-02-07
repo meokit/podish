@@ -81,10 +81,27 @@ public class ElfLoader
         }
 
         // Resolve the host path for reading the ELF file
-        // If filename starts with '/', it's a guest absolute path - resolve it to host
         string hostPath = filename;
-        if (hostRoot != null && filename.StartsWith("/"))
+        
+        // If we found a dentry with a HostInode, use its HostPath directly
+        if (dentry?.Inode is HostInode hi)
         {
+            hostPath = hi.HostPath;
+        }
+        else if (dentry?.Inode is OverlayInode oi && oi.UpperInode == null && oi.LowerInode is HostInode lhi)
+        {
+            hostPath = lhi.HostPath;
+        }
+        else if (hostRoot != null && filename.StartsWith("/") && !Path.IsPathRooted(filename))
+        {
+            // Only combine if it's a guest absolute path AND not a host absolute path
+            // Note: On Linux/Mac, Path.IsPathRooted("/") is true. 
+            // We need a better way to distinguish.
+            hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
+        }
+        else if (hostRoot != null && filename.StartsWith("/") && !filename.StartsWith(hostRoot))
+        {
+            // If it's a guest path (starts with /) but not already pointing into hostRoot
             hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
         }
         
@@ -142,6 +159,7 @@ public class ElfLoader
         }
 
         if (phdrAddr == 0) phdrAddr = loadBase + (uint)elf.Layout.SizeOfElfHeader;
+        Logger.LogDebug("ElfLoader: loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={Phnum}", loadBase, phdrAddr, phnum);
 
         // Setup Stack
         uint stackStart = StackTop - StackSize;

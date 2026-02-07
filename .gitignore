@@ -25,3 +25,6 @@ obj/
 *.trace/
 benchmark/coremark/
 .cache/
+*.profraw
+ia32_test
+tests/test_safe_access

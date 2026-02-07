@@ -55,11 +55,16 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
 // Memory Access
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
+// DEPRECATED: Use ResolvePtr + direct memcpy instead. These are slow (byte-by-byte) and for testing only.
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
 int X86_MemIsDirty(EmuState* state, uint32_t addr);
 // Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
 void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write);
+// Allocate a single page with given permissions, returns host pointer to page
+void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
+// Map external memory to guest address (caller owns memory), returns 1 on success
+int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms);
 
 // Execution
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);

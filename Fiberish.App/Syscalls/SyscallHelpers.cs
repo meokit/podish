@@ -18,23 +18,17 @@ public unsafe partial class SyscallManager
     {
         if (addr == 0) return "";
 
-        try
+        var sb = new StringBuilder();
+        uint current = addr;
+        byte[] buf = new byte[1];
+        while (true)
         {
-            var sb = new StringBuilder();
-            uint current = addr;
-            while (true)
-            {
-                var b = Engine.MemRead(current++, 1)[0];
-                if (b == 0) break;
-                sb.Append((char)b);
-                if (sb.Length > 4096) break; // Safety limit
-            }
-            return sb.ToString();
+            if (!Engine.CopyFromUser(current++, buf)) break;
+            if (buf[0] == 0) break;
+            sb.Append((char)buf[0]);
+            if (sb.Length > 4096) break; // Safety limit
         }
-        catch
-        {
-            return "";
-        }
+        return sb.ToString();
     }
 
     public Dentry? PathWalk(string path, Dentry? startAt = null, bool followLink = true, int recursion = 0)
