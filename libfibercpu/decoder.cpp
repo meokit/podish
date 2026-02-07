@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include "decoder_lut.h"
+#include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
 #include "ops.h"         // For g_Handlers
@@ -422,7 +423,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         // Advance
         current_eip += inst_len;
 
-#if 1
+#if 0
         // --- CMP + Jcc Fusion ---
         // If the current instruction is a CMP (various forms) and the NEXT is a Jcc,
         // we can fuse them into a single handler that does both.
@@ -577,22 +578,13 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     // we switch it to its No-Flags (NF) handler variant.
 
     // Initial live_flags = all flags (assume live at block exit)
-    uint32_t live_flags = 0xFFFFFFFF;
+    uint32_t live_flags = DFE_ALL_FLAGS;
 
     // Iterate backwards (skipping the sentinel)
     // op_indices corresponds to block->ops[0...N-1]. Sentinel is at N.
     for (int i = (int)block->ops.size() - 2; i >= 0; --i) {
         DecodedOp& op = block->ops[i];
         if (i >= (int)op_indices.size()) break;  // Should not happen
-
-        uint16_t h_idx = op_indices[i];
-        uint8_t map = (h_idx >> 8) & 1;
-        uint8_t opcode = h_idx & 0xFF;
-
-        // Define flag masks (simplified for analysis)
-        constexpr uint32_t ALL_FLAGS = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
-        uint32_t writes = 0;
-        uint32_t reads = 0;
 
         // [Safety] Never optimize fused instructions - they have special handlers
         if (op.meta.flags.is_fused) {
@@ -602,143 +594,63 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             continue;
         }
 
-        // 1. Determine Read/Write sets for common ALU opcodes
-        if (map == 0) {
-            // Check ranges first
-            if (opcode >= 0x40 && opcode <= 0x4F) {
-                // INC / DEC (Writes all except CF)
-                writes = ALL_FLAGS & ~CF_MASK;
-            } else if (opcode >= 0x70 && opcode <= 0x7F) {
-                // Jcc (Reads various flags)
-                reads = ALL_FLAGS;
-            } else if (opcode >= 0x80 && opcode <= 0x83) {
-                // Group 1 (80-83)
+        uint16_t h_idx = op_indices[i];
+        uint16_t flat_idx = h_idx & 0x1FF; // Map bit + Opcode
+        
+        const auto& info = kOpFlagTable[flat_idx];
+        uint32_t reads = 0;
+        uint32_t writes = 0;
+        
+        switch (info.type) {
+            case DFE_TYPE_SIMPLE:
+                reads = info.read_mask;
+                writes = info.write_mask;
+                break;
+                
+            case DFE_TYPE_GROUP1: {
+                // 0x80-0x83: ADD, OR, ADC, SBB, AND, SUB, XOR, CMP
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 7) {
-                    // CMP: Writes flags, reads none (producer)
-                    writes = ALL_FLAGS;
-                } else if (reg == 2 || reg == 3) {
-                    // ADC, SBB: Reads CF, Writes all
-                    reads = CF_MASK;
-                    writes = ALL_FLAGS;
+                if (reg == 2 || reg == 3) { // ADC, SBB
+                    reads = DFE_CF_MASK;
+                    writes = DFE_ALL_FLAGS;
+                } else if (reg == 7) { // CMP
+                    // Writes All, Reads None (unless it reads args, which are not flags)
+                    writes = DFE_ALL_FLAGS;
                 } else {
                     // ADD, OR, AND, SUB, XOR
-                    writes = ALL_FLAGS;
+                    writes = DFE_ALL_FLAGS;
                 }
-            } else if (opcode == 0xC0 || opcode == 0xC1 || (opcode >= 0xD0 && opcode <= 0xD3)) {
-                // Shift/Rotate: Writes flags
-                writes = ALL_FLAGS;
-            } else if (opcode == 0xF6 || opcode == 0xF7) {
-                // Group 3: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV
+                break;
+            }
+            case DFE_TYPE_GROUP2:
+                // Shift/Rotate
+                writes = DFE_ALL_FLAGS;
+                break;
+                
+            case DFE_TYPE_GROUP3: {
+                // F6/F7: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 0 || reg == 1) {
-                    // TEST: Writes flags, reads none
-                    writes = ALL_FLAGS;
-                } else if (reg == 2) {
-                    // NOT: No flags affected
-                } else {
-                    // NEG, MUL, IMUL, DIV, IDIV: Writes flags
-                    writes = ALL_FLAGS;
+                if (reg == 0 || reg == 1) { // TEST
+                    writes = DFE_ALL_FLAGS;
+                } else if (reg == 2) { // NOT
+                    // No flags
+                } else { // NEG, MUL, etc.
+                    writes = DFE_ALL_FLAGS;
                 }
-            } else if (opcode == 0x9D) {
-                // POPF: Writes all flags
-                writes = ALL_FLAGS;
-            } else if (opcode == 0x9C) {
-                // PUSHF: Reads all flags
-                reads = ALL_FLAGS;
-            } else if (opcode == 0x9E) {
-                // SAHF: Writes SF, ZF, AF, PF, CF
-                writes = ALL_FLAGS;
-            } else if (opcode == 0x9F) {
-                // LAHF: Reads SF, ZF, AF, PF, CF
-                reads = ALL_FLAGS;
-            } else {
-                switch (opcode) {
-                    // Group 1: ADD, OR, ADC, SBB, AND, SUB, XOR, CMP
-                    case 0x00:
-                    case 0x01:
-                    case 0x02:
-                    case 0x03:
-                    case 0x04:
-                    case 0x05:
-                        writes = ALL_FLAGS;
-                        break;  // ADD
-                    case 0x08:
-                    case 0x09:
-                    case 0x0A:
-                    case 0x0B:
-                    case 0x0C:
-                    case 0x0D:
-                        writes = ALL_FLAGS;
-                        break;  // OR
-                    case 0x10:
-                    case 0x11:
-                    case 0x12:
-                    case 0x13:
-                    case 0x14:
-                    case 0x15:
-                        writes = ALL_FLAGS;
-                        reads = CF_MASK;
-                        break;  // ADC
-                    case 0x18:
-                    case 0x19:
-                    case 0x1A:
-                    case 0x1B:
-                    case 0x1C:
-                    case 0x1D:
-                        writes = ALL_FLAGS;
-                        reads = CF_MASK;
-                        break;  // SBB
-                    case 0x20:
-                    case 0x21:
-                    case 0x22:
-                    case 0x23:
-                    case 0x24:
-                    case 0x25:
-                        writes = ALL_FLAGS;
-                        break;  // AND
-                    case 0x28:
-                    case 0x29:
-                    case 0x2A:
-                    case 0x2B:
-                    case 0x2C:
-                    case 0x2D:
-                        writes = ALL_FLAGS;
-                        break;  // SUB
-                    case 0x30:
-                    case 0x31:
-                    case 0x32:
-                    case 0x33:
-                    case 0x34:
-                    case 0x35:
-                        writes = ALL_FLAGS;
-                        break;  // XOR
-                    case 0x38:
-                    case 0x39:
-                    case 0x3A:
-                    case 0x3B:
-                    case 0x3C:
-                    case 0x3D:
-                        // CMP: Writes flags, reads none (producer)
-                        writes = ALL_FLAGS;
-                        break;
-                    case 0x84:
-                    case 0x85:
-                    case 0xA8:
-                    case 0xA9:
-                        // TEST: Writes flags, reads none (producer)
-                        writes = ALL_FLAGS;
-                        break;
+                break;
+            }
+            case DFE_TYPE_GROUP4: {
+                // FE/FF: INC/DEC (0,1) or CALL/JMP/PUSH
+                uint8_t reg = (op.modrm >> 3) & 7;
+                if (reg == 0 || reg == 1) { // INC, DEC
+                    writes = DFE_ALL_FLAGS & ~DFE_CF_MASK;
                 }
+                break;
             }
-        } else if (map == 1) {
-            if (opcode >= 0x40 && opcode <= 0x4F) {
-                reads = ALL_FLAGS;  // CMOVcc
-            } else if (opcode >= 0x80 && opcode <= 0x8F) {
-                reads = ALL_FLAGS;  // Jcc near
-            } else if (opcode >= 0x90 && opcode <= 0x9F) {
-                reads = ALL_FLAGS;  // SETcc
-            }
+            default:
+                // Unknown: Assume reads everything to be safe
+                reads = DFE_ALL_FLAGS;
+                break;
         }
 
         // 2. Optimization: If op writes flags that are NOT live, and we have an NF
