@@ -6,6 +6,7 @@ using Bifrost.Core;
 using Bifrost.Native;
 using Bifrost.Memory;
 using Bifrost.VFS;
+using Microsoft.Extensions.Logging;
 using Task = Bifrost.Core.Task;
 
 namespace Bifrost.Syscalls;
@@ -53,6 +54,7 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.sigreturn, SysSigReturn);
         Register(X86SyscallNumbers.clone, SysClone);
         Register(X86SyscallNumbers.uname, SysUname);
+        Register(X86SyscallNumbers.sysinfo, SysSysinfo);
         Register(X86SyscallNumbers.mprotect, SysMprotect);
         Register(X86SyscallNumbers.setfsuid, SysSetFsUid);
         Register(X86SyscallNumbers.setfsgid, SysSetFsGid);
@@ -149,6 +151,10 @@ public unsafe partial class SyscallManager
         Register(X86SyscallNumbers.tkill, SysTkill);
         Register(X86SyscallNumbers.tgkill, SysTgkill);
         Register(X86SyscallNumbers.execve, SysExecve);
+
+        Register(X86SyscallNumbers.select, SysSelect);
+        Register(X86SyscallNumbers._newselect, SysNewSelect);
+        Register(X86SyscallNumbers.poll, SysPoll);
     }
 
     private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -985,6 +991,21 @@ public unsafe partial class SyscallManager
         var task = Scheduler.GetByEngine(state);
         if (task != null)
         {
+            // Remove from /proc
+            // Only if leader? Threads exit individually.
+            // Linux removes /proc/pid only when all threads are gone (ThreadGroup empty).
+            // Simplified: If TID == TGID (main thread) and we are exiting properly? 
+            // Actually SysExit terminates the thread. SysExitGroup terminates the process.
+            // If SysExit is called by main thread, the process becomes zombie but /proc/pid remains until Waitpid?
+            // "ps" should show Zombies.
+            // So we should NOT remove /proc/pid here immediately if we want to see Zombies.
+            // But we don't support full Zombie state inspection in /proc yet.
+            // If we remove it, "ps" won't show it.
+            // Let's remove it for cleanup for now, or on Waitpid reaping.
+            
+            // Current simple impl: Remove on exit.
+            if (task.TID == task.Process.TGID)
+                ProcFsManager.OnProcessExit(sm, task.Process.TGID);
 
             task.ExitCode = (int)a1;
             task.Exited = true;
@@ -1021,10 +1042,61 @@ public unsafe partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
+        
+        var task = Scheduler.GetByEngine(state);
+        if (task != null)
+        {
+             ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+        }
+
         int code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, true);
         sm.Engine.Stop();
         return 0;
+    } 
+
+    // ... SysRead ... (omitted)
+
+    private static int SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.ENOSYS;
+
+        if (sm.CloneHandler == null) return -(int)Errno.ENOSYS;
+
+        var (tid, err) = sm.CloneHandler((int)a1, a2, a3, a4, a5);
+        if (err != null) return -(int)Errno.EAGAIN;
+        
+        // Hook ProcFs
+        var newTask = Scheduler.Get(tid);
+        if (newTask != null && newTask.TID == newTask.Process.TGID)
+        {
+            ProcFsManager.OnProcessStart(sm, newTask.Process.TGID);
+        }
+
+        if (((int)a1 & (int)LinuxConstants.CLONE_VFORK) != 0)
+        {
+            // Parent should be suspended until child exits
+            var child = Scheduler.Get(tid);
+            var task = Scheduler.GetByEngine(state);
+            if (child != null && task != null)
+            {
+                // Suspend parent using BlockingTask pattern
+                var tcs = new TaskCompletionSource<int>();
+                task.BlockingTask = tcs.Task;
+
+                // Spawn task to wait for child and wake parent
+                _ = System.Threading.Tasks.Task.Run(() =>
+                {
+                    child.WaitEvent.Wait();
+                    tcs.SetResult(0);
+                });
+
+                sm.Engine.Yield();
+            }
+        }
+
+        return tid;
     }
 
     private static int SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1130,40 +1202,7 @@ public unsafe partial class SyscallManager
         return (int)sm.BrkAddr;
     }
 
-    private static int SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.ENOSYS;
 
-        if (sm.CloneHandler == null) return -(int)Errno.ENOSYS;
-
-        var (tid, err) = sm.CloneHandler((int)a1, a2, a3, a4, a5);
-        if (err != null) return -(int)Errno.EAGAIN;
-
-        if (((int)a1 & (int)LinuxConstants.CLONE_VFORK) != 0)
-        {
-            // Parent should be suspended until child exits
-            var child = Scheduler.Get(tid);
-            var task = Scheduler.GetByEngine(state);
-            if (child != null && task != null)
-            {
-                // Suspend parent using BlockingTask pattern
-                var tcs = new TaskCompletionSource<int>();
-                task.BlockingTask = tcs.Task;
-
-                // Spawn task to wait for child and wake parent
-                _ = System.Threading.Tasks.Task.Run(() =>
-                {
-                    child.WaitEvent.Wait();
-                    tcs.SetResult(0);
-                });
-
-                sm.Engine.Yield();
-            }
-        }
-
-        return tid;
-    }
 
     private static int SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -1227,6 +1266,8 @@ public unsafe partial class SyscallManager
         uint entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
         uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
 
+        Logger.LogInformation($"[SysSetThreadArea] Entry={entry} Base={baseAddr:X}");
+
         sm.Engine.SetSegBase(Seg.GS, baseAddr);
 
         if (entry == 0xFFFFFFFF)
@@ -1270,6 +1311,46 @@ public unsafe partial class SyscallManager
         WriteUnameString(a1 + 260, uts.Machine);
         WriteUnameString(a1 + 325, uts.DomainName);
 
+        return 0;
+    }
+
+    private static int SysSysinfo(IntPtr state, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        var t = Bifrost.Core.Scheduler.GetByEngine(state);
+        if (t == null) return -(int)Errno.EPERM;
+
+        var info = new SysInfo();
+        info.Uptime = (int)((DateTime.UtcNow - Bifrost.Program.StartTime).TotalSeconds);
+        info.Loads = new int[] { 65536, 65536, 65536 };
+        info.TotalRam = 256 * 1024 * 1024;
+        info.FreeRam = 128 * 1024 * 1024;
+        info.SharedRam = 0;
+        info.BufferRam = 0;
+        info.TotalSwap = 0;
+        info.FreeSwap = 0;
+        info.Procs = (short)Bifrost.Core.Scheduler.ProcessCount;
+        info.TotalHigh = 0;
+        info.FreeHigh = 0;
+        info.MemUnit = 1;
+        info.Padding = new byte[8];
+
+        if (sysinfoAddr != 0)
+        {
+            int size = Marshal.SizeOf<SysInfo>();
+            byte[] buffer = new byte[size];
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try {
+                Marshal.StructureToPtr(info, ptr, false);
+                Marshal.Copy(ptr, buffer, 0, size);
+            } finally {
+                Marshal.FreeHGlobal(ptr);
+            }
+            sm.Engine.MemWrite(sysinfoAddr, buffer);
+        }
+        
         return 0;
     }
 
@@ -1909,9 +1990,11 @@ public unsafe partial class SyscallManager
 
     private static int SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        Console.WriteLine($"[SysAccess] Called a1=0x{a1:x}");
         var sm = Get(state);
         if (sm == null) return -1;
         string path = sm.ReadString(a1);
+        Console.WriteLine($"[SysAccess] Path: {path}");
         var dentry = sm.PathWalk(path);
         if (dentry != null && dentry.Inode != null) return 0;
         return -(int)Errno.ENOENT;
@@ -2526,19 +2609,33 @@ public unsafe partial class SyscallManager
 
     private static int SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        Console.WriteLine($"[SysExecve] Called a1=0x{a1:x}");
         var sm = Get(state);
         var task = Scheduler.GetByEngine(state);
         if (sm == null || task == null) return -(int)Errno.EPERM;
 
         string filename = sm.ReadString(a1);
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
+        Console.WriteLine($"[SysExecve] Filename: {filename}");
         
         // Resolve absolute path
         string absPath = filename;
         var dentry = sm.PathWalk(filename);
-        if (dentry != null && dentry.Inode is HostInode hi)
+        if (dentry != null)
         {
-             absPath = hi.HostPath;
+             if (dentry.Inode is HostInode hi)
+             {
+                  absPath = hi.HostPath;
+             }
+             else if (dentry.Inode is OverlayInode oi)
+             {
+                  // Try to get HostPath from Lower if Upper is not present (COW)
+                  // If Upper is present (Tmpfs), we currently fail as ElfLoader needs a file path.
+                  if (oi.UpperInode == null && oi.LowerInode is HostInode lhi)
+                  {
+                       absPath = lhi.HostPath;
+                  }
+             }
         }
         else if (filename.StartsWith("/"))
         {
@@ -2763,8 +2860,9 @@ public unsafe partial class SyscallManager
 
         string source = a1 == 0 ? "" : sm.ReadString(a1);
         string target = sm.ReadString(a2);
-        string fstype = sm.ReadString(a3);
+        string fstype = a3 == 0 ? "" : sm.ReadString(a3);
         uint flags = a4;
+        uint dataAddr = a5; 
 
         var targetDentry = sm.PathWalk(target);
         if (targetDentry == null)
@@ -2773,31 +2871,66 @@ public unsafe partial class SyscallManager
         }
 
         SuperBlock? newSb = null;
-        if (fstype == "tmpfs" || fstype == "devtmpfs")
-        {
-            var fsType = new FileSystemType { Name = fstype, FileSystem = new Tmpfs() };
-            newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, null);
-        }
-        else if (fstype == "hostfs" || ((flags & (uint)LinuxConstants.MS_BIND) != 0)) // MS_BIND
+
+        // Handle MS_BIND (Bind Mount)
+        if ((flags & (uint)LinuxConstants.MS_BIND) != 0)
         {
             string hostRoot = source;
-            if ((flags & (uint)LinuxConstants.MS_BIND) != 0)
+            var srcDentry = sm.PathWalk(source);
+            
+            // If binding a host path, we might need a Hostfs SB?
+            // Bind mount usually just attaching the existing dentry tree to a new location.
+            // But our VFS 'mount' logic expects a SuperBlock root.
+            // If we bind a directory, we effectively mount the SB of that directory?
+            // Or we treat it as a new "BindFS"?
+            // Existing logic created a new Hostfs SB rooted at source.
+            // We'll preserve that behavior for HostFS compatibility.
+            
+            if (srcDentry != null && srcDentry.Inode is HostInode hi) 
             {
-                var srcDentry = sm.PathWalk(source);
-                if (srcDentry != null && srcDentry.Inode is HostInode hi) hostRoot = hi.HostPath;
+                hostRoot = hi.HostPath;
+                var fsType = FileSystemRegistry.Get("hostfs");
+                if (fsType != null)
+                {
+                    try { newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null); } catch { }
+                }
             }
-
-            var fsType = new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() };
-            try
+            // For internal bind mounts (Tmpfs -> Tmpfs), we might need a different approach (BindDentry?), 
+            // strictly following VFS struct, MountRoot points to a SB Root. 
+            // We can't easily "bind" a subdirectory as a Root of a new SB without a "BindFileSystem" wrapper.
+            // Fallback: only support Hostfs bind for now as before.
+        }
+        else
+        {
+            var fsType = FileSystemRegistry.Get(fstype);
+            if (fsType != null)
             {
-                newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null);
+                 // Special handling for Overlay Options parsing could go here if we support dynamic overlay mounts
+                 object? dataObj = null;
+                 
+                 // If passing string data options
+                 if (dataAddr != 0)
+                 {
+                     // We could read string and pass it?
+                     // Tmpfs ignores it. Hostfs uses it as root path? No, Hostfs uses 'source'.
+                 }
+                 
+                 try 
+                 {
+                    newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, dataObj);
+                 }
+                 catch (Exception e)
+                 {
+                     Logger.LogWarning($"Mount failed for {fstype}: {e.Message}");
+                     return -(int)Errno.EINVAL;
+                 }
             }
-            catch
+            else
             {
-                // Failed to create hostfs
-                return -(int)Errno.ENOENT;
+                return -(int)Errno.ENODEV;
             }
         }
+
 
         if (newSb != null)
         {
@@ -2948,6 +3081,8 @@ public unsafe partial class SyscallManager
         // Basic implementation for startup
         switch (cmd)
         {
+            case 0: // F_DUPFD
+                 return sm.AllocFD(sm.FDs[(int)fd], (int)arg);
             case 1: // F_GETFD
                 return 0; // No flags
             case 2: // F_SETFD
@@ -2961,10 +3096,9 @@ public unsafe partial class SyscallManager
                 // sm.FDs[(int)fd].Flags = (int)arg; 
                 return 0;
             default:
-                // Log warning but return success to avoid crash during init
-                // Console.WriteLine($"[WARN] Unimplemented fcntl64 cmd {cmd}");
-                return 0; 
-                // return -(int)Errno.EINVAL;
+                // Log warning but return EINVAL to avoid misleading applications
+                Console.WriteLine($"[WARN] Unimplemented fcntl64 cmd {cmd}");
+                return -(int)Errno.EINVAL;
         }
     }
 }

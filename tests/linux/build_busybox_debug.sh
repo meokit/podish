@@ -25,7 +25,7 @@ podman run --rm \
     --platform linux/386 \
     -v "$BUILD_DIR:/work/build" \
     -v "$ROOTFS:/work/output/rootfs" \
-    -v "$BUILD_DIR/build_internal.sh:/build_internal.sh" \
+    -v "$SCRIPT_DIR/build_internal.sh:/build_internal.sh" \
     "$CONTAINER_IMAGE" \
     /build_internal.sh
 

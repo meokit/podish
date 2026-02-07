@@ -233,6 +233,20 @@ public class File
     {
         Dentry.Inode?.Sync(this);
     }
+
+    /// <summary>
+    /// Check for readiness. Returns a bitmask of POLL* constants.
+    /// Default implementation for regular files: Always readable and writable.
+    /// </summary>
+    public virtual short Poll(short events)
+    {
+        // Regular files are always ready for read/write
+        // See Linux: fs/select.c
+        short revents = 0;
+        if ((events & 0x0001) != 0) revents |= 0x0001; // POLLIN
+        if ((events & 0x0004) != 0) revents |= 0x0004; // POLLOUT
+        return revents;
+    }
 }
 
 public struct DCacheKey : IEquatable<DCacheKey>

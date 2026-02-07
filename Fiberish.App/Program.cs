@@ -13,6 +13,7 @@ class Program
 {
     private static ILogger Logger = null!;
     public static bool ShowStats { get; private set; } = false;
+    public static readonly DateTime StartTime = DateTime.UtcNow;
 
     static async Task<int> Main(string[] args)
     {
@@ -62,10 +63,13 @@ class Program
 
         string exe = args[argIdx];
         string[] exeArgs = args.Skip(argIdx).ToArray();
-        string[] envs = Environment.GetEnvironmentVariables()
-            .Keys.Cast<string>()
-            .Select(k => $"{k}={Environment.GetEnvironmentVariable(k)}")
-            .ToArray();
+        string[] envs = new string[] 
+        { 
+            "PATH=/bin:/usr/bin:/sbin:/usr/sbin", 
+            "HOME=/", 
+            "TERM=xterm",
+            "USER=root" 
+        };
 
         // 1. Init Emulator
         // Note: Engine is IDisposable. We should manage its lifecycle carefully with Tasks.
@@ -82,11 +86,13 @@ class Program
         // 4. Setup Syscalls (Init VFS)
         var sys = new SyscallManager(engine, mm, 0, rootfs);
         sys.Strace = trace;
+        ProcFsManager.Init(sys);
 
         // 5. Create Main Task (BEFORE loading to handle any faults during load)
         var proc = new Process(Task.NextPID(), mm, sys);
         var mainTask = new Task(proc.TGID, proc, engine);
         Scheduler.Add(mainTask);
+        ProcFsManager.OnProcessStart(sys, proc.TGID);
         Console.WriteLine($"[Program] Created Main Task {mainTask.TID}, Engine 0x{engine.State:x}");
 
         // 6. Load ELF
@@ -165,6 +171,7 @@ class Program
             try
             {
                 var child = parent.Clone(flags, stack, ptid, tls, ctid);
+                ProcFsManager.OnProcessStart(child.Process.Syscalls, child.TID);
 
                 // Start child in background without blocking
                 _ = child.RunLoopAsync();
@@ -191,6 +198,11 @@ class Program
             if (!t.Process.Mem.HandleFault(addr, isWrite, eng))
             {
                 Logger.LogError("[Task {TID}] SegFault at 0x{Addr:x} (Vector: {Vector}) EIP=0x{Eip:x} - {Registers}", t.TID, addr, eng.FaultVector, eng.Eip, eng.ToString());
+                try {
+                    var code = eng.MemRead(eng.Eip, 16);
+                    Logger.LogError("Code at EIP: {Code}", BitConverter.ToString(code).Replace("-", " "));
+                } catch { }
+
                 t.DumpTrace();
                 t.Process.Mem.LogVMAs();
                 eng.SetStatusFault();

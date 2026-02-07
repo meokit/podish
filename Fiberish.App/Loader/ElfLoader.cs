@@ -33,21 +33,38 @@ public class ElfLoader
         // Try to find the file in VFS to get a Dentry for mmap
         // If filename is absolute on host, try to make it relative to rootfs if possible
         string vfsLookupPath = filename;
-        string hostRoot = Path.GetFullPath(((HostSuperBlock)sys.Root.SuperBlock).HostRoot).TrimEnd(Path.DirectorySeparatorChar);
-        string absFilename = Path.GetFullPath(filename);
+        string? hostRoot = null;
+        HostSuperBlock? hsb = null;
 
-        if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
+        if (sys.Root.SuperBlock is HostSuperBlock h) 
         {
-            vfsLookupPath = absFilename.Substring(hostRoot.Length);
-            if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
-            else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/') vfsLookupPath = "/" + vfsLookupPath;
-            vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
+            hsb = h;
+            hostRoot = h.HostRoot;
+        }
+        else if (sys.Root.SuperBlock is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
+        {
+            hsb = lh;
+            hostRoot = lh.HostRoot;
+        }
+
+        if (hostRoot != null)
+        {
+            hostRoot = Path.GetFullPath(hostRoot).TrimEnd(Path.DirectorySeparatorChar);
+            string absFilename = Path.GetFullPath(filename);
+
+            if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                vfsLookupPath = absFilename.Substring(hostRoot.Length);
+                if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
+                else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/') vfsLookupPath = "/" + vfsLookupPath;
+                vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
+            }
         }
 
         var dentry = sys.PathWalk(vfsLookupPath);
 
         // If PathWalk failed (e.g. file is outside rootfs), try to get a Dentry directly from Hostfs if applicable
-        if (dentry == null && sys.Root.SuperBlock is HostSuperBlock hsb)
+        if (dentry == null && hsb != null)
         {
             try
             {
@@ -60,8 +77,16 @@ public class ElfLoader
             catch { /* ignore */ }
         }
 
+        // Resolve the host path for reading the ELF file
+        // If filename starts with '/', it's a guest absolute path - resolve it to host
+        string hostPath = filename;
+        if (hostRoot != null && filename.StartsWith("/"))
+        {
+            hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
+        }
+        
         // Still use Host IO for ElfFile reader as it needs a Stream
-        using var stream = System.IO.File.OpenRead(filename);
+        using var stream = System.IO.File.OpenRead(hostPath);
         var elf = ElfFile.Read(stream);
 
         uint loadBase = 0;

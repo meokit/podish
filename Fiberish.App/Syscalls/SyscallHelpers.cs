@@ -119,9 +119,9 @@ public unsafe partial class SyscallManager
         return current;
     }
 
-    public int AllocFD(Bifrost.VFS.File file)
+    public int AllocFD(Bifrost.VFS.File file, int minFd = 3)
     {
-        int fd = 3;
+        int fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
         FDs[fd] = file;
         return fd;

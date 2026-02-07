@@ -287,8 +287,11 @@ public class HostInode : Inode
 
         if (file?.PrivateData is FileStream fs)
         {
-            if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
-            return fs.Read(buffer);
+            lock (fs)
+            {
+                if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
+                return fs.Read(buffer);
+            }
         }
 
         using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -302,10 +305,13 @@ public class HostInode : Inode
 
         if (file?.PrivateData is FileStream fs)
         {
-            if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
-            fs.Write(buffer);
-            Size = (ulong)fs.Length;
-            return buffer.Length;
+            lock (fs)
+            {
+                if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
+                fs.Write(buffer);
+                Size = (ulong)fs.Length;
+                return buffer.Length;
+            }
         }
 
         using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);

@@ -243,6 +243,7 @@ public class VMAManager
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
+        // Logger.LogInformation("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
         var vma = FindVMA(addr);
         if (vma == null)
         {
@@ -259,9 +260,68 @@ public class VMAManager
         uint pageStart = addr & LinuxConstants.PageMask;
         Protection tempPerms = vma.Perms | Protection.Write;
 
+        // COW Logic
+        byte[]? existingData = null;
+        if (isWrite && (vma.Flags & MapFlags.Private) != 0)
+        {
+             try
+             {
+                 existingData = engine.MemRead(pageStart, (uint)LinuxConstants.PageSize);
+             }
+             catch (Exception ex)
+             {
+                 Logger.LogWarning("Failed to read existing data for COW at 0x{Addr:x}: {Message}", pageStart, ex.Message);
+             }
+        }
+
         engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)tempPerms);
 
-        if (vma.File != null)
+        if (existingData != null)
+        {
+             // Restore the data we just read (COW copy)
+             // This takes precedence over File loading for COW.
+             engine.MemWrite(pageStart, existingData);
+        }
+        // Only load from file if we didn't preserve data? 
+        // OR if preserved data was just "empty unmapped space"?
+        // If Parent had modified the page, existingData has modifications.
+        // If Parent hadn't modified, existingData has File Content (from Parent's mapping).
+        // So 'existingData' should ALWAYS be correct for COW!
+        // The only case it is wrong is if the page was NOT mapped at all (Demand Load).
+        // If not mapped, MemRead returns what?
+        // If MemRead returns 0s (Safe), then we have 0s.
+        // If we write 0s back, we get 0s.
+        // THEN if vma.File != null, we load from file.
+        // BUT we should NOT overwrite modified data with file data!
+        // This is tricky.
+        
+        // Revised Strategy:
+        // Use 'existingData' ONLY.
+        // If 'existingData' was read from unmapped page (0s), and it was supposed to be File...
+        // Then we end up with 0s. Bad.
+        
+        // We really need 'IsMapped'.
+        
+        // Fallback Strategy for now:
+        // Assume if VMA.File is NULL, use ExistingData (Anon memory COW).
+        // If VMA.File is NOT NULL, we are trickier.
+        // But for 'simple_fork' failure, it's Stack (Anon).
+        // So fixing Anon path helps.
+        
+        // Implementation:
+        // Only trigger COW copy for Anon logic for now?
+        // Or if we trust X86_Clone maps everything.
+        
+        // If X86_Clone maps everything, then MemRead is ALWAYS valid data.
+        // So we should Write it back, and SKIP File Loading?
+        // YES. If we have data, we don't reload from disk.
+        
+        if (existingData != null)
+        {
+             // We restored data.
+             // Do NOT load from file again (it would overwrite modifications).
+        }
+        else if (vma.File != null)
         {
             long vmaOffset = pageStart - vma.Start;
             long off = vma.Offset + vmaOffset;

@@ -241,6 +241,13 @@ public partial class Task
                         CPU.Run(0, 1000000);
 
                         var status = CPU.Status;
+                        
+                        // Check if a syscall requested Async Wait (Cooperative Yield)
+                        if (BlockingTask != null)
+                        {
+                            status = EmuStatus.Yield;
+                        }
+
                         if (status == EmuStatus.Fault)
                         {
                             Logger.LogError("[Task {TID}] Fatal Fault at 0x{Eip:x} (Vector: {Vector})", TID, CPU.Eip, CPU.FaultVector);
@@ -719,6 +726,7 @@ public static class Scheduler
     private static readonly Dictionary<int, Process> _processes = new();
     private static readonly Dictionary<IntPtr, Task> _engineToTask = new();
     public static int ReadyCount { get { lock (_lock) return _readyQueue.Count; } }
+    public static int ProcessCount { get { lock (_lock) return _processes.Count; } }
     private static readonly object _lock = new();
 
     public static readonly AsyncLocal<Task?> _currentTask = new();

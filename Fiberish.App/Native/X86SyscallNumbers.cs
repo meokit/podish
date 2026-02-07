@@ -76,6 +76,7 @@ public static class X86SyscallNumbers
     public const int lstat = 107;
     public const int fstat = 108;
     public const int wait4 = 114;
+    public const int sysinfo = 116;
     public const int sigreturn = 119;
     public const int clone = 120;
     public const int uname = 122;
@@ -173,4 +174,8 @@ public static class X86SyscallNumbers
     public const int sync = 36;
     public const int madvise = 219;
     public const int msync = 144;
+    
+    public const int select = 82;
+    public const int _newselect = 142;
+    public const int poll = 168; 
 }
