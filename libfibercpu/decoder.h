@@ -107,15 +107,13 @@ struct DecodedOp {
     uint8_t modrm;
 
     // ------------ 12 BYTES ------------
-    int32_t handler_offset;
-    // ------------ 16 BYTES ------------
     int8_t length;
     int8_t extra;
     int8_t padding0;
     int8_t padding1;
-
-    // ------------ 20 BYTES ------------
+    // ------------ 16 BYTES ------------
     uint32_t next_eip;
+    int32_t handler_offset;
 };
 
 // Size check

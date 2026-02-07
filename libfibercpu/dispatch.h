@@ -15,7 +15,6 @@ extern HandlerFunc g_Handlers_NF[1024];
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb) {
-    uint32_t original_eip = state->ctx.eip;
     // Advance EIP before execution
     state->ctx.eip = op->next_eip;
 
@@ -31,6 +30,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
     if (state->status != EmuStatus::Running) {
         // Restore EIP if Fault (Precise Exception)
         if (state->status == EmuStatus::Fault) {
+            uint32_t original_eip = op->next_eip - op->length;
             state->ctx.eip = original_eip;
         }
         return instr_limit;
