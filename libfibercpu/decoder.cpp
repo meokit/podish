@@ -62,7 +62,7 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 
 // Decoder Logic
 // Returns true on success, false on failure/invalid instruction
-bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
+bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_index) {
     // Reset op
     std::memset(op, 0, sizeof(DecodedOp));
     op->prefixes.flags.ea_base = 8;
@@ -140,7 +140,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     ptr++;
 
     // Set Handler Index (Map 0 or 1) - Local, not stored in op
-    uint16_t handler_index = (map << 8) | opcode;
+    *handler_index = (map << 8) | opcode;
 
     // 3. ModRM
     uint8_t has_modrm = kHasModRM[map][opcode];
@@ -287,15 +287,14 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     if (map == 0 && (op->prefixes.all & 0xFF) == 0) {
         if (opcode == 0x89) {
             uint8_t mod = (op->modrm >> 6) & 3;
-            handler_index = (mod == 3) ? OP_MOV_RR_STORE : OP_MOV_RM_STORE;
+            *handler_index = (mod == 3) ? OP_MOV_RR_STORE : OP_MOV_RM_STORE;
         } else if (opcode == 0x8B) {
             uint8_t mod = (op->modrm >> 6) & 3;
-            handler_index = (mod == 3) ? OP_MOV_RR_LOAD : OP_MOV_MR_LOAD;
+            *handler_index = (mod == 3) ? OP_MOV_RR_LOAD : OP_MOV_MR_LOAD;
         }
     }
 
-    op->opcode = handler_index;
-    HandlerFunc h = g_Handlers[handler_index];
+    HandlerFunc h = g_Handlers[*handler_index];
     if (h) {
         op->handler_offset = (int32_t)((intptr_t)h - (intptr_t)g_HandlerBase);
     } else {
@@ -364,7 +363,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         DecodedOp op;
-        if (!DecodeInstruction(buf, &op)) {
+        uint16_t handler_index;
+        if (!DecodeInstruction(buf, &op, &handler_index)) {
             // Decode error: Insert Fault Op
             fprintf(stderr,
                     "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
@@ -376,7 +376,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
             op.handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
 
-            op.eip_offset = (uint32_t)(current_eip - start_eip);
             temp_ops.push_back(op);
 
             // Append Sentinel for dispatch safety
@@ -385,7 +384,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
             HandlerFunc exit_h = g_ExitHandlers[0];
             sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
-            sentinel.eip_offset = (uint32_t)(current_eip + 1 - start_eip);
 
             // Sentinel next_block initialization to dummy
             sentinel.next_block = state->dummy_invalid_block;
@@ -397,7 +395,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         // Check if a specialized handler exists for this opcode + modrm/etc.
-        HandlerFunc specialized_h = FindSpecializedHandler(op.opcode, &op);
+        HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
         if (specialized_h) {
             op.handler_offset = (int32_t)((intptr_t)specialized_h - (intptr_t)g_HandlerBase);
         }
@@ -422,8 +420,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             opcode = *ptr;
         }
         op_indices.push_back((map << 8) | opcode);
-
-        op.eip_offset = (uint32_t)(current_eip - start_eip);
 
         temp_ops.push_back(op);
         inst_count++;
@@ -460,9 +456,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
         sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
-        sentinel.eip_offset = (uint32_t)(current_eip - start_eip);
         sentinel.next_block = state->dummy_invalid_block;  // Important!
-
         temp_ops.push_back(sentinel);
     }
     end_eip = current_eip;

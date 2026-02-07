@@ -509,9 +509,10 @@ int X86_Step(EmuState* state) {
     }
 
     DecodedOp ops[2];
+    uint16_t handler_index = 0;
     std::memset(ops, 0, sizeof(ops));
 
-    if (!DecodeInstruction(buf, &ops[0])) {
+    if (!DecodeInstruction(buf, &ops[0], &handler_index)) {
         ops[0].length = 1;
         // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];

@@ -88,9 +88,9 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
     g_SpecializedRegistry.push_back({opcode, criteria, handler});
 }
 
-HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
+HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     for (const auto& entry : g_SpecializedRegistry) {
-        if (entry.opcode == opcode) {
+        if (entry.opcode == handler_index) {
             // Check ModRM constraints
             // If op doesn't have modrm but criteria requires it -> fail?
             // The criteria.Matches takes modrm uint8.

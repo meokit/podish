@@ -71,6 +71,8 @@ struct DecodedOp {
     };
 #pragma clang diagnostic pop
 
+    // ------------ 8 BYTES ------------
+
     // Prefixes
     union {
         uint16_t all;
@@ -85,6 +87,8 @@ struct DecodedOp {
             uint16_t ea_index : 4;  // 0-7: Reg, 8: None
         } flags;
     } prefixes;
+
+    // ------------ 10 BYTES ------------
 
     // Internal Flags
     union {
@@ -102,24 +106,20 @@ struct DecodedOp {
     // ModR/M
     uint8_t modrm;
 
-    // Opcode for profiling
-    uint16_t opcode;
+    // ------------ 12 BYTES ------------
 
-    // Handler Information
-    // We use a bitfield to pack:
-    // - handler_offset (32 bits signed): +/- 8MB range for handler functions
-    // - length (4 bits): Max instruction length is 15 bytes
-    // - extra (4 bits): Opcode-specific data (Condition Code, etc.)
+    // int32_t handler_offset : 24;
+    // uint32_t length : 4;
+    // uint32_t extra : 4;
     int32_t handler_offset;
-    uint32_t length : 8;
-    uint32_t extra : 4;
-    uint32_t reserved : 4;
-    uint32_t eip_offset : 16;
+
+    // ------------ 16 BYTES ------------
+    int8_t length;
+    int8_t extra;
 };
 
 // Size check
 // static_assert(sizeof(DecodedOp) == 24, "DecodedOp size mismatch");
-
 struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
@@ -142,7 +142,7 @@ struct BasicBlock {
 };
 
 // Decoder Logic
-bool DecodeInstruction(const uint8_t* code, DecodedOp* op);
+bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_index);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts);
