@@ -19,6 +19,16 @@ static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::Micr
     Helper_Group1<uint8_t, FixedSubOp>(state, op, dest, src, utlb);
 }
 
+// Named wrappers for Group 1 EbIb specializations
+static void OpGroup1_Add_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<0>(s, o, u); }
+static void OpGroup1_Or_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpGroup1_EbIb<1>(s, o, u); }
+static void OpGroup1_Adc_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<2>(s, o, u); }
+static void OpGroup1_Sbb_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<3>(s, o, u); }
+static void OpGroup1_And_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<4>(s, o, u); }
+static void OpGroup1_Sub_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<5>(s, o, u); }
+static void OpGroup1_Xor_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<6>(s, o, u); }
+static void OpGroup1_Cmp_EbIb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EbIb<7>(s, o, u); }
+
 template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 81: Arith r/m32, imm32
@@ -41,26 +51,51 @@ static FORCE_INLINE void OpGroup1_EvIz(EmuState* state, DecodedOp* op, mem::Micr
     }
 }
 
+// Named wrappers for Group 1 specializations
+static void OpGroup1_Add_EvIz(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<0>(s, o, u); }
+static void OpGroup1_Sub_EvIz(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<5>(s, o, u); }
+static void OpGroup1_Cmp_EvIz(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<7>(s, o, u); }
+
+static void OpGroup1_Add_EvIz_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<0, Specialized::ModReg>(s, o, u); }
+static void OpGroup1_Sub_EvIz_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<5, Specialized::ModReg>(s, o, u); }
+static void OpGroup1_Cmp_EvIz_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup1_EvIz<7, Specialized::ModReg>(s, o, u); }
+
+template <uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup3_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F6 (Byte) or F7 (Dword)
     bool is_byte = (op->extra == 0x6);  // 0xF6 & 0xF == 6
     if (is_byte) {
         uint8_t val = ReadModRM8(state, op, utlb);
-        Helper_Group3<uint8_t>(state, op, val, utlb);
+        Helper_Group3<uint8_t, FixedSubOp>(state, op, val, utlb);
     } else {
         if (op->prefixes.flags.opsize) {
             uint16_t val = ReadModRM16(state, op, utlb);
-            Helper_Group3<uint16_t>(state, op, val, utlb);
+            Helper_Group3<uint16_t, FixedSubOp>(state, op, val, utlb);
         } else {
             uint32_t val = ReadModRM32(state, op, utlb);
-            Helper_Group3<uint32_t>(state, op, val, utlb);
+            Helper_Group3<uint32_t, FixedSubOp>(state, op, val, utlb);
         }
     }
 }
 
+// Named wrappers for Group 3 specializations (Profiling visibility)
+static void OpGroup3_Test_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup3_Ev<0>(s, o, u); }
+static void OpGroup3_Not_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpGroup3_Ev<2>(s, o, u); }
+static void OpGroup3_Neg_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpGroup3_Ev<3>(s, o, u); }
+static void OpGroup3_Mul_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpGroup3_Ev<4>(s, o, u); }
+static void OpGroup3_Imul_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup3_Ev<5>(s, o, u); }
+static void OpGroup3_Div_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpGroup3_Ev<6>(s, o, u); }
+static void OpGroup3_Idiv_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup3_Ev<7>(s, o, u); }
+
+template <uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FE: Group 4 (Byte)
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop;
+    if constexpr (FixedSubOp != 0xFF) {
+        subop = FixedSubOp;
+    } else {
+        subop = (op->modrm >> 3) & 7;
+    }
     uint8_t val = ReadModRM8(state, op, utlb);
     uint32_t old_cf = state->ctx.eflags & CF_MASK;
 
@@ -83,6 +118,10 @@ static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroT
             OpUd2(state, op);
     }
 }
+
+// Named wrappers for Group 4 specializations
+static void OpGroup4_Inc_Eb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup4_Eb<0>(s, o, u); }
+static void OpGroup4_Dec_Eb(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup4_Eb<1>(s, o, u); }
 
 template <uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup5_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -165,6 +204,12 @@ static FORCE_INLINE void OpGroup5_Ev(EmuState* state, DecodedOp* op, mem::MicroT
             break;
     }
 }
+
+static void OpGroup5_Inc_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup5_Ev<0>(s, o, u); }
+static void OpGroup5_Dec_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup5_Ev<1>(s, o, u); }
+static void OpGroup5_Call_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup5_Ev<2>(s, o, u); }
+static void OpGroup5_Jmp_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup5_Ev<4>(s, o, u); }
+static void OpGroup5_Push_Ev(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup5_Ev<6>(s, o, u); }
 
 static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t sub = (op->modrm >> 3) & 7;
@@ -345,70 +390,80 @@ void OpUd2(EmuState* state, DecodedOp* op) {
 }
 
 void RegisterGroupOps() {
-    g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb<>>;
     g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz<>>;
     g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz<>>;
+    g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb<>>;
+
+#define REGISTER_GROUP_SPEC(opcode, subop, func) \
+    { \
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = subop; \
+        DispatchRegistrar<func>::RegisterSpecialized(opcode, c); \
+    }
+
+#define REGISTER_GROUP_SPEC_MODREG(opcode, subop, func) \
+    { \
+        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = subop; \
+        c.mod_mask = 0xC0; c.mod_val = 0xC0; \
+        DispatchRegistrar<func>::RegisterSpecialized(opcode, c); \
+    }
+
+    // Specializations for Group 1 EbIb (0x80)
+    REGISTER_GROUP_SPEC(0x80, 0, OpGroup1_Add_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 1, OpGroup1_Or_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 2, OpGroup1_Adc_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 3, OpGroup1_Sbb_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 4, OpGroup1_And_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 5, OpGroup1_Sub_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 6, OpGroup1_Xor_EbIb);
+    REGISTER_GROUP_SPEC(0x80, 7, OpGroup1_Cmp_EbIb);
 
     // Specializations for Group 1 (0x83: r/m32, imm8) - Heavily used (ADD, SUB, CMP)
-    // SubOp 0: ADD
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 0; // Reg=0 (ADD)
-        DispatchRegistrar<OpGroup1_EvIz<0>>::RegisterSpecialized(0x83, c);
-        
-        // Mod=3 (Reg) specialized
-        c.mod_mask = 0xC0; c.mod_val = 0xC0; 
-        DispatchRegistrar<OpGroup1_EvIz<0, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
-    }
-    // SubOp 5: SUB
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 5; // Reg=5 (SUB)
-        DispatchRegistrar<OpGroup1_EvIz<5>>::RegisterSpecialized(0x83, c);
+    REGISTER_GROUP_SPEC(0x83, 0, OpGroup1_Add_EvIz);
+    REGISTER_GROUP_SPEC_MODREG(0x83, 0, OpGroup1_Add_EvIz_ModReg);
+    
+    REGISTER_GROUP_SPEC(0x83, 5, OpGroup1_Sub_EvIz);
+    REGISTER_GROUP_SPEC_MODREG(0x83, 5, OpGroup1_Sub_EvIz_ModReg);
 
-        c.mod_mask = 0xC0; c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup1_EvIz<5, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
-    }
-    // SubOp 7: CMP
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 7; // Reg=7 (CMP)
-        DispatchRegistrar<OpGroup1_EvIz<7>>::RegisterSpecialized(0x83, c);
-        
-        c.mod_mask = 0xC0; c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup1_EvIz<7, Specialized::ModReg>>::RegisterSpecialized(0x83, c);
-    }
+    REGISTER_GROUP_SPEC(0x83, 7, OpGroup1_Cmp_EvIz);
+    REGISTER_GROUP_SPEC_MODREG(0x83, 7, OpGroup1_Cmp_EvIz_ModReg);
+
     g_Handlers[0x98] = DispatchWrapper<OpCwde>;
     g_Handlers[0x99] = DispatchWrapper<OpCdq>;
     g_Handlers[0xFF] = DispatchWrapper<OpGroup5_Ev<>>;
     
     // Group 5 Specializations
-    // SubOp 0: INC
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 0;
-        DispatchRegistrar<OpGroup5_Ev<0>>::RegisterSpecialized(0xFF, c);
-    }
-    // SubOp 1: DEC
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 1;
-        DispatchRegistrar<OpGroup5_Ev<1>>::RegisterSpecialized(0xFF, c);
-    }
-    // SubOp 2: CALL (Near Indirect)
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 2;
-        DispatchRegistrar<OpGroup5_Ev<2>>::RegisterSpecialized(0xFF, c);
-    }
-    // SubOp 4: JMP (Near Indirect)
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 4;
-        DispatchRegistrar<OpGroup5_Ev<4>>::RegisterSpecialized(0xFF, c);
-    }
-    // SubOp 6: PUSH
-    {
-        SpecCriteria c; c.reg_mask = 0x7; c.reg_val = 6;
-        DispatchRegistrar<OpGroup5_Ev<6>>::RegisterSpecialized(0xFF, c);
-    }
+    REGISTER_GROUP_SPEC(0xFF, 0, OpGroup5_Inc_Ev);
+    REGISTER_GROUP_SPEC(0xFF, 1, OpGroup5_Dec_Ev);
+    REGISTER_GROUP_SPEC(0xFF, 2, OpGroup5_Call_Ev);
+    REGISTER_GROUP_SPEC(0xFF, 4, OpGroup5_Jmp_Ev);
+    REGISTER_GROUP_SPEC(0xFF, 6, OpGroup5_Push_Ev);
+
     g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
-    g_Handlers[0xF6] = DispatchWrapper<OpGroup3_Ev>;
-    g_Handlers[0xF7] = DispatchWrapper<OpGroup3_Ev>;
-    g_Handlers[0xFE] = DispatchWrapper<OpGroup4_Eb>;
+    g_Handlers[0xF6] = DispatchWrapper<OpGroup3_Ev<>>;
+    g_Handlers[0xF7] = DispatchWrapper<OpGroup3_Ev<>>;
+
+    REGISTER_GROUP_SPEC(0xF6, 0, OpGroup3_Test_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 2, OpGroup3_Not_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 3, OpGroup3_Neg_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 4, OpGroup3_Mul_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 5, OpGroup3_Imul_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 6, OpGroup3_Div_Ev);
+    REGISTER_GROUP_SPEC(0xF6, 7, OpGroup3_Idiv_Ev);
+
+    REGISTER_GROUP_SPEC(0xF7, 0, OpGroup3_Test_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 2, OpGroup3_Not_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 3, OpGroup3_Neg_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 4, OpGroup3_Mul_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 5, OpGroup3_Imul_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 6, OpGroup3_Div_Ev);
+    REGISTER_GROUP_SPEC(0xF7, 7, OpGroup3_Idiv_Ev);
+
+    g_Handlers[0xFE] = DispatchWrapper<OpGroup4_Eb<>>;
+
+    REGISTER_GROUP_SPEC(0xFE, 0, OpGroup4_Inc_Eb);
+    REGISTER_GROUP_SPEC(0xFE, 1, OpGroup4_Dec_Eb);
+
+#undef REGISTER_GROUP_SPEC
     g_Handlers[0x1C7] = DispatchWrapper<OpGroup9>;
     g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Rm_R>;

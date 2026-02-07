@@ -24,14 +24,14 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
     state->ctx.eip += offset;
 }
 
-template <uint8_t Cond>
+template <uint8_t Cond, bool IsRel8>
 static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     // Condition check is compile-time specialized
     
     if (CheckConditionFixed<Cond>(state)) {
         int32_t offset;
-        if (op->length == 2) {
+        if constexpr (IsRel8) {
             // 8-bit relative jump (0x7x opcodes)
             offset = (int32_t)(int8_t)(op->imm & 0xFF);
         } else {
@@ -41,6 +41,17 @@ static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
         state->ctx.eip += offset;
     }
 }
+
+// Named wrappers for Jcc specializations
+#define JCC_WRAPPERS(cond, name) \
+    static void OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpJcc_Rel<cond, true>(s, o, u); } \
+    static void OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpJcc_Rel<cond, false>(s, o, u); }
+
+JCC_WRAPPERS(0, O) JCC_WRAPPERS(1, NO) JCC_WRAPPERS(2, B) JCC_WRAPPERS(3, AE)
+JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A)
+JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP)
+JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
+#undef JCC_WRAPPERS
 
 static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
@@ -131,6 +142,24 @@ static FORCE_INLINE void OpCmov_GvEv(EmuState* state, DecodedOp* op, mem::MicroT
         }
     }
 }
+
+// Named wrappers for CMOV specializations
+static void OpCmov_O(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<0>(s, o, u); }
+static void OpCmov_NO(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<1>(s, o, u); }
+static void OpCmov_B(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<2>(s, o, u); }
+static void OpCmov_AE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<3>(s, o, u); }
+static void OpCmov_E(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<4>(s, o, u); }
+static void OpCmov_NE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<5>(s, o, u); }
+static void OpCmov_BE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<6>(s, o, u); }
+static void OpCmov_A(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<7>(s, o, u); }
+static void OpCmov_S(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<8>(s, o, u); }
+static void OpCmov_NS(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<9>(s, o, u); }
+static void OpCmov_P(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<10>(s, o, u); }
+static void OpCmov_NP(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<11>(s, o, u); }
+static void OpCmov_L(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<12>(s, o, u); }
+static void OpCmov_GE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<13>(s, o, u); }
+static void OpCmov_LE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<14>(s, o, u); }
+static void OpCmov_G(EmuState* s, DecodedOp* o, mem::MicroTLB* u)  { OpCmov_GvEv<15>(s, o, u); }
 
 // ------------------------------------------------------------------------------------------------
 // Flag Operations
@@ -321,18 +350,26 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
     }
 }
 
-template<int I>
-static void RegisterCmov() {
-    g_Handlers[0x140 + I] = DispatchWrapper<OpCmov_GvEv<I>>;
-    if constexpr (I + 1 < 16) RegisterCmov<I + 1>();
-}
+static HandlerFunc g_JccRel8Wrappers[] = {
+    DispatchWrapper<OpJcc_O_Rel8>, DispatchWrapper<OpJcc_NO_Rel8>, DispatchWrapper<OpJcc_B_Rel8>, DispatchWrapper<OpJcc_AE_Rel8>,
+    DispatchWrapper<OpJcc_E_Rel8>, DispatchWrapper<OpJcc_NE_Rel8>, DispatchWrapper<OpJcc_BE_Rel8>, DispatchWrapper<OpJcc_A_Rel8>,
+    DispatchWrapper<OpJcc_S_Rel8>, DispatchWrapper<OpJcc_NS_Rel8>, DispatchWrapper<OpJcc_P_Rel8>, DispatchWrapper<OpJcc_NP_Rel8>,
+    DispatchWrapper<OpJcc_L_Rel8>, DispatchWrapper<OpJcc_GE_Rel8>, DispatchWrapper<OpJcc_LE_Rel8>, DispatchWrapper<OpJcc_G_Rel8>
+};
 
-template<int I>
-static void RegisterJcc() {
-    g_Handlers[0x70 + I] = DispatchWrapper<OpJcc_Rel<I>>;   // Jcc rel8
-    g_Handlers[0x180 + I] = DispatchWrapper<OpJcc_Rel<I>>;  // Jcc rel32 (0F 8x)
-    if constexpr (I + 1 < 16) RegisterJcc<I + 1>();
-}
+static HandlerFunc g_JccRel32Wrappers[] = {
+    DispatchWrapper<OpJcc_O_Rel32>, DispatchWrapper<OpJcc_NO_Rel32>, DispatchWrapper<OpJcc_B_Rel32>, DispatchWrapper<OpJcc_AE_Rel32>,
+    DispatchWrapper<OpJcc_E_Rel32>, DispatchWrapper<OpJcc_NE_Rel32>, DispatchWrapper<OpJcc_BE_Rel32>, DispatchWrapper<OpJcc_A_Rel32>,
+    DispatchWrapper<OpJcc_S_Rel32>, DispatchWrapper<OpJcc_NS_Rel32>, DispatchWrapper<OpJcc_P_Rel32>, DispatchWrapper<OpJcc_NP_Rel32>,
+    DispatchWrapper<OpJcc_L_Rel32>, DispatchWrapper<OpJcc_GE_Rel32>, DispatchWrapper<OpJcc_LE_Rel32>, DispatchWrapper<OpJcc_G_Rel32>
+};
+
+static HandlerFunc g_CmovWrappers[] = {
+    DispatchWrapper<OpCmov_O>, DispatchWrapper<OpCmov_NO>, DispatchWrapper<OpCmov_B>, DispatchWrapper<OpCmov_AE>,
+    DispatchWrapper<OpCmov_E>, DispatchWrapper<OpCmov_NE>, DispatchWrapper<OpCmov_BE>, DispatchWrapper<OpCmov_A>,
+    DispatchWrapper<OpCmov_S>, DispatchWrapper<OpCmov_NS>, DispatchWrapper<OpCmov_P>, DispatchWrapper<OpCmov_NP>,
+    DispatchWrapper<OpCmov_L>, DispatchWrapper<OpCmov_GE>, DispatchWrapper<OpCmov_LE>, DispatchWrapper<OpCmov_G>
+};
 
 void RegisterControlOps() {
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
@@ -354,11 +391,15 @@ void RegisterControlOps() {
     g_Handlers[0xFB] = DispatchWrapper<OpSti>;        // STI
     g_Handlers[0xFC] = DispatchWrapper<OpCld>;        // CLD
     g_Handlers[0xFD] = DispatchWrapper<OpStd>;        // STD
-    RegisterJcc<0>();
+    for (int i = 0; i < 16; i++) {
+        g_Handlers[0x70 + i] = g_JccRel8Wrappers[i];   // Jcc rel8
+        g_Handlers[0x180 + i] = g_JccRel32Wrappers[i];  // Jcc rel32 (0F 8x)
+        g_Handlers[0x140 + i] = g_CmovWrappers[i]; // CMOVcc
+    }
+
     g_Handlers[0xCE] = DispatchWrapper<OpInto>;
     g_Handlers[0x131] = DispatchWrapper<OpRdtsc>;  // 0F 31
     g_Handlers[0x1A2] = DispatchWrapper<OpCpuid>;  // 0F A2
-    RegisterCmov<0>();
     g_Handlers[0x11F] = DispatchWrapper<OpNop>;         // Multi-byte NOP (0F 1F)
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
 }

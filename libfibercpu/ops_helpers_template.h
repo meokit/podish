@@ -63,9 +63,14 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB*
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
-template <typename T>
+template <typename T, uint8_t FixedSubOp = 0xFF>
 void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop;
+    if constexpr (FixedSubOp != 0xFF) {
+        subop = FixedSubOp;
+    } else {
+        subop = (op->modrm >> 3) & 7;
+    }
 
     switch (subop) {
         case 0:  // TEST imm

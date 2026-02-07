@@ -314,7 +314,8 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     block->inst_count = 0;
 
     uint32_t current_eip = start_eip;
-    uint64_t effective_limit = std::min((uint64_t)32, max_insts);
+    constexpr uint64_t MAX_INSTS = 64; // 16 * 64 == 1024, so it can not cross 3 pages
+    uint64_t effective_limit = std::min(MAX_INSTS, max_insts == 0 ? MAX_INSTS : max_insts);
 
     // Temporary storage for indices to support DFE (since DecodedOp doesn't store
     // them anymore)
@@ -438,12 +439,12 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
     DecodedOp sentinel;
     std::memset(&sentinel, 0, sizeof(sentinel));
 
-    // Select exit handler based on last opcode to reduce BTB pressure
-    uint8_t last_opcode = 0;
-    if (!op_indices.empty()) {
-        last_opcode = op_indices.back() & 0xFF;
-    }
-    HandlerFunc exit_h = g_ExitHandlers[last_opcode % 16];
+    // Select exit handler based on eip to reduce BTB pressure
+    uint32_t k = (uint32_t)current_eip;
+    k ^= k >> 12;
+    k ^= k >> 4;
+    uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
+    HandlerFunc exit_h = g_ExitHandlers[exit_idx];
     sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
     sentinel.eip_offset = (uint32_t)(current_eip - start_eip);
     block->ops.push_back(sentinel);
