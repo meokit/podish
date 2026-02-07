@@ -446,12 +446,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         state->last_block = block_ptr;
         if (block_ptr->inst_count > 0) {
             DecodedOp* head = &block_ptr->ops[0];
-            HandlerFunc h = nullptr;
-            int32_t offset = head->handler_offset;
-            if (offset != 0) {
-                h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-            }
-
+            HandlerFunc h = head->handler;
             if (h) {
                 int64_t batch_limit = 1000;
                 if (max_insts != 0) {
@@ -516,20 +511,16 @@ int X86_Step(EmuState* state) {
         ops[0].length = 1;
         // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
-        ops[0].handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
+        ops[0].handler = ud2;
     }
 
     // Sentinel
     HandlerFunc exit_h = g_ExitHandlers[0];
-    ops[1].handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+    ops[1].handler = exit_h;
     ops[1].next_block = state->dummy_invalid_block;
 
     // Run first op
-    HandlerFunc h = nullptr;
-    int32_t offset = ops[0].handler_offset;
-    if (offset != 0) {
-        h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-    }
+    HandlerFunc h = ops[0].handler;
 
     if (h) {
         uint32_t old_eip = state->ctx.eip;

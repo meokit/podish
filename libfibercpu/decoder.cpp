@@ -296,11 +296,11 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
 
     HandlerFunc h = g_Handlers[*handler_index];
     if (h) {
-        op->handler_offset = (int32_t)((intptr_t)h - (intptr_t)g_HandlerBase);
+        op->handler = h;
     } else {
         // Fallback to UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
-        op->handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
+        op->handler = ud2;
     }
 
     return true;
@@ -374,7 +374,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             op.length = 0;  // Fault: EIP points to instruction
 
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
-            op.handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
+            op.handler = ud2;
 
             op.next_eip = current_eip;
             temp_ops.push_back(op);
@@ -384,7 +384,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             std::memset(&sentinel, 0, sizeof(sentinel));
 
             HandlerFunc exit_h = g_ExitHandlers[0];
-            sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+            sentinel.handler = exit_h;
 
             // Sentinel next_block initialization to dummy
             sentinel.next_block = state->dummy_invalid_block;
@@ -399,7 +399,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // Check if a specialized handler exists for this opcode + modrm/etc.
         HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
         if (specialized_h) {
-            op.handler_offset = (int32_t)((intptr_t)specialized_h - (intptr_t)g_HandlerBase);
+            op.handler = specialized_h;
         }
 
         // Recover index logic (to keep op_indices in sync)
@@ -458,7 +458,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         k ^= k >> 4;
         uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
-        sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+        sentinel.handler = exit_h;
         sentinel.next_block = state->dummy_invalid_block;  // Important!
         temp_ops.push_back(sentinel);
     }
@@ -523,7 +523,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         if (writes != 0 && (writes & live_flags) == 0) {
             HandlerFunc nf_h = g_Handlers_NF[h_idx];
             if (nf_h) {
-                op.handler_offset = (int32_t)((intptr_t)nf_h - (intptr_t)g_HandlerBase);
+                op.handler = nf_h;
             }
         }
         live_flags &= ~writes;

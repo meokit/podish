@@ -56,7 +56,7 @@ using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, Decod
 
 struct BasicBlock;
 
-struct DecodedOp {
+struct alignas(32) DecodedOp {
     // Immediate and Displacement
 
 #pragma clang diagnostic push
@@ -113,11 +113,15 @@ struct DecodedOp {
     int8_t padding1;
     // ------------ 16 BYTES ------------
     uint32_t next_eip;
-    int32_t handler_offset;
+    uint32_t padding2;
+
+    // ------------ 24 BYTES ------------
+    HandlerFunc handler;
+    // ------------ 32 BYTES ------------
 };
 
 // Size check
-// static_assert(sizeof(DecodedOp) == 24, "DecodedOp size mismatch");
+// static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");
 struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;

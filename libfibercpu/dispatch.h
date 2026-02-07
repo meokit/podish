@@ -15,12 +15,12 @@ extern HandlerFunc g_Handlers_NF[1024];
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb) {
+    PREFETCH((void*)(op + 2));
     // Advance EIP before execution
     state->ctx.eip = op->next_eip;
 
     DecodedOp* RESTRICT next = op + 1;
-    int32_t offset = next->handler_offset;
-    HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
+    HandlerFunc h = next->handler;
     PREFETCH((void*)h);
 
     // Execute Logic

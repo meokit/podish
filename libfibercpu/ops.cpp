@@ -21,10 +21,9 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
             DecodedOp* next_head = &op->next_block->ops[0];
 
             // Direct Relative Dispatch
-            int32_t offset = next_head->handler_offset;
-            if (offset != 0) {
-                HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-                ATTR_MUSTTAIL return h(state, next_head, instr_limit, utlb);
+            auto handler = next_head->handler;
+            if (handler != nullptr) {
+                ATTR_MUSTTAIL return handler(state, next_head, instr_limit, utlb);
             }
         }
     }
