@@ -378,7 +378,6 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             return true;  // Return true to execute what we have (including the fault)
         }
 
-        // --- SPECIALIZATION ---
         // Check if a specialized handler exists for this opcode + modrm/etc.
         HandlerFunc specialized_h = FindSpecializedHandler(op.opcode, &op);
         if (specialized_h) {
@@ -784,22 +783,6 @@ BasicBlock::~BasicBlock() {
     UnlinkAll();
 }
 
-void BasicBlock::LinkFrom(BasicBlock* source) {
-    if (!source) return;
-    
-    // Check if source is already linked to us (Idempotency check)
-    if (!source->ops.empty() && source->ops.back().next_block == this) {
-        return;
-    }
-    
-    // 1. Add source to our incoming list
-    incoming_jumps.push_back(source);
-
-    // 2. Set source's last op to point to us
-    if (!source->ops.empty()) {
-        source->ops.back().next_block = this;
-    }
-}
 
 void BasicBlock::RemoveIncoming(BasicBlock* source) {
     if (!source) return;

@@ -125,6 +125,24 @@ struct BasicBlock {
     void UnlinkAll();
 };
 
+FORCE_INLINE void BasicBlock::LinkFrom(BasicBlock* source) {
+    if (!source) return;
+    
+    // Check if source is already linked to us (Idempotency check)
+    // Note: ops is a vector of DecodedOp. access back() is valid if not empty.
+    if (!source->ops.empty() && source->ops.back().next_block == this) {
+        return;
+    }
+    
+    // 1. Add source to our incoming list
+    incoming_jumps.push_back(source);
+
+    // 2. Set source's last op to point to us
+    if (!source->ops.empty()) {
+        source->ops.back().next_block = this;
+    }
+}
+
 // Decoder Logic
 bool DecodeInstruction(const uint8_t* code, DecodedOp* op);
 

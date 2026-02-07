@@ -16,13 +16,13 @@ enum class Specialized : uint8_t {
     // General
     // Registers (ModRM.Reg field)
     RegEax = 100, Reg0 = 100,
-    RegEcx,       Reg1,
-    RegEdx,       Reg2,
-    RegEbx,       Reg3,
-    RegEsp,       Reg4,
-    RegEbp,       Reg5,
-    RegEsi,       Reg6,
-    RegEdi,       Reg7,
+    RegEcx = 101, Reg1 = 101,
+    RegEdx = 102, Reg2 = 102,
+    RegEbx = 103, Reg3 = 103,
+    RegEsp = 104, Reg4 = 104,
+    RegEbp = 105, Reg5 = 105,
+    RegEsi = 106, Reg6 = 106,
+    RegEdi = 107, Reg7 = 107,
     
     // Addressing Modes
     ModReg,     // Mod=3 (Register)
