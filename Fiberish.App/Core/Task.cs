@@ -476,7 +476,7 @@ public partial class Task
                 {
                      Exited = true;
                      ExitCode = 128 + sig;
-                     Console.WriteLine($"[Task {TID}] Terminated by signal {sig}");
+                     Logger.LogInformation("[Task {TID}:{PID}] Terminated by signal {Signal}", TID, Process.TGID, sig);
                      return;
                 }
                 // Ignore others for now
@@ -659,28 +659,26 @@ public partial class Task
             var stats = JsonSerializer.Deserialize(json, TlbStatsContext.Default.TlbStatsJson);
             if (stats == null) return;
 
-            Console.WriteLine($"\n--- [Task {TID}] TLB Statistics ---");
-            Console.WriteLine($"  Total Reads:  {stats.TotalReads:N0}");
-            Console.WriteLine($"  Total Writes: {stats.TotalWrites:N0}");
-            Console.WriteLine("");
+            Logger.LogInformation("\n--- [Task {TID}] TLB Statistics ---", TID);
+            Logger.LogInformation("  Total Reads:  {TotalReads:N0}", stats.TotalReads);
+            Logger.LogInformation("  Total Writes: {TotalWrites:N0}", stats.TotalWrites);
             
             double l1ReadHitRate = stats.TotalReads > 0 ? (double)stats.L1ReadHits / stats.TotalReads * 100 : 0;
             double l2ReadHitRate = stats.TotalReads > 0 ? (double)stats.L2ReadHits / stats.TotalReads * 100 : 0;
             double readMissRate = stats.TotalReads > 0 ? (double)stats.ReadMisses / stats.TotalReads * 100 : 0;
 
-            Console.WriteLine($"  Read L1 Hit:  {stats.L1ReadHits,12:N0} ({l1ReadHitRate,6:F2}%)");
-            Console.WriteLine($"  Read L2 Hit:  {stats.L2ReadHits,12:N0} ({l2ReadHitRate,6:F2}%)");
-            Console.WriteLine($"  Read Miss:    {stats.ReadMisses,12:N0} ({readMissRate,6:F2}%)");
-            Console.WriteLine("");
+            Logger.LogInformation("  Read L1 Hit:  {L1ReadHits,12:N0} ({L1ReadHitRate,6:F2}%)", stats.L1ReadHits, l1ReadHitRate);
+            Logger.LogInformation("  Read L2 Hit:  {L2ReadHits,12:N0} ({L2ReadHitRate,6:F2}%)", stats.L2ReadHits, l2ReadHitRate);
+            Logger.LogInformation("  Read Miss:    {ReadMisses,12:N0} ({ReadMissRate,6:F2}%)", stats.ReadMisses, readMissRate);
 
             double l1WriteHitRate = stats.TotalWrites > 0 ? (double)stats.L1WriteHits / stats.TotalWrites * 100 : 0;
             double l2WriteHitRate = stats.TotalWrites > 0 ? (double)stats.L2WriteHits / stats.TotalWrites * 100 : 0;
             double writeMissRate = stats.TotalWrites > 0 ? (double)stats.WriteMisses / stats.TotalWrites * 100 : 0;
 
-            Console.WriteLine($"  Write L1 Hit: {stats.L1WriteHits,12:N0} ({l1WriteHitRate,6:F2}%)");
-            Console.WriteLine($"  Write L2 Hit: {stats.L2WriteHits,12:N0} ({l2WriteHitRate,6:F2}%)");
-            Console.WriteLine($"  Write Miss:   {stats.WriteMisses,12:N0} ({writeMissRate,6:F2}%)");
-            Console.WriteLine("---------------------------------\n");
+            Logger.LogInformation("  Write L1 Hit: {L1WriteHits,12:N0} ({L1WriteHitRate,6:F2}%)", stats.L1WriteHits, l1WriteHitRate);
+            Logger.LogInformation("  Write L2 Hit: {L2WriteHits,12:N0} ({L2WriteHitRate,6:F2}%)", stats.L2WriteHits, l2WriteHitRate);
+            Logger.LogInformation("  Write Miss:   {WriteMisses,12:N0} ({WriteMissRate,6:F2}%)", stats.WriteMisses, writeMissRate);
+            Logger.LogInformation("---------------------------------");
         }
         catch (Exception ex)
         {
@@ -741,6 +739,7 @@ public partial class Task
 
 public static class Scheduler
 {
+    private static readonly ILogger Logger = Logging.CreateLogger("Scheduler");
     private static readonly Queue<Task> _readyQueue = new();
     private static readonly Dictionary<int, Task> _tasks = new();
     private static readonly Dictionary<int, Process> _processes = new();
@@ -762,7 +761,7 @@ public static class Scheduler
         {
             _tasks[t.TID] = t;
             _engineToTask[t.CPU.State] = t;
-            Console.WriteLine($"[Scheduler] Registered Task {t.TID} with Engine 0x{t.CPU.State:x}");
+            Logger.LogInformation("[Scheduler] Registered Task {TID} with Engine 0x{Engine:x}", t.TID, t.CPU.State);
             _processes[t.Process.TGID] = t.Process;
         }
     }

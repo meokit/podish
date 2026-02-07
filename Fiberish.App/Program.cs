@@ -5,6 +5,7 @@ using Bifrost.Syscalls;
 using Bifrost.Native;
 using Microsoft.Extensions.Logging;
 using Bifrost.Diagnostics;
+using System.CommandLine;
 using Task = Bifrost.Core.Task;
 
 namespace Bifrost;
@@ -13,56 +14,75 @@ class Program
 {
     private static ILogger Logger = null!;
     public static bool ShowStats { get; private set; } = false;
+    public static bool Verbose { get; private set; } = false;
     public static readonly DateTime StartTime = DateTime.UtcNow;
 
     static async Task<int> Main(string[] args)
     {
-        string rootfs = Directory.GetCurrentDirectory();
-        bool trace = false;
-        int argIdx = 0;
+        var rootOption = new Option<string>(
+            aliases: new[] { "--rootfs", "-r" },
+            getDefaultValue: () => Directory.GetCurrentDirectory(),
+            description: "Set root filesystem path");
 
-        while (argIdx < args.Length && args[argIdx].StartsWith("--"))
+        var verboseOption = new Option<bool>(
+            aliases: new[] { "--verbose", "-v" },
+            description: "Show verbose output (scheduler, loader info)");
+
+        var traceOption = new Option<bool>(
+            aliases: new[] { "--trace", "-t" },
+            description: "Enable syscall tracing and detailed logging");
+
+        var statsOption = new Option<bool>(
+            name: "--stats",
+            description: "Show TLB statistics on exit");
+
+        var exeArgument = new Argument<string>(
+            name: "executable",
+            description: "Path to the Linux executable to run");
+
+        var argsArgument = new Argument<string[]>(
+            name: "args",
+            getDefaultValue: () => Array.Empty<string>(),
+            description: "Arguments to pass to the executable");
+
+        var rootCommand = new RootCommand("x86emu - Linux x86 emulator")
         {
-            if (args[argIdx] == "--trace")
-            {
-                trace = true;
-                argIdx++;
-            }
-            else if (args[argIdx] == "--rootfs" && argIdx + 1 < args.Length)
-            {
-                rootfs = args[argIdx + 1];
-                argIdx += 2;
-            }
-            else if (args[argIdx] == "--stats")
-            {
-                ShowStats = true;
-                argIdx++;
-            }
-            else
-            {
-                break;
-            }
-        }
+            rootOption,
+            verboseOption,
+            traceOption,
+            statsOption,
+            exeArgument,
+            argsArgument
+        };
 
+        rootCommand.SetHandler(async (rootfs, verbose, trace, stats, exe, exeArgs) =>
+        {
+            Verbose = verbose;
+            ShowStats = stats;
+            Environment.ExitCode = await RunEmulator(rootfs, verbose, trace, stats, exe, exeArgs);
+        }, rootOption, verboseOption, traceOption, statsOption, exeArgument, argsArgument);
+
+        return await rootCommand.InvokeAsync(args);
+    }
+
+    static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool stats, string exe, string[] exeArgs)
+    {
         // Initialize Logging
         Logging.LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
-            builder.AddConsole(options =>
+            if (verbose || trace)
             {
-                options.LogToStandardErrorThreshold = LogLevel.Trace;
-            });
-            builder.SetMinimumLevel(trace ? LogLevel.Trace : LogLevel.Information);
+                builder.AddConsole(options =>
+                {
+                    options.LogToStandardErrorThreshold = LogLevel.Trace;
+                });
+            }
+            builder.SetMinimumLevel(trace ? LogLevel.Trace : (verbose ? LogLevel.Information : LogLevel.Warning));
         });
         Logger = Logging.CreateLogger<Program>();
 
-        if (argIdx >= args.Length)
-        {
-            Console.Error.WriteLine("Usage: Bifrost [--rootfs <path>] [--trace] <native_binary> [args...]");
-            return 1;
-        }
-
-        string exe = args[argIdx];
-        string[] exeArgs = args.Skip(argIdx).ToArray();
+        // Combine exe and additional args
+        string[] fullArgs = new[] { exe }.Concat(exeArgs).ToArray();
         string[] envs = new string[] 
         { 
             "PATH=/bin:/usr/bin:/sbin:/usr/sbin", 
@@ -72,15 +92,12 @@ class Program
         };
 
         // 1. Init Emulator
-        // Note: Engine is IDisposable. We should manage its lifecycle carefully with Tasks.
-        // Initial engine for loading.
         var engine = new Engine();
 
         // 2. Init VMA Manager
         var mm = new VMAManager();
 
         // 3. Setup Fault Handler Wrapper
-        // This global handler delegates to the specific Task's handler
         engine.FaultHandler = GlobalFaultHandler;
 
         // 4. Setup Syscalls (Init VFS)
@@ -88,15 +105,15 @@ class Program
         sys.Strace = trace;
         ProcFsManager.Init(sys);
 
-        // 5. Create Main Task (BEFORE loading to handle any faults during load)
+        // 5. Create Main Task
         var proc = new Process(Task.NextPID(), mm, sys);
         var mainTask = new Task(proc.TGID, proc, engine);
         Scheduler.Add(mainTask);
         ProcFsManager.OnProcessStart(sys, proc.TGID);
-        Console.WriteLine($"[Program] Created Main Task {mainTask.TID}, Engine 0x{engine.State:x}");
+        Logger.LogInformation("Created Main Task {TID}, Engine 0x{Engine:x}", mainTask.TID, engine.State);
 
         // 6. Load ELF
-        var res = ElfLoader.Load(exe, sys, exeArgs, envs);
+        var res = ElfLoader.Load(exe, sys, fullArgs, envs);
         sys.BrkAddr = res.BrkAddr;
 
         // 7. Setup CPU State
@@ -115,7 +132,6 @@ class Program
 
             if (group)
             {
-                // mark the whole process as exiting
                 lock (t.Process)
                 {
                     if (t.Process.State != ProcessState.Zombie)
@@ -132,7 +148,6 @@ class Program
             }
             else
             {
-                // Single thread exit - if it's the main thread (TID == TGID), mark process as zombie
                 if (t.TID == t.Process.TGID)
                 {
                     lock (t.Process)
@@ -150,13 +165,12 @@ class Program
 
         engine.InterruptHandler = (eng, vec) =>
         {
-            // Use current task's syscall manager (usually same as sys for main thread)
             var t = Scheduler.CurrentTask;
             if (t != null)
             {
                 return t.Process.Syscalls.Handle(eng, vec);
             }
-            return sys.Handle(eng, vec); // Fallback
+            return sys.Handle(eng, vec);
         };
 
         // Setup Dependency Injection
@@ -173,7 +187,6 @@ class Program
                 var child = parent.Clone(flags, stack, ptid, tls, ctid);
                 ProcFsManager.OnProcessStart(child.Process.Syscalls, child.TID);
 
-                // Start child in background without blocking
                 _ = child.RunLoopAsync();
 
                 return (child.TID, null);

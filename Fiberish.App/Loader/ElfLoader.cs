@@ -7,6 +7,8 @@ using Bifrost.Core;
 using Bifrost.Syscalls;
 using Bifrost.VFS;
 using Bifrost.Native;
+using Bifrost.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Bifrost.Loader;
 
@@ -20,6 +22,7 @@ public class LoaderResult
 
 public class ElfLoader
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<ElfLoader>();
     public const uint StackTop = 0xC0000000;
     public const uint StackSize = 0x800000;
 
@@ -230,7 +233,7 @@ public class ElfLoader
             InitialStack = stackData.AsSpan((int)(sp - stackStart)).ToArray(),
             BrkAddr = brkAddr
         };
-        Console.WriteLine($"[ElfLoader] Entry=0x{res.Entry:x} SP=0x{res.SP:x} Brk=0x{res.BrkAddr:x} InitialStackLen={res.InitialStack.Length}");
+        Logger.LogInformation("ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen}", res.Entry, res.SP, res.BrkAddr, res.InitialStack.Length);
         return res;
     }
 }

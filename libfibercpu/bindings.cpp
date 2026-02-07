@@ -331,23 +331,9 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 }
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
-    if (addr >= 0x10000 && addr < 0x11000 && size > 0) {
-        fprintf(stderr, "[C++] X86_MemWrite(0x%x, size=%u) first bytes: %02x %02x %02x %02x\n", addr, size, data[0],
-                data[1], data[2], data[3]);
-    }
     for (uint32_t i = 0; i < size; ++i) {
         mem::MicroTLB utlb;
         state->mmu.write<uint8_t>(addr + i, data[i], &utlb);
-    }
-    if (addr >= 0x10000 && addr < 0x11000 && size >= 4) {
-        // Verify by reading back
-        uint8_t verify[4];
-        for (int i = 0; i < 4; i++) {
-            mem::MicroTLB utlb;
-            verify[i] = state->mmu.read<uint8_t>(addr + i, &utlb);
-        }
-        fprintf(stderr, "[C++] X86_MemWrite verify read at 0x%x: %02x %02x %02x %02x\n", addr, verify[0], verify[1],
-                verify[2], verify[3]);
     }
 }
 
@@ -366,16 +352,7 @@ int X86_MemIsDirty(EmuState* state, uint32_t addr) {
 void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write) {
     if (!state) return nullptr;
     mem::Property perm = is_write ? mem::Property::Write : mem::Property::Read;
-    void* result = state->mmu.resolve_safe(addr, perm);
-    if (addr >= 0x10000 && addr < 0x11000) {
-        fprintf(stderr, "[C++] X86_ResolvePtr(0x%x) -> %p\n", addr, result);
-        if (result) {
-            uint8_t* p = (uint8_t*)result - (addr & 0xFFF);
-            fprintf(stderr, "[C++] Page 0x10000 first bytes: %02x %02x %02x %02x\n", p[0], p[1], p[2], p[3]);
-            fprintf(stderr, "[C++] Offset 0x998 bytes: %02x %02x %02x %02x\n", p[0x998], p[0x999], p[0x99a], p[0x99b]);
-        }
-    }
-    return result;
+    return state->mmu.resolve_safe(addr, perm);
 }
 
 // ----------------------------------------------------------------------------

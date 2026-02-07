@@ -178,17 +178,13 @@ public class Engine : IDisposable
         var sb = new StringBuilder();
         uint current = addr;
         
-        Console.WriteLine($"[ReadStringSafe] Entering addr=0x{addr:x}");
-        
         while (sb.Length < limit)
         {
             void* ptr = X86Native.ResolvePtr(State, current, 0); // Read
-            Console.WriteLine($"[ReadStringSafe] ResolvePtr(0x{current:x}) returned {(ptr != null ? "valid" : "null")}");
             if (ptr == null) 
             {
                 if (PageFaultResolver != null && PageFaultResolver(current, false))
                 {
-                    Console.WriteLine($"[ReadStringSafe] Resolved fault for 0x{current:x}");
                     ptr = X86Native.ResolvePtr(State, current, 0);
                 }
             }

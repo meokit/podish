@@ -243,7 +243,7 @@ public class VMAManager
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
-        Logger.LogInformation("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
+        Logger.LogDebug("HandleFault: 0x{Addr:x} Write={IsWrite}", addr, isWrite);
         var vma = FindVMA(addr);
         if (vma == null)
         {
@@ -279,23 +279,13 @@ public class VMAManager
                     readLen = (int)remainingFile;
             }
 
-            string filePath = vma.File.Dentry?.Inode is HostInode hi ? hi.HostPath : "unknown";
-            Logger.LogInformation("HandleFault: Loading from {FilePath} for 0x{PageStart:x} off={Off} readLen={ReadLen}", filePath, pageStart, off, readLen);
-
             if (readLen > 0)
             {
                 Span<byte> buf = stackalloc byte[LinuxConstants.PageSize];
                 int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
-                Logger.LogInformation("HandleFault: Read {N} bytes for page 0x{PageStart:x}, first bytes: {B0:x2} {B1:x2} {B2:x2} {B3:x2}", 
-                    n, pageStart, n > 0 ? buf[0] : 0, n > 1 ? buf[1] : 0, n > 2 ? buf[2] : 0, n > 3 ? buf[3] : 0);
                 if (n > 0)
                 {
                     engine.MemWrite(pageStart, buf.Slice(0, n));
-                    
-                    // Verify write by reading back
-                    var verify = engine.MemRead(pageStart, 4);
-                    Logger.LogInformation("HandleFault: Verify after write at 0x{PageStart:x}: {V0:x2} {V1:x2} {V2:x2} {V3:x2}", 
-                        pageStart, verify[0], verify[1], verify[2], verify[3]);
                 }
             }
         }

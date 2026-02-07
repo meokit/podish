@@ -2205,11 +2205,9 @@ public unsafe partial class SyscallManager
 
     private static int SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        Console.WriteLine($"[SysAccess] Called a1=0x{a1:x}");
         var sm = Get(state);
         if (sm == null) return -1;
         string path = sm.ReadString(a1);
-        Console.WriteLine($"[SysAccess] Path: {path}");
         var dentry = sm.PathWalk(path);
         if (dentry != null && dentry.Inode != null) return 0;
         return -(int)Errno.ENOENT;
@@ -2831,14 +2829,12 @@ public unsafe partial class SyscallManager
 
     private static int SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        Console.WriteLine($"[SysExecve] Called a1=0x{a1:x}");
         var sm = Get(state);
         var task = Scheduler.GetByEngine(state);
         if (sm == null || task == null) return -(int)Errno.EPERM;
 
         string filename = sm.ReadString(a1);
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
-        Console.WriteLine($"[SysExecve] Filename: {filename}");
         
         // Resolve absolute path
         string absPath = filename;
@@ -2916,8 +2912,8 @@ public unsafe partial class SyscallManager
         task.AltStackFlags = 0;
 
         // Load new ELF
-        Console.WriteLine($"[SysExecve] Loading {absPath} with {args.Count} args, {envs.Count} envs");
-        foreach (var arg in args) Console.WriteLine($"  arg: {arg}");
+        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs", absPath, args.Count, envs.Count);
+        foreach (var arg in args) Logger.LogDebug("  arg: {Arg}", arg);
         try 
         {
             // Note: ElfLoader.Load usually expects us to map the file.
@@ -2955,7 +2951,7 @@ public unsafe partial class SyscallManager
         }
         catch (Exception ex) // Catch other exceptions during execve
         {
-            Console.WriteLine($"Execve failed: {ex.Message}");
+            Logger.LogWarning("Execve failed: {Message}", ex.Message);
             return -(int)Errno.ENOENT;
         }
 
@@ -3318,8 +3314,7 @@ public unsafe partial class SyscallManager
                 // sm.FDs[(int)fd].Flags = (int)arg; 
                 return 0;
             default:
-                // Log warning but return EINVAL to avoid misleading applications
-                Console.WriteLine($"[WARN] Unimplemented fcntl64 cmd {cmd}");
+                // Unimplemented fcntl64 cmd (suppress unless verbose)
                 return -(int)Errno.EINVAL;
         }
     }
