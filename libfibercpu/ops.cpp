@@ -5,7 +5,8 @@ namespace fiberish {
 
 // Sentinel Handler
 template <int I>
-ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {
+ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                       mem::MicroTLB utlb) {
     // Basic Block Chaining
     // Optim: If next_block is dummy, is_valid is false, so we skip.
     // If next_block is real but invalidated, is_valid is false, so we skip.

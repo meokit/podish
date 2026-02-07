@@ -14,16 +14,44 @@
 #define FORCE_INLINE inline
 #endif
 
+#if defined(_MSC_VER)
+#define RESTRICT __restrict
+#elif defined(__GNUC__) || defined(__clang__)
+#define RESTRICT __restrict__
+#else
+#define RESTRICT
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define PREFETCH(addr) __builtin_prefetch(addr, 0, 3)
+#define PREFETCH_WRITE(addr) __builtin_prefetch(addr, 1, 3)
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#if defined(_M_X64) || defined(_M_IX86)
+#define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
+#define PREFETCH_WRITE(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)  // x86写预取指令支持有限
+#elif defined(_M_ARM64) || defined(_M_ARM)
+#define PREFETCH(addr) __prefetch((const void*)(addr))
+#define PREFETCH_WRITE(addr) __prefetchw((const void*)(addr))
+#else
+#define PREFETCH(addr)
+#define PREFETCH_WRITE(addr)
+#endif
+#else
+#define PREFETCH(addr)
+#define PREFETCH_WRITE(addr)
+#endif
+
 namespace fiberish {
 
 struct EmuState;
 struct DecodedOp;
 
 // Logic Function (Standard ABI, implementation)
-using LogicFunc = void (*)(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
+using LogicFunc = void (*)(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);  // Always inlined, no restrict needed
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
-using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit,
+using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb);
 
 struct BasicBlock;
