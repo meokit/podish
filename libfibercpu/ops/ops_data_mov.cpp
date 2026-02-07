@@ -67,7 +67,7 @@ static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
 }
 
 template <Specialized DstSpec = Specialized::None, Specialized SrcSpec = Specialized::None>
-static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE void OpMov_GvEv_Reg_Template(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
@@ -103,6 +103,24 @@ static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::Mic
         uint8_t dst = (op->modrm >> 3) & 7;
         SetReg(state, dst, val);
     }
+}
+
+// Named wrappers for profiling visibility
+static void OpMov_Ebp_Esp(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMov_GvEv_Reg_Template<Specialized::RegEbp, Specialized::RegEsp>(state, op, utlb);
+}
+
+static void OpMov_Ecx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMov_GvEv_Reg_Template<Specialized::RegEcx, Specialized::RegEax>(state, op, utlb);
+}
+
+static void OpMov_Edx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMov_GvEv_Reg_Template<Specialized::RegEdx, Specialized::RegEax>(state, op, utlb);
+}
+
+// Generic fallback
+static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMov_GvEv_Reg_Template<>(state, op, utlb);
 }
 
 template <Specialized S = Specialized::None>
@@ -946,7 +964,7 @@ void RegisterDataMovOps() {
         c.reg_mask = 0x7; c.reg_val = 5; // Dst = EBP
         c.rm_mask = 0x7;  c.rm_val = 4;  // Src = ESP
         c.mod_mask = 3;   c.mod_val = 3; // Register Mode
-        DispatchRegistrar<OpMov_GvEv_Reg<Specialized::RegEbp, Specialized::RegEsp>>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Ebp_Esp>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
 
     // 2. MOV ECX, EAX (Loop/Param)
@@ -956,7 +974,7 @@ void RegisterDataMovOps() {
         c.reg_mask = 0x7; c.reg_val = 1; // Dst = ECX
         c.rm_mask = 0x7;  c.rm_val = 0;  // Src = EAX
         c.mod_mask = 3;   c.mod_val = 3;
-        DispatchRegistrar<OpMov_GvEv_Reg<Specialized::RegEcx, Specialized::RegEax>>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Ecx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
 
     // 3. MOV EDX, EAX (Mul/Div Prep)
@@ -966,7 +984,7 @@ void RegisterDataMovOps() {
         c.reg_mask = 0x7; c.reg_val = 2; // Dst = EDX
         c.rm_mask = 0x7;  c.rm_val = 0;  // Src = EAX
         c.mod_mask = 3;   c.mod_val = 3;
-        DispatchRegistrar<OpMov_GvEv_Reg<Specialized::RegEdx, Specialized::RegEax>>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8
     g_Handlers[0x8A] = DispatchWrapper<OpMov_GbEb>;  // MOV r8, r/m8
