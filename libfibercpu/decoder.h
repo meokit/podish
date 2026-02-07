@@ -23,7 +23,8 @@ struct DecodedOp;
 using LogicFunc = void (*)(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
-using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb);
+using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* state, DecodedOp* op, int64_t instr_limit,
+                                                 mem::MicroTLB utlb);
 
 struct BasicBlock;
 
@@ -95,57 +96,27 @@ struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
-    std::vector<DecodedOp> ops;
+    bool is_valid = true;
 
-    // Chaining & Lifecycle
-    std::vector<BasicBlock*> incoming_jumps;
-    mutable uint32_t ref_count = 0;
+    // Flexible Array Member - Must be last
+    // We expect max 64 instructions per block + 1 sentinel + 1 fault handling = ~66
+    // Allocation size will be sizeof(BasicBlock) + sizeof(DecodedOp) * (count - 1)
+    DecodedOp ops[1];
 
-    BasicBlock();
-    ~BasicBlock();
-
-    void Retain() const {
-        // Assuming single-threaded emulator context or external locking.
-        // If MT execution of the *same* EmuState is needed, use atomic.
-        // Given current architecture implies single-threaded step/run per state:
-        const_cast<BasicBlock*>(this)->ref_count++;
+    // Helper to calculate allocation size
+    static size_t CalculateSize(size_t op_count) {
+        if (op_count == 0) return sizeof(BasicBlock);
+        return sizeof(BasicBlock) + sizeof(DecodedOp) * (op_count - 1);
     }
 
-    void Release() const {
-        auto* self = const_cast<BasicBlock*>(this);
-        if (--self->ref_count == 0) {
-            delete self;
-        }
-    }
-
-    // Link logic: this block is the TARGET. source is jumping TO here.
-    void LinkFrom(BasicBlock* source);
-    void RemoveIncoming(BasicBlock* source);
-    void UnlinkAll();
+    // Mark block as invalid
+    void Invalidate();
 };
-
-FORCE_INLINE void BasicBlock::LinkFrom(BasicBlock* source) {
-    if (!source) return;
-    
-    // Check if source is already linked to us (Idempotency check)
-    // Note: ops is a vector of DecodedOp. access back() is valid if not empty.
-    if (!source->ops.empty() && source->ops.back().next_block == this) {
-        return;
-    }
-    
-    // 1. Add source to our incoming list
-    incoming_jumps.push_back(source);
-
-    // 2. Set source's last op to point to us
-    if (!source->ops.empty()) {
-        source->ops.back().next_block = this;
-    }
-}
 
 // Decoder Logic
 bool DecodeInstruction(const uint8_t* code, DecodedOp* op);
 
-// Decode Block
-bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block);
+// Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
+BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts);
 
-}  // namespace x86emu
+}  // namespace fiberish

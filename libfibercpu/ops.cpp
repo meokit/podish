@@ -4,27 +4,26 @@
 namespace fiberish {
 
 // Sentinel Handler
-template<int I>
-ATTR_PRESERVE_NONE
-int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {
-    // End of Threaded Dispatch Chain.
-    if (op->next_block) {
-        // Basic Block Chaining
-        if (op->next_block->start_eip == state->ctx.eip) {
-            // Check instruction limit before chaining
-            if (instr_limit > 0) {
-                // Subtract the NEXT block's size from the limit
-                instr_limit -= op->next_block->inst_count;
+template <int I>
+ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {
+    // Basic Block Chaining
+    // Optim: If next_block is dummy, is_valid is false, so we skip.
+    // If next_block is real but invalidated, is_valid is false, so we skip.
+    if (op->next_block->is_valid && op->next_block->start_eip == state->ctx.eip) {
+        // Check instruction limit before chaining
+        if (instr_limit > 0) {
+            // Subtract the NEXT block's size from the limit
+            instr_limit -= op->next_block->inst_count;
 
-                state->last_block = op->next_block;
-                DecodedOp* next_head = &op->next_block->ops[0];
+            state->last_block = op->next_block;
+            // ops is now flexible array member, essentially ops[0]
+            DecodedOp* next_head = &op->next_block->ops[0];
 
-                // Direct Relative Dispatch
-                int32_t offset = next_head->handler_offset;
-                if (offset != 0) {
-                    HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
-                    ATTR_MUSTTAIL return h(state, next_head, instr_limit, utlb);
-                }
+            // Direct Relative Dispatch
+            int32_t offset = next_head->handler_offset;
+            if (offset != 0) {
+                HandlerFunc h = (HandlerFunc)((intptr_t)g_HandlerBase + offset);
+                ATTR_MUSTTAIL return h(state, next_head, instr_limit, utlb);
             }
         }
     }
@@ -32,18 +31,16 @@ int64_t OpExitBlock(EmuState* state, DecodedOp* op, int64_t instr_limit, mem::Mi
     return instr_limit;
 }
 
-// Instantiate 16 variants to reduce BTB pressure
+// Instantiate variants to reduce BTB pressure
 #define INSTANTIATE_EXIT(i) OpExitBlock<i>
 HandlerFunc g_ExitHandlers[32] = {
-    INSTANTIATE_EXIT(0),  INSTANTIATE_EXIT(1),  INSTANTIATE_EXIT(2),  INSTANTIATE_EXIT(3),
-    INSTANTIATE_EXIT(4),  INSTANTIATE_EXIT(5),  INSTANTIATE_EXIT(6),  INSTANTIATE_EXIT(7),
-    INSTANTIATE_EXIT(8),  INSTANTIATE_EXIT(9),  INSTANTIATE_EXIT(10), INSTANTIATE_EXIT(11),
-    INSTANTIATE_EXIT(12), INSTANTIATE_EXIT(13), INSTANTIATE_EXIT(14), INSTANTIATE_EXIT(15),
-    INSTANTIATE_EXIT(16), INSTANTIATE_EXIT(17), INSTANTIATE_EXIT(18), INSTANTIATE_EXIT(19),
-    INSTANTIATE_EXIT(20), INSTANTIATE_EXIT(21), INSTANTIATE_EXIT(22), INSTANTIATE_EXIT(23),
-    INSTANTIATE_EXIT(24), INSTANTIATE_EXIT(25), INSTANTIATE_EXIT(26), INSTANTIATE_EXIT(27),
-    INSTANTIATE_EXIT(28), INSTANTIATE_EXIT(29), INSTANTIATE_EXIT(30), INSTANTIATE_EXIT(31)
-};
+    INSTANTIATE_EXIT(0),  INSTANTIATE_EXIT(1),  INSTANTIATE_EXIT(2),  INSTANTIATE_EXIT(3),  INSTANTIATE_EXIT(4),
+    INSTANTIATE_EXIT(5),  INSTANTIATE_EXIT(6),  INSTANTIATE_EXIT(7),  INSTANTIATE_EXIT(8),  INSTANTIATE_EXIT(9),
+    INSTANTIATE_EXIT(10), INSTANTIATE_EXIT(11), INSTANTIATE_EXIT(12), INSTANTIATE_EXIT(13), INSTANTIATE_EXIT(14),
+    INSTANTIATE_EXIT(15), INSTANTIATE_EXIT(16), INSTANTIATE_EXIT(17), INSTANTIATE_EXIT(18), INSTANTIATE_EXIT(19),
+    INSTANTIATE_EXIT(20), INSTANTIATE_EXIT(21), INSTANTIATE_EXIT(22), INSTANTIATE_EXIT(23), INSTANTIATE_EXIT(24),
+    INSTANTIATE_EXIT(25), INSTANTIATE_EXIT(26), INSTANTIATE_EXIT(27), INSTANTIATE_EXIT(28), INSTANTIATE_EXIT(29),
+    INSTANTIATE_EXIT(30), INSTANTIATE_EXIT(31)};
 
 // Global dispatch table
 // This is initialized by HandlerInit static constructor below
@@ -94,13 +91,13 @@ HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
     for (const auto& entry : g_SpecializedRegistry) {
         if (entry.opcode == opcode) {
             // Check ModRM constraints
-            // If op doesn't have modrm but criteria requires it -> fail? 
+            // If op doesn't have modrm but criteria requires it -> fail?
             // The criteria.Matches takes modrm uint8.
             // DecodedOp has modrm field always, valid if flags.has_modrm is true.
             // If specialized entry requires modrm (mask != 0) and op doesn't have it, we should probably fail?
-            // SpecCriteria::Matches logic: checks masks. If mask is 0, it matches anything (including garbage if not present).
-            // Usually we specialize precisely.
-            
+            // SpecCriteria::Matches logic: checks masks. If mask is 0, it matches anything (including garbage if not
+            // present). Usually we specialize precisely.
+
             if (op->meta.flags.has_modrm) {
                 if (entry.criteria.Matches(op->modrm, op->prefixes.all)) return entry.handler;
             } else {
@@ -109,13 +106,13 @@ HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
                 // My logic above was simplistic.
                 // Let's create a dummy modrm=0 if not present, but ensure mask checks fail if they were set?
                 // Actually, if has_modrm is false, modrm field is undefined/garbage (or 0).
-                
+
                 // Better logic:
                 // 1. Prefix Check always
                 if (entry.criteria.prefix_mask) {
                     if ((op->prefixes.all & entry.criteria.prefix_mask) != entry.criteria.prefix_val) continue;
                 }
-                
+
                 // 2. ModRM Check
                 if (op->meta.flags.has_modrm) {
                     // Standard check
@@ -127,7 +124,7 @@ HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
                     // If criteria REQUIRES ModRM specific values (mask != 0), then it's a mismatch.
                     if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) continue;
                 }
-                
+
                 return entry.handler;
             }
         }

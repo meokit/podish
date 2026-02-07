@@ -2,7 +2,11 @@
 
 #include <ankerl/unordered_dense.h>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <memory_resource>
+#include <vector>
 #include "common.h"
 #include "decoder.h"  // For BasicBlock definition
 #include "hooks.h"
@@ -22,46 +26,19 @@ struct EmuState {
     mem::Mmu mmu;
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
-    
-    // Intrusive Pointer Wrapper for automatic Retain/Release
-    struct BlockPtr {
-        BasicBlock* ptr = nullptr;
-        
-        BlockPtr() = default;
-        BlockPtr(BasicBlock* p) : ptr(p) { if(ptr) ptr->Retain(); }
-        BlockPtr(const BlockPtr& other) : ptr(other.ptr) { if(ptr) ptr->Retain(); }
-        BlockPtr(BlockPtr&& other) noexcept : ptr(other.ptr) { other.ptr = nullptr; }
-        
-        ~BlockPtr() { if(ptr) ptr->Release(); }
-        
-        BlockPtr& operator=(const BlockPtr& other) {
-            if (this != &other) {
-                if(ptr) ptr->Release();
-                ptr = other.ptr;
-                if(ptr) ptr->Retain();
-            }
-            return *this;
-        }
-        
-        BlockPtr& operator=(BasicBlock* p) {
-            if (ptr != p) {
-                if(ptr) ptr->Release();
-                ptr = p;
-                if(ptr) ptr->Retain();
-            }
-            return *this;
-        }
 
-        BasicBlock* get() const { return ptr; }
-        BasicBlock* operator->() const { return ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
+    // PMR Allocation
+    std::pmr::monotonic_buffer_resource block_pool;
+    std::pmr::polymorphic_allocator<BasicBlock> block_alloc{&block_pool};
 
-    // Block Cache - Stores raw pointers, but we treat them as "Strong Refs" owned by the map.
-    // However, std::map/unordered_map doesn't automatically call Release on raw pointers when erased.
-    // So we use our BlockPtr wrapper as the value type to ensure Release is called on erase/clear.
-    ankerl::unordered_dense::map<uint32_t, BlockPtr> block_cache;
-    
+    // Block Cache - Stores raw pointers. Blocks are owned by block_pool.
+    ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
+
+    // Optimization: Dummy "Invalid" block.
+    // next_block pointers are initialized to this instead of nullptr.
+    // This allows removing the "if (next_block)" check in OpExitBlock.
+    BasicBlock* dummy_invalid_block = nullptr;
+
     // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
     // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.
     ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
@@ -71,7 +48,7 @@ struct EmuState {
     uint32_t fault_addr = 0;
 
     // Chaining Info
-    BlockPtr last_block;
+    BasicBlock* last_block = nullptr;
 
     // Callback Storage
     FaultHandler fault_handler = nullptr;
@@ -84,11 +61,11 @@ struct EmuState {
     void* interrupt_userdata[256] = {nullptr};
 
     // TSC State
-    uint64_t tsc_frequency = 1000000000; // Default 1GHz
+    uint64_t tsc_frequency = 1000000000;  // Default 1GHz
     uint64_t tsc_offset = 0;
-    int tsc_mode = 1; // 0: Fixed Increment, 1: Real-time
-    uint64_t tsc_fixed_counter = 0; // For mode 0
+    int tsc_mode = 1;                // 0: Fixed Increment, 1: Real-time
+    uint64_t tsc_fixed_counter = 0;  // For mode 0
     std::chrono::steady_clock::time_point tsc_start_time;
 };
 
-}  // namespace x86emu
+}  // namespace fiberish

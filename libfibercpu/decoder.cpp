@@ -6,8 +6,8 @@
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
 #include "ops.h"         // For g_Handlers
-#include "state.h"
 #include "specialization.h"
+#include "state.h"
 
 namespace fiberish {
 
@@ -87,7 +87,9 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
                 op->prefixes.flags.rep = 1;
                 break;
 
-            // Group 2: Segment Overrides
+                // Group 2: Segment Overrides
+#define ENABLE_UNUSED_SEGMENTS_DECODING 1
+#if ENABLE_UNUSED_SEGMENTS_DECODING
             case 0x2E:
                 op->prefixes.flags.segment = 2;
                 break;  // CS
@@ -100,6 +102,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
             case 0x26:
                 op->prefixes.flags.segment = 1;
                 break;  // ES
+#endif
             case 0x64:
                 op->prefixes.flags.segment = 5;
                 break;  // FS
@@ -142,7 +145,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
     // 3. ModRM
     uint8_t has_modrm = kHasModRM[map][opcode];
     if (has_modrm) {
-        // ... (existing logic) ...
         op->meta.flags.has_modrm = 1;
         uint8_t modrm = *ptr++;
         op->modrm = modrm;
@@ -280,7 +282,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
 
     // Final Step: Calculate Relative Handler Offset
     // Specialized 32-bit MOV (0x89, 0x8B) - No Legacy Prefixes
-    // Important: We only check legacy prefixes (lock, rep, segment, opsize, addrsize) 
+    // Important: We only check legacy prefixes (lock, rep, segment, opsize, addrsize)
     // which are in the low 8 bits of prefixes.all.
     if (map == 0 && (op->prefixes.all & 0xFF) == 0) {
         if (opcode == 0x89) {
@@ -308,17 +310,23 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op) {
 // Helper to check if opcode is Control Flow
 static bool IsControlFlow(const DecodedOp* op) { return op->meta.flags.is_control_flow; }
 
-bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts, BasicBlock* block) {
-    block->start_eip = start_eip;
-    block->ops.clear();
-    block->inst_count = 0;
+BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts) {
+    // 1. Decode into temporary storage
+    // Use a small buffer on stack to avoid heap allocation for common small blocks?
+    // Or just std::vector. std::vector is safer for now.
+    std::vector<DecodedOp> temp_ops;
+    constexpr uint64_t MAX_INSTS = 64;
+    temp_ops.reserve(MAX_INSTS + 2);  // + Sentinel + potential Fault
 
     uint32_t current_eip = start_eip;
-    constexpr uint64_t MAX_INSTS = 64; // 16 * 64 == 1024, so it can not cross 3 pages
+    uint32_t inst_count = 0;
+
     uint64_t effective_limit = std::min(MAX_INSTS, max_insts == 0 ? MAX_INSTS : max_insts);
 
-    // Temporary storage for indices to support DFE (since DecodedOp doesn't store
-    // them anymore)
+    // DFE Live Flags - declared here to avoid goto skip error
+    uint32_t live_flags = DFE_ALL_FLAGS;
+
+    // Temporary storage for indices to support DFE
     std::vector<uint16_t> op_indices;
     op_indices.reserve(effective_limit);
 
@@ -327,13 +335,15 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         return (start & 0xFFFFF000) != ((start + len - 1) & 0xFFFFF000);
     };
 
-    while (block->ops.size() < effective_limit) {
+    uint32_t end_eip = start_eip;
+    bool success = true;
+
+    while (temp_ops.size() < effective_limit) {
         // 0. Check Limit
         if (limit_eip != 0 && current_eip >= limit_eip) {
             break;
         }
         // 1. Fetch
-        // Read instruction bytes safely
         uint8_t buf[16];
         bool fetch_fault = false;
         for (int i = 0; i < 16; ++i) {
@@ -345,17 +355,21 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         }
 
         if (fetch_fault) {
-            if (block->ops.empty()) return false;  // First instruction failed
-            break;                                 // Terminate block
+            if (temp_ops.empty()) {
+                // If first instruction fails, we return nullptr effectively (or special block?)
+                // Original code returned false.
+                success = false;
+            }
+            break;
         }
 
         DecodedOp op;
         if (!DecodeInstruction(buf, &op)) {
             // Decode error: Insert Fault Op
             fprintf(stderr,
-                "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
-                "%02X %02X\n",
-                current_eip, buf[0], buf[1], buf[2], buf[3]);
+                    "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
+                    "%02X %02X\n",
+                    current_eip, buf[0], buf[1], buf[2], buf[3]);
             std::memset(&op, 0, sizeof(op));
             op.length = 0;  // Fault: EIP points to instruction
 
@@ -363,7 +377,7 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             op.handler_offset = (int32_t)((intptr_t)ud2 - (intptr_t)g_HandlerBase);
 
             op.eip_offset = (uint32_t)(current_eip - start_eip);
-            block->ops.push_back(op);
+            temp_ops.push_back(op);
 
             // Append Sentinel for dispatch safety
             DecodedOp sentinel;
@@ -373,10 +387,13 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
             sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
             sentinel.eip_offset = (uint32_t)(current_eip + 1 - start_eip);
 
-            block->ops.push_back(sentinel);
+            // Sentinel next_block initialization to dummy
+            sentinel.next_block = state->dummy_invalid_block;
 
-            block->end_eip = current_eip + 1;
-            return true;  // Return true to execute what we have (including the fault)
+            temp_ops.push_back(sentinel);
+
+            end_eip = current_eip + 1;
+            goto finalize;
         }
 
         // Check if a specialized handler exists for this opcode + modrm/etc.
@@ -384,12 +401,10 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         if (specialized_h) {
             op.handler_offset = (int32_t)((intptr_t)specialized_h - (intptr_t)g_HandlerBase);
         }
-        // ----------------------
 
         // Recover index logic (to keep op_indices in sync)
         uint8_t map = 0;
         uint8_t opcode = buf[0];
-        // Handle prefixes correctly to find opcode
         const uint8_t* ptr = buf;
         while (true) {
             uint8_t b = *ptr;
@@ -409,9 +424,9 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         op_indices.push_back((map << 8) | opcode);
 
         op.eip_offset = (uint32_t)(current_eip - start_eip);
-        // Add to block
-        block->ops.push_back(op);
-        block->inst_count++;
+
+        temp_ops.push_back(op);
+        inst_count++;
         uint32_t inst_len = op.length;
 
         // Stop if Control Flow
@@ -423,173 +438,130 @@ bool DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64
         // Advance
         current_eip += inst_len;
 
-        // Stop if Control Flow
-        if (IsControlFlow(&block->ops.back())) {
+        // Stop if Control Flow (checked again on last op? redundancy from original code)
+        if (IsControlFlow(&temp_ops.back())) {
             break;
         }
 
         // Stop if Page Cross
-        // (Execution engine might need to re-check TLB)
         if (is_page_cross(current_eip, 1)) {
             break;
         }
     }
 
-    // Append Sentinel Op to terminate Threaded Dispatch
-    DecodedOp sentinel;
-    std::memset(&sentinel, 0, sizeof(sentinel));
+    // Append Sentinel Op
+    {
+        DecodedOp sentinel;
+        std::memset(&sentinel, 0, sizeof(sentinel));
 
-    // Select exit handler based on eip to reduce BTB pressure
-    uint32_t k = (uint32_t)current_eip;
-    k ^= k >> 12;
-    k ^= k >> 4;
-    uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
-    HandlerFunc exit_h = g_ExitHandlers[exit_idx];
-    sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
-    sentinel.eip_offset = (uint32_t)(current_eip - start_eip);
-    block->ops.push_back(sentinel);
+        uint32_t k = (uint32_t)current_eip;
+        k ^= k >> 12;
+        k ^= k >> 4;
+        uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
+        HandlerFunc exit_h = g_ExitHandlers[exit_idx];
+        sentinel.handler_offset = (int32_t)((intptr_t)exit_h - (intptr_t)g_HandlerBase);
+        sentinel.eip_offset = (uint32_t)(current_eip - start_eip);
+        sentinel.next_block = state->dummy_invalid_block;  // Important!
+
+        temp_ops.push_back(sentinel);
+    }
+    end_eip = current_eip;
 
 #if 1
-    // Optimization: Dead Flag Elimination (Backward Pass)
-    // We analyze the def-use chain of EFLAGS within the block.
-    // If an instruction writes flags that are never used (or overwritten),
-    // we switch it to its No-Flags (NF) handler variant.
-
-    // Initial live_flags = all flags (assume live at block exit)
-    uint32_t live_flags = DFE_ALL_FLAGS;
-
-    // Iterate backwards (skipping the sentinel)
-    // op_indices corresponds to block->ops[0...N-1]. Sentinel is at N.
-    for (int i = (int)block->ops.size() - 2; i >= 0; --i) {
-        DecodedOp& op = block->ops[i];
-        if (i >= (int)op_indices.size()) break;  // Should not happen
+    // DFE Optimization (Backward Pass)
+    live_flags = DFE_ALL_FLAGS;
+    for (int i = (int)temp_ops.size() - 2; i >= 0; --i) {
+        DecodedOp& op = temp_ops[i];
+        if (i >= (int)op_indices.size()) break;
 
         uint16_t h_idx = op_indices[i];
-        uint16_t flat_idx = h_idx & 0x1FF; // Map bit + Opcode
-        
+        uint16_t flat_idx = h_idx & 0x1FF;
+
         const auto& info = kOpFlagTable[flat_idx];
         uint32_t reads = 0;
         uint32_t writes = 0;
-        
+
         switch (info.type) {
             case DFE_TYPE_SIMPLE:
                 reads = info.read_mask;
                 writes = info.write_mask;
                 break;
-                
             case DFE_TYPE_GROUP1: {
-                // 0x80-0x83: ADD, OR, ADC, SBB, AND, SUB, XOR, CMP
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 2 || reg == 3) { // ADC, SBB
+                if (reg == 2 || reg == 3) {  // ADC, SBB
                     reads = DFE_CF_MASK;
                     writes = DFE_ALL_FLAGS;
-                } else if (reg == 7) { // CMP
-                    // Writes All, Reads None (unless it reads args, which are not flags)
+                } else if (reg == 7) {  // CMP
                     writes = DFE_ALL_FLAGS;
                 } else {
-                    // ADD, OR, AND, SUB, XOR
                     writes = DFE_ALL_FLAGS;
                 }
                 break;
             }
             case DFE_TYPE_GROUP2:
-                // Shift/Rotate
                 writes = DFE_ALL_FLAGS;
                 break;
-                
             case DFE_TYPE_GROUP3: {
-                // F6/F7: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 0 || reg == 1) { // TEST
+                if (reg == 0 || reg == 1) {  // TEST
                     writes = DFE_ALL_FLAGS;
-                } else if (reg == 2) { // NOT
-                    // No flags
-                } else { // NEG, MUL, etc.
+                } else if (reg == 2) {  // NOT
+                } else {                // NEG, MUL
                     writes = DFE_ALL_FLAGS;
                 }
                 break;
             }
             case DFE_TYPE_GROUP4: {
-                // FE/FF: INC/DEC (0,1) or CALL/JMP/PUSH
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 0 || reg == 1) { // INC, DEC
+                if (reg == 0 || reg == 1) {  // INC, DEC
                     writes = DFE_ALL_FLAGS & ~DFE_CF_MASK;
                 }
                 break;
             }
             default:
-                // Unknown: Assume reads everything to be safe
                 reads = DFE_ALL_FLAGS;
                 break;
         }
 
-        // 2. Optimization: If op writes flags that are NOT live, and we have an NF
-        // handler
         if (writes != 0 && (writes & live_flags) == 0) {
             HandlerFunc nf_h = g_Handlers_NF[h_idx];
             if (nf_h) {
-                // Update Offset directly to NF version
                 op.handler_offset = (int32_t)((intptr_t)nf_h - (intptr_t)g_HandlerBase);
             }
         }
-
-        // 3. Update live_flags for next (previous) instruction
         live_flags &= ~writes;
         live_flags |= reads;
     }
 #endif
 
-    block->end_eip = current_eip;
-    return !block->ops.empty();
+finalize:
+    if (!success || temp_ops.empty()) return nullptr;
+
+    // 2. Allocate BasicBlock with Flexible Array Member
+    size_t alloc_size = BasicBlock::CalculateSize(temp_ops.size());
+    void* mem = state->block_pool.allocate(alloc_size);
+    // BasicBlock is POD-like now, no constructor call needed, but we can placement new to be safe/clean
+    BasicBlock* block = new (mem) BasicBlock;
+
+    block->start_eip = start_eip;
+    block->end_eip = end_eip;
+    block->inst_count = inst_count;
+    block->is_valid = true;
+
+    // Copy ops
+    std::memcpy(block->ops, temp_ops.data(), temp_ops.size() * sizeof(DecodedOp));
+
+    return block;
 }
 
 // ----------------------------------------------------------------------------
 // BasicBlock Implementation
 // ----------------------------------------------------------------------------
 
-BasicBlock::BasicBlock() = default;
-
-BasicBlock::~BasicBlock() {
-    // 1. Clear outgoing links (I -> Others)
-    if (!ops.empty()) {
-        BasicBlock* target = ops.back().next_block;
-        // Check if this op is indeed a chained branch. 
-        // In our current engine, only the sentinel at the end of a block holds next_block.
-        // And it's only set during chaining in X86_Run.
-        if (target) {
-            target->RemoveIncoming(this);
-        }
-    }
-
-    // 2. Clear incoming links (Others -> I)
-    UnlinkAll();
-}
-
-
-void BasicBlock::RemoveIncoming(BasicBlock* source) {
-    if (!source) return;
-    auto it = std::find(incoming_jumps.begin(), incoming_jumps.end(), source);
-    if (it != incoming_jumps.end()) {
-        // Swap with last element and pop for O(1) removal (relative to search)
-        *it = incoming_jumps.back();
-        incoming_jumps.pop_back();
-    }
-}
-
-void BasicBlock::UnlinkAll() {
-    // For every block that jumps to us...
-    for (BasicBlock* src : incoming_jumps) {
-        if (!src->ops.empty()) {
-            // Clear the pointer in the source block
-            // Note: We assume the source block is still alive because it holds a raw pointer to us.
-            // But wait, in our new model, source does NOT hold a strong ref to us (to avoid cycles).
-            // Source holds a raw pointer. We must clear it.
-            if (src->ops.back().next_block == this) {
-                 src->ops.back().next_block = nullptr;
-            }
-        }
-    }
-    incoming_jumps.clear();
+void BasicBlock::Invalidate() {
+    if (!is_valid) return;
+    is_valid = false;
+    // No unlinking needed because OpExitBlock checks is_valid
 }
 
 }  // namespace fiberish

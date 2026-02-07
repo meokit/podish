@@ -1,12 +1,12 @@
 #include "bindings.h"
 #include <execinfo.h>
 #include <unistd.h>
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-#include <algorithm>
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
@@ -16,7 +16,6 @@
 
 using namespace fiberish;
 using MicroTLB = mem::MicroTLB;
-
 
 extern "C" {
 
@@ -50,9 +49,13 @@ static void X86_InvalidatePage(EmuState* state, uint32_t page_addr) {
     if (it != state->page_to_blocks.end()) {
         // Remove all referenced blocks from the cache
         for (uint32_t eip : it->second) {
-            state->block_cache.erase(eip);
+            auto block_it = state->block_cache.find(eip);
+            if (block_it != state->block_cache.end()) {
+                block_it->second->Invalidate();
+                state->block_cache.erase(block_it);
+            }
         }
-        // Crucial: Remove the entire mapping for this page to prevent 
+        // Crucial: Remove the entire mapping for this page to prevent
         // the vector from growing indefinitely with stale EIPs.
         state->page_to_blocks.erase(it);
     }
@@ -97,6 +100,19 @@ EmuState* X86_Create() {
 
     // Default FPU State
     state->ctx.fpu_cw = 0x037F;
+    // Hooks initialized by default constructor of HookManager
+
+    // Initialize Dummy Invalid Block
+    // Allocate enough for 0 ops (just sizeof(BasicBlock)) as it has flexible array member ops[1].
+    // Wait, ops[1] means size is sizeof(BasicBlock).
+    // We don't need extra ops for the dummy block.
+    void* mem = state->block_pool.allocate(sizeof(BasicBlock));
+    state->dummy_invalid_block = new (mem) BasicBlock;
+    state->dummy_invalid_block->is_valid = false;
+    state->dummy_invalid_block->inst_count = 0;
+    // We should safely initialize ops[0] just in case?
+    // No, it won't be accessed if is_valid check fails or if we don't chain to it.
+    // But OpExitBlock checks dummy->is_valid (false) and doesn't execute.
     state->ctx.fpu_sw = 0x0000;
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
@@ -107,7 +123,7 @@ EmuState* X86_Create() {
 
     // Link MMU to State Status
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
-    
+
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
@@ -182,7 +198,11 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 }
 
 void X86_Destroy(EmuState* state) {
-    if (state) delete state;
+    if (state) {
+        // Monotonic buffer resource will automatically release all memory
+        // allocated from it (BasicBlocks and their vectors) when 'state' is deleted.
+        delete state;
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -283,7 +303,7 @@ void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { 
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     state->mmu.munmap(addr, size);
-    
+
     // Also invalidate JIT cache for this range (code may have been translated from these pages)
     uint32_t start_page = addr >> 12;
     uint32_t end_page = (addr + size + 0xFFF) >> 12;
@@ -292,7 +312,11 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
         if (it != state->page_to_blocks.end()) {
             for (uint32_t block_eip : it->second) {
                 // Remove from block cache if it exists
-                state->block_cache.erase(block_eip);
+                auto block_it = state->block_cache.find(block_eip);
+                if (block_it != state->block_cache.end()) {
+                    block_it->second->Invalidate();
+                    state->block_cache.erase(block_it);
+                }
             }
             state->page_to_blocks.erase(it);
         }
@@ -346,33 +370,62 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         auto it = state->block_cache.find(eip);
         if (it == state->block_cache.end()) {
-            // Use raw pointer, ownership transferred to BlockPtr in map
-            BasicBlock* new_block = new BasicBlock();
-            if (!DecodeBlock(state, eip, end_eip, 0, new_block)) {
-                delete new_block; // Failed, manual delete
+            // Allocate and Decode block
+            // DecodeBlock now handles allocation via PMR pool with flexible array member usage.
+            BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
+
+            if (!new_block) {
                 state->status = EmuStatus::Fault;
                 break;
             }
-            // Insert (constructs BlockPtr -> ref_count=1)
-            auto res = state->block_cache.insert({eip, new_block});
-            it = res.first;
 
-            // Update Page Mapping (Crucial for SMC Invalidation)
-            state->page_to_blocks[eip >> 12].push_back(eip);
+            // Insert into cache
+            auto res = state->block_cache.insert({eip, new_block});
+            // If failed to insert (should not happen), use what we have
+            if (!res.second) {
+                // Theoretically memory leak in pool if we cared about reclaiming this single block...
+                // But monotonic pool doesn't support dealloc.
+                new_block = res.first->second;
+            } else {
+                // Register Block for Page Invalidation (SMC)
+                uint32_t page_addr = eip & 0xFFFFF000;
+                state->page_to_blocks[page_addr].push_back(eip);
+
+                // If block crosses page, register for the second page too
+                // Note: new_block->end_eip might be past the page boundary
+                // We only check start/end pages.
+                // Our decoder limits block to not cross 2 pages so max 2 pages involved.
+                // end_eip is exclusive.
+                if (((new_block->end_eip - 1) & 0xFFFFF000) != page_addr) {
+                    uint32_t page2 = (new_block->end_eip - 1) & 0xFFFFF000;
+                    state->page_to_blocks[page2].push_back(eip);
+                }
+            }
+            it = state->block_cache.find(eip);
         }
 
-        // Hold a strong reference to the current block for the duration of its execution.
-        // This prevents UAF if SMC invalidates the block while it's running.
-        EmuState::BlockPtr current_block_ref = it->second;
-        BasicBlock* block_ptr = current_block_ref.get();
+        // Get raw pointer
+        BasicBlock* block_ptr = it->second;
+
+        // Skip invalid blocks (shouldn't happen if we erase them on invalidation,
+        // but safe to check if we change logic)
+        if (!block_ptr->is_valid) {
+            // Re-decode? Or Fault?
+            // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
+            // Let's treat it as a miss and re-decode.
+            state->block_cache.erase(it);
+            continue;
+        }
 
         // Link previous block to this one for chaining
-        if (state->last_block) {
-            block_ptr->LinkFrom(state->last_block.get());
+        if (state->last_block && state->last_block->inst_count > 0) {
+            // Access the Sentinel Op (always at index inst_count)
+            // Because ops contains [Inst 0, Inst 1, ..., Inst N-1, Sentinel]
+            // inst_count = N. So ops[N] is the Sentinel.
+            state->last_block->ops[state->last_block->inst_count].next_block = block_ptr;
         }
-        state->last_block = current_block_ref;
-
-        if (!block_ptr->ops.empty()) {
+        state->last_block = block_ptr;
+        if (block_ptr->inst_count > 0) {
             DecodedOp* head = &block_ptr->ops[0];
             HandlerFunc h = nullptr;
             int32_t offset = head->handler_offset;
@@ -493,7 +546,7 @@ void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata)
 void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
     state->mem_hook = hook;
     state->mem_userdata = userdata;
-    
+
     if (hook) {
         state->mmu.set_mem_hook(InternalMemHookBridge, state);
     } else {
@@ -539,7 +592,11 @@ void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
         auto it = state->page_to_blocks.find(p);
         if (it != state->page_to_blocks.end()) {
             for (uint32_t eip : it->second) {
-                state->block_cache.erase(eip);
+                auto block_it = state->block_cache.find(eip);
+                if (block_it != state->block_cache.end()) {
+                    block_it->second->Invalidate();
+                    state->block_cache.erase(block_it);
+                }
             }
             state->page_to_blocks.erase(it);
         }
@@ -586,14 +643,14 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
     if (!state || !buffer || buffer_size == 0) return -1;
     auto& s = state->mmu.stats;
     int n = snprintf(buffer, buffer_size,
-        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
-        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
-        "\"read_misses\":%llu,\"write_misses\":%llu,"
-        "\"total_reads\":%llu,\"total_writes\":%llu}",
-        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
-        (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
-        (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes);
+                     "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+                     "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+                     "\"read_misses\":%llu,\"write_misses\":%llu,"
+                     "\"total_reads\":%llu,\"total_writes\":%llu}",
+                     (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
+                     (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
+                     (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes);
     return n;
 #else
     if (buffer && buffer_size > 0) {
