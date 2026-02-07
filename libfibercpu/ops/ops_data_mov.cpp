@@ -100,6 +100,16 @@ static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::Mic
     state->mmu.write<uint32_t>(addr, val, utlb);
 }
 
+// Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
+static void OpMov_Store_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEax>(s, o, u); }
+static void OpMov_Store_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEcx>(s, o, u); }
+static void OpMov_Store_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEdx>(s, o, u); }
+static void OpMov_Store_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEbx>(s, o, u); }
+static void OpMov_Store_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEsp>(s, o, u); }
+static void OpMov_Store_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEbp>(s, o, u); }
+static void OpMov_Store_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEsi>(s, o, u); }
+static void OpMov_Store_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEdi>(s, o, u); }
+
 static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -170,6 +180,8 @@ static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::Mic
 }
 
 template <Specialized S = Specialized::None>
+
+
 static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
     // ModRM.Reg is the Destination Register
@@ -192,6 +204,16 @@ static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::Mic
         SetReg(state, reg, val);
     }
 }
+
+// Named wrappers for OpMov_GvEv_Mem (Load) - Specializing Destination
+static void OpMov_Load_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEax>(s, o, u); }
+static void OpMov_Load_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEcx>(s, o, u); }
+static void OpMov_Load_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEdx>(s, o, u); }
+static void OpMov_Load_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEbx>(s, o, u); }
+static void OpMov_Load_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEsp>(s, o, u); }
+static void OpMov_Load_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEbp>(s, o, u); }
+static void OpMov_Load_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEsi>(s, o, u); }
+static void OpMov_Load_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEdi>(s, o, u); }
 
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, r8 (0x88)
@@ -943,63 +965,34 @@ void RegisterDataMovOps() {
     g_Handlers[OP_MOV_RR_LOAD]  = DispatchWrapper<OpMov_GvEv_Reg>;
     g_Handlers[OP_MOV_MR_LOAD]  = DispatchWrapper<OpMov_GvEv_Mem<>>;
 
-    // Specialize MOV Load/Store for all 8 registers
-    // OP_MOV_MR_LOAD (Load): Reg is Dest, RM is Mem
-    // OP_MOV_RM_STORE (Store): Reg is Src, RM is Mem
-    auto RegisterMovSpecs = [](uint8_t reg_idx, Specialized s) {
-        SpecCriteria c;
-        c.reg_mask = 0x7;
-        c.reg_val = reg_idx;
-        
-        switch(s) {
-            case Specialized::RegEax:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEax>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEax>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEcx:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEcx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEcx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEdx:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEdx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEdx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEbx:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEbx>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEbx>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEsp:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEsp>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEsp>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEbp:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEbp>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEbp>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEsi:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEsi>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEsi>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            case Specialized::RegEdi:
-                DispatchRegistrar<OpMov_GvEv_Mem<Specialized::RegEdi>>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-                DispatchRegistrar<OpMov_EvGv_Mem<Specialized::RegEdi>>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-                break;
-            default: break;
-        }
-    };
     
 
 
     
     // Register for all 8 registers
-    RegisterMovSpecs(0, Specialized::RegEax);
-    RegisterMovSpecs(1, Specialized::RegEcx);
-    RegisterMovSpecs(2, Specialized::RegEdx);
-    RegisterMovSpecs(3, Specialized::RegEbx);
-    RegisterMovSpecs(4, Specialized::RegEsp);
-    RegisterMovSpecs(5, Specialized::RegEbp);
-    RegisterMovSpecs(6, Specialized::RegEsi);
-    RegisterMovSpecs(7, Specialized::RegEdi);
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
+    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
 
     // --- Key MOV Patterns Specialization ---
     
