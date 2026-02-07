@@ -9,7 +9,7 @@
 #include "../ops_helpers_template.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -469,4 +469,4 @@ void RegisterGroupOps() {
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Rm_R>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

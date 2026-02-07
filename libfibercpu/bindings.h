@@ -4,10 +4,10 @@
 #ifdef __cplusplus
 #include <cstdint>
 #include <cstddef>
-namespace x86emu {
+namespace fiberish {
 struct EmuState;
 }
-typedef x86emu::EmuState EmuState;
+typedef fiberish::EmuState EmuState;
 #else
 #include <stdint.h>
 #include <stddef.h>

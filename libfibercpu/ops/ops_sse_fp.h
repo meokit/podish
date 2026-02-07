@@ -6,7 +6,7 @@
 #include "../common.h"
 #include "../decoder.h"
 
-namespace x86emu {
+namespace fiberish {
 
 simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred);
 simde__m128d Helper_CmpSD(simde__m128d a, simde__m128d b, uint8_t pred);

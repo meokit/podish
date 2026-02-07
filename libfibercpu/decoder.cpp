@@ -9,7 +9,7 @@
 #include "state.h"
 #include "specialization.h"
 
-namespace x86emu {
+namespace fiberish {
 
 alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
     // Map 0: Primary opcodes (Jcc short, CALL, JMP, RET, LOOP, INT, HLT, etc.)
@@ -592,4 +592,4 @@ void BasicBlock::UnlinkAll() {
     incoming_jumps.clear();
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

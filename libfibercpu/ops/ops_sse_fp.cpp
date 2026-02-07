@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 58: ADDPS/ADDPD/ADDSS/ADDSD
@@ -708,4 +708,4 @@ void RegisterSseFpOps() {
     g_Handlers[0x152] = DispatchWrapper<OpRsqrt_Sse>;       // 0F 52: RSQRTPS / RSQRTSS
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

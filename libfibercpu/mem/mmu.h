@@ -10,7 +10,7 @@
 #include "tlb.h"
 #include "types.h"
 
-namespace x86emu::mem {
+namespace fiberish::mem {
 
 // L2 Chunk: Covers 4MB (1024 * 4KB)
 // Sparse allocation of actual pages

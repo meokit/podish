@@ -5,7 +5,7 @@
 #include <string>
 #include "common.h"
 
-namespace x86emu {
+namespace fiberish {
 
 struct EmuState;  // Forward decl
 

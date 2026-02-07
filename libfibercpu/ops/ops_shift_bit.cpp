@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 template <uint8_t FixedSubOp = 0xFF>
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte, mem::MicroTLB* utlb) {
@@ -512,4 +512,4 @@ void RegisterShiftBitOps() {
     }
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

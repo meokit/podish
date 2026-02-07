@@ -7,7 +7,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 
-}  // namespace x86emu
+}  // namespace fiberish

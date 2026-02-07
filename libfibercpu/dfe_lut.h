@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace x86emu {
+namespace fiberish {
 
 // DFE Types
 constexpr uint8_t DFE_TYPE_SIMPLE = 0;

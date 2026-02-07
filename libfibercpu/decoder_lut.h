@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace x86emu {
+namespace fiberish {
 
 // Extracted and Modified from Blink x86.c
 //

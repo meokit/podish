@@ -14,7 +14,7 @@
 #define FORCE_INLINE inline
 #endif
 
-namespace x86emu {
+namespace fiberish {
 
 struct EmuState;
 struct DecodedOp;

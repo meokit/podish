@@ -5,7 +5,7 @@
 #include <functional>
 #include "types.h"
 
-namespace x86emu::mem {
+namespace fiberish::mem {
     
 struct alignas(16) MicroTLB {
     uint32_t tag_r = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)

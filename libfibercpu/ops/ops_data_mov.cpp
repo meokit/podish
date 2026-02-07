@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m16/32, r16/32 (0x89)
@@ -1099,4 +1099,4 @@ void RegisterDataMovOps() {
     g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

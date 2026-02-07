@@ -3,6 +3,6 @@
 #include "../decoder.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 void RegisterSseIntOps();
 }  // namespace x86emu

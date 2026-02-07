@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 2A: CVTPI2PS (MMX) / CVTSI2SS (F3) / CVTSI2SD (F2)
@@ -217,4 +217,4 @@ void RegisterSseCvtOps() {
     g_Handlers[0x12D] = DispatchWrapper<OpCvt_2D>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

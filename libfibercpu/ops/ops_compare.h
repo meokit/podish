@@ -6,7 +6,7 @@
 #include "../common.h"
 #include "../decoder.h"
 
-namespace x86emu {
+namespace fiberish {
 
 void RegisterCompareOps();
 

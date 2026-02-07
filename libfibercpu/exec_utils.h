@@ -5,7 +5,7 @@
 #include "decoder.h"
 #include "state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // ------------------------------------------------------------------------------------------------
 // Register Access

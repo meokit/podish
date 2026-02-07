@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpImul_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AF: IMUL r16/32, r/m16/32
@@ -75,4 +75,4 @@ void RegisterMulDivOps() {
     g_Handlers[0x1AF] = DispatchWrapper<OpImul_GvEv>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

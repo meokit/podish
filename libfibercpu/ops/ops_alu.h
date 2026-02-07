@@ -6,6 +6,6 @@
 #include "../common.h"
 #include "../decoder.h"
 
-namespace x86emu {
+namespace fiberish {
 void RegisterAluOps();
 }  // namespace x86emu

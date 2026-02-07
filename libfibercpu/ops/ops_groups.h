@@ -6,7 +6,7 @@
 #include "../common.h"
 #include "../decoder.h"
 
-namespace x86emu {
+namespace fiberish {
 void OpUd2(EmuState* state, DecodedOp* op);
 void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 void RegisterGroupOps();

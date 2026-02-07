@@ -3,7 +3,7 @@
 #include <cstdint>
 #include "common.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // Specialization Types
 // This enum is used as a template parameter for instruction handlers.

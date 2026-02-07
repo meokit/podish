@@ -21,7 +21,7 @@
 #include "ops/ops_sse_int.h"
 #include "ops/ops_sse_mov.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // Handler Base Anchor (Used for calculating relative offsets)
 extern void* g_HandlerBase;

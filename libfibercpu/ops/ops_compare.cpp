@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 38: CMP r/m8, r8
@@ -151,4 +151,4 @@ void RegisterCompareOps() {
     }
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

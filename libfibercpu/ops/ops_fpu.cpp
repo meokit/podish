@@ -10,7 +10,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static inline void UpdateFSW(EmuState* state) {
     state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x3800) | ((state->ctx.fpu_top & 7) << 11);
@@ -246,16 +246,16 @@ static FORCE_INLINE void OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB*
         bool pass = false;
         switch ((op->modrm >> 3) & 7) {
             case 0:
-                pass = (state->ctx.eflags & x86emu::CF_MASK);
+                pass = (state->ctx.eflags & fiberish::CF_MASK);
                 break;  // FCMOVB
             case 1:
-                pass = (state->ctx.eflags & x86emu::ZF_MASK);
+                pass = (state->ctx.eflags & fiberish::ZF_MASK);
                 break;  // FCMOVE
             case 2:
-                pass = (state->ctx.eflags & (x86emu::CF_MASK | x86emu::ZF_MASK));
+                pass = (state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
                 break;  // FCMOVBE
             case 3:
-                pass = (state->ctx.eflags & x86emu::PF_MASK);
+                pass = (state->ctx.eflags & fiberish::PF_MASK);
                 break;  // FCMOVU
         }
         if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -323,16 +323,16 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
             bool pass = false;
             switch (mode) {
                 case 0:
-                    pass = !(state->ctx.eflags & x86emu::CF_MASK);
+                    pass = !(state->ctx.eflags & fiberish::CF_MASK);
                     break;  // FCMOVNB
                 case 1:
-                    pass = !(state->ctx.eflags & x86emu::ZF_MASK);
+                    pass = !(state->ctx.eflags & fiberish::ZF_MASK);
                     break;  // FCMOVNE
                 case 2:
-                    pass = !(state->ctx.eflags & (x86emu::CF_MASK | x86emu::ZF_MASK));
+                    pass = !(state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
                     break;  // FCMOVNBE
                 case 3:
-                    pass = !(state->ctx.eflags & x86emu::PF_MASK);
+                    pass = !(state->ctx.eflags & fiberish::PF_MASK);
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -349,28 +349,28 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK |
-                                   x86emu::SF_MASK | x86emu::AF_MASK);
+            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
+                                   fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
+                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= x86emu::ZF_MASK;
+                state->ctx.eflags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= x86emu::CF_MASK;
+                state->ctx.eflags |= fiberish::CF_MASK;
             }
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK |
-                                   x86emu::SF_MASK | x86emu::AF_MASK);
+            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
+                                   fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
+                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= x86emu::ZF_MASK;
+                state->ctx.eflags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= x86emu::CF_MASK;
+                state->ctx.eflags |= fiberish::CF_MASK;
             }
         } else {
             OpUd2(state, op);
@@ -578,14 +578,14 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK |
-                                   x86emu::SF_MASK | x86emu::AF_MASK);
+            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
+                                   fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
+                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= x86emu::ZF_MASK;
+                state->ctx.eflags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= x86emu::CF_MASK;
+                state->ctx.eflags |= fiberish::CF_MASK;
             }
             FpuPop(state);
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMIP
@@ -593,14 +593,14 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK | x86emu::OF_MASK |
-                                   x86emu::SF_MASK | x86emu::AF_MASK);
+            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
+                                   fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (x86emu::ZF_MASK | x86emu::PF_MASK | x86emu::CF_MASK);
+                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= x86emu::ZF_MASK;
+                state->ctx.eflags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= x86emu::CF_MASK;
+                state->ctx.eflags |= fiberish::CF_MASK;
             }
             FpuPop(state);
         } else {
@@ -658,4 +658,4 @@ void RegisterFpuOps() {
     g_Handlers[0xDF] = DispatchWrapper<OpFpu_DF>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

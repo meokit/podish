@@ -7,7 +7,7 @@
 #include "../dispatch.h"
 #include "../exec_utils.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // Logical
 static FORCE_INLINE void OpPand_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -840,4 +840,4 @@ void RegisterSseIntOps() {
     g_Handlers[0x1D7] = DispatchWrapper<OpPmovmskb_Sse>;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

@@ -6,7 +6,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // SHLD: Double Precision Shift Left
 // dest = (dest << count) | (src >> (32 - count))
@@ -159,4 +159,4 @@ void RegisterDoubleShiftOps() {
     g_Handlers[0x1AD] = DispatchWrapper<OpShrd_EvGvCl>;  // 0F AD: SHRD r/m32, r32, CL
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

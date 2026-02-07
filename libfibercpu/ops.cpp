@@ -1,7 +1,7 @@
 #include "ops.h"
 #include "dispatch.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // Sentinel Handler
 template<int I>
@@ -135,4 +135,4 @@ HandlerFunc FindSpecializedHandler(uint16_t opcode, DecodedOp* op) {
     return nullptr;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

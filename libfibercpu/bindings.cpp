@@ -14,7 +14,7 @@
 #include "ops.h"
 #include "state.h"
 
-using namespace x86emu;
+using namespace fiberish;
 using MicroTLB = mem::MicroTLB;
 
 

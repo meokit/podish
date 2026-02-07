@@ -6,7 +6,7 @@
 #include "../common.h"
 #include "../decoder.h"
 
-namespace x86emu {
+namespace fiberish {
 void Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte);
 void RegisterShiftBitOps();
 }  // namespace x86emu

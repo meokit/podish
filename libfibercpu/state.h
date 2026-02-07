@@ -8,7 +8,7 @@
 #include "hooks.h"
 #include "mem/mmu.h"
 
-namespace x86emu {
+namespace fiberish {
 
 struct EmuState;
 

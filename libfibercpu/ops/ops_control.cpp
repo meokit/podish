@@ -9,7 +9,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E9: JMP rel32, EB: JMP rel8
@@ -404,4 +404,4 @@ void RegisterControlOps() {
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

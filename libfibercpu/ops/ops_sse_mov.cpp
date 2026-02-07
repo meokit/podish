@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 static FORCE_INLINE void OpMov_Sse_Load(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 10: MOVUPS/MOVUPD/MOVSS/MOVSD
@@ -330,7 +330,7 @@ static FORCE_INLINE void OpMaskmovdqu(EmuState* state, DecodedOp* op, mem::Micro
     simde__m128i val = simde_mm_castps_si128(state->ctx.xmm[(op->modrm >> 3) & 7]);
     simde__m128i mask = simde_mm_castps_si128(state->ctx.xmm[op->modrm & 7]);
 
-    uint32_t addr = GetReg(state, x86emu::EDI);
+    uint32_t addr = GetReg(state, fiberish::EDI);
 
     alignas(16) uint8_t v[16], m[16];
     std::memcpy(v, &val, 16);
@@ -421,4 +421,4 @@ void RegisterSseMovOps() {
     g_Handlers[0x1D6] = DispatchWrapper<OpMovq_Store>;  // 66 0F D6: MOVQ xmm/m64, xmm
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

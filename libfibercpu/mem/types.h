@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace x86emu::mem {
+namespace fiberish::mem {
 
 using GuestAddr = uint32_t;
 using HostAddr = std::byte*;

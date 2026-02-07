@@ -8,7 +8,7 @@
 #include "../ops.h"
 #include "../state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAdd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -880,4 +880,4 @@ void RegisterAluOps() {
         g_Handlers_NF[0x48 + i] = DispatchWrapper<OpDec_Reg<false>>;
     }
 }
-}  // namespace x86emu
+}  // namespace fiberish

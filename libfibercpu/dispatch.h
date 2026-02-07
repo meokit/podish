@@ -5,7 +5,7 @@
 
 #include <cstdio>
 
-namespace x86emu {
+namespace fiberish {
 
 // External reference to handlers
 extern void* g_HandlerBase;

@@ -5,7 +5,7 @@
 #include "exec_utils.h"
 #include "state.h"
 
-namespace x86emu {
+namespace fiberish {
 
 // Forward declarations (from ops/ops_groups.h)
 void OpUd2(EmuState* state, DecodedOp* op);

@@ -19,7 +19,7 @@
 #define CPU_RELAX() std::this_thread::yield()
 #endif
 
-namespace x86emu {
+namespace fiberish {
 
 enum class EmuStatus { Running, Stopped, Fault, Yield };
 
