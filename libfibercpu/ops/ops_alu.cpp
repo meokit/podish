@@ -727,48 +727,50 @@ static FORCE_INLINE void OpTest_EaxImm(EmuState* state, DecodedOp* op, mem::Micr
 
 void RegisterAluOps() {
     g_Handlers[0x00] = DispatchWrapper<OpAdd_EbGb<true>>;
-    g_Handlers_NF[0x00] = DispatchWrapper<OpAdd_EbGb<false>>;
+    DispatchRegistrar<OpAdd_EbGb<false>>::RegisterNF(0x00);
 
     // 01: ADD r/m16/32, r16/32
     DispatchRegistrar<OpAdd_EvGv<true>>::Register(0x01);
     DispatchRegistrar<OpAdd_EvGv<false>>::RegisterNF(0x01);
-    
+
     // Specialization: ADD EAX, r32 (Mod=3, RM=0)
     // OpAdd_EvGv<true, Specialized::RegEax>
     SpecCriteria criteria;
-    criteria.mod_mask = 0xC0; criteria.mod_val = 0xC0; // Mod=3 (Reg)
-    criteria.rm_mask = 0x07; criteria.rm_val = 0x00;   // RM=0 (EAX)
+    criteria.mod_mask = 0xC0;
+    criteria.mod_val = 0xC0;  // Mod=3 (Reg)
+    criteria.rm_mask = 0x07;
+    criteria.rm_val = 0x00;  // RM=0 (EAX)
     DispatchRegistrar<OpAdd_EvGv<true, Specialized::RegEax>>::RegisterSpecialized(0x01, criteria);
 
     g_Handlers[0x02] = DispatchWrapper<OpAdd_GbEb<true>>;
-    g_Handlers_NF[0x02] = DispatchWrapper<OpAdd_GbEb<false>>;
+    DispatchRegistrar<OpAdd_GbEb<false>>::RegisterNF(0x02);
 
     g_Handlers[0x03] = DispatchWrapper<OpAdd_GvEv<true>>;
-    g_Handlers_NF[0x03] = DispatchWrapper<OpAdd_GvEv<false>>;
+    DispatchRegistrar<OpAdd_GvEv<false>>::RegisterNF(0x03);
 
     g_Handlers[0x04] = DispatchWrapper<OpAdd_AlImm<true>>;
-    g_Handlers_NF[0x04] = DispatchWrapper<OpAdd_AlImm<false>>;
+    DispatchRegistrar<OpAdd_AlImm<false>>::RegisterNF(0x04);
 
     g_Handlers[0x05] = DispatchWrapper<OpAdd_EaxImm<true>>;
-    g_Handlers_NF[0x05] = DispatchWrapper<OpAdd_EaxImm<false>>;
+    DispatchRegistrar<OpAdd_EaxImm<false>>::RegisterNF(0x05);
 
     g_Handlers[0x08] = DispatchWrapper<OpOr_EbGb<true>>;
-    g_Handlers_NF[0x08] = DispatchWrapper<OpOr_EbGb<false>>;
+    DispatchRegistrar<OpOr_EbGb<false>>::RegisterNF(0x08);
 
     g_Handlers[0x09] = DispatchWrapper<OpOr_EvGv<true>>;
-    g_Handlers_NF[0x09] = DispatchWrapper<OpOr_EvGv<false>>;
+    DispatchRegistrar<OpOr_EvGv<false>>::RegisterNF(0x09);
 
     g_Handlers[0x0A] = DispatchWrapper<OpOr_GbEb<true>>;
-    g_Handlers_NF[0x0A] = DispatchWrapper<OpOr_GbEb<false>>;
+    DispatchRegistrar<OpOr_GbEb<false>>::RegisterNF(0x0A);
 
     g_Handlers[0x0B] = DispatchWrapper<OpOr_GvEv<true>>;
-    g_Handlers_NF[0x0B] = DispatchWrapper<OpOr_GvEv<false>>;
+    DispatchRegistrar<OpOr_GvEv<false>>::RegisterNF(0x0B);
 
     g_Handlers[0x0C] = DispatchWrapper<OpOr_AlImm<true>>;
-    g_Handlers_NF[0x0C] = DispatchWrapper<OpOr_AlImm<false>>;
+    DispatchRegistrar<OpOr_AlImm<false>>::RegisterNF(0x0C);
 
     g_Handlers[0x0D] = DispatchWrapper<OpOr_EaxImm<true>>;
-    g_Handlers_NF[0x0D] = DispatchWrapper<OpOr_EaxImm<false>>;
+    DispatchRegistrar<OpOr_EaxImm<false>>::RegisterNF(0x0D);
 
     // ADC/SBB must always update/read flags, so no NF optimization for them
     // directly unless we prove they don't read CF (which is their whole point).
@@ -778,94 +780,94 @@ void RegisterAluOps() {
     // but not write result flags.
 
     g_Handlers[0x10] = DispatchWrapper<OpAdc_EbGb<true>>;
-    g_Handlers_NF[0x10] = DispatchWrapper<OpAdc_EbGb<false>>;
+    DispatchRegistrar<OpAdc_EbGb<false>>::RegisterNF(0x10);
 
     g_Handlers[0x11] = DispatchWrapper<OpAdc_EvGv<true>>;
-    g_Handlers_NF[0x11] = DispatchWrapper<OpAdc_EvGv<false>>;
+    DispatchRegistrar<OpAdc_EvGv<false>>::RegisterNF(0x11);
 
     g_Handlers[0x12] = DispatchWrapper<OpAdc_GbEb<true>>;
-    g_Handlers_NF[0x12] = DispatchWrapper<OpAdc_GbEb<false>>;
+    DispatchRegistrar<OpAdc_GbEb<false>>::RegisterNF(0x12);
 
     g_Handlers[0x13] = DispatchWrapper<OpAdc_GvEv<true>>;
-    g_Handlers_NF[0x13] = DispatchWrapper<OpAdc_GvEv<false>>;
+    DispatchRegistrar<OpAdc_GvEv<false>>::RegisterNF(0x13);
 
     g_Handlers[0x14] = DispatchWrapper<OpAdc_AlImm<true>>;
-    g_Handlers_NF[0x14] = DispatchWrapper<OpAdc_AlImm<false>>;
+    DispatchRegistrar<OpAdc_AlImm<false>>::RegisterNF(0x14);
 
     g_Handlers[0x15] = DispatchWrapper<OpAdc_EaxImm<true>>;
-    g_Handlers_NF[0x15] = DispatchWrapper<OpAdc_EaxImm<false>>;
+    DispatchRegistrar<OpAdc_EaxImm<false>>::RegisterNF(0x15);
 
     g_Handlers[0x18] = DispatchWrapper<OpSbb_EbGb<true>>;
-    g_Handlers_NF[0x18] = DispatchWrapper<OpSbb_EbGb<false>>;
+    DispatchRegistrar<OpSbb_EbGb<false>>::RegisterNF(0x18);
 
     g_Handlers[0x19] = DispatchWrapper<OpSbb_EvGv<true>>;
-    g_Handlers_NF[0x19] = DispatchWrapper<OpSbb_EvGv<false>>;
+    DispatchRegistrar<OpSbb_EvGv<false>>::RegisterNF(0x19);
 
     g_Handlers[0x1A] = DispatchWrapper<OpSbb_GbEb<true>>;
-    g_Handlers_NF[0x1A] = DispatchWrapper<OpSbb_GbEb<false>>;
+    DispatchRegistrar<OpSbb_GbEb<false>>::RegisterNF(0x1A);
 
     g_Handlers[0x1B] = DispatchWrapper<OpSbb_GvEv<true>>;
-    g_Handlers_NF[0x1B] = DispatchWrapper<OpSbb_GvEv<false>>;
+    DispatchRegistrar<OpSbb_GvEv<false>>::RegisterNF(0x1B);
 
     g_Handlers[0x1C] = DispatchWrapper<OpSbb_AlImm<true>>;
-    g_Handlers_NF[0x1C] = DispatchWrapper<OpSbb_AlImm<false>>;
+    DispatchRegistrar<OpSbb_AlImm<false>>::RegisterNF(0x1C);
 
     g_Handlers[0x1D] = DispatchWrapper<OpSbb_EaxImm<true>>;
-    g_Handlers_NF[0x1D] = DispatchWrapper<OpSbb_EaxImm<false>>;
+    DispatchRegistrar<OpSbb_EaxImm<false>>::RegisterNF(0x1D);
 
     g_Handlers[0x20] = DispatchWrapper<OpAnd_EbGb<true>>;
-    g_Handlers_NF[0x20] = DispatchWrapper<OpAnd_EbGb<false>>;
+    DispatchRegistrar<OpAnd_EbGb<false>>::RegisterNF(0x20);
 
     g_Handlers[0x21] = DispatchWrapper<OpAnd_EvGv<true>>;
-    g_Handlers_NF[0x21] = DispatchWrapper<OpAnd_EvGv<false>>;
+    DispatchRegistrar<OpAnd_EvGv<false>>::RegisterNF(0x21);
 
     g_Handlers[0x22] = DispatchWrapper<OpAnd_GbEb<true>>;
-    g_Handlers_NF[0x22] = DispatchWrapper<OpAnd_GbEb<false>>;
+    DispatchRegistrar<OpAnd_GbEb<false>>::RegisterNF(0x22);
 
     g_Handlers[0x23] = DispatchWrapper<OpAnd_GvEv<true>>;
-    g_Handlers_NF[0x23] = DispatchWrapper<OpAnd_GvEv<false>>;
+    DispatchRegistrar<OpAnd_GvEv<false>>::RegisterNF(0x23);
 
     g_Handlers[0x24] = DispatchWrapper<OpAnd_AlImm<true>>;
-    g_Handlers_NF[0x24] = DispatchWrapper<OpAnd_AlImm<false>>;
+    DispatchRegistrar<OpAnd_AlImm<false>>::RegisterNF(0x24);
 
     g_Handlers[0x25] = DispatchWrapper<OpAnd_EaxImm<true>>;
-    g_Handlers_NF[0x25] = DispatchWrapper<OpAnd_EaxImm<false>>;
+    DispatchRegistrar<OpAnd_EaxImm<false>>::RegisterNF(0x25);
 
     g_Handlers[0x28] = DispatchWrapper<OpSub_EbGb<true>>;
-    g_Handlers_NF[0x28] = DispatchWrapper<OpSub_EbGb<false>>;
+    DispatchRegistrar<OpSub_EbGb<false>>::RegisterNF(0x28);
 
     g_Handlers[0x29] = DispatchWrapper<OpSub_EvGv<true>>;
-    g_Handlers_NF[0x29] = DispatchWrapper<OpSub_EvGv<false>>;
+    DispatchRegistrar<OpSub_EvGv<false>>::RegisterNF(0x29);
 
     g_Handlers[0x2A] = DispatchWrapper<OpSub_GbEb<true>>;
-    g_Handlers_NF[0x2A] = DispatchWrapper<OpSub_GbEb<false>>;
+    DispatchRegistrar<OpSub_GbEb<false>>::RegisterNF(0x2A);
 
     g_Handlers[0x2B] = DispatchWrapper<OpSub_GvEv<true>>;
-    g_Handlers_NF[0x2B] = DispatchWrapper<OpSub_GvEv<false>>;
+    DispatchRegistrar<OpSub_GvEv<false>>::RegisterNF(0x2B);
 
     g_Handlers[0x2C] = DispatchWrapper<OpSub_AlImm<true>>;
-    g_Handlers_NF[0x2C] = DispatchWrapper<OpSub_AlImm<false>>;
+    DispatchRegistrar<OpSub_AlImm<false>>::RegisterNF(0x2C);
 
     g_Handlers[0x2D] = DispatchWrapper<OpSub_EaxImm<true>>;
-    g_Handlers_NF[0x2D] = DispatchWrapper<OpSub_EaxImm<false>>;
+    DispatchRegistrar<OpSub_EaxImm<false>>::RegisterNF(0x2D);
 
     g_Handlers[0x30] = DispatchWrapper<OpXor_EbGb<true>>;
-    g_Handlers_NF[0x30] = DispatchWrapper<OpXor_EbGb<false>>;
+    DispatchRegistrar<OpXor_EbGb<false>>::RegisterNF(0x30);
 
     g_Handlers[0x31] = DispatchWrapper<OpXor_EvGv<true>>;
-    g_Handlers_NF[0x31] = DispatchWrapper<OpXor_EvGv<false>>;
+    DispatchRegistrar<OpXor_EvGv<false>>::RegisterNF(0x31);
 
     g_Handlers[0x32] = DispatchWrapper<OpXor_GbEb<true>>;
-    g_Handlers_NF[0x32] = DispatchWrapper<OpXor_GbEb<false>>;
+    DispatchRegistrar<OpXor_GbEb<false>>::RegisterNF(0x32);
 
     g_Handlers[0x33] = DispatchWrapper<OpXor_GvEv<true>>;
-    g_Handlers_NF[0x33] = DispatchWrapper<OpXor_GvEv<false>>;
+    DispatchRegistrar<OpXor_GvEv<false>>::RegisterNF(0x33);
 
     g_Handlers[0x34] = DispatchWrapper<OpXor_AlImm<true>>;
-    g_Handlers_NF[0x34] = DispatchWrapper<OpXor_AlImm<false>>;
+    DispatchRegistrar<OpXor_AlImm<false>>::RegisterNF(0x34);
 
     g_Handlers[0x35] = DispatchWrapper<OpXor_EaxImm<true>>;
-    g_Handlers_NF[0x35] = DispatchWrapper<OpXor_EaxImm<false>>;
+    DispatchRegistrar<OpXor_EaxImm<false>>::RegisterNF(0x35);
 
     g_Handlers[0x3C] = DispatchWrapper<OpCmp_AlImm>;
     g_Handlers[0x3D] = DispatchWrapper<OpCmp_EaxImm>;
@@ -874,10 +876,10 @@ void RegisterAluOps() {
     g_Handlers[0xA9] = DispatchWrapper<OpTest_EaxImm>;
     for (int i = 0; i < 8; ++i) {
         g_Handlers[0x40 + i] = DispatchWrapper<OpInc_Reg<true>>;
-        g_Handlers_NF[0x40 + i] = DispatchWrapper<OpInc_Reg<false>>;
+        DispatchRegistrar<OpInc_Reg<false>>::RegisterNF(0x40 + i);
 
         g_Handlers[0x48 + i] = DispatchWrapper<OpDec_Reg<true>>;
-        g_Handlers_NF[0x48 + i] = DispatchWrapper<OpDec_Reg<false>>;
+        DispatchRegistrar<OpDec_Reg<false>>::RegisterNF(0x48 + i);
     }
 }
 }  // namespace fiberish

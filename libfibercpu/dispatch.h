@@ -10,7 +10,7 @@ namespace fiberish {
 // External reference to handlers
 extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
-extern HandlerFunc g_Handlers_NF[1024];
+extern HandlerFunc g_Handlers[1024];
 
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -48,7 +48,15 @@ template <LogicFunc Target>
 struct DispatchRegistrar {
     static void Register(int idx) { g_Handlers[idx] = DispatchWrapper<Target>; }
 
-    static void RegisterNF(int idx) { g_Handlers_NF[idx] = DispatchWrapper<Target>; }
+    static void RegisterNF(int idx) {
+        SpecCriteria criteria;
+        criteria.no_flags = true;
+        // Don't set masks, so it matches any ModRM/Prefix unless overridden?
+        // Wait, standard specialized handler matches narrowly.
+        // But here we want to match broadly (any modrm) BUT with no_flags=true.
+        // SpecCriteria defaults mask to 0 (wildcard). So this registers a generic NoFlags handler for this opcode.
+        RegisterSpecializedHandler(idx, criteria, (HandlerFunc)DispatchWrapper<Target>);
+    }
 
     // Specialization Registration
     static void RegisterSpecialized(int opcode, SpecCriteria criteria) {

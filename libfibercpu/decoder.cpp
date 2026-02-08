@@ -535,9 +535,24 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         if (writes != 0 && (writes & live_flags) == 0) {
-            HandlerFunc nf_h = g_Handlers_NF[h_idx];
-            if (nf_h) {
-                op.handler = nf_h;
+            // Dead Flags!
+            op.meta.flags.no_flags = 1;
+
+            // Re-resolve Handler with no_flags set
+            // Note: We might have resolved a specialized handler earlier.
+            // If we have a specialized handler that also supports NoFlags, fantastic.
+            // But currently registered handlers are either Generic, Generic-NF, or Specialized-Attr.
+            // If we have Specialized-Attr (e.g. Add_RegEax), we need Add_RegEax_NF.
+            // But if we only have Add_Generic_NF, we might lose RegEax optimization.
+            // The user implies we should use specialization system to select the best one.
+            HandlerFunc special_h = FindSpecializedHandler(h_idx, &op);
+            if (special_h) {
+                op.handler = special_h;
+            } else {
+                // If no specialized handler found for NoFlags, keep original?
+                // Or try to find generic NF handler?
+                // RegisterNF implementation registers a specialized handler with just no_flags=true.
+                // FindSpecialized will match it if no other constraints block it.
             }
         }
         live_flags &= ~writes;

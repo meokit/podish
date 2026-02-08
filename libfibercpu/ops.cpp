@@ -1,4 +1,7 @@
 #include "ops.h"
+#include <algorithm>
+#include <unordered_map>
+#include <vector>
 #include "dispatch.h"
 
 namespace fiberish {
@@ -49,7 +52,6 @@ static uint8_t g_HandlerBaseMarker = 0;
 void* g_HandlerBase = (void*)&g_HandlerBaseMarker;
 
 HandlerFunc g_Handlers[1024] = {nullptr};
-HandlerFunc g_Handlers_NF[1024] = {nullptr};
 
 // Static initialization of dispatch table
 struct HandlerInit {
@@ -57,7 +59,6 @@ struct HandlerInit {
         // 1. Clear All
         for (int i = 0; i < 1024; ++i) {
             g_Handlers[i] = nullptr;
-            g_Handlers_NF[i] = nullptr;
         }
 
         // 2. Register all modular operations
@@ -81,55 +82,84 @@ struct HandlerInit {
 static HandlerInit _init;
 
 // Specialization Registry
-static std::vector<SpecializedEntry> g_SpecializedRegistry;
+// Array of vectors for O(1) opcode lookup
+static std::vector<SpecializedEntry> g_OpSpecializations[1024];
+// Lookup Cache to accelerate finding specialized handlers
+// Thread-local for lock-free access
+static thread_local ankerl::unordered_dense::map<uint64_t, HandlerFunc> g_SpecCache;
 
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
-    g_SpecializedRegistry.push_back({opcode, criteria, handler});
+    if (opcode >= 1024) return;
+    auto& list = g_OpSpecializations[opcode];
+    list.push_back({opcode, criteria, handler});
+
+    // Sort by specificity (Descending Score)
+    // Most specific first
+    std::sort(list.begin(), list.end(), [](const SpecializedEntry& a, const SpecializedEntry& b) {
+        return a.criteria.GetScore() > b.criteria.GetScore();
+    });
+
+    // Clear cache on registration?
+    // Since cache is thread_local and registration happens at startup (main thread),
+    // clearing main thread's cache is fine but others start empty anyway.
+    // We can skip explicit clear here as it's unlikely to have stale entries during static init.
 }
 
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
-    for (const auto& entry : g_SpecializedRegistry) {
-        if (entry.opcode == handler_index) {
-            // Check ModRM constraints
-            // If op doesn't have modrm but criteria requires it -> fail?
-            // The criteria.Matches takes modrm uint8.
-            // DecodedOp has modrm field always, valid if flags.has_modrm is true.
-            // If specialized entry requires modrm (mask != 0) and op doesn't have it, we should probably fail?
-            // SpecCriteria::Matches logic: checks masks. If mask is 0, it matches anything (including garbage if not
-            // present). Usually we specialize precisely.
+    if (handler_index >= 1024) return nullptr;
 
-            if (op->meta.flags.has_modrm) {
-                if (entry.criteria.Matches(op->modrm, op->prefixes.all)) return entry.handler;
-            } else {
-                // If op has no ModRM...
-                // But wait, if criteria has a prefix constraint but NO modrm constraint, we should check it.
-                // My logic above was simplistic.
-                // Let's create a dummy modrm=0 if not present, but ensure mask checks fail if they were set?
-                // Actually, if has_modrm is false, modrm field is undefined/garbage (or 0).
+    // Construct Cache Key
+    // Layout:
+    // [0-9]   Opcode (10 bits)
+    // [10-17] ModRM (8 bits)
+    // [18-33] Prefixes (16 bits)
+    // [34]    HasModRM (1 bit)
+    // [35]    NoFlags (1 bit)
+    uint64_t key = handler_index;
 
-                // Better logic:
-                // 1. Prefix Check always
-                if (entry.criteria.prefix_mask) {
-                    if ((op->prefixes.all & entry.criteria.prefix_mask) != entry.criteria.prefix_val) continue;
-                }
-
-                // 2. ModRM Check
-                if (op->meta.flags.has_modrm) {
-                    // Standard check
-                    if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) {
-                        if (!entry.criteria.Matches(op->modrm, op->prefixes.all)) continue;
-                    }
-                } else {
-                    // No ModRM in instruction.
-                    // If criteria REQUIRES ModRM specific values (mask != 0), then it's a mismatch.
-                    if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) continue;
-                }
-
-                return entry.handler;
-            }
-        }
+    if (op->meta.flags.has_modrm) {
+        key |= ((uint64_t)op->modrm << 10);
+        key |= (1ULL << 34);
     }
-    return nullptr;
+    key |= ((uint64_t)op->prefixes.all << 18);
+    if (op->meta.flags.no_flags) key |= (1ULL << 35);
+
+    // Check Cache
+    auto it = g_SpecCache.find(key);
+    if (it != g_SpecCache.end()) return it->second;
+
+    // Lookup
+    const auto& list = g_OpSpecializations[handler_index];
+    HandlerFunc found = nullptr;
+
+    for (const auto& entry : list) {
+        // Opcode check implicit by array index
+
+        // 1. Prefix Check always
+        if (entry.criteria.prefix_mask) {
+            if ((op->prefixes.all & entry.criteria.prefix_mask) != entry.criteria.prefix_val) continue;
+        }
+
+        // 2. ModRM Check
+        if (op->meta.flags.has_modrm) {
+            // Standard check
+            if (!entry.criteria.Matches(op->modrm, op->prefixes.all, op->meta.flags.no_flags)) continue;
+        } else {
+            // No ModRM in instruction.
+            // If criteria REQUIRES ModRM specific values (mask != 0), then it's a mismatch.
+            if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) continue;
+
+            // Still check no_flags even without ModRM
+            if (entry.criteria.no_flags != op->meta.flags.no_flags) continue;
+        }
+
+        found = entry.handler;
+        break;  // Found the most specific match due to sorting
+    }
+
+    // Update Cache
+    g_SpecCache[key] = found;
+    return found;
 }
 
 }  // namespace fiberish

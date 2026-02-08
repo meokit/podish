@@ -100,6 +100,7 @@ struct alignas(32) DecodedOp {
             uint8_t has_imm : 1;
             uint8_t is_control_flow : 1;
             uint8_t ea_shift : 2;
+            uint8_t no_flags : 1;
         } flags;
     } meta;
 

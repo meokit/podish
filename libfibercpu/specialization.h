@@ -61,7 +61,10 @@ struct SpecCriteria {
     uint16_t prefix_mask = 0;
     uint16_t prefix_val = 0;
 
-    bool Matches(uint8_t modrm, uint16_t prefixes) const {
+    // Flags Constraints
+    bool no_flags = false;
+
+    bool Matches(uint8_t modrm, uint16_t prefixes, bool op_no_flags) const {
         if (mod_mask) {
             uint8_t mod = (modrm >> 6) & 3;
             if ((mod & mod_mask) != mod_val) return false;
@@ -77,7 +80,24 @@ struct SpecCriteria {
         if (prefix_mask) {
             if ((prefixes & prefix_mask) != prefix_val) return false;
         }
+        if (no_flags != op_no_flags) return false;
         return true;
+    }
+
+    int GetScore() const {
+        int score = 0;
+        if (mod_mask) score += 2;  // Rough weight
+        if (reg_mask) score += 3;
+        if (rm_mask) score += 3;
+        if (prefix_mask) {
+            // Count bits
+            uint16_t v = prefix_mask;
+            while (v) {
+                score++;
+                v &= v - 1;
+            }
+        }
+        return score;
     }
 };
 

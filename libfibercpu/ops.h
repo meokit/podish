@@ -2,8 +2,8 @@
 
 #include "common.h"
 #include "decoder.h"
-#include "state.h"
 #include "specialization.h"
+#include "state.h"
 
 // Include all modular operation headers
 #include "ops/ops_alu.h"
@@ -28,15 +28,15 @@ extern void* g_HandlerBase;
 
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
-extern HandlerFunc g_Handlers_NF[1024];
+extern HandlerFunc g_Handlers[1024];
 extern HandlerFunc g_ExitHandlers[32];
 
 // Specialized Opcode Indices
 enum SpecializedOp : uint16_t {
     OP_MOV_RR_STORE = 0x200,  // MOV r32, r32 (from 0x89)
     OP_MOV_RM_STORE = 0x201,  // MOV [mem], r32 (from 0x89)
-    OP_MOV_RR_LOAD  = 0x202,  // MOV r32, r32 (from 0x8B)
-    OP_MOV_MR_LOAD  = 0x203,  // MOV r32, [mem] (from 0x8B)
+    OP_MOV_RR_LOAD = 0x202,   // MOV r32, r32 (from 0x8B)
+    OP_MOV_MR_LOAD = 0x203,   // MOV r32, [mem] (from 0x8B)
 };
 
 // Initialization
@@ -54,4 +54,4 @@ void RegisterSseFpOps();
 void RegisterSseIntOps();
 void RegisterSseMovOps();
 
-}  // namespace x86emu
+}  // namespace fiberish
