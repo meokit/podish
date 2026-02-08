@@ -66,6 +66,16 @@ struct EmuState {
     int tsc_mode = 1;                // 0: Fixed Increment, 1: Real-time
     uint64_t tsc_fixed_counter = 0;  // For mode 0
     std::chrono::steady_clock::time_point tsc_start_time;
+
+    // Precise Exception Support
+    // When a fault occurs in the fast dispatch loop, we swap the NEXT instruction's handler
+    // with HandlerInterrupt. This field stores the original handler to be restored.
+    // Use void* to avoid circular dependency with decoder.h if HandlerFunc not visible here (it is visible via
+    // decoder.h include) Actually decoder.h is included. Wait, EmuState forward declared in decoder.h, but state.h
+    // includes decoder.h. decoder.h includes common.h. state.h includes decoder.h.
+    int64_t (*saved_handler)(EmuState* RESTRICT, DecodedOp* RESTRICT, int64_t, mem::MicroTLB);
 };
 
 }  // namespace fiberish
+
+#include "mem/mmu_impl.h"

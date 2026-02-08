@@ -6,10 +6,54 @@
 
 namespace fiberish {
 
+// Interrupt Handler for Precise Exceptions
+ATTR_PRESERVE_NONE int64_t HandlerInterrupt(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                            mem::MicroTLB utlb) {
+    // 1. Restore the original handler
+    if (state->saved_handler) {
+        op->handler = (HandlerFunc)state->saved_handler;
+        state->saved_handler = nullptr;
+    }
+
+    // 2. Stop the chain (return current limit)
+    // The loop in RunLoop will check state->status and exit.
+    return instr_limit;
+}
+
+void TriggerPreciseFault(EmuState* state, DecodedOp* op) {
+    if (!op) {
+        // Fallback for non-op context (e.g. loader/direct access)
+        if (state->status == EmuStatus::Running) {
+            state->status = EmuStatus::Fault;
+        }
+        return;
+    }
+
+    state->status = EmuStatus::Fault;
+    // Precise Exception: roll back EIP to current instruction start
+    state->ctx.eip = op->next_eip - op->length;
+
+    DecodedOp* next = op + 1;
+    // Avoid re-swapping if already swapped
+    if (next->handler == HandlerInterrupt) return;
+
+    state->saved_handler = (int64_t (*)(EmuState*, DecodedOp*, int64_t, mem::MicroTLB))next->handler;
+    next->handler = HandlerInterrupt;
+}
+
 // Sentinel Handler
 template <int I>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                        mem::MicroTLB utlb) {
+    auto* last_op = op - 1;
+
+    if (last_op->branch_target != std::numeric_limits<uint32_t>::max()) {
+        state->ctx.eip = last_op->branch_target;
+        last_op->branch_target = std::numeric_limits<uint32_t>::max();
+    } else {
+        state->ctx.eip = last_op->next_eip;
+    }
+
     // Basic Block Chaining
     // Optim: If next_block is dummy, is_valid is false, so we skip.
     // If next_block is real but invalidated, is_valid is false, so we skip.

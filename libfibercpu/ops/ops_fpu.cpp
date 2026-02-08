@@ -41,14 +41,14 @@ static inline void UpdateFpuRoundingMode(EmuState* state) { f80_sync_to_soft(sta
 
 // Helper to read float32 from memory and convert to float80
 static inline float80 ReadF32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint32_t val = state->mmu.read<uint32_t>(ComputeLinearAddress(state, op), utlb);
+    uint32_t val = state->mmu.read<uint32_t>(state, ComputeLinearAddress(state, op), utlb, op);
     float f = *(float*)&val;
     return f80_from_double((double)f);
 }
 
 // Helper to read float64 from memory and convert to float80
 static inline float80 ReadF64(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint64_t val = state->mmu.read<uint64_t>(ComputeLinearAddress(state, op), utlb);
+    uint64_t val = state->mmu.read<uint64_t>(state, ComputeLinearAddress(state, op), utlb, op);
     return f80_from_double(*(double*)&val);
 }
 
@@ -212,22 +212,22 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 2:  // FST m32
             {
                 float f = (float)f80_to_double(FpuTop(state, 0));
-                state->mmu.write<uint32_t>(addr, *(uint32_t*)&f, utlb);
+                state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op);
                 break;
             }
             case 3:  // FSTP m32
             {
                 float80 val = FpuPop(state);
                 float f = (float)f80_to_double(val);
-                state->mmu.write<uint32_t>(addr, *(uint32_t*)&f, utlb);
+                state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op);
                 break;
             }
             case 5:  // FLDCW m16
-                state->ctx.fpu_cw = state->mmu.read<uint16_t>(addr, utlb);
+                state->ctx.fpu_cw = state->mmu.read<uint16_t>(state, addr, utlb, op);
                 UpdateFpuRoundingMode(state);
                 break;
             case 7:  // FNSTCW m16
-                state->mmu.write<uint16_t>(addr, state->ctx.fpu_cw, utlb);
+                state->mmu.write<uint16_t>(state, addr, state->ctx.fpu_cw, utlb, op);
                 break;
             default:
                 OpUd2(state, op);
@@ -262,7 +262,7 @@ static FORCE_INLINE void OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB*
     } else {
         uint8_t subop = (op->modrm >> 3) & 7;
         uint32_t addr = ComputeLinearAddress(state, op);
-        int32_t val32 = (int32_t)state->mmu.read<uint32_t>(addr, utlb);
+        int32_t val32 = (int32_t)state->mmu.read<uint32_t>(state, addr, utlb, op);
         float80 val = f80_from_int(val32);
         float80& st0 = FpuTop(state, 0);
 
@@ -380,7 +380,7 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
         switch (subop) {
             case 0:  // FILD m32
             {
-                int32_t val = (int32_t)state->mmu.read<uint32_t>(addr, utlb);
+                int32_t val = (int32_t)state->mmu.read<uint32_t>(state, addr, utlb, op);
                 float80 t = f80_from_int(val);
                 FpuPush(state, &t);
                 break;
@@ -388,20 +388,20 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 2:  // FIST m32
             {
                 int32_t val = (int32_t)f80_to_int(FpuTop(state, 0));
-                state->mmu.write<uint32_t>(addr, (uint32_t)val, utlb);
+                state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op);
                 break;
             }
             case 3:  // FISTP m32
             {
                 int32_t val = (int32_t)f80_to_int(FpuPop(state));
-                state->mmu.write<uint32_t>(addr, (uint32_t)val, utlb);
+                state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op);
                 break;
             }
             case 5:  // FLD m80
             {
                 // Read 10 bytes
-                uint64_t low = state->mmu.read<uint64_t>(addr, utlb);
-                uint16_t high = state->mmu.read<uint16_t>(addr + 8, utlb);
+                uint64_t low = state->mmu.read<uint64_t>(state, addr, utlb, op);
+                uint16_t high = state->mmu.read<uint16_t>(state, addr + 8, utlb, op);
                 float80 f;
                 f.signif = low;
                 f.signExp = high;
@@ -411,8 +411,8 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 7:  // FSTP m80
             {
                 float80 f = FpuPop(state);
-                state->mmu.write<uint64_t>(addr, f.signif, utlb);
-                state->mmu.write<uint16_t>(addr + 8, f.signExp, utlb);
+                state->mmu.write<uint64_t>(state, addr, f.signif, utlb, op);
+                state->mmu.write<uint16_t>(state, addr + 8, f.signExp, utlb, op);
                 break;
             }
             default:
@@ -526,13 +526,13 @@ static FORCE_INLINE void OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 2:  // FST m64
             {
                 double d = f80_to_double(FpuTop(state, 0));
-                state->mmu.write<uint64_t>(addr, *(uint64_t*)&d, utlb);
+                state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op);
                 break;
             }
             case 3:  // FSTP m64
             {
                 double d = f80_to_double(FpuPop(state));
-                state->mmu.write<uint64_t>(addr, *(uint64_t*)&d, utlb);
+                state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op);
                 break;
             }
             default:
@@ -628,7 +628,7 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
         switch (subop) {
             case 0:  // FILD m16
             {
-                int16_t val = (int16_t)state->mmu.read<uint16_t>(addr, utlb);
+                int16_t val = (int16_t)state->mmu.read<uint16_t>(state, addr, utlb, op);
                 float80 t = f80_from_int(val);
                 FpuPush(state, &t);
                 break;
@@ -636,18 +636,18 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 2:  // FIST m16
             {
                 int16_t val = (int16_t)f80_to_int(FpuTop(state, 0));
-                state->mmu.write<uint16_t>(addr, (uint16_t)val, utlb);
+                state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op);
                 break;
             }
             case 3:  // FISTP m16
             {
                 int16_t val = (int16_t)f80_to_int(FpuPop(state));
-                state->mmu.write<uint16_t>(addr, (uint16_t)val, utlb);
+                state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op);
                 break;
             }
             case 5:  // FILD m64
             {
-                int64_t val = (int64_t)state->mmu.read<uint64_t>(addr, utlb);
+                int64_t val = (int64_t)state->mmu.read<uint64_t>(state, addr, utlb, op);
                 float80 t = f80_from_int(val);
                 FpuPush(state, &t);
                 break;
@@ -655,7 +655,7 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
             case 7:  // FISTP m64
             {
                 int64_t val = f80_to_int(FpuPop(state));
-                state->mmu.write<uint64_t>(addr, (uint64_t)val, utlb);
+                state->mmu.write<uint64_t>(state, addr, (uint64_t)val, utlb, op);
                 break;
             }
             default:

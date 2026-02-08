@@ -12,29 +12,19 @@ extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
 extern HandlerFunc g_Handlers[1024];
 
+ATTR_PRESERVE_NONE int64_t HandlerInterrupt(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                            mem::MicroTLB utlb);
+
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb) {
     PREFETCH((void*)(op + 2));
-    // Advance EIP before execution
-    state->ctx.eip = op->next_eip;
-
     DecodedOp* RESTRICT next = op + 1;
-    HandlerFunc h = next->handler;
-    PREFETCH((void*)h);
 
     // Execute Logic
     Target(state, op, &utlb);
 
-    // Stop Chain if Fault/Stopped/Yield
-    if (state->status != EmuStatus::Running) {
-        // Restore EIP if Fault (Precise Exception)
-        if (state->status == EmuStatus::Fault) {
-            uint32_t original_eip = op->next_eip - op->length;
-            state->ctx.eip = original_eip;
-        }
-        return instr_limit;
-    }
+    HandlerFunc h = next->handler;  // May changed by Target
 
     // Direct Relative Dispatch
     // Note: We don't check for 0 here for speed, assuming well-formed blocks

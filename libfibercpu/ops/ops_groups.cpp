@@ -168,22 +168,22 @@ static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
 
             if (subop == 2) {  // Call
                 if constexpr (sizeof(T) == 2) {
-                    Push16(state, (uint16_t)state->ctx.eip, utlb);
-                    state->ctx.eip = val & 0xFFFF;
+                    Push16(state, (uint16_t)op->next_eip, utlb, op);
+                    op->branch_target = val & 0xFFFF;
                 } else {
-                    Push32(state, state->ctx.eip, utlb);
-                    state->ctx.eip = val;
+                    Push32(state, op->next_eip, utlb, op);
+                    op->branch_target = val;
                 }
             } else if (subop == 4) {  // Jmp
                 if constexpr (sizeof(T) == 2)
-                    state->ctx.eip = val & 0xFFFF;
+                    op->branch_target = val & 0xFFFF;
                 else
-                    state->ctx.eip = val;
+                    op->branch_target = val;
             } else if (subop == 6) {  // Push
                 if constexpr (sizeof(T) == 2)
-                    Push16(state, (uint16_t)val, utlb);
+                    Push16(state, (uint16_t)val, utlb, op);
                 else
-                    Push32(state, val, utlb);
+                    Push32(state, val, utlb, op);
             }
             break;
         }
@@ -319,6 +319,7 @@ static FORCE_INLINE void OpCwde(EmuState* state, DecodedOp* op, mem::MicroTLB* u
 
 void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!state->hooks.on_invalid_opcode(state)) {
+        TriggerPreciseFault(state, op);
         state->status = EmuStatus::Fault;
         state->fault_vector = 6;
     }
@@ -329,7 +330,7 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
     uint8_t sub = (op->modrm >> 3) & 7;
     if (sub == 1) {  // CMPXCHG8B
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t mem_val = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
         uint32_t eax = GetReg(state, EAX);
         uint32_t edx = GetReg(state, EDX);
         uint64_t edx_eax = ((uint64_t)edx << 32) | eax;
@@ -338,7 +339,7 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
             uint32_t ebx = GetReg(state, EBX);
             uint32_t ecx = GetReg(state, ECX);
             uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
-            state->mmu.write<uint64_t>(addr, ecx_ebx, utlb);
+            state->mmu.write<uint64_t>(state, addr, ecx_ebx, utlb, op);
         } else {
             state->ctx.eflags &= ~ZF_MASK;
             SetReg(state, EAX, (uint32_t)mem_val);

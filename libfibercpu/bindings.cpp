@@ -158,10 +158,6 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     state->mmu.set_status_ptr(&state->status, &state->fault_vector);
 
     // 4. Set Callbacks (Bridge to same handlers, but new 'state' passed)
-    // Note: The UserData is pointing to whatever specific object managed the parent.
-    // For Clone, we might need new userdata?
-    // In our Go implementation, we use global wrappers or map state->Task.
-    // So copying userdata is strictly correct for now (same logic applies).
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     // state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
@@ -339,14 +335,14 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         mem::MicroTLB utlb;
-        state->mmu.write<uint8_t>(addr + i, data[i], &utlb);
+        state->mmu.write<uint8_t>(state, addr + i, data[i], &utlb, nullptr);
     }
 }
 
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
         mem::MicroTLB utlb;
-        val[i] = state->mmu.read<uint8_t>(addr + i, &utlb);
+        val[i] = state->mmu.read<uint8_t>(state, addr + i, &utlb, nullptr);
     }
 }
 
@@ -496,7 +492,7 @@ int X86_Step(EmuState* state) {
     uint8_t buf[16];
     for (int i = 0; i < 16; ++i) {
         mem::MicroTLB utlb;
-        buf[i] = state->mmu.read<uint8_t>(state->ctx.eip + i, &utlb);
+        buf[i] = state->mmu.read<uint8_t>(state, state->ctx.eip + i, &utlb, nullptr);
         if (state->status != EmuStatus::Running) {
             f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
             return (int)state->status;

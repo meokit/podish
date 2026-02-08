@@ -31,14 +31,22 @@ static FORCE_INLINE void OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp* op,
     // Read Source (ModRM.Reg)
     if constexpr (SrcSpec >= Specialized::Reg0 && SrcSpec <= Specialized::Reg7) {
         constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)Specialized::Reg0;
-        if constexpr (FixedSrc == 0) val = state->ctx.regs[0];
-        else if constexpr (FixedSrc == 1) val = state->ctx.regs[1];
-        else if constexpr (FixedSrc == 2) val = state->ctx.regs[2];
-        else if constexpr (FixedSrc == 3) val = state->ctx.regs[3];
-        else if constexpr (FixedSrc == 4) val = state->ctx.regs[4];
-        else if constexpr (FixedSrc == 5) val = state->ctx.regs[5];
-        else if constexpr (FixedSrc == 6) val = state->ctx.regs[6];
-        else if constexpr (FixedSrc == 7) val = state->ctx.regs[7];
+        if constexpr (FixedSrc == 0)
+            val = state->ctx.regs[0];
+        else if constexpr (FixedSrc == 1)
+            val = state->ctx.regs[1];
+        else if constexpr (FixedSrc == 2)
+            val = state->ctx.regs[2];
+        else if constexpr (FixedSrc == 3)
+            val = state->ctx.regs[3];
+        else if constexpr (FixedSrc == 4)
+            val = state->ctx.regs[4];
+        else if constexpr (FixedSrc == 5)
+            val = state->ctx.regs[5];
+        else if constexpr (FixedSrc == 6)
+            val = state->ctx.regs[6];
+        else if constexpr (FixedSrc == 7)
+            val = state->ctx.regs[7];
     } else {
         uint8_t src = (op->modrm >> 3) & 7;
         val = GetReg(state, src);
@@ -47,14 +55,22 @@ static FORCE_INLINE void OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp* op,
     // Write Destination (ModRM.RM)
     if constexpr (DstSpec >= Specialized::Reg0 && DstSpec <= Specialized::Reg7) {
         constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)Specialized::Reg0;
-        if constexpr (FixedDst == 0) state->ctx.regs[0] = val;
-        else if constexpr (FixedDst == 1) state->ctx.regs[1] = val;
-        else if constexpr (FixedDst == 2) state->ctx.regs[2] = val;
-        else if constexpr (FixedDst == 3) state->ctx.regs[3] = val;
-        else if constexpr (FixedDst == 4) state->ctx.regs[4] = val;
-        else if constexpr (FixedDst == 5) state->ctx.regs[5] = val;
-        else if constexpr (FixedDst == 6) state->ctx.regs[6] = val;
-        else if constexpr (FixedDst == 7) state->ctx.regs[7] = val;
+        if constexpr (FixedDst == 0)
+            state->ctx.regs[0] = val;
+        else if constexpr (FixedDst == 1)
+            state->ctx.regs[1] = val;
+        else if constexpr (FixedDst == 2)
+            state->ctx.regs[2] = val;
+        else if constexpr (FixedDst == 3)
+            state->ctx.regs[3] = val;
+        else if constexpr (FixedDst == 4)
+            state->ctx.regs[4] = val;
+        else if constexpr (FixedDst == 5)
+            state->ctx.regs[5] = val;
+        else if constexpr (FixedDst == 6)
+            state->ctx.regs[6] = val;
+        else if constexpr (FixedDst == 7)
+            state->ctx.regs[7] = val;
     } else {
         uint8_t dst = op->modrm & 7;
         SetReg(state, dst, val);
@@ -62,14 +78,30 @@ static FORCE_INLINE void OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp* op,
 }
 
 // Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
-static void OpMov_EvGv_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEax>(s, o, u); }
-static void OpMov_EvGv_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEcx>(s, o, u); }
-static void OpMov_EvGv_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEdx>(s, o, u); }
-static void OpMov_EvGv_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEbx>(s, o, u); }
-static void OpMov_EvGv_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEsp>(s, o, u); }
-static void OpMov_EvGv_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEbp>(s, o, u); }
-static void OpMov_EvGv_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEsi>(s, o, u); }
-static void OpMov_EvGv_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Reg_Template<Specialized::RegEdi>(s, o, u); }
+static void OpMov_EvGv_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEax>(s, o, u);
+}
+static void OpMov_EvGv_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEcx>(s, o, u);
+}
+static void OpMov_EvGv_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEdx>(s, o, u);
+}
+static void OpMov_EvGv_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEbx>(s, o, u);
+}
+static void OpMov_EvGv_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEsp>(s, o, u);
+}
+static void OpMov_EvGv_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEbp>(s, o, u);
+}
+static void OpMov_EvGv_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEsi>(s, o, u);
+}
+static void OpMov_EvGv_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Reg_Template<Specialized::RegEdi>(s, o, u);
+}
 
 static FORCE_INLINE void OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     OpMov_EvGv_Reg_Template<>(state, op, utlb);
@@ -83,32 +115,56 @@ static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::Mic
     if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
         constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
         // Compiler optimization: GetReg(state, FixedReg) becomes pure structure access
-        if constexpr (FixedReg == 0) val = state->ctx.regs[0]; // EAX
-        else if constexpr (FixedReg == 1) val = state->ctx.regs[1]; // ECX
-        else if constexpr (FixedReg == 2) val = state->ctx.regs[2]; // EDX
-        else if constexpr (FixedReg == 3) val = state->ctx.regs[3]; // EBX
-        else if constexpr (FixedReg == 4) val = state->ctx.regs[4]; // ESP
-        else if constexpr (FixedReg == 5) val = state->ctx.regs[5]; // EBP
-        else if constexpr (FixedReg == 6) val = state->ctx.regs[6]; // ESI
-        else if constexpr (FixedReg == 7) val = state->ctx.regs[7]; // EDI
+        if constexpr (FixedReg == 0)
+            val = state->ctx.regs[0];  // EAX
+        else if constexpr (FixedReg == 1)
+            val = state->ctx.regs[1];  // ECX
+        else if constexpr (FixedReg == 2)
+            val = state->ctx.regs[2];  // EDX
+        else if constexpr (FixedReg == 3)
+            val = state->ctx.regs[3];  // EBX
+        else if constexpr (FixedReg == 4)
+            val = state->ctx.regs[4];  // ESP
+        else if constexpr (FixedReg == 5)
+            val = state->ctx.regs[5];  // EBP
+        else if constexpr (FixedReg == 6)
+            val = state->ctx.regs[6];  // ESI
+        else if constexpr (FixedReg == 7)
+            val = state->ctx.regs[7];  // EDI
     } else {
         uint8_t reg = (op->modrm >> 3) & 7;
         val = GetReg(state, reg);
     }
-    
+
     uint32_t addr = ComputeLinearAddress(state, op);
-    state->mmu.write<uint32_t>(addr, val, utlb);
+    state->mmu.write<uint32_t>(state, addr, val, utlb, op);
 }
 
 // Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
-static void OpMov_Store_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEax>(s, o, u); }
-static void OpMov_Store_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEcx>(s, o, u); }
-static void OpMov_Store_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEdx>(s, o, u); }
-static void OpMov_Store_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEbx>(s, o, u); }
-static void OpMov_Store_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEsp>(s, o, u); }
-static void OpMov_Store_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEbp>(s, o, u); }
-static void OpMov_Store_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEsi>(s, o, u); }
-static void OpMov_Store_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_EvGv_Mem<Specialized::RegEdi>(s, o, u); }
+static void OpMov_Store_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEax>(s, o, u);
+}
+static void OpMov_Store_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEcx>(s, o, u);
+}
+static void OpMov_Store_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEdx>(s, o, u);
+}
+static void OpMov_Store_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEbx>(s, o, u);
+}
+static void OpMov_Store_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEsp>(s, o, u);
+}
+static void OpMov_Store_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEbp>(s, o, u);
+}
+static void OpMov_Store_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEsi>(s, o, u);
+}
+static void OpMov_Store_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_EvGv_Mem<Specialized::RegEdi>(s, o, u);
+}
 
 static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r16/32, r/m16/32 (0x8B)
@@ -127,18 +183,26 @@ static FORCE_INLINE void OpMov_GvEv_Reg_Template(EmuState* state, DecodedOp* op,
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
-    
+
     // Read Source
     if constexpr (SrcSpec >= Specialized::Reg0 && SrcSpec <= Specialized::Reg7) {
         constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)Specialized::Reg0;
-        if constexpr (FixedSrc == 0) val = state->ctx.regs[0];
-        else if constexpr (FixedSrc == 1) val = state->ctx.regs[1];
-        else if constexpr (FixedSrc == 2) val = state->ctx.regs[2];
-        else if constexpr (FixedSrc == 3) val = state->ctx.regs[3];
-        else if constexpr (FixedSrc == 4) val = state->ctx.regs[4];
-        else if constexpr (FixedSrc == 5) val = state->ctx.regs[5];
-        else if constexpr (FixedSrc == 6) val = state->ctx.regs[6];
-        else if constexpr (FixedSrc == 7) val = state->ctx.regs[7];
+        if constexpr (FixedSrc == 0)
+            val = state->ctx.regs[0];
+        else if constexpr (FixedSrc == 1)
+            val = state->ctx.regs[1];
+        else if constexpr (FixedSrc == 2)
+            val = state->ctx.regs[2];
+        else if constexpr (FixedSrc == 3)
+            val = state->ctx.regs[3];
+        else if constexpr (FixedSrc == 4)
+            val = state->ctx.regs[4];
+        else if constexpr (FixedSrc == 5)
+            val = state->ctx.regs[5];
+        else if constexpr (FixedSrc == 6)
+            val = state->ctx.regs[6];
+        else if constexpr (FixedSrc == 7)
+            val = state->ctx.regs[7];
     } else {
         uint8_t src = op->modrm & 7;
         val = GetReg(state, src);
@@ -147,14 +211,22 @@ static FORCE_INLINE void OpMov_GvEv_Reg_Template(EmuState* state, DecodedOp* op,
     // Write Destination
     if constexpr (DstSpec >= Specialized::Reg0 && DstSpec <= Specialized::Reg7) {
         constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)Specialized::Reg0;
-        if constexpr (FixedDst == 0) state->ctx.regs[0] = val;
-        else if constexpr (FixedDst == 1) state->ctx.regs[1] = val;
-        else if constexpr (FixedDst == 2) state->ctx.regs[2] = val;
-        else if constexpr (FixedDst == 3) state->ctx.regs[3] = val;
-        else if constexpr (FixedDst == 4) state->ctx.regs[4] = val;
-        else if constexpr (FixedDst == 5) state->ctx.regs[5] = val;
-        else if constexpr (FixedDst == 6) state->ctx.regs[6] = val;
-        else if constexpr (FixedDst == 7) state->ctx.regs[7] = val;
+        if constexpr (FixedDst == 0)
+            state->ctx.regs[0] = val;
+        else if constexpr (FixedDst == 1)
+            state->ctx.regs[1] = val;
+        else if constexpr (FixedDst == 2)
+            state->ctx.regs[2] = val;
+        else if constexpr (FixedDst == 3)
+            state->ctx.regs[3] = val;
+        else if constexpr (FixedDst == 4)
+            state->ctx.regs[4] = val;
+        else if constexpr (FixedDst == 5)
+            state->ctx.regs[5] = val;
+        else if constexpr (FixedDst == 6)
+            state->ctx.regs[6] = val;
+        else if constexpr (FixedDst == 7)
+            state->ctx.regs[7] = val;
     } else {
         uint8_t dst = (op->modrm >> 3) & 7;
         SetReg(state, dst, val);
@@ -181,24 +253,31 @@ static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::Mic
 
 template <Specialized S = Specialized::None>
 
-
 static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
     // ModRM.Reg is the Destination Register
     uint32_t addr = ComputeLinearAddress(state, op);
-    uint32_t val = state->mmu.read<uint32_t>(addr, utlb);
-    
+    uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+
     if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
         constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
         // Compiler optimization: GetReg(state, FixedReg) becomes pure structure access
-        if constexpr (FixedReg == 0) state->ctx.regs[0] = val; // EAX
-        else if constexpr (FixedReg == 1) state->ctx.regs[1] = val; // ECX
-        else if constexpr (FixedReg == 2) state->ctx.regs[2] = val; // EDX
-        else if constexpr (FixedReg == 3) state->ctx.regs[3] = val; // EBX
-        else if constexpr (FixedReg == 4) state->ctx.regs[4] = val; // ESP
-        else if constexpr (FixedReg == 5) state->ctx.regs[5] = val; // EBP
-        else if constexpr (FixedReg == 6) state->ctx.regs[6] = val; // ESI
-        else if constexpr (FixedReg == 7) state->ctx.regs[7] = val; // EDI
+        if constexpr (FixedReg == 0)
+            state->ctx.regs[0] = val;  // EAX
+        else if constexpr (FixedReg == 1)
+            state->ctx.regs[1] = val;  // ECX
+        else if constexpr (FixedReg == 2)
+            state->ctx.regs[2] = val;  // EDX
+        else if constexpr (FixedReg == 3)
+            state->ctx.regs[3] = val;  // EBX
+        else if constexpr (FixedReg == 4)
+            state->ctx.regs[4] = val;  // ESP
+        else if constexpr (FixedReg == 5)
+            state->ctx.regs[5] = val;  // EBP
+        else if constexpr (FixedReg == 6)
+            state->ctx.regs[6] = val;  // ESI
+        else if constexpr (FixedReg == 7)
+            state->ctx.regs[7] = val;  // EDI
     } else {
         uint8_t reg = (op->modrm >> 3) & 7;
         SetReg(state, reg, val);
@@ -206,14 +285,30 @@ static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::Mic
 }
 
 // Named wrappers for OpMov_GvEv_Mem (Load) - Specializing Destination
-static void OpMov_Load_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEax>(s, o, u); }
-static void OpMov_Load_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEcx>(s, o, u); }
-static void OpMov_Load_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEdx>(s, o, u); }
-static void OpMov_Load_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEbx>(s, o, u); }
-static void OpMov_Load_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEsp>(s, o, u); }
-static void OpMov_Load_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEbp>(s, o, u); }
-static void OpMov_Load_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEsi>(s, o, u); }
-static void OpMov_Load_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpMov_GvEv_Mem<Specialized::RegEdi>(s, o, u); }
+static void OpMov_Load_Eax(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEax>(s, o, u);
+}
+static void OpMov_Load_Ecx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEcx>(s, o, u);
+}
+static void OpMov_Load_Edx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEdx>(s, o, u);
+}
+static void OpMov_Load_Ebx(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEbx>(s, o, u);
+}
+static void OpMov_Load_Esp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEsp>(s, o, u);
+}
+static void OpMov_Load_Ebp(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEbp>(s, o, u);
+}
+static void OpMov_Load_Esi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEsi>(s, o, u);
+}
+static void OpMov_Load_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    OpMov_GvEv_Mem<Specialized::RegEdi>(s, o, u);
+}
 
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, r8 (0x88)
@@ -291,15 +386,15 @@ static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op, mem::M
 
     // A0: extra=0, A1: extra=1
     if (op->extra == 0) {  // A0
-        uint8_t val = state->mmu.read<uint8_t>(linear, utlb);
+        uint8_t val = state->mmu.read<uint8_t>(state, linear, utlb, op);
         uint32_t* rptr = GetRegPtr(state, EAX);
         *rptr = (*rptr & 0xFFFFFF00) | val;
     } else {  // A1
         if (op->prefixes.flags.opsize) {
-            uint16_t val = state->mmu.read<uint16_t>(linear, utlb);
+            uint16_t val = state->mmu.read<uint16_t>(state, linear, utlb, op);
             SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | val);
         } else {
-            uint32_t val = state->mmu.read<uint32_t>(linear, utlb);
+            uint32_t val = state->mmu.read<uint32_t>(state, linear, utlb, op);
             SetReg(state, EAX, val);
         }
     }
@@ -314,14 +409,14 @@ static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op, mem::
     // A2: extra=2, A3: extra=3
     if (op->extra == 2) {  // A2
         uint8_t val = GetReg8(state, EAX);
-        state->mmu.write<uint8_t>(linear, val, utlb);
+        state->mmu.write<uint8_t>(state, linear, val, utlb, op);
     } else {  // A3
         if (op->prefixes.flags.opsize) {
             uint16_t val = (uint16_t)GetReg(state, EAX);
-            state->mmu.write<uint16_t>(linear, val, utlb);
+            state->mmu.write<uint16_t>(state, linear, val, utlb, op);
         } else {
             uint32_t val = GetReg(state, EAX);
-            state->mmu.write<uint32_t>(linear, val, utlb);
+            state->mmu.write<uint32_t>(state, linear, val, utlb, op);
         }
     }
 }
@@ -393,7 +488,7 @@ static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::Micr
         }
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint16_t>(addr, val, utlb);
+        state->mmu.write<uint16_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -416,7 +511,7 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
             uint32_t edi = GetReg(state, EDI);
             uint32_t src_base = GetSegmentBase(state, op);
 
-            uint32_t copied = state->mmu.copy_block(esi + src_base, edi, total_bytes);
+            uint32_t copied = state->mmu.copy_block(state, esi + src_base, edi, total_bytes, op);
 
             // Calculate how many FULL items were processed
             uint32_t items_processed = copied / sizeof(T);
@@ -429,22 +524,23 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
 
             // If we stopped early (fault), we leave state consistent at the fault
             // point.
-            return;
+            if (items_processed != ecx) return;
         }
 
-        // Slow path / Reverse path (DF=1)
-        while (ecx > 0) {
+        // Slow path / Reverse path (DF=1) / Remainder
+        while (GetReg(state, ECX) > 0) {
             uint32_t esi = GetReg(state, ESI);
             uint32_t edi = GetReg(state, EDI);
+            uint32_t ecx = GetReg(state, ECX);
 
             // DS:ESI -> ES:EDI
             // For now assume flat model (DS=0, ES=0)
             uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-            T val = state->mmu.read<T>(src_addr, utlb);
+            T val = state->mmu.read<T>(state, src_addr, utlb, op);
             if (state->status != EmuStatus::Running) break;
 
-            state->mmu.write<T>(edi, val, utlb);
+            state->mmu.write<T>(state, edi, val, utlb, op);
             if (state->status != EmuStatus::Running) break;
 
             SetReg(state, ESI, esi + step);
@@ -458,15 +554,17 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         uint32_t edi = GetReg(state, EDI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-        T val = state->mmu.read<T>(src_addr, utlb);
-        state->mmu.write<T>(edi, val, utlb);
+        T val = state->mmu.read<T>(state, src_addr, utlb, op);
+        state->mmu.write<T>(state, edi, val, utlb, op);
 
         SetReg(state, ESI, esi + step);
         SetReg(state, EDI, edi + step);
     }
 }
 
-static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Movs<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    Helper_Movs<uint8_t>(state, op, utlb);
+}
 
 static FORCE_INLINE void OpMovs_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize) {
@@ -491,11 +589,14 @@ void Helper_Stos(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         val = (T)GetReg(state, EAX);  // EAX
 
     if (op->prefixes.flags.rep) {
-        uint32_t ecx = GetReg(state, ECX);
-        while (ecx > 0) {
+        // Optimization: Could use memset logic if T=byte/word/struct pattern
+        // For now simple loop
+        while (GetReg(state, ECX) > 0) {
+            uint32_t ecx = GetReg(state, ECX);
             uint32_t edi = GetReg(state, EDI);
             // Dest ES:EDI
-            state->mmu.write<T>(edi, val, utlb);
+            state->mmu.write<T>(state, edi, val, utlb, op);
+            if (state->status != EmuStatus::Running) break;
 
             SetReg(state, EDI, edi + step);
 
@@ -504,12 +605,14 @@ void Helper_Stos(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         }
     } else {
         uint32_t edi = GetReg(state, EDI);
-        state->mmu.write<T>(edi, val, utlb);
+        state->mmu.write<T>(state, edi, val, utlb, op);
         SetReg(state, EDI, edi + step);
     }
 }
 
-static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Stos<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    Helper_Stos<uint8_t>(state, op, utlb);
+}
 
 static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize) {
@@ -580,9 +683,9 @@ static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTL
     // PUSH r16/32 (0x50+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        Push16(state, (uint16_t)GetReg(state, reg), utlb);
+        Push16(state, (uint16_t)GetReg(state, reg), utlb, op);
     } else {
-        Push32(state, GetReg(state, reg), utlb);
+        Push32(state, GetReg(state, reg), utlb, op);
     }
 }
 
@@ -593,17 +696,17 @@ static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op, mem::MicroTL
     if (op->extra == 0xA) {  // 6A
         val = (int32_t)(int8_t)val;
     }
-    Push32(state, val, utlb);
+    Push32(state, val, utlb, op);
 }
 
 static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // POP r16/32 (0x58+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t val = Pop16(state, utlb);
+        uint16_t val = Pop16(state, utlb, op);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
     } else {
-        uint32_t val = Pop32(state, utlb);
+        uint32_t val = Pop32(state, utlb, op);
         SetReg(state, reg, val);
     }
 }
@@ -636,7 +739,8 @@ void Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto perform = [&](uint32_t& ecx_ref) {
         uint32_t esi = GetReg(state, ESI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T val = state->mmu.read<T>(src_addr, utlb);
+        T val = state->mmu.read<T>(state, src_addr, utlb, op);
+        if (state->status != EmuStatus::Running) return;
 
         if constexpr (sizeof(T) == 1) {
             uint32_t* rptr = GetRegPtr(state, EAX);
@@ -651,9 +755,11 @@ void Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     };
 
     if (op->prefixes.flags.rep) {
-        uint32_t ecx = GetReg(state, ECX);
-        while (ecx > 0) {
+        // LODS with REP loads RCX times? Usually invalid but technically loopable
+        while (GetReg(state, ECX) > 0) {
+            uint32_t ecx = GetReg(state, ECX);
             perform(ecx);
+            if (state->status != EmuStatus::Running) break;
             ecx--;
             SetReg(state, ECX, ecx);
         }
@@ -663,7 +769,9 @@ void Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     }
 }
 
-static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Lods<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    Helper_Lods<uint8_t>(state, op, utlb);
+}
 static FORCE_INLINE void OpLods_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
         Helper_Lods<uint16_t>(state, op, utlb);
@@ -679,7 +787,9 @@ void Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto perform = [&]() {
         uint32_t edi = GetReg(state, EDI);
         // ES:[EDI]
-        T mem_val = state->mmu.read<T>(edi, utlb);
+        T mem_val = state->mmu.read<T>(state, edi, utlb, op);
+        if (state->status != EmuStatus::Running) return;
+
         T acc;
         if constexpr (sizeof(T) == 1)
             acc = (T)GetReg(state, EAX);
@@ -694,10 +804,11 @@ void Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     };
 
     if (op->prefixes.flags.rep || op->prefixes.flags.repne) {  // REPE (F3) or REPNE (F2)
-        uint32_t ecx = GetReg(state, ECX);
-
-        while (ecx > 0) {
+        while (GetReg(state, ECX) > 0) {
             perform();
+            if (state->status != EmuStatus::Running) break;
+
+            uint32_t ecx = GetReg(state, ECX);
             ecx--;
             SetReg(state, ECX, ecx);
 
@@ -713,7 +824,9 @@ void Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     }
 }
 
-static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Scas<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    Helper_Scas<uint8_t>(state, op, utlb);
+}
 static FORCE_INLINE void OpScas_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
         Helper_Scas<uint16_t>(state, op, utlb);
@@ -731,8 +844,11 @@ void Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         uint32_t edi = GetReg(state, EDI);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T src_val = state->mmu.read<T>(src_addr, utlb);
-        T dst_val = state->mmu.read<T>(edi, utlb);  // ES:EDI
+        T src_val = state->mmu.read<T>(state, src_addr, utlb, op);
+        if (state->status != EmuStatus::Running) return;
+
+        T dst_val = state->mmu.read<T>(state, edi, utlb, op);  // ES:EDI
+        if (state->status != EmuStatus::Running) return;
 
         AluSub<T>(state, src_val, dst_val);
 
@@ -741,9 +857,11 @@ void Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     };
 
     if (op->prefixes.flags.rep || op->prefixes.flags.repne) {
-        uint32_t ecx = GetReg(state, ECX);
-        while (ecx > 0) {
+        while (GetReg(state, ECX) > 0) {
             perform();
+            if (state->status != EmuStatus::Running) break;
+
+            uint32_t ecx = GetReg(state, ECX);
             ecx--;
             SetReg(state, ECX, ecx);
 
@@ -759,7 +877,9 @@ void Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     }
 }
 
-static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) { Helper_Cmps<uint8_t>(state, op, utlb); }
+static FORCE_INLINE void OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    Helper_Cmps<uint8_t>(state, op, utlb);
+}
 static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
         Helper_Cmps<uint16_t>(state, op, utlb);
@@ -773,28 +893,27 @@ static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroT
 
 static FORCE_INLINE void OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 60: PUSHA/PUSHAD
+    uint32_t temp = GetReg(state, ESP);
     if (op->prefixes.flags.opsize) {
         // PUSHA (16-bit)
-        uint16_t temp = GetReg(state, ESP) & 0xFFFF;
-        Push16(state, (uint16_t)GetReg(state, EAX), utlb);
-        Push16(state, (uint16_t)GetReg(state, ECX), utlb);
-        Push16(state, (uint16_t)GetReg(state, EDX), utlb);
-        Push16(state, (uint16_t)GetReg(state, EBX), utlb);
-        Push16(state, temp, utlb);
-        Push16(state, (uint16_t)GetReg(state, EBP), utlb);
-        Push16(state, (uint16_t)GetReg(state, ESI), utlb);
-        Push16(state, (uint16_t)GetReg(state, EDI), utlb);
+        Push16(state, (uint16_t)GetReg(state, EAX), utlb, op);
+        Push16(state, (uint16_t)GetReg(state, ECX), utlb, op);
+        Push16(state, (uint16_t)GetReg(state, EDX), utlb, op);
+        Push16(state, (uint16_t)GetReg(state, EBX), utlb, op);
+        Push16(state, (uint16_t)temp, utlb, op);
+        Push16(state, (uint16_t)GetReg(state, EBP), utlb, op);
+        Push16(state, (uint16_t)GetReg(state, ESI), utlb, op);
+        Push16(state, (uint16_t)GetReg(state, EDI), utlb, op);
     } else {
         // PUSHAD (32-bit)
-        uint32_t temp = GetReg(state, ESP);
-        Push32(state, GetReg(state, EAX), utlb);
-        Push32(state, GetReg(state, ECX), utlb);
-        Push32(state, GetReg(state, EDX), utlb);
-        Push32(state, GetReg(state, EBX), utlb);
-        Push32(state, temp, utlb);
-        Push32(state, GetReg(state, EBP), utlb);
-        Push32(state, GetReg(state, ESI), utlb);
-        Push32(state, GetReg(state, EDI), utlb);
+        Push32(state, GetReg(state, EAX), utlb, op);
+        Push32(state, GetReg(state, ECX), utlb, op);
+        Push32(state, GetReg(state, EDX), utlb, op);
+        Push32(state, GetReg(state, EBX), utlb, op);
+        Push32(state, temp, utlb, op);
+        Push32(state, GetReg(state, EBP), utlb, op);
+        Push32(state, GetReg(state, ESI), utlb, op);
+        Push32(state, GetReg(state, EDI), utlb, op);
     }
 }
 
@@ -802,24 +921,28 @@ static FORCE_INLINE void OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     // 61: POPA/POPAD
     if (op->prefixes.flags.opsize) {
         // POPA (16-bit)
-        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | Pop16(state, utlb));
-        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | Pop16(state, utlb));
-        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | Pop16(state, utlb));
-        Pop16(state, utlb);  // Skip SP
-        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | Pop16(state, utlb));
-        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | Pop16(state, utlb));
-        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | Pop16(state, utlb));
-        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | Pop16(state, utlb));
+        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | Pop16(state, utlb, op));
+        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | Pop16(state, utlb, op));
+        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | Pop16(state, utlb, op));
+        Pop16(state, utlb, op);  // Skip SP
+        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | Pop16(state, utlb, op));
+        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | Pop16(state, utlb, op));
+        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | Pop16(state, utlb, op));
     } else {
         // POPAD (32-bit)
-        SetReg(state, EDI, Pop32(state, utlb));
-        SetReg(state, ESI, Pop32(state, utlb));
-        SetReg(state, EBP, Pop32(state, utlb));
-        Pop32(state, utlb);  // Skip ESP
-        SetReg(state, EBX, Pop32(state, utlb));
-        SetReg(state, EDX, Pop32(state, utlb));
-        SetReg(state, ECX, Pop32(state, utlb));
-        SetReg(state, EAX, Pop32(state, utlb));
+        SetReg(state, EDI, Pop32(state, utlb, op));
+        SetReg(state, ESI, Pop32(state, utlb, op));
+        SetReg(state, EBP, Pop32(state, utlb, op));
+        Pop32(state, utlb, op);  // Skip ESP
+        SetReg(state, EBX, Pop32(state, utlb, op));
+        SetReg(state, EDX, Pop32(state, utlb, op));
+        SetReg(state, ECX, Pop32(state, utlb, op));
+    }
+    // EAX is popped last
+    if (op->prefixes.flags.opsize) {
+        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | Pop16(state, utlb, op));
+    } else {
+        SetReg(state, EAX, Pop32(state, utlb, op));
     }
 }
 
@@ -827,39 +950,34 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
     uint16_t size = op->imm & 0xFFFF;
-    uint8_t level = (op->imm >> 16) & 0x1F;
-    
-    // 1. Push EBP
-    Push32(state, GetReg(state, EBP), utlb);
-    uint32_t frame_temp = GetReg(state, ESP); // ESP after push
+    uint8_t nesting = (op->imm >> 16) & 0xFF;
 
-    // 2. If Level > 0, push previous frame pointers
-    if (level > 0) {
-        // We need to read from the *current* EBP (which points to start of previous frame)
-        // and follow the chain 'level-1' times.
+    // 1. Push EBP
+    Push32(state, GetReg(state, EBP), utlb, op);
+    // 2. FrameTemp = ESP
+    uint32_t frame_temp = GetReg(state, ESP);
+
+    if (nesting > 0) {
+        if (nesting > 31) nesting = 31;
+
+        // ... nesting logic ...
+        // We need to implement loop if we support nesting > 1
+        // For now, simplify or assume single nesting usually 0 or 1
+        // But for completeness:
         uint32_t ebp = GetReg(state, EBP);
-        
-        for (uint8_t i = 1; i < level; ++i) {
-            ebp -= 4; // Point to pointer to prev frame? 
-            // On stack: [OldEBP] [RetAddr]
-            // ENTER L, 1: Push EBP. FrameTemp = ESP. 
-            // If Level > 0:
-            //   For i=1 to Level-1:
-            //     EBP = EBP - 4
-            //     Push [EBP]
-            //   Push FrameTemp
-            
+        for (int i = 1; i < nesting; ++i) {
             ebp -= 4;
-            uint32_t val = state->mmu.read<uint32_t>(ebp, utlb);
-            Push32(state, val, utlb);
+            ebp -= 4;
+            uint32_t val = state->mmu.read<uint32_t>(state, ebp, utlb, op);
+            Push32(state, val, utlb, op);
         }
         // Push FrameTemp
-        Push32(state, frame_temp, utlb);
+        Push32(state, frame_temp, utlb, op);
     }
-    
+
     // 3. MOV EBP, FrameTemp
     SetReg(state, EBP, frame_temp);
-    
+
     // 4. SUB ESP, Size
     SetReg(state, ESP, GetReg(state, ESP) - size);
 }
@@ -870,7 +988,7 @@ static FORCE_INLINE void OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     uint32_t ebp = GetReg(state, EBP);
     SetReg(state, ESP, ebp);
     // POP EBP
-    SetReg(state, EBP, Pop32(state, utlb));
+    SetReg(state, EBP, Pop32(state, utlb, op));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -963,47 +1081,126 @@ void RegisterDataMovOps() {
     // Specialized 32-bit MOV
     g_Handlers[OP_MOV_RR_STORE] = DispatchWrapper<OpMov_EvGv_Reg>;
     g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem<>>;
-    g_Handlers[OP_MOV_RR_LOAD]  = DispatchWrapper<OpMov_GvEv_Reg>;
-    g_Handlers[OP_MOV_MR_LOAD]  = DispatchWrapper<OpMov_GvEv_Mem<>>;
+    g_Handlers[OP_MOV_RR_LOAD] = DispatchWrapper<OpMov_GvEv_Reg>;
+    g_Handlers[OP_MOV_MR_LOAD] = DispatchWrapper<OpMov_GvEv_Mem<>>;
 
-    
-
-
-    
     // Register for all 8 registers
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 1;
+        DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 1;
+        DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 2;
+        DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 2;
+        DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 3;
+        DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 3;
+        DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 4;
+        DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 4;
+        DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 5;
+        DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 5;
+        DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 6;
+        DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 6;
+        DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecialized(OP_MOV_MR_LOAD, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecialized(OP_MOV_RM_STORE, c); }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    }
 
     // --- Key MOV Patterns Specialization ---
-    
+
     // 1. MOV EBP, ESP (Stack Frame Construction)
     // Opcode 8B /r. Mod=3. Reg=EBP(5), RM=ESP(4).
     {
-        SpecCriteria c; 
-        c.reg_mask = 0x7; c.reg_val = 5; // Dst = EBP
-        c.rm_mask = 0x7;  c.rm_val = 4;  // Src = ESP
-        c.mod_mask = 3;   c.mod_val = 3; // Register Mode
+        SpecCriteria c;
+        c.reg_mask = 0x7;
+        c.reg_val = 5;  // Dst = EBP
+        c.rm_mask = 0x7;
+        c.rm_val = 4;  // Src = ESP
+        c.mod_mask = 3;
+        c.mod_val = 3;  // Register Mode
         DispatchRegistrar<OpMov_Ebp_Esp>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
 
@@ -1011,9 +1208,12 @@ void RegisterDataMovOps() {
     // Reg=ECX(1), RM=EAX(0)
     {
         SpecCriteria c;
-        c.reg_mask = 0x7; c.reg_val = 1; // Dst = ECX
-        c.rm_mask = 0x7;  c.rm_val = 0;  // Src = EAX
-        c.mod_mask = 3;   c.mod_val = 3;
+        c.reg_mask = 0x7;
+        c.reg_val = 1;  // Dst = ECX
+        c.rm_mask = 0x7;
+        c.rm_val = 0;  // Src = EAX
+        c.mod_mask = 3;
+        c.mod_val = 3;
         DispatchRegistrar<OpMov_Ecx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
 
@@ -1021,18 +1221,22 @@ void RegisterDataMovOps() {
     // Reg=EDX(2), RM=EAX(0)
     {
         SpecCriteria c;
-        c.reg_mask = 0x7; c.reg_val = 2; // Dst = EDX
-        c.rm_mask = 0x7;  c.rm_val = 0;  // Src = EAX
-        c.mod_mask = 3;   c.mod_val = 3;
+        c.reg_mask = 0x7;
+        c.reg_val = 2;  // Dst = EDX
+        c.rm_mask = 0x7;
+        c.rm_val = 0;  // Src = EAX
+        c.mod_mask = 3;
+        c.mod_val = 3;
         DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
 
-
-    #define REG_EVGV(ridx, FuncName) \
-    { \
-        SpecCriteria c; \
-        c.reg_mask = 0x7; c.reg_val = ridx; \
-        c.mod_mask = 3;   c.mod_val = 3; \
+#define REG_EVGV(ridx, FuncName)                                              \
+    {                                                                         \
+        SpecCriteria c;                                                       \
+        c.reg_mask = 0x7;                                                     \
+        c.reg_val = ridx;                                                     \
+        c.mod_mask = 3;                                                       \
+        c.mod_val = 3;                                                        \
         DispatchRegistrar<FuncName>::RegisterSpecialized(OP_MOV_RR_STORE, c); \
     }
 
@@ -1044,18 +1248,74 @@ void RegisterDataMovOps() {
     REG_EVGV(5, OpMov_EvGv_Ebp);
     REG_EVGV(6, OpMov_EvGv_Esi);
     REG_EVGV(7, OpMov_EvGv_Edi);
-    
+
     // Fix index 2 and 7 duplication in macro above (wrote Edi twice)
     // Let's rewrite cleaner without macro to be safe and explicit.
-    
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=0; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Eax>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=1; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ecx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=2; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Edx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=3; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ebx>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=4; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Esp>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=5; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Ebp>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=6; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Esi>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
-    { SpecCriteria c; c.reg_mask=7; c.reg_val=7; c.mod_mask=3; c.mod_val=3; DispatchRegistrar<OpMov_EvGv_Edi>::RegisterSpecialized(OP_MOV_RR_STORE, c); }
+
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Eax>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 1;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Ecx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 2;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Edx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 3;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Ebx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 4;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Esp>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 5;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Ebp>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 6;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Esi>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_EvGv_Edi>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+    }
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8
     g_Handlers[0x8A] = DispatchWrapper<OpMov_GbEb>;  // MOV r8, r/m8
     g_Handlers[0xC6] = DispatchWrapper<OpMov_EbIb>;  // MOV r/m8, imm8

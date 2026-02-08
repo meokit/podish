@@ -77,10 +77,14 @@ struct alignas(64) Context {
     uint16_t last_opcode;
 
     // System Environment (Pointers to Managers)
-    // We store these here so handlers can access memory/hooks via the Context
-    // pointer.
     void* mmu;    // Type-erased or forward-declared SoftMMU*
     void* hooks;  // Type-erased or forward-declared HookManager*
 };
+
+struct EmuState;
+struct DecodedOp;
+
+// Helper to trigger precise fault from MMU/Helpers by modifying the next instruction's handler
+void TriggerPreciseFault(EmuState* state, DecodedOp* op);
 
 }  // namespace fiberish

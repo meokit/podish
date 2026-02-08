@@ -67,6 +67,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
     std::memset(op, 0, sizeof(DecodedOp));
     op->prefixes.flags.ea_base = 8;
     op->prefixes.flags.ea_index = 8;
+    op->branch_target = std::numeric_limits<uint32_t>::max();  // Invalid branch target
 
     const uint8_t* start = code;
     const uint8_t* ptr = code;
@@ -346,7 +347,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint8_t buf[16];
         bool fetch_fault = false;
         for (int i = 0; i < 16; ++i) {
-            buf[i] = state->mmu.read_for_exec<uint8_t>(current_eip + i);
+            buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
             if (state->status != EmuStatus::Running) {
                 fetch_fault = true;
                 break;
@@ -473,6 +474,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
         sentinel.handler = exit_h;
+        sentinel.next_eip = temp_ops.back().next_eip;      // Copy next_eip from last op
         sentinel.next_block = state->dummy_invalid_block;  // Important!
         temp_ops.push_back(sentinel);
     }

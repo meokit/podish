@@ -41,7 +41,7 @@ static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0)
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<double>(addr, utlb);
+            b = state->mmu.read<double>(state, addr, utlb, op);
         // Truncate
         res = (int32_t)b;
     } else if (op->prefixes.flags.rep) {  // F3: CVTTSS2SI (Single -> Int32)
@@ -49,7 +49,7 @@ static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0)
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<float>(addr, utlb);
+            b = state->mmu.read<float>(state, addr, utlb, op);
         res = (int32_t)b;
     } else {
         OpUd2(state, op);
@@ -69,7 +69,7 @@ static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0)
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<double>(addr, utlb);
+            b = state->mmu.read<double>(state, addr, utlb, op);
 
         // TODO: Sync MXCSR rounding mode to host
         res = simde_mm_cvtsd_si32(simde_mm_set_sd(b));
@@ -78,7 +78,7 @@ static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0)
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         else
-            b = state->mmu.read<float>(addr, utlb);
+            b = state->mmu.read<float>(state, addr, utlb, op);
 
         // TODO: Sync MXCSR rounding mode to host
         res = simde_mm_cvtss_si32(simde_mm_set_ss(b));
@@ -107,7 +107,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
             src_pd = simde_mm_set_sd(*(double*)&val);
         }
         *dest_ptr = simde_mm_cvtsd_ss(*dest_ptr, src_pd);
@@ -119,7 +119,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(addr, utlb);
+            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
             src = simde_mm_set_ss(*(float*)&val);
         }
 
@@ -134,7 +134,7 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
             uint32_t v0 = (uint32_t)val;
             uint32_t v1 = (uint32_t)(val >> 32);
             src = simde_mm_set_ps(0.0f, 0.0f, *(float*)&v1, *(float*)&v0);
@@ -187,7 +187,7 @@ static FORCE_INLINE void OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB*
             isrc = simde_mm_castps_si128(src);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
             uint32_t v0 = (uint32_t)val;
             uint32_t v1 = (uint32_t)(val >> 32);
             isrc = simde_mm_set_epi32(0, 0, v1, v0);

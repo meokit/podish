@@ -201,7 +201,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 uint16_t ax = (uint16_t)GetReg(state, EAX) & 0xFFFF;
                 if (val == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;
@@ -215,7 +215,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 uint32_t dx_ax = ((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF);
                 if (val == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;
@@ -234,7 +234,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 uint64_t edx_eax = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
                 if (val == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;
@@ -253,7 +253,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 int8_t v = (int8_t)val;
                 if (v == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;
@@ -269,7 +269,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 int16_t v = (int16_t)val;
                 if (v == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;
@@ -289,7 +289,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 int32_t v = (int32_t)val;
                 if (v == 0) {
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->status = EmuStatus::Fault;
+                        TriggerPreciseFault(state, op);
                         state->fault_vector = 0;  // #DE
                     }
                     return;

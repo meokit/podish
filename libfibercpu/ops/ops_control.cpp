@@ -22,7 +22,7 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
         // 32-bit relative jump (E9)
         offset = (int32_t)op->imm;
     }
-    state->ctx.eip += offset;
+    op->branch_target = op->next_eip + offset;
 }
 
 template <uint8_t Cond, bool IsRel8>
@@ -39,7 +39,7 @@ static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
             // 32-bit relative jump (0F 8x opcodes)
             offset = (int32_t)op->imm;
         }
-        state->ctx.eip += offset;
+        op->branch_target = op->next_eip + offset;
     }
 }
 
@@ -50,30 +50,31 @@ static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
 
 JCC_WRAPPERS(0, O)
 JCC_WRAPPERS(1, NO)
-JCC_WRAPPERS(2, B) JCC_WRAPPERS(3, AE) JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A)
-    JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L)
-        JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
+JCC_WRAPPERS(2, B)
+JCC_WRAPPERS(3, AE) JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S)
+    JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE)
+        JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
             static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
     // Push Return Address (Current EIP is already advanced to Next Insn by
     // Wrapper/Step)
-    Push32(state, state->ctx.eip, utlb);
+    Push32(state, op->next_eip, utlb, op);
     // Jump relative to Next Insn
-    state->ctx.eip += (int32_t)op->imm;
+    op->branch_target = op->next_eip + (int32_t)op->imm;
 }
 
 static FORCE_INLINE void OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C3: RET
-    uint32_t ret_eip = Pop32(state, utlb);
-    state->ctx.eip = ret_eip;
+    uint32_t ret_eip = Pop32(state, utlb, op);
+    op->branch_target = ret_eip;
 }
 
 static FORCE_INLINE void OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C2: RET imm16
-    uint32_t ret_eip = Pop32(state, utlb);
-    state->ctx.eip = ret_eip;
+    uint32_t ret_eip = Pop32(state, utlb, op);
+    op->branch_target = ret_eip;
 
     // Pop imm16 bytes from stack
     uint32_t esp = GetReg(state, ESP);
@@ -81,102 +82,16 @@ static FORCE_INLINE void OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroT
     SetReg(state, ESP, esp);
 }
 
-static FORCE_INLINE void OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // CD ib: INT imm8
-    // Note: Decoder puts imm8 in op->imm
-    uint8_t vector = (uint8_t)op->imm;
-    if (!state->hooks.on_interrupt(state, vector)) {
-        state->status = EmuStatus::Fault;
-        state->fault_vector = vector;
-    }
-    utlb->invalidate();
-}
-
-static FORCE_INLINE void OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // CC: INT3 (Vector 3, Breakpoint)
-    if (!state->hooks.on_interrupt(state, 3)) {
-        state->status = EmuStatus::Fault;
-        state->fault_vector = 3;
-    }
-    utlb->invalidate();
-}
-
-static FORCE_INLINE void OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // CE: INTO (Interrupt 4 if Overflow Flag set)
-    if (state->ctx.eflags & OF_MASK) {
-        if (!state->hooks.on_interrupt(state, 4)) {
-            state->status = EmuStatus::Fault;
-            state->fault_vector = 4;  // #OF
-        }
-    }
-    utlb->invalidate();
-}
-
-static FORCE_INLINE void OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // HLT (0xF4)
-    state->status = EmuStatus::Stopped;
-    utlb->invalidate();
-}
-
-static FORCE_INLINE void OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 90: NOP
-    // F3 90: PAUSE (REP NOP)
-    if (op->prefixes.flags.rep) {
-        CPU_RELAX();
-    }
-}
-
-template <uint8_t Cond>
-static FORCE_INLINE void OpCmov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F 4x: CMOVcc r32, r/m32
-    // Condition check is compile-time specialized
-
-    bool pass = CheckConditionFixed<Cond>(state);
-    if (pass) {
-        if (op->prefixes.flags.opsize) {
-            uint16_t val = ReadModRM16(state, op, utlb);
-            uint8_t reg = (op->modrm >> 3) & 7;
-            SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
-        } else {
-            uint32_t val = ReadModRM32(state, op, utlb);
-            uint8_t reg = (op->modrm >> 3) & 7;
-            SetReg(state, reg, val);
-        }
-    }
-}
-
-// Named wrappers for CMOV specializations
-static void OpCmov_O(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<0>(s, o, u); }
-static void OpCmov_NO(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<1>(s, o, u); }
-static void OpCmov_B(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<2>(s, o, u); }
-static void OpCmov_AE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<3>(s, o, u); }
-static void OpCmov_E(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<4>(s, o, u); }
-static void OpCmov_NE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<5>(s, o, u); }
-static void OpCmov_BE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<6>(s, o, u); }
-static void OpCmov_A(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<7>(s, o, u); }
-static void OpCmov_S(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<8>(s, o, u); }
-static void OpCmov_NS(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<9>(s, o, u); }
-static void OpCmov_P(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<10>(s, o, u); }
-static void OpCmov_NP(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<11>(s, o, u); }
-static void OpCmov_L(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<12>(s, o, u); }
-static void OpCmov_GE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<13>(s, o, u); }
-static void OpCmov_LE(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<14>(s, o, u); }
-static void OpCmov_G(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov_GvEv<15>(s, o, u); }
-
-// ------------------------------------------------------------------------------------------------
-// Flag Operations
-// ------------------------------------------------------------------------------------------------
-
 static FORCE_INLINE void OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9C: PUSHF/PUSHFD
     if (op->prefixes.flags.opsize) {
         // PUSHF (16-bit)
-        Push16(state, (uint16_t)state->ctx.eflags, utlb);
+        Push16(state, (uint16_t)state->ctx.eflags, utlb, op);
     } else {
         // PUSHFD (32-bit)
         // Note: VM and RF flags are usually cleared in image pushed to stack?
         // For simple emulation, we push raw.
-        Push32(state, state->ctx.eflags & 0x00FCFFFF, utlb);
+        Push32(state, state->ctx.eflags & 0x00FCFFFF, utlb, op);
     }
 }
 
@@ -184,7 +99,7 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     // 9D: POPF/POPFD
     if (op->prefixes.flags.opsize) {
         // POPF (16-bit)
-        uint16_t val = Pop16(state, utlb);
+        uint16_t val = Pop16(state, utlb, op);
         // Only update bits allowed by mask (and within 16-bit range)
         uint32_t mask = state->ctx.eflags_mask & 0xFFFF;
         // Also always preserve Reserved Bit 1 (Value 2)
@@ -194,7 +109,7 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
         state->ctx.eflags = new_flags;
     } else {
         // POPFD (32-bit)
-        uint32_t val = Pop32(state, utlb);
+        uint32_t val = Pop32(state, utlb, op);
         uint32_t mask = state->ctx.eflags_mask;
         uint32_t original = state->ctx.eflags;
         uint32_t new_flags = (original & ~mask) | (val & mask);
@@ -318,13 +233,13 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
         case 2:  // LDMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                state->ctx.mxcsr = state->mmu.read<uint32_t>(addr, utlb);
+                state->ctx.mxcsr = state->mmu.read<uint32_t>(state, addr, utlb, op);
             }
             break;
         case 3:  // STMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                state->mmu.write<uint32_t>(addr, state->ctx.mxcsr, utlb);
+                state->mmu.write<uint32_t>(state, addr, state->ctx.mxcsr, utlb, op);
             }
             break;
         case 5:  // LFENCE (mod=3, rm=0)
@@ -351,6 +266,101 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
             break;
     }
 }
+
+// ----------------------------------------------------------------------------
+// Missing Control Optimizations
+// ----------------------------------------------------------------------------
+
+static FORCE_INLINE void OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // NOP - Do nothing
+}
+
+static FORCE_INLINE void OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // HLT
+    // For user-mode emulation, this ends execution or waits?
+    // Stops execution for now.
+    state->status = EmuStatus::Stopped;
+}
+
+// Helper for interrupts
+static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 1. Check if hook handles it
+    if (state->interrupt_handlers[vector]) {
+        // Hook is void (*)(...) or int (*)(...)
+        // In state.h: using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
+        // If it returns non-zero, it means handled?
+        if (state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector])) {
+            return;
+        }
+    }
+
+    // 2. Real Interrupt Emulation (Push Flags, CS, EIP)
+    // For now, we just fault if not handled, as we don't fully emulate IDT in user mode runner.
+    state->status = EmuStatus::Fault;
+    state->fault_vector = vector;
+}
+
+static FORCE_INLINE void OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // CD ib: INT n
+    uint8_t vector = (uint8_t)op->imm;
+    RaiseInterrupt(state, vector, op, utlb);
+}
+
+static FORCE_INLINE void OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // CC: INT 3
+    RaiseInterrupt(state, 3, op, utlb);
+}
+
+static FORCE_INLINE void OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // CE: INTO
+    if (state->ctx.eflags & OF_MASK) {
+        RaiseInterrupt(state, 4, op, utlb);
+    }
+}
+
+// CMOV Implementation
+template <uint8_t Cond>
+static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
+    // If condition is FALSE, NOP (no memory read).
+
+    if (CheckConditionFixed<Cond>(state)) {
+        uint8_t reg = (op->modrm >> 3) & 7;
+
+        if (op->prefixes.flags.opsize) {
+            // 16-bit
+            uint16_t val = ReadModRM16(state, op, utlb);
+            uint32_t current = state->ctx.regs[reg];
+            state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+        } else {
+            // 32-bit
+            uint32_t val = ReadModRM32(state, op, utlb);
+            state->ctx.regs[reg] = val;
+        }
+    }
+}
+
+// Named wrappers for Cmov specializations
+#define CMOV_WRAPPERS(cond, name) \
+    static void OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov<cond>(s, o, u); }
+
+CMOV_WRAPPERS(0, O)
+CMOV_WRAPPERS(1, NO)
+CMOV_WRAPPERS(2, B)
+CMOV_WRAPPERS(3, AE)
+CMOV_WRAPPERS(4, E)
+CMOV_WRAPPERS(5, NE)
+CMOV_WRAPPERS(6, BE)
+CMOV_WRAPPERS(7, A)
+CMOV_WRAPPERS(8, S)
+CMOV_WRAPPERS(9, NS)
+CMOV_WRAPPERS(10, P)
+CMOV_WRAPPERS(11, NP)
+CMOV_WRAPPERS(12, L)
+CMOV_WRAPPERS(13, GE)
+CMOV_WRAPPERS(14, LE)
+CMOV_WRAPPERS(15, G)
+#undef CMOV_WRAPPERS
 
 static HandlerFunc g_JccRel8Wrappers[] = {
     DispatchWrapper<OpJcc_O_Rel8>,  DispatchWrapper<OpJcc_NO_Rel8>, DispatchWrapper<OpJcc_B_Rel8>,

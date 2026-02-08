@@ -25,7 +25,7 @@ static FORCE_INLINE void OpMov_Sse_Load(EmuState* state, DecodedOp* op, mem::Mic
         } else {
             // Mem->Reg: Load double, zero high
             uint32_t addr = ComputeLinearAddress(state, op);
-            double val = state->mmu.read<double>(addr, utlb);
+            double val = state->mmu.read<double>(state, addr, utlb, op);
             // set_sd sets low double, zeroes high
             state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_set_sd(val));
         }
@@ -37,7 +37,7 @@ static FORCE_INLINE void OpMov_Sse_Load(EmuState* state, DecodedOp* op, mem::Mic
         } else {
             // Mem->Reg: Load float, zero high
             uint32_t addr = ComputeLinearAddress(state, op);
-            float val = state->mmu.read<float>(addr, utlb);
+            float val = state->mmu.read<float>(state, addr, utlb, op);
             // set_ss sets low float, zeroes high
             state->ctx.xmm[reg] = simde_mm_set_ss(val);
         }
@@ -68,7 +68,7 @@ static FORCE_INLINE void OpMov_Sse_Store(EmuState* state, DecodedOp* op, mem::Mi
             uint32_t addr = ComputeLinearAddress(state, op);
             double val;
             simde_mm_store_sd(&val, simde_mm_castps_pd(src_val));
-            state->mmu.write<double>(addr, val, utlb);
+            state->mmu.write<double>(state, addr, val, utlb, op);
         }
     } else if (op->prefixes.flags.rep) {  // F3: MOVSS
         if ((op->modrm >> 6) == 3) {
@@ -80,7 +80,7 @@ static FORCE_INLINE void OpMov_Sse_Store(EmuState* state, DecodedOp* op, mem::Mi
             uint32_t addr = ComputeLinearAddress(state, op);
             float val;
             simde_mm_store_ss(&val, src_val);
-            state->mmu.write<float>(addr, val, utlb);
+            state->mmu.write<float>(state, addr, val, utlb, op);
         }
     } else {  // MOVUPS/MOVUPD
         // Store 128
@@ -114,7 +114,7 @@ static FORCE_INLINE void OpMovq_Load(EmuState* state, DecodedOp* op, mem::MicroT
         val = ((uint64_t*)&state->ctx.xmm[rm])[0];
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        val = state->mmu.read<uint64_t>(addr, utlb);
+        val = state->mmu.read<uint64_t>(state, addr, utlb, op);
     }
     uint8_t reg = (op->modrm >> 3) & 7;
     // Set 64 bits low, 0 high.
@@ -155,7 +155,7 @@ static FORCE_INLINE void OpMovq_Store(EmuState* state, DecodedOp* op, mem::Micro
         ptr[1] = 0;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint64_t>(addr, val, utlb);
+        state->mmu.write<uint64_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -196,7 +196,7 @@ static FORCE_INLINE void OpMovhpd(EmuState* state, DecodedOp* op, mem::MicroTLB*
     if (op->extra == 6) {  // Load
         // Load m64 to Dest[127:64]
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[1] = val;  // High
@@ -205,7 +205,7 @@ static FORCE_INLINE void OpMovhpd(EmuState* state, DecodedOp* op, mem::MicroTLB*
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint64_t>(addr, val, utlb);
+        state->mmu.write<uint64_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -215,7 +215,7 @@ static FORCE_INLINE void OpMovhps(EmuState* state, DecodedOp* op, mem::MicroTLB*
 
     if (op->extra == 6) {  // Load
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[1] = val;  // High
@@ -223,7 +223,7 @@ static FORCE_INLINE void OpMovhps(EmuState* state, DecodedOp* op, mem::MicroTLB*
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint64_t>(addr, val, utlb);
+        state->mmu.write<uint64_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -233,7 +233,7 @@ static FORCE_INLINE void OpMovlpd(EmuState* state, DecodedOp* op, mem::MicroTLB*
 
     if (op->extra == 2) {  // Load 12
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[0] = val;  // Low
@@ -241,7 +241,7 @@ static FORCE_INLINE void OpMovlpd(EmuState* state, DecodedOp* op, mem::MicroTLB*
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint64_t>(addr, val, utlb);
+        state->mmu.write<uint64_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -251,7 +251,7 @@ static FORCE_INLINE void OpMovlps(EmuState* state, DecodedOp* op, mem::MicroTLB*
 
     if (op->extra == 2) {  // Load 12
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+        uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t* ptr = (uint64_t*)&state->ctx.xmm[reg];
         ptr[0] = val;  // Low
@@ -259,7 +259,7 @@ static FORCE_INLINE void OpMovlps(EmuState* state, DecodedOp* op, mem::MicroTLB*
         uint8_t reg = (op->modrm >> 3) & 7;
         uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint64_t>(addr, val, utlb);
+        state->mmu.write<uint64_t>(state, addr, val, utlb, op);
     }
 }
 
@@ -273,7 +273,7 @@ static FORCE_INLINE void OpDup_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(addr, utlb);
+            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
             src = simde_mm_set_sd(*(double*)&val);
         }
         state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_movedup_pd(src));
@@ -322,7 +322,7 @@ static FORCE_INLINE void OpMovnti(EmuState* state, DecodedOp* op, mem::MicroTLB*
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t r_val = GetReg(state, reg);
     uint32_t addr = ComputeLinearAddress(state, op);
-    state->mmu.write<uint32_t>(addr, r_val, utlb);
+    state->mmu.write<uint32_t>(state, addr, r_val, utlb, op);
 }
 
 static FORCE_INLINE void OpMaskmovdqu(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -338,7 +338,7 @@ static FORCE_INLINE void OpMaskmovdqu(EmuState* state, DecodedOp* op, mem::Micro
 
     for (int i = 0; i < 16; ++i) {
         if (m[i] & 0x80) {
-            state->mmu.write<uint8_t>(addr + i, v[i], utlb);
+            state->mmu.write<uint8_t>(state, addr + i, v[i], utlb, op);
         }
     }
 }

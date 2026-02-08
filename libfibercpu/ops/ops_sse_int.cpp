@@ -658,7 +658,7 @@ static FORCE_INLINE void OpPinsrw_Sse(EmuState* state, DecodedOp* op, mem::Micro
         val = (int)(uint16_t)state->ctx.regs[op->modrm & 7];
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        val = (int)state->mmu.read<uint16_t>(addr, utlb);
+        val = (int)state->mmu.read<uint16_t>(state, addr, utlb, op);
     }
 
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);

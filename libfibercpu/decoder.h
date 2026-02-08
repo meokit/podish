@@ -114,7 +114,7 @@ struct alignas(32) DecodedOp {
     int8_t padding1;
     // ------------ 16 BYTES ------------
     uint32_t next_eip;
-    uint32_t padding2;
+    uint32_t branch_target;
 
     // ------------ 24 BYTES ------------
     HandlerFunc handler;
