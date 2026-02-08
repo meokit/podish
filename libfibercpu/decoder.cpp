@@ -424,6 +424,20 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         op_indices.push_back((map << 8) | opcode);
         op.next_eip = current_eip + op.length;
 
+        // Optimization: Skip NOPs by absorbing them into the previous instruction
+        // unless it's the first instruction of the block
+        bool is_nop = (handler_index == 0x90 || handler_index == 0x11F);
+        if (is_nop && !temp_ops.empty() && !IsControlFlow(&temp_ops.back())) {
+            // "Absorb" NOP into the previous instruction
+            DecodedOp& prev = temp_ops.back();
+            prev.next_eip += op.length;
+            prev.length += op.length;
+            op_indices.pop_back();
+            // Advance EIP and continue
+            current_eip += op.length;
+            continue;
+        }
+
         temp_ops.push_back(op);
         inst_count++;
         uint32_t inst_len = op.length;
