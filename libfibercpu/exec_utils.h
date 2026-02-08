@@ -43,43 +43,60 @@ constexpr uint32_t OF_MASK = 0x0800;
 template <uint8_t Cond>
 inline bool CheckConditionFixed(EmuState* state) {
     uint32_t f = state->ctx.eflags;
-    if constexpr (Cond == 0) return (f & OF_MASK) != 0; // JO
-    else if constexpr (Cond == 1) return (f & OF_MASK) == 0; // JNO
-    else if constexpr (Cond == 2) return (f & CF_MASK) != 0; // JB/JC
-    else if constexpr (Cond == 3) return (f & CF_MASK) == 0; // JNB/JNC
-    else if constexpr (Cond == 4) return (f & ZF_MASK) != 0; // JZ/JE
-    else if constexpr (Cond == 5) return (f & ZF_MASK) == 0; // JNZ/JNE
-    else if constexpr (Cond == 6) return (f & (CF_MASK | ZF_MASK)) != 0; // JBE
-    else if constexpr (Cond == 7) return (f & (CF_MASK | ZF_MASK)) == 0; // JA
-    else if constexpr (Cond == 8) return (f & SF_MASK) != 0; // JS
-    else if constexpr (Cond == 9) return (f & SF_MASK) == 0; // JNS
-    else if constexpr (Cond == 10) return (f & PF_MASK) != 0; // JP/JPE
-    else if constexpr (Cond == 11) return (f & PF_MASK) == 0; // JNP/JPO
-    else if constexpr (Cond == 12) return ((f & SF_MASK) != 0) != ((f & OF_MASK) != 0); // JL
-    else if constexpr (Cond == 13) return ((f & SF_MASK) != 0) == ((f & OF_MASK) != 0); // JGE
-    else if constexpr (Cond == 14) return (f & ZF_MASK) || (((f & SF_MASK) != 0) != ((f & OF_MASK) != 0)); // JLE
-    else if constexpr (Cond == 15) return !(f & ZF_MASK) && (((f & SF_MASK) != 0) == ((f & OF_MASK) != 0)); // JG
-    else return false;
+    if constexpr (Cond == 0)
+        return (f & OF_MASK) != 0;  // JO
+    else if constexpr (Cond == 1)
+        return (f & OF_MASK) == 0;  // JNO
+    else if constexpr (Cond == 2)
+        return (f & CF_MASK) != 0;  // JB/JC
+    else if constexpr (Cond == 3)
+        return (f & CF_MASK) == 0;  // JNB/JNC
+    else if constexpr (Cond == 4)
+        return (f & ZF_MASK) != 0;  // JZ/JE
+    else if constexpr (Cond == 5)
+        return (f & ZF_MASK) == 0;  // JNZ/JNE
+    else if constexpr (Cond == 6)
+        return (f & (CF_MASK | ZF_MASK)) != 0;  // JBE
+    else if constexpr (Cond == 7)
+        return (f & (CF_MASK | ZF_MASK)) == 0;  // JA
+    else if constexpr (Cond == 8)
+        return (f & SF_MASK) != 0;  // JS
+    else if constexpr (Cond == 9)
+        return (f & SF_MASK) == 0;  // JNS
+    else if constexpr (Cond == 10)
+        return (f & PF_MASK) != 0;  // JP/JPE
+    else if constexpr (Cond == 11)
+        return (f & PF_MASK) == 0;  // JNP/JPO
+    else if constexpr (Cond == 12)
+        return ((f & SF_MASK) != 0) != ((f & OF_MASK) != 0);  // JL
+    else if constexpr (Cond == 13)
+        return ((f & SF_MASK) != 0) == ((f & OF_MASK) != 0);  // JGE
+    else if constexpr (Cond == 14)
+        return (f & ZF_MASK) || (((f & SF_MASK) != 0) != ((f & OF_MASK) != 0));  // JLE
+    else if constexpr (Cond == 15)
+        return !(f & ZF_MASK) && (((f & SF_MASK) != 0) == ((f & OF_MASK) != 0));  // JG
+    else
+        return false;
 }
 
 inline bool CheckCondition(EmuState* state, uint8_t cond) {
     static const uint32_t g_ConditionLUT[16] = {
-        0xFFFF0000, // cond 0: JO
-        0x0000FFFF, // cond 1: JNO
-        0xAAAAAAAA, // cond 2: JB
-        0x55555555, // cond 3: JAE
-        0xF0F0F0F0, // cond 4: JZ
-        0x0F0F0F0F, // cond 5: JNZ
-        0xFAFAFAFA, // cond 6: JBE
-        0x05050505, // cond 7: JA
-        0xFF00FF00, // cond 8: JS
-        0x00FF00FF, // cond 9: JNS
-        0xCCCCCCCC, // cond 10: JP
-        0x33333333, // cond 11: JNP
-        0x00FFFF00, // cond 12: JL
-        0xFF0000FF, // cond 13: JGE
-        0xF0FFFFF0, // cond 14: JLE
-        0x0F00000F, // cond 15: JG
+        0xFFFF0000,  // cond 0: JO
+        0x0000FFFF,  // cond 1: JNO
+        0xAAAAAAAA,  // cond 2: JB
+        0x55555555,  // cond 3: JAE
+        0xF0F0F0F0,  // cond 4: JZ
+        0x0F0F0F0F,  // cond 5: JNZ
+        0xFAFAFAFA,  // cond 6: JBE
+        0x05050505,  // cond 7: JA
+        0xFF00FF00,  // cond 8: JS
+        0x00FF00FF,  // cond 9: JNS
+        0xCCCCCCCC,  // cond 10: JP
+        0x33333333,  // cond 11: JNP
+        0x00FFFF00,  // cond 12: JL
+        0xFF0000FF,  // cond 13: JGE
+        0xF0FFFFF0,  // cond 14: JLE
+        0x0F00000F,  // cond 15: JG
     };
 
     uint32_t f = state->ctx.eflags;
@@ -97,31 +114,18 @@ inline bool CheckCondition(EmuState* state, uint8_t cond) {
 inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = op->prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
-    if (seg == 5 || seg == 6) {
-        return state->ctx.seg_base[seg - 1];
+    if (seg >= 5) {
+        return state->ctx.seg_base[seg];
     }
     return 0;
 }
 
 inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
-    // Uses pre-calculated components from Decode stage
-    uint32_t base = 0;
-
-    // Base Register
-    if (op->prefixes.flags.ea_base < 8) {
-        base = GetReg(state, op->prefixes.flags.ea_base);
-    }
-
-    // Index Register
-    if (op->prefixes.flags.ea_index < 8) {
-        base += (GetReg(state, op->prefixes.flags.ea_index) << op->meta.flags.ea_shift);
-    }
-
-    // Displacement
-    if (op->meta.flags.has_disp) {
-        base += op->disp;
-    }
+    // If ea_base or ea_index is 8, will fetch from the `zero` register
+    uint32_t base = state->ctx.regs[op->prefixes.flags.ea_base];
+    base += (state->ctx.regs[op->prefixes.flags.ea_index] << op->meta.flags.ea_shift);
+    base += op->disp;
     return base;
 }
 
@@ -725,4 +729,4 @@ inline T AluRcr(EmuState* state, T dest, uint8_t count) {
     return res;
 }
 
-}  // namespace x86emu
+}  // namespace fiberish

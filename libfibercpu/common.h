@@ -49,7 +49,7 @@ enum Seg {
 // Aligned to cache line (64 bytes) to avoid false sharing if we ever go
 // multi-threaded (though this is single threaded)
 struct alignas(64) Context {
-    uint32_t regs[8];      // General Purpose Registers
+    uint32_t regs[9];      // General Purpose Registers, the 9th is zero register
     uint32_t eip;          // Instruction Pointer
     uint32_t eflags;       // EFLAGS Register
     uint32_t eflags_mask;  // Mask for user-modifiable flags (1=modifiable)
@@ -70,7 +70,8 @@ struct alignas(64) Context {
     // CS, DS, SS, ES, are typically base 0 (Flat Model).
     // FS and GS are often used for TLS (Thread Local Storage).
     // The emulator allows the caller to set these bases.
-    uint32_t seg_base[6];
+    // 0 = Dummy, 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
+    uint32_t seg_base[7];
 
     // Profiling
     uint16_t last_opcode;
@@ -82,4 +83,4 @@ struct alignas(64) Context {
     void* hooks;  // Type-erased or forward-declared HookManager*
 };
 
-}  // namespace x86emu
+}  // namespace fiberish

@@ -291,14 +291,14 @@ void X86_WriteFPUReg(EmuState* state, int idx, const uint8_t* val) {
 
 uint32_t X86_SegBaseRead(EmuState* state, int seg_index) {
     if (seg_index >= 0 && seg_index < 6) {
-        return state->ctx.seg_base[seg_index];
+        return state->ctx.seg_base[seg_index + 1];
     }
     return 0;
 }
 
 void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
     if (seg_index >= 0 && seg_index < 6) {
-        state->ctx.seg_base[seg_index] = base;
+        state->ctx.seg_base[seg_index + 1] = base;
     }
 }
 
