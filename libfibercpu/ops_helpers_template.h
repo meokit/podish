@@ -86,7 +86,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 WriteModRM16(state, op, ~val, utlb);
             else
                 WriteModRM32(state, op, ~val, utlb);
-            break;
+            return;
         case 3:  // NEG
         {
             T res = AluSub<T, UpdateFlags>(state, (T)0, val);
@@ -98,12 +98,12 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
             }
 
             if constexpr (sizeof(T) == 1)
-                WriteModRM8(state, op, res, utlb);
+                WriteModRM8(state, op, (uint8_t)res, utlb);
             else if constexpr (sizeof(T) == 2)
-                WriteModRM16(state, op, res, utlb);
+                WriteModRM16(state, op, (uint16_t)res, utlb);
             else
-                WriteModRM32(state, op, res, utlb);
-            break;
+                WriteModRM32(state, op, (uint32_t)res, utlb);
+            return;
         }
         case 4:  // MUL (Unsigned)
         {
@@ -304,6 +304,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
         }
         default:
             OpUd2(state, op);
+            return;
     }
 }
 

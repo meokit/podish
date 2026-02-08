@@ -98,7 +98,7 @@ private:
     void sync_dirty(GuestAddr vaddr);
 
     // Slow Path: Resolve address, handle allocation/permissions/faults
-    [[nodiscard]] HostAddr resolve_slow(EmuState* state, GuestAddr addr, Property req_perm, DecodedOp* op);
+    [[nodiscard]] MemResult<HostAddr> resolve_slow(EmuState* state, GuestAddr addr, Property req_perm, DecodedOp* op);
 
 public:
     // Safe resolution without faulting
@@ -269,37 +269,41 @@ public:
     }
 
     // Internal helper for resolution (TLB or Slow) without hooks
-    [[nodiscard]] FORCE_INLINE HostAddr resolve_ptr(EmuState* state, GuestAddr addr, Property req_perm, DecodedOp* op);
+    [[nodiscard]] FORCE_INLINE MemResult<HostAddr> resolve_ptr(EmuState* state, GuestAddr addr, Property req_perm,
+                                                               DecodedOp* op);
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE T read_no_utlb(EmuState* state, GuestAddr addr, DecodedOp* op = nullptr);
+    [[nodiscard]] FORCE_INLINE MemResult<T> read_no_utlb(EmuState* state, GuestAddr addr, DecodedOp* op = nullptr);
 
     template <typename T>
-    FORCE_INLINE void write_no_utlb(EmuState* state, GuestAddr addr, T val, DecodedOp* op = nullptr);
+    [[nodiscard]] FORCE_INLINE MemResult<void> write_no_utlb(EmuState* state, GuestAddr addr, T val,
+                                                             DecodedOp* op = nullptr);
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE T read(EmuState* state, GuestAddr addr, MicroTLB* utlb, DecodedOp* op);
+    [[nodiscard]] FORCE_INLINE MemResult<T> read(EmuState* state, GuestAddr addr, MicroTLB* utlb, DecodedOp* op);
 
     template <typename T>
-    FORCE_INLINE void write(EmuState* state, GuestAddr addr, T val, MicroTLB* utlb, DecodedOp* op);
+    [[nodiscard]] FORCE_INLINE MemResult<void> write(EmuState* state, GuestAddr addr, T val, MicroTLB* utlb,
+                                                     DecodedOp* op);
 
     // Slow Path: Hooks, Resolution, Faults
     template <typename T>
-    T read_slow(EmuState* state, GuestAddr addr, DecodedOp* op);
+    [[nodiscard]] MemResult<T> read_slow(EmuState* state, GuestAddr addr, DecodedOp* op);
 
     template <typename T>
-    void write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op);
+    [[nodiscard]] MemResult<void> write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op);
 
     // Optimized Cross-Page Access
     template <typename T>
-    T read_cross_page(EmuState* state, GuestAddr addr, DecodedOp* op);
+    [[nodiscard]] MemResult<T> read_cross_page(EmuState* state, GuestAddr addr, DecodedOp* op);
 
     template <typename T>
-    void write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op);
+    [[nodiscard]] MemResult<void> write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op);
 
     // Block Copy
     // Note: I updated this signature in impl to take EmuState* state.
-    uint32_t copy_block(EmuState* state, GuestAddr src_addr, GuestAddr dst_addr, uint32_t size, DecodedOp* op);
+    [[nodiscard]] MemResult<void> copy_block(EmuState* state, GuestAddr src_addr, GuestAddr dst_addr, uint32_t size,
+                                             DecodedOp* op);
 
     // Fetch Instruction Pointer
     [[nodiscard]] inline const std::byte* translate_exec(EmuState* state, GuestAddr addr);

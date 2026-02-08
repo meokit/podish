@@ -15,7 +15,9 @@ static FORCE_INLINE void OpImul_GvEv(EmuState* state, DecodedOp* op, mem::MicroT
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         int16_t val1 = (int16_t)GetReg(state, reg);
-        int16_t val2 = (int16_t)ReadModRM16(state, op, utlb);
+        auto res_md = ReadModRM16(state, op, utlb);
+        if (!res_md) return;
+        int16_t val2 = (int16_t)*res_md;
         int32_t res = (int32_t)val1 * (int32_t)val2;
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
         if (res != (int32_t)(int16_t)res) {
@@ -25,7 +27,9 @@ static FORCE_INLINE void OpImul_GvEv(EmuState* state, DecodedOp* op, mem::MicroT
         }
     } else {
         int32_t val1 = (int32_t)GetReg(state, reg);
-        int32_t val2 = (int32_t)ReadModRM32(state, op, utlb);
+        auto res_md = ReadModRM32(state, op, utlb);
+        if (!res_md) return;
+        int32_t val2 = (int32_t)*res_md;
         int64_t res = (int64_t)val1 * (int64_t)val2;
         SetReg(state, reg, (uint32_t)res);
         if (res != (int64_t)(int32_t)res) {
@@ -43,7 +47,9 @@ static FORCE_INLINE void OpImul_GvEvIz(EmuState* state, DecodedOp* op, mem::Micr
     bool is_imm8 = (op->extra == 0xB);  // 0x6B & 0xF == 0xB
 
     if (op->prefixes.flags.opsize) {
-        int16_t val1 = (int16_t)ReadModRM16(state, op, utlb);
+        auto res_md = ReadModRM16(state, op, utlb);
+        if (!res_md) return;
+        int16_t val1 = (int16_t)*res_md;
         int16_t val2 = (int16_t)op->imm;
         if (is_imm8) val2 = (int16_t)(int8_t)val2;
 
@@ -55,7 +61,9 @@ static FORCE_INLINE void OpImul_GvEvIz(EmuState* state, DecodedOp* op, mem::Micr
             state->ctx.eflags &= ~(OF_MASK | CF_MASK);
         }
     } else {
-        int32_t val1 = (int32_t)ReadModRM32(state, op, utlb);
+        auto res_md = ReadModRM32(state, op, utlb);
+        if (!res_md) return;
+        int32_t val1 = (int32_t)*res_md;
         int32_t val2 = (int32_t)op->imm;
         if (is_imm8) val2 = (int32_t)(int8_t)val2;
 

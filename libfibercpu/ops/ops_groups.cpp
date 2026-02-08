@@ -18,7 +18,10 @@ namespace fiberish {
 template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 80: Arith r/m8, imm8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = (uint8_t)op->imm;
     Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
 }
@@ -29,10 +32,15 @@ static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::Mi
     // 81: Arith r/m, imm32
     // 83: Arith r/m, imm8 (sign-extended)
     T dest;
-    if constexpr (sizeof(T) == 2)
-        dest = ReadModRM16(state, op, utlb);
-    else
-        dest = ReadModRM32(state, op, utlb);
+    if constexpr (sizeof(T) == 2) {
+        auto res = ReadModRM16(state, op, utlb);
+        if (!res) return;
+        dest = *res;
+    } else {
+        auto res = ReadModRM32(state, op, utlb);
+        if (!res) return;
+        dest = *res;
+    }
 
     T src;
     if (op->extra == 0x3) {                 // 0x83
@@ -51,7 +59,9 @@ static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::Mi
 template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup3_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F6
-    uint8_t val = ReadModRM8(state, op, utlb);
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    uint8_t val = *val_res;
     Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
 
@@ -59,10 +69,15 @@ template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
 static FORCE_INLINE void OpGroup3_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F7
     T val;
-    if constexpr (sizeof(T) == 2)
-        val = ReadModRM16(state, op, utlb);
-    else
-        val = ReadModRM32(state, op, utlb);
+    if constexpr (sizeof(T) == 2) {
+        auto res = ReadModRM16(state, op, utlb);
+        if (!res) return;
+        val = *res;
+    } else {
+        auto res = ReadModRM32(state, op, utlb);
+        if (!res) return;
+        val = *res;
+    }
 
     Helper_Group3<T, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
@@ -80,7 +95,11 @@ static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroT
     } else {
         subop = (op->modrm >> 3) & 7;
     }
-    uint8_t val = ReadModRM8(state, op, utlb);
+
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    uint8_t val = *val_res;
+
     uint32_t old_cf = state->ctx.eflags & CF_MASK;
 
     switch (subop) {
@@ -121,10 +140,15 @@ static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
         case 0:  // INC Ev
         {
             T val;
-            if constexpr (sizeof(T) == 2)
-                val = ReadModRM16(state, op, utlb);
-            else
-                val = ReadModRM32(state, op, utlb);
+            if constexpr (sizeof(T) == 2) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            }
 
             uint32_t old_cf = state->ctx.eflags & CF_MASK;
             T res = AluAdd<T, UpdateFlags>(state, val, 1);
@@ -139,10 +163,15 @@ static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
         case 1:  // DEC Ev
         {
             T val;
-            if constexpr (sizeof(T) == 2)
-                val = ReadModRM16(state, op, utlb);
-            else
-                val = ReadModRM32(state, op, utlb);
+            if constexpr (sizeof(T) == 2) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            }
 
             uint32_t old_cf = state->ctx.eflags & CF_MASK;
             T res = AluSub<T, UpdateFlags>(state, val, 1);
@@ -161,17 +190,22 @@ static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
             // These Ops do not flag, so UpdateFlags ignored (effectively always false/true logic same)
             // Reuse implementation from switch
             uint32_t val = 0;  // Or target
-            if constexpr (sizeof(T) == 2)
-                val = ReadModRM16(state, op, utlb);
-            else
-                val = ReadModRM32(state, op, utlb);
+            if constexpr (sizeof(T) == 2) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                val = *res;
+            }
 
             if (subop == 2) {  // Call
                 if constexpr (sizeof(T) == 2) {
-                    Push16(state, (uint16_t)op->next_eip, utlb, op);
+                    if (!Push16(state, (uint16_t)op->next_eip, utlb, op)) return;
                     op->branch_target = val & 0xFFFF;
                 } else {
-                    Push32(state, op->next_eip, utlb, op);
+                    if (!Push32(state, op->next_eip, utlb, op)) return;
                     op->branch_target = val;
                 }
             } else if (subop == 4) {  // Jmp
@@ -180,10 +214,11 @@ static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
                 else
                     op->branch_target = val;
             } else if (subop == 6) {  // Push
-                if constexpr (sizeof(T) == 2)
-                    Push16(state, (uint16_t)val, utlb, op);
-                else
-                    Push32(state, val, utlb, op);
+                if constexpr (sizeof(T) == 2) {
+                    if (!Push16(state, (uint16_t)val, utlb, op)) return;
+                } else {
+                    if (!Push32(state, val, utlb, op)) return;
+                }
             }
             break;
         }
@@ -330,7 +365,10 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
     uint8_t sub = (op->modrm >> 3) & 7;
     if (sub == 1) {  // CMPXCHG8B
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+        auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+        if (!mem_res) return;
+        uint64_t mem_val = *mem_res;
+
         uint32_t eax = GetReg(state, EAX);
         uint32_t edx = GetReg(state, EDX);
         uint64_t edx_eax = ((uint64_t)edx << 32) | eax;
@@ -339,7 +377,7 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
             uint32_t ebx = GetReg(state, EBX);
             uint32_t ecx = GetReg(state, ECX);
             uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
-            state->mmu.write<uint64_t>(state, addr, ecx_ebx, utlb, op);
+            (void)state->mmu.write<uint64_t>(state, addr, ecx_ebx, utlb, op);
         } else {
             state->ctx.eflags &= ~ZF_MASK;
             SetReg(state, EAX, (uint32_t)mem_val);
@@ -359,12 +397,19 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op, mem::MicroT
         width = 2;
 
     uint32_t dest_val = 0;
-    if (width == 1)
-        dest_val = ReadModRM8(state, op, utlb);
-    else if (width == 2)
-        dest_val = ReadModRM16(state, op, utlb);
-    else
-        dest_val = ReadModRM32(state, op, utlb);
+    if (width == 1) {
+        auto res = ReadModRM8(state, op, utlb);
+        if (!res) return;
+        dest_val = *res;
+    } else if (width == 2) {
+        auto res = ReadModRM16(state, op, utlb);
+        if (!res) return;
+        dest_val = *res;
+    } else {
+        auto res = ReadModRM32(state, op, utlb);
+        if (!res) return;
+        dest_val = *res;
+    }
 
     uint8_t reg = (op->modrm >> 3) & 7;
     uint32_t src_val = 0;

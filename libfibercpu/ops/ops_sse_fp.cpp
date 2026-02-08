@@ -20,7 +20,9 @@ static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: ADDPD (Packed Double)
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] =
             simde_mm_castpd_ps(simde_mm_add_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
     } else if (op->prefixes.flags.repne) {  // F2: ADDSD (Scalar Double)
@@ -29,7 +31,9 @@ static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint64_t mem_val = *mem_res;
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
             src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
@@ -42,14 +46,18 @@ static FORCE_INLINE void OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t mem_val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint32_t mem_val = *mem_res;
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
             src_val = simde_mm_set_ss(f_val);
         }
         state->ctx.xmm[reg] = simde_mm_add_ss(dst_val, src_val);
     } else {  // None: ADDPS (Packed Single)
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_add_ps(dst_val, src_val);
     }
 }
@@ -63,7 +71,9 @@ static FORCE_INLINE void OpSub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: SUBPD
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] =
             simde_mm_castpd_ps(simde_mm_sub_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
     } else if (op->prefixes.flags.repne) {  // F2: SUBSD
@@ -71,7 +81,9 @@ static FORCE_INLINE void OpSub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint64_t mem_val = *mem_res;
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
             src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
@@ -83,14 +95,18 @@ static FORCE_INLINE void OpSub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t mem_val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint32_t mem_val = *mem_res;
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
             src_val = simde_mm_set_ss(f_val);
         }
         state->ctx.xmm[reg] = simde_mm_sub_ss(dst_val, src_val);
     } else {  // None: SUBPS
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_sub_ps(dst_val, src_val);
     }
 }
@@ -104,7 +120,9 @@ static FORCE_INLINE void OpMul_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: MULPD
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] =
             simde_mm_castpd_ps(simde_mm_mul_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
     } else if (op->prefixes.flags.repne) {  // F2: MULSD
@@ -112,7 +130,9 @@ static FORCE_INLINE void OpMul_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint64_t mem_val = *mem_res;
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
             src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
@@ -124,14 +144,18 @@ static FORCE_INLINE void OpMul_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t mem_val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint32_t mem_val = *mem_res;
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
             src_val = simde_mm_set_ss(f_val);
         }
         state->ctx.xmm[reg] = simde_mm_mul_ss(dst_val, src_val);
     } else {  // None: MULPS
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_mul_ps(dst_val, src_val);
     }
 }
@@ -145,7 +169,9 @@ static FORCE_INLINE void OpDiv_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: DIVPD
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] =
             simde_mm_castpd_ps(simde_mm_div_pd(simde_mm_castps_pd(dst_val), simde_mm_castps_pd(src_val)));
     } else if (op->prefixes.flags.repne) {  // F2: DIVSD
@@ -153,7 +179,9 @@ static FORCE_INLINE void OpDiv_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t mem_val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint64_t mem_val = *mem_res;
             double d_val;
             std::memcpy(&d_val, &mem_val, 8);
             src_val = simde_mm_castpd_ps(simde_mm_set_sd(d_val));
@@ -165,14 +193,18 @@ static FORCE_INLINE void OpDiv_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_val = state->ctx.xmm[rm];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t mem_val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto mem_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!mem_res) return;
+            uint32_t mem_val = *mem_res;
             float f_val;
             std::memcpy(&f_val, &mem_val, 4);
             src_val = simde_mm_set_ss(f_val);
         }
         state->ctx.xmm[reg] = simde_mm_div_ss(dst_val, src_val);
     } else {  // None: DIVPS
-        src_val = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_div_ps(dst_val, src_val);
     }
 }
@@ -181,7 +213,9 @@ static FORCE_INLINE void OpAnd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     // 0F 54: ANDPS/ANDPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    simde__m128 src_val = ReadModRM128(state, op, utlb);
+    auto src_res = ReadModRM128(state, op, utlb);
+    if (!src_res) return;
+    simde__m128 src_val = *src_res;
 
     if (op->prefixes.flags.opsize) {  // 66: ANDPD
         state->ctx.xmm[reg] =
@@ -195,7 +229,9 @@ static FORCE_INLINE void OpAndn_Sse(EmuState* state, DecodedOp* op, mem::MicroTL
     // 0F 55: ANDNPS/ANDNPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    simde__m128 src_val = ReadModRM128(state, op, utlb);
+    auto src_res = ReadModRM128(state, op, utlb);
+    if (!src_res) return;
+    simde__m128 src_val = *src_res;
 
     if (op->prefixes.flags.opsize) {  // 66: ANDNPD
         state->ctx.xmm[reg] =
@@ -209,7 +245,9 @@ static FORCE_INLINE void OpOr_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB*
     // 0F 56: ORPS/ORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    simde__m128 src_val = ReadModRM128(state, op, utlb);
+    auto src_res = ReadModRM128(state, op, utlb);
+    if (!src_res) return;
+    simde__m128 src_val = *src_res;
 
     if (op->prefixes.flags.opsize) {  // 66: ORPD
         state->ctx.xmm[reg] =
@@ -223,7 +261,9 @@ static FORCE_INLINE void OpXor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     // 0F 57: XORPS/XORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    simde__m128 src_val = ReadModRM128(state, op, utlb);
+    auto src_res = ReadModRM128(state, op, utlb);
+    if (!src_res) return;
+    simde__m128 src_val = *src_res;
 
     if (op->prefixes.flags.opsize) {  // 66: XORPD
         state->ctx.xmm[reg] =
@@ -241,8 +281,9 @@ static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     if (op->prefixes.flags.opsize) {
         // 66 0F C2: CMPPD
         simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
-        simde__m128 src = ReadModRM128(state, op, utlb);
-        simde__m128d src_pd = simde_mm_castps_pd(src);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128d src_pd = simde_mm_castps_pd(*src_res);
 
         simde__m128d res = Helper_CmpPD(dest_pd, src_pd, pred);
         *dest_ptr = simde_mm_castpd_ps(res);
@@ -256,8 +297,9 @@ static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            src_pd = simde_mm_set_sd(*(double*)&val);
+            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src_pd = simde_mm_set_sd(*(double*)&(*val_res));
         }
 
         simde__m128d res = Helper_CmpSD(dest_pd, src_pd, pred);
@@ -270,15 +312,17 @@ static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            src = simde_mm_set_ss(*(float*)&val);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src = simde_mm_set_ss(*(float*)&(*val_res));
         }
         *dest_ptr = Helper_CmpSS(*dest_ptr, src, pred);
 
     } else {
         // 0F C2: CMPPS
-        simde__m128 src = ReadModRM128(state, op, utlb);
-        *dest_ptr = Helper_CmpPS(*dest_ptr, src, pred);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        *dest_ptr = Helper_CmpPS(*dest_ptr, *src_res, pred);
     }
 }
 
@@ -292,10 +336,14 @@ static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op, mem::Micro
 
     if (op->prefixes.flags.repne) {  // F2: Scalar Double
         double b;
-        if (op->modrm >= 0xC0)
+        if (op->modrm >= 0xC0) {
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
-        else
-            b = state->mmu.read<double>(state, ComputeLinearAddress(state, op), utlb, op);
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto b_res = state->mmu.read<double>(state, addr, utlb, op);
+            if (!b_res) return;
+            b = *b_res;
+        }
 
         double* dest = (double*)&state->ctx.xmm[reg_idx];  // [0]
         if (is_min)
@@ -306,10 +354,14 @@ static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op, mem::Micro
 
     } else if (op->prefixes.flags.rep) {  // F3: Scalar Single
         float b;
-        if (op->modrm >= 0xC0)
+        if (op->modrm >= 0xC0) {
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
-        else
-            b = state->mmu.read<float>(state, ComputeLinearAddress(state, op), utlb, op);
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto b_res = state->mmu.read<float>(state, addr, utlb, op);
+            if (!b_res) return;
+            b = *b_res;
+        }
 
         float* dest = (float*)&state->ctx.xmm[reg_idx];  // [0]
         if (is_min)
@@ -319,17 +371,18 @@ static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op, mem::Micro
         // High 96 bits unmodified
 
     } else if (op->prefixes.flags.opsize) {  // 66: Packed Double
-        simde__m128 val = ReadModRM128(state, op, utlb);
+        auto val_res = ReadModRM128(state, op, utlb);
+        if (!val_res) return;
         simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
-        simde__m128d b = simde_mm_castps_pd(val);
+        simde__m128d b = simde_mm_castps_pd(*val_res);
         simde__m128d res = is_min ? simde_mm_min_pd(a, b) : simde_mm_max_pd(a, b);
         state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
 
     } else {  // None: Packed Single
-        simde__m128 val = ReadModRM128(state, op, utlb);
+        auto val_res = ReadModRM128(state, op, utlb);
+        if (!val_res) return;
         simde__m128 a = state->ctx.xmm[reg_idx];
-        // Using SIMDe directly on simde__m128 (aliased to simde__m128)
-        state->ctx.xmm[reg_idx] = is_min ? simde_mm_min_ps(a, val) : simde_mm_max_ps(a, val);
+        state->ctx.xmm[reg_idx] = is_min ? simde_mm_min_ps(a, *val_res) : simde_mm_max_ps(a, *val_res);
     }
 }
 
@@ -341,23 +394,14 @@ static FORCE_INLINE void OpMovAp_Sse(EmuState* state, DecodedOp* op, mem::MicroT
     bool is_load = (op->extra == 0x8);
 
     if (is_load) {  // Load 0x28
-        simde__m128 val = ReadModRM128(state, op, utlb);
+        auto val_res = ReadModRM128(state, op, utlb);
+        if (!val_res) return;
         uint8_t reg = (op->modrm >> 3) & 7;
-        state->ctx.xmm[reg] = val;
+        state->ctx.xmm[reg] = *val_res;
     } else {  // Store 0x29
         uint8_t reg = (op->modrm >> 3) & 7;
         simde__m128 val = state->ctx.xmm[reg];
-        // WriteModRM128 logic inline
-        if (op->modrm >= 0xC0) {
-            state->ctx.xmm[op->modrm & 7] = val;
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            if (op->modrm < 0xC0) {
-                // Check alignment?
-            }
-            state->mmu.write<uint64_t>(state, addr, ((uint64_t*)&val)[0], utlb, op);
-            state->mmu.write<uint64_t>(state, addr + 8, ((uint64_t*)&val)[1], utlb, op);
-        }
+        if (!WriteModRM128(state, op, val, utlb)) return;
     }
 }
 
@@ -466,9 +510,10 @@ static FORCE_INLINE void OpSqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTL
             src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!val_res) return;
             double d;
-            std::memcpy(&d, &val, 8);
+            std::memcpy(&d, &(*val_res), 8);
             src = simde_mm_set_sd(d);
         }
 
@@ -483,9 +528,10 @@ static FORCE_INLINE void OpSqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTL
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
             float f;
-            std::memcpy(&f, &val, 4);
+            std::memcpy(&f, &(*val_res), 4);
             src = simde_mm_set_ss(f);
         }
 
@@ -493,12 +539,16 @@ static FORCE_INLINE void OpSqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTL
         state->ctx.xmm[reg] = simde_mm_move_ss(dest, sqrt_val);
 
     } else if (op->prefixes.flags.opsize) {  // 66: SQRTPD
-        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op, utlb));
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_sqrt_pd(src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
 
     } else {  // None: SQRTPS
-        simde__m128 src = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128 src = *src_res;
         simde__m128 res = simde_mm_sqrt_ps(src);
         state->ctx.xmm[reg] = res;
     }
@@ -525,8 +575,9 @@ static FORCE_INLINE void OpUcomis_Unified(EmuState* state, DecodedOp* op, mem::M
             b = simde_mm_cvtsd_f64(vb);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint64_t val = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            std::memcpy(&b, &val, 8);
+            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            std::memcpy(&b, &(*val_res), 8);
         }
 
         if (std::isnan(a) || std::isnan(b))
@@ -543,8 +594,9 @@ static FORCE_INLINE void OpUcomis_Unified(EmuState* state, DecodedOp* op, mem::M
             b = simde_mm_cvtss_f32(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            std::memcpy(&b, &val, 4);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            std::memcpy(&b, &(*val_res), 4);
         }
 
         if (std::isnan(a) || std::isnan(b))
@@ -584,13 +636,15 @@ static FORCE_INLINE void OpRcp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            src = simde_mm_set_ss(*(float*)&val);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src = simde_mm_set_ss(*(float*)&(*val_res));
         }
         state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rcp_ss(src));
     } else {  // RCPPS
-        simde__m128 src = ReadModRM128(state, op, utlb);
-        state->ctx.xmm[reg] = simde_mm_rcp_ps(src);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        state->ctx.xmm[reg] = simde_mm_rcp_ps(*src_res);
     }
 }
 
@@ -605,13 +659,15 @@ static FORCE_INLINE void OpRsqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroT
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            src = simde_mm_set_ss(*(float*)&val);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src = simde_mm_set_ss(*(float*)&(*val_res));
         }
         state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rsqrt_ss(src));
     } else {  // RSQRTPS
-        simde__m128 src = ReadModRM128(state, op, utlb);
-        state->ctx.xmm[reg] = simde_mm_rsqrt_ps(src);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        state->ctx.xmm[reg] = simde_mm_rsqrt_ps(*src_res);
     }
 }
 
@@ -624,8 +680,9 @@ static FORCE_INLINE void OpShuf_Unified(EmuState* state, DecodedOp* op, mem::Mic
 
     if (op->prefixes.flags.opsize) {  // 66: SHUFPD
         double* dest_arr = (double*)&state->ctx.xmm[reg];
-        simde__m128 src_val = ReadModRM128(state, op, utlb);
-        double* src_arr = (double*)&src_val;
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        double* src_arr = (double*)&(*src_res);
 
         double result[2];
         result[0] = dest_arr[(imm & 1)];        // Select from dest
@@ -635,8 +692,9 @@ static FORCE_INLINE void OpShuf_Unified(EmuState* state, DecodedOp* op, mem::Mic
 
     } else {  // None: SHUFPS
         float* dest_arr = (float*)&state->ctx.xmm[reg];
-        simde__m128 src_val = ReadModRM128(state, op, utlb);
-        float* src_arr = (float*)&src_val;
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        float* src_arr = (float*)&(*src_res);
 
         float result[4];
         result[0] = dest_arr[(imm & 3)];         // Select from dest[0:1]
@@ -656,12 +714,16 @@ static FORCE_INLINE void OpUnpckl_Unified(EmuState* state, DecodedOp* op, mem::M
 
     if (op->prefixes.flags.opsize) {  // 66: UNPCKLPD
         simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
-        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op, utlb));
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_unpacklo_pd(dest, src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
     } else {  // None: UNPCKLPS
         simde__m128 dest = state->ctx.xmm[reg];
-        simde__m128 src = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128 src = *src_res;
         simde__m128 res = simde_mm_unpacklo_ps(dest, src);
         state->ctx.xmm[reg] = res;
     }
@@ -675,12 +737,16 @@ static FORCE_INLINE void OpUnpckh_Unified(EmuState* state, DecodedOp* op, mem::M
 
     if (op->prefixes.flags.opsize) {  // 66: UNPCKHPD
         simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
-        simde__m128d src = simde_mm_castps_pd(ReadModRM128(state, op, utlb));
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_unpackhi_pd(dest, src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
     } else {  // None: UNPCKHPS
         simde__m128 dest = state->ctx.xmm[reg];
-        simde__m128 src = ReadModRM128(state, op, utlb);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128 src = *src_res;
         simde__m128 res = simde_mm_unpackhi_ps(dest, src);
         state->ctx.xmm[reg] = res;
     }

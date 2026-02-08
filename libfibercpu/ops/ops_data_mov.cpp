@@ -15,10 +15,10 @@ static FORCE_INLINE void OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
-        WriteModRM16(state, op, val, utlb);
+        if (!WriteModRM16(state, op, val, utlb)) return;
     } else {
         uint32_t val = GetReg(state, reg);
-        WriteModRM32(state, op, val, utlb);
+        if (!WriteModRM32(state, op, val, utlb)) return;
     }
 }
 
@@ -137,7 +137,7 @@ static FORCE_INLINE void OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::Mic
     }
 
     uint32_t addr = ComputeLinearAddress(state, op);
-    state->mmu.write<uint32_t>(state, addr, val, utlb, op);
+    if (!state->mmu.write<uint32_t>(state, addr, val, utlb, op)) return;
 }
 
 // Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
@@ -170,10 +170,14 @@ static FORCE_INLINE void OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t val = ReadModRM16(state, op, utlb);
+        auto val_res = ReadModRM16(state, op, utlb);
+        if (!val_res) return;
+        uint16_t val = *val_res;
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
     } else {
-        uint32_t val = ReadModRM32(state, op, utlb);
+        auto val_res = ReadModRM32(state, op, utlb);
+        if (!val_res) return;
+        uint32_t val = *val_res;
         SetReg(state, reg, val);
     }
 }
@@ -252,12 +256,20 @@ static FORCE_INLINE void OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::Mic
 }
 
 template <Specialized S = Specialized::None>
+static FORCE_INLINE void OpMov_OaMa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // A3: MOV m32, EAX
+    uint32_t addr = ComputeLinearAddress(state, op);
+    uint32_t val = GetReg(state, EAX);
+    if (!state->mmu.write<uint32_t>(state, addr, val, utlb, op)) return;
+}
 
+template <Specialized S = Specialized::None>
 static FORCE_INLINE void OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
-    // ModRM.Reg is the Destination Register
     uint32_t addr = ComputeLinearAddress(state, op);
-    uint32_t val = state->mmu.read<uint32_t>(state, addr, utlb, op);
+    auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+    if (!val_res) return;
+    uint32_t val = *val_res;
 
     if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
         constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
@@ -310,18 +322,33 @@ static void OpMov_Load_Edi(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     OpMov_GvEv_Mem<Specialized::RegEdi>(s, o, u);
 }
 
+static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 86: XCHG r/m8, r8
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    uint8_t rm_val = *val_res;
+
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg_val = GetReg8(state, reg);
+
+    if (!WriteModRM8(state, op, reg_val, utlb)) return;
+    SetReg8(state, reg, rm_val);
+}
+
 static FORCE_INLINE void OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, r8 (0x88)
     // Store 8-bit Reg into ModRM
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t val = GetReg8(state, reg);
-    WriteModRM8(state, op, val, utlb);
+    if (!WriteModRM8(state, op, val, utlb)) return;
 }
 
 static FORCE_INLINE void OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r8, r/m8 (0x8A)
     // Load 8-bit ModRM into Reg
-    uint8_t val = ReadModRM8(state, op, utlb);
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    uint8_t val = *val_res;
     uint8_t reg = (op->modrm >> 3) & 7;
 
     // Write to 8-bit register
@@ -338,7 +365,16 @@ static FORCE_INLINE void OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
 static FORCE_INLINE void OpMov_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, imm8 (0xC6)
     uint8_t val = (uint8_t)op->imm;
-    WriteModRM8(state, op, val, utlb);
+    if (!WriteModRM8(state, op, val, utlb)) return;
+}
+
+static FORCE_INLINE void OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // MOV r/m16/32, imm16/32 (0xC7)
+    if (op->prefixes.flags.opsize) {
+        if (!WriteModRM16(state, op, (uint16_t)op->imm, utlb)) return;
+    } else {
+        if (!WriteModRM32(state, op, (uint32_t)op->imm, utlb)) return;
+    }
 }
 
 static FORCE_INLINE void OpMov_RegImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -369,15 +405,6 @@ static FORCE_INLINE void OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::Micr
     *rptr = curr;
 }
 
-static FORCE_INLINE void OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // C7: MOV r/m16/32, imm16/32
-    if (op->prefixes.flags.opsize) {
-        WriteModRM16(state, op, (uint16_t)op->imm, utlb);
-    } else {
-        WriteModRM32(state, op, op->imm, utlb);
-    }
-}
-
 static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A0: MOV AL, moffs8 (Byte)
     // A1: MOV EAX, moffs32 (Word/Dword)
@@ -386,16 +413,19 @@ static FORCE_INLINE void OpMov_Moffs_Load(EmuState* state, DecodedOp* op, mem::M
 
     // A0: extra=0, A1: extra=1
     if (op->extra == 0) {  // A0
-        uint8_t val = state->mmu.read<uint8_t>(state, linear, utlb, op);
+        auto val_res = state->mmu.read<uint8_t>(state, linear, utlb, op);
+        if (!val_res) return;
         uint32_t* rptr = GetRegPtr(state, EAX);
-        *rptr = (*rptr & 0xFFFFFF00) | val;
+        *rptr = (*rptr & 0xFFFFFF00) | *val_res;
     } else {  // A1
         if (op->prefixes.flags.opsize) {
-            uint16_t val = state->mmu.read<uint16_t>(state, linear, utlb, op);
-            SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | val);
+            auto val_res = state->mmu.read<uint16_t>(state, linear, utlb, op);
+            if (!val_res) return;
+            SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | *val_res);
         } else {
-            uint32_t val = state->mmu.read<uint32_t>(state, linear, utlb, op);
-            SetReg(state, EAX, val);
+            auto val_res = state->mmu.read<uint32_t>(state, linear, utlb, op);
+            if (!val_res) return;
+            SetReg(state, EAX, *val_res);
         }
     }
 }
@@ -409,14 +439,14 @@ static FORCE_INLINE void OpMov_Moffs_Store(EmuState* state, DecodedOp* op, mem::
     // A2: extra=2, A3: extra=3
     if (op->extra == 2) {  // A2
         uint8_t val = GetReg8(state, EAX);
-        state->mmu.write<uint8_t>(state, linear, val, utlb, op);
+        if (!state->mmu.write<uint8_t>(state, linear, val, utlb, op)) return;
     } else {  // A3
         if (op->prefixes.flags.opsize) {
             uint16_t val = (uint16_t)GetReg(state, EAX);
-            state->mmu.write<uint16_t>(state, linear, val, utlb, op);
+            if (!state->mmu.write<uint16_t>(state, linear, val, utlb, op)) return;
         } else {
             uint32_t val = GetReg(state, EAX);
-            state->mmu.write<uint32_t>(state, linear, val, utlb, op);
+            if (!state->mmu.write<uint32_t>(state, linear, val, utlb, op)) return;
         }
     }
 }
@@ -440,7 +470,9 @@ static FORCE_INLINE void OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::Micr
                   // selector = (uint16_t)GetReg(state, rm);
     } else {
         // uint32_t addr = ComputeLinearAddress(state, op);
-        // selector = state->mmu.read<uint16_t>(addr, utlb);
+        // auto selector_res = state->mmu.read<uint16_t>(addr, utlb);
+        // if (!selector_res) return;
+        // selector = *selector_res;
         if (state->status != EmuStatus::Running) return;
     }
 
@@ -488,7 +520,7 @@ static FORCE_INLINE void OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::Micr
         }
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        state->mmu.write<uint16_t>(state, addr, val, utlb, op);
+        if (!state->mmu.write<uint16_t>(state, addr, val, utlb, op)) return;
     }
 }
 
@@ -511,11 +543,15 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
             uint32_t edi = GetReg(state, EDI);
             uint32_t src_base = GetSegmentBase(state, op);
 
-            uint32_t copied = state->mmu.copy_block(state, esi + src_base, edi, total_bytes, op);
-
-            // Calculate how many FULL items were processed
-            uint32_t items_processed = copied / sizeof(T);
-            uint32_t bytes_processed = items_processed * sizeof(T);
+            auto res = state->mmu.copy_block(state, esi + src_base, edi, total_bytes, op);
+            if (!res) {
+                // If optimized path fails, fallback to slow loop for precise fault handling
+                // or just return if the fault is already recorded.
+                // For now, let's just abort as the MMU already handled the fault state.
+                return;
+            }
+            uint32_t bytes_processed = total_bytes;
+            uint32_t items_processed = ecx;
 
             // Update Regs
             SetReg(state, ESI, esi + bytes_processed);
@@ -537,11 +573,11 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
             // For now assume flat model (DS=0, ES=0)
             uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-            T val = state->mmu.read<T>(state, src_addr, utlb, op);
-            if (state->status != EmuStatus::Running) break;
+            auto val_res = state->mmu.read<T>(state, src_addr, utlb, op);
+            if (!val_res) return;  // Abort on fault
+            T val = *val_res;
 
-            state->mmu.write<T>(state, edi, val, utlb, op);
-            if (state->status != EmuStatus::Running) break;
+            if (!state->mmu.write<T>(state, edi, val, utlb, op)) return;  // Abort on fault
 
             SetReg(state, ESI, esi + step);
             SetReg(state, EDI, edi + step);
@@ -554,8 +590,11 @@ void Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         uint32_t edi = GetReg(state, EDI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
 
-        T val = state->mmu.read<T>(state, src_addr, utlb, op);
-        state->mmu.write<T>(state, edi, val, utlb, op);
+        auto val_res = state->mmu.read<T>(state, src_addr, utlb, op);
+        if (!val_res) return;  // Abort on fault
+        T val = *val_res;
+
+        if (!state->mmu.write<T>(state, edi, val, utlb, op)) return;  // Abort on fault
 
         SetReg(state, ESI, esi + step);
         SetReg(state, EDI, edi + step);
@@ -595,8 +634,7 @@ void Helper_Stos(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
             uint32_t ecx = GetReg(state, ECX);
             uint32_t edi = GetReg(state, EDI);
             // Dest ES:EDI
-            state->mmu.write<T>(state, edi, val, utlb, op);
-            if (state->status != EmuStatus::Running) break;
+            if (!state->mmu.write<T>(state, edi, val, utlb, op)) return;  // Abort on fault
 
             SetReg(state, EDI, edi + step);
 
@@ -605,7 +643,7 @@ void Helper_Stos(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         }
     } else {
         uint32_t edi = GetReg(state, EDI);
-        state->mmu.write<T>(state, edi, val, utlb, op);
+        if (!state->mmu.write<T>(state, edi, val, utlb, op)) return;  // Abort on fault
         SetReg(state, EDI, edi + step);
     }
 }
@@ -624,7 +662,9 @@ static FORCE_INLINE void OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroT
 
 static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B6: MOVZX r16/32, r/m8
-    uint8_t val = ReadModRM8(state, op, utlb);
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    uint8_t val = *val_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
@@ -635,8 +675,9 @@ static FORCE_INLINE void OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::Micro
 
 static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B7: MOVZX r16/32, r/m16
-    // Note: MOVZX r16, m16 is effectively MOV r16, m16
-    uint16_t val = ReadModRM16(state, op, utlb);
+    auto val_res = ReadModRM16(state, op, utlb);
+    if (!val_res) return;
+    uint16_t val = *val_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
@@ -647,24 +688,27 @@ static FORCE_INLINE void OpMovzx_Word(EmuState* state, DecodedOp* op, mem::Micro
 
 static FORCE_INLINE void OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BE: MOVSX r16/32, r/m8
-    uint8_t val = ReadModRM8(state, op, utlb);
+    auto val_res = ReadModRM8(state, op, utlb);
+    if (!val_res) return;
+    int8_t val = (int8_t)*val_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)(int16_t)(int8_t)val);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)(int16_t)val);
     } else {
-        SetReg(state, reg, (uint32_t)(int32_t)(int8_t)val);
+        SetReg(state, reg, (uint32_t)(int32_t)val);
     }
 }
 
 static FORCE_INLINE void OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BF: MOVSX r16/32, r/m16
-    // Note: MOVSX r16, m16 is effectively MOV r16, m16
-    uint16_t val = ReadModRM16(state, op, utlb);
+    auto val_res = ReadModRM16(state, op, utlb);
+    if (!val_res) return;
+    int16_t val = (int16_t)*val_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
     } else {
-        SetReg(state, reg, (uint32_t)(int32_t)(int16_t)val);
+        SetReg(state, reg, (uint32_t)(int32_t)val);
     }
 }
 
@@ -683,9 +727,9 @@ static FORCE_INLINE void OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTL
     // PUSH r16/32 (0x50+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        Push16(state, (uint16_t)GetReg(state, reg), utlb, op);
+        if (!Push16(state, (uint16_t)GetReg(state, reg), utlb, op)) return;
     } else {
-        Push32(state, GetReg(state, reg), utlb, op);
+        if (!Push32(state, GetReg(state, reg), utlb, op)) return;
     }
 }
 
@@ -696,18 +740,33 @@ static FORCE_INLINE void OpPush_Imm(EmuState* state, DecodedOp* op, mem::MicroTL
     if (op->extra == 0xA) {  // 6A
         val = (int32_t)(int8_t)val;
     }
-    Push32(state, val, utlb, op);
+    if (!Push32(state, val, utlb, op)) return;
 }
 
 static FORCE_INLINE void OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // POP r16/32 (0x58+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t val = Pop16(state, utlb, op);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+        auto val_res = Pop16(state, utlb, op);
+        if (!val_res) return;
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | *val_res);
     } else {
-        uint32_t val = Pop32(state, utlb, op);
-        SetReg(state, reg, val);
+        auto val_res = Pop32(state, utlb, op);
+        if (!val_res) return;
+        SetReg(state, reg, *val_res);
+    }
+}
+
+static FORCE_INLINE void OpPop_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 8F: POP r/m16/32
+    if (op->prefixes.flags.opsize) {
+        auto val_res = Pop16(state, utlb, op);
+        if (!val_res) return;
+        if (!WriteModRM16(state, op, *val_res, utlb)) return;
+    } else {
+        auto val_res = Pop32(state, utlb, op);
+        if (!val_res) return;
+        if (!WriteModRM32(state, op, *val_res, utlb)) return;
     }
 }
 
@@ -715,14 +774,20 @@ static FORCE_INLINE void OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroT
     // XCHG r/m16/32, r16/32 (0x87)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
+        auto rm_val_res = ReadModRM16(state, op, utlb);
+        if (!rm_val_res) return;
+        uint16_t rm_val = *rm_val_res;
         uint16_t reg_val = (uint16_t)GetReg(state, reg);
-        uint16_t rm_val = ReadModRM16(state, op, utlb);
-        WriteModRM16(state, op, reg_val, utlb);
+
+        if (!WriteModRM16(state, op, reg_val, utlb)) return;
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | rm_val);
     } else {
+        auto rm_val_res = ReadModRM32(state, op, utlb);
+        if (!rm_val_res) return;
+        uint32_t rm_val = *rm_val_res;
         uint32_t reg_val = GetReg(state, reg);
-        uint32_t rm_val = ReadModRM32(state, op, utlb);
-        WriteModRM32(state, op, reg_val, utlb);
+
+        if (!WriteModRM32(state, op, reg_val, utlb)) return;
         SetReg(state, reg, rm_val);
     }
 }
@@ -739,8 +804,12 @@ void Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto perform = [&](uint32_t& ecx_ref) {
         uint32_t esi = GetReg(state, ESI);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T val = state->mmu.read<T>(state, src_addr, utlb, op);
-        if (state->status != EmuStatus::Running) return;
+        auto val_res = state->mmu.read<T>(state, src_addr, utlb, op);
+        if (!val_res) {
+            state->status = EmuStatus::Fault;  // Set fault status
+            return;
+        }
+        T val = *val_res;
 
         if constexpr (sizeof(T) == 1) {
             uint32_t* rptr = GetRegPtr(state, EAX);
@@ -787,8 +856,12 @@ void Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto perform = [&]() {
         uint32_t edi = GetReg(state, EDI);
         // ES:[EDI]
-        T mem_val = state->mmu.read<T>(state, edi, utlb, op);
-        if (state->status != EmuStatus::Running) return;
+        auto mem_val_res = state->mmu.read<T>(state, edi, utlb, op);
+        if (!mem_val_res) {
+            state->status = EmuStatus::Fault;  // Set fault status
+            return;
+        }
+        T mem_val = *mem_val_res;
 
         T acc;
         if constexpr (sizeof(T) == 1)
@@ -844,11 +917,19 @@ void Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
         uint32_t edi = GetReg(state, EDI);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op);
-        T src_val = state->mmu.read<T>(state, src_addr, utlb, op);
-        if (state->status != EmuStatus::Running) return;
+        auto src_val_res = state->mmu.read<T>(state, src_addr, utlb, op);
+        if (!src_val_res) {
+            state->status = EmuStatus::Fault;  // Set fault status
+            return;
+        }
+        T src_val = *src_val_res;
 
-        T dst_val = state->mmu.read<T>(state, edi, utlb, op);  // ES:EDI
-        if (state->status != EmuStatus::Running) return;
+        auto dst_val_res = state->mmu.read<T>(state, edi, utlb, op);  // ES:EDI
+        if (!dst_val_res) {
+            state->status = EmuStatus::Fault;  // Set fault status
+            return;
+        }
+        T dst_val = *dst_val_res;
 
         AluSub<T>(state, src_val, dst_val);
 
@@ -893,27 +974,26 @@ static FORCE_INLINE void OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroT
 
 static FORCE_INLINE void OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 60: PUSHA/PUSHAD
-    uint32_t temp = GetReg(state, ESP);
     if (op->prefixes.flags.opsize) {
-        // PUSHA (16-bit)
-        Push16(state, (uint16_t)GetReg(state, EAX), utlb, op);
-        Push16(state, (uint16_t)GetReg(state, ECX), utlb, op);
-        Push16(state, (uint16_t)GetReg(state, EDX), utlb, op);
-        Push16(state, (uint16_t)GetReg(state, EBX), utlb, op);
-        Push16(state, (uint16_t)temp, utlb, op);
-        Push16(state, (uint16_t)GetReg(state, EBP), utlb, op);
-        Push16(state, (uint16_t)GetReg(state, ESI), utlb, op);
-        Push16(state, (uint16_t)GetReg(state, EDI), utlb, op);
+        uint16_t temp = (uint16_t)GetReg(state, ESP);
+        if (!Push16(state, (uint16_t)GetReg(state, EAX), utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, ECX), utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, EDX), utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, EBX), utlb, op)) return;
+        if (!Push16(state, temp, utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, EBP), utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, ESI), utlb, op)) return;
+        if (!Push16(state, (uint16_t)GetReg(state, EDI), utlb, op)) return;
     } else {
-        // PUSHAD (32-bit)
-        Push32(state, GetReg(state, EAX), utlb, op);
-        Push32(state, GetReg(state, ECX), utlb, op);
-        Push32(state, GetReg(state, EDX), utlb, op);
-        Push32(state, GetReg(state, EBX), utlb, op);
-        Push32(state, temp, utlb, op);
-        Push32(state, GetReg(state, EBP), utlb, op);
-        Push32(state, GetReg(state, ESI), utlb, op);
-        Push32(state, GetReg(state, EDI), utlb, op);
+        uint32_t temp = GetReg(state, ESP);
+        if (!Push32(state, GetReg(state, EAX), utlb, op)) return;
+        if (!Push32(state, GetReg(state, ECX), utlb, op)) return;
+        if (!Push32(state, GetReg(state, EDX), utlb, op)) return;
+        if (!Push32(state, GetReg(state, EBX), utlb, op)) return;
+        if (!Push32(state, temp, utlb, op)) return;
+        if (!Push32(state, GetReg(state, EBP), utlb, op)) return;
+        if (!Push32(state, GetReg(state, ESI), utlb, op)) return;
+        if (!Push32(state, GetReg(state, EDI), utlb, op)) return;
     }
 }
 
@@ -921,58 +1001,80 @@ static FORCE_INLINE void OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     // 61: POPA/POPAD
     if (op->prefixes.flags.opsize) {
         // POPA (16-bit)
-        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | Pop16(state, utlb, op));
-        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | Pop16(state, utlb, op));
-        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | Pop16(state, utlb, op));
-        Pop16(state, utlb, op);  // Skip SP
-        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | Pop16(state, utlb, op));
-        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | Pop16(state, utlb, op));
-        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | Pop16(state, utlb, op));
+        auto di = Pop16(state, utlb, op);
+        if (!di) return;
+        auto si = Pop16(state, utlb, op);
+        if (!si) return;
+        auto bp = Pop16(state, utlb, op);
+        if (!bp) return;
+        auto sp = Pop16(state, utlb, op);
+        if (!sp) return;  // Skip SP
+        auto bx = Pop16(state, utlb, op);
+        if (!bx) return;
+        auto dx = Pop16(state, utlb, op);
+        if (!dx) return;
+        auto cx = Pop16(state, utlb, op);
+        if (!cx) return;
+        auto ax = Pop16(state, utlb, op);
+        if (!ax) return;
+
+        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | *di);
+        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | *si);
+        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | *bp);
+        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | *bx);
+        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | *dx);
+        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | *cx);
+        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | *ax);
     } else {
         // POPAD (32-bit)
-        SetReg(state, EDI, Pop32(state, utlb, op));
-        SetReg(state, ESI, Pop32(state, utlb, op));
-        SetReg(state, EBP, Pop32(state, utlb, op));
-        Pop32(state, utlb, op);  // Skip ESP
-        SetReg(state, EBX, Pop32(state, utlb, op));
-        SetReg(state, EDX, Pop32(state, utlb, op));
-        SetReg(state, ECX, Pop32(state, utlb, op));
-    }
-    // EAX is popped last
-    if (op->prefixes.flags.opsize) {
-        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | Pop16(state, utlb, op));
-    } else {
-        SetReg(state, EAX, Pop32(state, utlb, op));
+        auto di = Pop32(state, utlb, op);
+        if (!di) return;
+        auto si = Pop32(state, utlb, op);
+        if (!si) return;
+        auto bp = Pop32(state, utlb, op);
+        if (!bp) return;
+        auto sp = Pop32(state, utlb, op);
+        if (!sp) return;  // Skip ESP
+        auto bx = Pop32(state, utlb, op);
+        if (!bx) return;
+        auto dx = Pop32(state, utlb, op);
+        if (!dx) return;
+        auto cx = Pop32(state, utlb, op);
+        if (!cx) return;
+        auto ax = Pop32(state, utlb, op);
+        if (!ax) return;
+
+        SetReg(state, EDI, *di);
+        SetReg(state, ESI, *si);
+        SetReg(state, EBP, *bp);
+        SetReg(state, EBX, *bx);
+        SetReg(state, EDX, *dx);
+        SetReg(state, ECX, *cx);
+        SetReg(state, EAX, *ax);
     }
 }
 
 static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
-    uint16_t size = op->imm & 0xFFFF;
-    uint8_t nesting = (op->imm >> 16) & 0xFF;
+    uint16_t size = (uint16_t)op->imm;
+    uint8_t level = (uint8_t)(op->imm >> 16);
 
     // 1. Push EBP
-    Push32(state, GetReg(state, EBP), utlb, op);
-    // 2. FrameTemp = ESP
+    if (!Push32(state, GetReg(state, EBP), utlb, op)) return;
+
     uint32_t frame_temp = GetReg(state, ESP);
 
-    if (nesting > 0) {
-        if (nesting > 31) nesting = 31;
-
-        // ... nesting logic ...
-        // We need to implement loop if we support nesting > 1
-        // For now, simplify or assume single nesting usually 0 or 1
-        // But for completeness:
+    if (level > 0) {
         uint32_t ebp = GetReg(state, EBP);
-        for (int i = 1; i < nesting; ++i) {
-            ebp -= 4;
-            ebp -= 4;
-            uint32_t val = state->mmu.read<uint32_t>(state, ebp, utlb, op);
-            Push32(state, val, utlb, op);
+        for (int i = 1; i < level; ++i) {
+            ebp -= 4;  // Move to previous frame pointer
+            auto val_res = state->mmu.read<uint32_t>(state, ebp, utlb, op);
+            if (!val_res) return;
+            if (!Push32(state, *val_res, utlb, op)) return;
         }
         // Push FrameTemp
-        Push32(state, frame_temp, utlb, op);
+        if (!Push32(state, frame_temp, utlb, op)) return;
     }
 
     // 3. MOV EBP, FrameTemp
@@ -985,24 +1087,23 @@ static FORCE_INLINE void OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* 
 static FORCE_INLINE void OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C9: LEAVE
     // MOV ESP, EBP
-    uint32_t ebp = GetReg(state, EBP);
-    SetReg(state, ESP, ebp);
+    SetReg(state, ESP, GetReg(state, EBP));
     // POP EBP
-    SetReg(state, EBP, Pop32(state, utlb, op));
+    auto val_res = Pop32(state, utlb, op);
+    if (!val_res) return;
+    SetReg(state, EBP, *val_res);
 }
 
 // ------------------------------------------------------------------------------------------------
 // Flag/Misc Operations (LAHF, SAHF, XCHG)
 // ------------------------------------------------------------------------------------------------
-
 static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9F: LAHF
     // AH <- EFLAGS(SF:ZF:0:AF:0:PF:1:CF)
+
     uint32_t flags = state->ctx.eflags;
-    uint8_t ah = (flags & 0xFF);
-    // Flags: SF(7), ZF(6), 0(5), AF(4), 0(3), PF(2), 1(1), CF(0)
-    // EFLAGS low byte matches this format exactly (Reserved bits 1, 3, 5 are
-    // fixed). Bit 1 is 1. Bit 3 is 0. Bit 5 is 0. So simple copy is correct.
+
+    uint8_t ah = (flags & 0xD5) | 0x02;  // 0xD5 = 1101 0101 (Mask valid flags)
 
     uint32_t eax = GetReg(state, EAX);
     eax = (eax & 0xFFFF00FF) | (ah << 8);
@@ -1012,47 +1113,15 @@ static FORCE_INLINE void OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
 static FORCE_INLINE void OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9E: SAHF
     // EFLAGS(SF:ZF:0:AF:0:PF:1:CF) <- AH
+
     uint32_t eax = GetReg(state, EAX);
     uint8_t ah = (eax >> 8) & 0xFF;
 
     uint32_t flags = state->ctx.eflags;
-    // Mask: SF, ZF, AF, PF, CF. And reserved bits.
-    // SF(7), ZF(6), AF(4), PF(2), CF(0)
-    // Reserved: 5, 3, 1.
-    // Intel: "The SF, ZF, AF, PF, and CF flags are set... Reserved bits 1, 3,
-    // and 5... are unaffected" -> Wait. "LOADS SF, ZF, AF, PF, and CF ... from
-    // AH" "Bits 1, 3, and 5 of flags are set to 1, 0, 0" (In EFLAGS? Or does it
-    // say that AH has them?) Actually SAHF loads the fixed values too? "bits 1,
-    // 3, and 5 ... are unaffected" (Some sources say unaffected, some say loaded)
-    // Intel SDM: "EFLAGS(SF:ZF:0:AF:0:PF:1:CF) <- AH" ... suggests it writes
-    // fixed values? Usually it replaces the low byte entirely.
 
-    // uint32_t mask = 0xD5; // Unused
-    // Update only these?
-    flags = (flags & ~0xFF) | (ah & 0xFF);
-    // Note: This overwrites reserved bits 1,3,5 with AH's values.
-    // AH usually has them set correctly from LAHF.
-    // If not, we might set bit 1 to 0.
-    // Let's force bit 1 to 1.
-    flags |= 2;
+    flags = (flags & ~0xFF) | (ah & 0xD5) | 0x02;
+
     state->ctx.eflags = flags;
-}
-
-static FORCE_INLINE void OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 86: XCHG r/m8, r8
-    uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
-    uint8_t reg_val = (reg < 4) ? (*rptr & 0xFF) : ((*rptr >> 8) & 0xFF);
-
-    uint8_t rm_val = ReadModRM8(state, op, utlb);
-
-    // Write reg_val to RM
-    WriteModRM8(state, op, reg_val, utlb);
-
-    // Write rm_val to Reg
-    uint32_t mask = (reg < 4) ? 0xFF : 0xFF00;
-    uint32_t shift = (reg < 4) ? 0 : 8;
-    *rptr = (*rptr & ~mask) | (rm_val << shift);
 }
 
 static FORCE_INLINE void OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -1351,8 +1420,9 @@ void RegisterDataMovOps() {
     g_Handlers[0x68] = DispatchWrapper<OpPush_Imm>;
     g_Handlers[0x6A] = DispatchWrapper<OpPush_Imm>;
     for (int i = 0; i < 8; ++i) g_Handlers[0x58 + i] = DispatchWrapper<OpPop_Reg>;
-    g_Handlers[0x8E] = DispatchWrapper<OpMov_Sreg_Rm>;
     g_Handlers[0x8C] = DispatchWrapper<OpMov_Rm_Sreg>;
+    g_Handlers[0x8E] = DispatchWrapper<OpMov_Sreg_Rm>;
+    g_Handlers[0x8F] = DispatchWrapper<OpPop_Ev>;
     g_Handlers[0x1B6] = DispatchWrapper<OpMovzx_Byte>;
     g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
     g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;

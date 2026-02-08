@@ -40,22 +40,28 @@ static inline float80& FpuTop(EmuState* state, int index) {
 static inline void UpdateFpuRoundingMode(EmuState* state) { f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw); }
 
 // Helper to read float32 from memory and convert to float80
-static inline float80 ReadF32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint32_t val = state->mmu.read<uint32_t>(state, ComputeLinearAddress(state, op), utlb, op);
+static inline MemResult<float80> ReadF32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    auto res = state->mmu.read<uint32_t>(state, ComputeLinearAddress(state, op), utlb, op);
+    if (!res) return std::unexpected(res.error());
+    uint32_t val = *res;
     float f = *(float*)&val;
     return f80_from_double((double)f);
 }
 
 // Helper to read float64 from memory and convert to float80
-static inline float80 ReadF64(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint64_t val = state->mmu.read<uint64_t>(state, ComputeLinearAddress(state, op), utlb, op);
+static inline MemResult<float80> ReadF64(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    auto res = state->mmu.read<uint64_t>(state, ComputeLinearAddress(state, op), utlb, op);
+    if (!res) return std::unexpected(res.error());
+    uint64_t val = *res;
     return f80_from_double(*(double*)&val);
 }
 
 static FORCE_INLINE void OpFpu_D8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D8: FPU Arith m32
     uint8_t subop = (op->modrm >> 3) & 7;
-    float80 val = ReadF32(state, op, utlb);
+    auto val_res = ReadF32(state, op, utlb);
+    if (!val_res) return;
+    float80 val = *val_res;
     float80& st0 = FpuTop(state, 0);
 
     switch (subop) {
@@ -205,30 +211,56 @@ static FORCE_INLINE void OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB*
         switch (subop) {
             case 0:  // FLD m32
             {
-                float80 t = ReadF32(state, op, utlb);
-                FpuPush(state, &t);
+                auto t_res = ReadF32(state, op, utlb);
+                if (!t_res) return;
+                FpuPush(state, &(*t_res));
                 break;
             }
-            case 2:  // FST m32
+            case 2:  // FST m32fp
             {
-                float f = (float)f80_to_double(FpuTop(state, 0));
-                state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op);
-                break;
-            }
-            case 3:  // FSTP m32
-            {
-                float80 val = FpuPop(state);
+                float80 val = FpuTop(state, 0);
                 float f = (float)f80_to_double(val);
-                state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op);
+                if (!state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op)) return;
+                break;
+            }
+            case 3:  // FSTP m32fp
+            {
+                float80 val = FpuTop(state, 0);
+                float f = (float)f80_to_double(val);
+                if (!state->mmu.write<uint32_t>(state, addr, *(uint32_t*)&f, utlb, op)) return;
+                FpuPop(state);
+                break;
+            }
+            case 4:  // FLDENV m14/28byte
+            {
+                auto cw_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!cw_res) return;
+                state->ctx.fpu_cw = *cw_res;
+                // TODO: full env load (SW, TW, IP, CS, OP, DS)
+                UpdateFpuRoundingMode(state);
                 break;
             }
             case 5:  // FLDCW m16
-                state->ctx.fpu_cw = state->mmu.read<uint16_t>(state, addr, utlb, op);
+            {
+                auto cw_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!cw_res) return;
+                state->ctx.fpu_cw = *cw_res;
                 UpdateFpuRoundingMode(state);
                 break;
-            case 7:  // FNSTCW m16
-                state->mmu.write<uint16_t>(state, addr, state->ctx.fpu_cw, utlb, op);
+            }
+            case 6:  // FNSTENV m14/28byte
+            {
+                if (!state->mmu.write<uint16_t>(state, addr, state->ctx.fpu_cw, utlb, op)) return;
+                if (!state->mmu.write<uint16_t>(state, addr + 2, state->ctx.fpu_sw, utlb, op)) return;
+                if (!state->mmu.write<uint16_t>(state, addr + 4, state->ctx.fpu_tw, utlb, op)) return;
+                // TODO: full env store (IP, CS, OP, DS)
                 break;
+            }
+            case 7:  // FNSTCW m16
+            {
+                if (!state->mmu.write<uint16_t>(state, addr, state->ctx.fpu_cw, utlb, op)) return;
+                break;
+            }
             default:
                 OpUd2(state, op);
         }
@@ -262,7 +294,9 @@ static FORCE_INLINE void OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB*
     } else {
         uint8_t subop = (op->modrm >> 3) & 7;
         uint32_t addr = ComputeLinearAddress(state, op);
-        int32_t val32 = (int32_t)state->mmu.read<uint32_t>(state, addr, utlb, op);
+        auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+        if (!val_res) return;
+        int32_t val32 = (int32_t)*val_res;
         float80 val = f80_from_int(val32);
         float80& st0 = FpuTop(state, 0);
 
@@ -378,41 +412,49 @@ static FORCE_INLINE void OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB*
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
-            case 0:  // FILD m32
+            case 0:  // FILD m32int
             {
-                int32_t val = (int32_t)state->mmu.read<uint32_t>(state, addr, utlb, op);
+                auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int32_t val = (int32_t)*val_res;
                 float80 t = f80_from_int(val);
                 FpuPush(state, &t);
                 break;
             }
-            case 2:  // FIST m32
+            case 2:  // FIST m32int
             {
-                int32_t val = (int32_t)f80_to_int(FpuTop(state, 0));
-                state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op);
+                float80 st0 = FpuTop(state, 0);
+                int32_t val = (int32_t)f80_to_int(st0);
+                if (!state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op)) return;
                 break;
             }
-            case 3:  // FISTP m32
+            case 3:  // FISTP m32int
             {
-                int32_t val = (int32_t)f80_to_int(FpuPop(state));
-                state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op);
+                float80 st0 = FpuTop(state, 0);
+                int32_t val = (int32_t)f80_to_int(st0);
+                if (!state->mmu.write<uint32_t>(state, addr, (uint32_t)val, utlb, op)) return;
+                FpuPop(state);
                 break;
             }
-            case 5:  // FLD m80
+            case 5:  // FLD m80fp
             {
-                // Read 10 bytes
-                uint64_t low = state->mmu.read<uint64_t>(state, addr, utlb, op);
-                uint16_t high = state->mmu.read<uint16_t>(state, addr + 8, utlb, op);
+                auto low_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+                if (!low_res) return;
+                auto high_res = state->mmu.read<uint16_t>(state, addr + 8, utlb, op);
+                if (!high_res) return;
+
                 float80 f;
-                f.signif = low;
-                f.signExp = high;
+                f.signif = *low_res;
+                f.signExp = *high_res;
                 FpuPush(state, &f);
                 break;
             }
-            case 7:  // FSTP m80
+            case 7:  // FSTP m80fp
             {
-                float80 f = FpuPop(state);
-                state->mmu.write<uint64_t>(state, addr, f.signif, utlb, op);
-                state->mmu.write<uint16_t>(state, addr + 8, f.signExp, utlb, op);
+                float80 f = FpuTop(state, 0);
+                if (!state->mmu.write<uint64_t>(state, addr, f.signif, utlb, op)) return;
+                if (!state->mmu.write<uint16_t>(state, addr + 8, f.signExp, utlb, op)) return;
+                FpuPop(state);
                 break;
             }
             default:
@@ -455,7 +497,9 @@ static FORCE_INLINE void OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB*
                 OpUd2(state, op);
         }
     } else {
-        float80 val = ReadF64(state, op, utlb);
+        auto val_res = ReadF64(state, op, utlb);
+        if (!val_res) return;
+        float80 val = *val_res;
         float80& st0 = FpuTop(state, 0);
         switch (subop) {
             case 0:
@@ -515,24 +559,29 @@ static FORCE_INLINE void OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB*
             OpUd2(state, op);
         }
     } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
             case 0:  // FLD m64
             {
-                float80 t = ReadF64(state, op, utlb);
+                // ReadF64 handles MemResult and returns on fault.
+                auto t_res = ReadF64(state, op, utlb);
+                if (!t_res) return;
+                float80 t = *t_res;
                 FpuPush(state, &t);
                 break;
             }
-            case 2:  // FST m64
+            case 2:  // FST m64fp
             {
+                uint32_t addr = ComputeLinearAddress(state, op);
                 double d = f80_to_double(FpuTop(state, 0));
-                state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op);
+                if (!state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op)) return;
                 break;
             }
-            case 3:  // FSTP m64
+            case 3:  // FSTP m64fp
             {
-                double d = f80_to_double(FpuPop(state));
-                state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op);
+                uint32_t addr = ComputeLinearAddress(state, op);
+                double d = f80_to_double(FpuTop(state, 0));
+                if (!state->mmu.write<uint64_t>(state, addr, *(uint64_t*)&d, utlb, op)) return;
+                FpuPop(state);
                 break;
             }
             default:
@@ -576,9 +625,59 @@ static FORCE_INLINE void OpFpu_DE(EmuState* state, DecodedOp* op, mem::MicroTLB*
         }
         FpuPop(state);
     } else {
-        // Memory ops (FIADD m16 etc.) -- Not needed for test_redis_002 presumably?
-        // Let's implement basics
-        OpUd2(state, op);
+        uint32_t addr = ComputeLinearAddress(state, op);
+        switch (subop) {
+            case 0:  // FIADD m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_add(FpuTop(state, 0), f80_from_int(val));
+                break;
+            }
+            case 1:  // FIMUL m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_mul(FpuTop(state, 0), f80_from_int(val));
+                break;
+            }
+            case 4:  // FISUB m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_sub(FpuTop(state, 0), f80_from_int(val));
+                break;
+            }
+            case 5:  // FISUBR m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_sub(f80_from_int(val), FpuTop(state, 0));
+                break;
+            }
+            case 6:  // FIDIV m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_div(FpuTop(state, 0), f80_from_int(val));
+                break;
+            }
+            case 7:  // FIDIVR m16int
+            {
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                FpuTop(state, 0) = f80_div(f80_from_int(val), FpuTop(state, 0));
+                break;
+            }
+            default:
+                OpUd2(state, op);
+        }
     }
 }
 
@@ -626,36 +725,45 @@ static FORCE_INLINE void OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB*
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         switch (subop) {
-            case 0:  // FILD m16
+            case 0:  // FILD m16int
             {
-                int16_t val = (int16_t)state->mmu.read<uint16_t>(state, addr, utlb, op);
-                float80 t = f80_from_int(val);
-                FpuPush(state, &t);
+                auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int16_t val = (int16_t)*val_res;
+                float80 f = f80_from_int(val);
+                FpuPush(state, &f);
                 break;
             }
-            case 2:  // FIST m16
+            case 2:  // FIST m16int
             {
-                int16_t val = (int16_t)f80_to_int(FpuTop(state, 0));
-                state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op);
+                float80 st0 = FpuTop(state, 0);
+                int16_t val = (int16_t)f80_to_int(st0);
+                if (!state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op)) return;
                 break;
             }
-            case 3:  // FISTP m16
+            case 3:  // FISTP m16int
             {
-                int16_t val = (int16_t)f80_to_int(FpuPop(state));
-                state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op);
+                float80 st0 = FpuTop(state, 0);
+                int16_t val = (int16_t)f80_to_int(st0);
+                if (!state->mmu.write<uint16_t>(state, addr, (uint16_t)val, utlb, op)) return;
+                FpuPop(state);
                 break;
             }
-            case 5:  // FILD m64
+            case 5:  // FILD m64int
             {
-                int64_t val = (int64_t)state->mmu.read<uint64_t>(state, addr, utlb, op);
-                float80 t = f80_from_int(val);
-                FpuPush(state, &t);
+                auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                int64_t val = (int64_t)*val_res;
+                float80 f = f80_from_int(val);
+                FpuPush(state, &f);
                 break;
             }
-            case 7:  // FISTP m64
+            case 7:  // FISTP m64int
             {
-                int64_t val = f80_to_int(FpuPop(state));
-                state->mmu.write<uint64_t>(state, addr, (uint64_t)val, utlb, op);
+                float80 st0 = FpuTop(state, 0);
+                int64_t val = (int64_t)f80_to_int(st0);
+                if (!state->mmu.write<uint64_t>(state, addr, (uint64_t)val, utlb, op)) return;
+                FpuPop(state);
                 break;
             }
             default:

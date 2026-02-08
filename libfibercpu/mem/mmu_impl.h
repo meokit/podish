@@ -56,9 +56,9 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 }
 
 // Resolve Slow
-[[nodiscard]] FORCE_INLINE HostAddr Mmu::resolve_slow(EmuState* state, GuestAddr addr, Property req_perm,
-                                                      DecodedOp* op) {
-    if (!page_dir) return nullptr;
+[[nodiscard]] FORCE_INLINE MemResult<HostAddr> Mmu::resolve_slow(EmuState* state, GuestAddr addr, Property req_perm,
+                                                                 DecodedOp* op) {
+    if (!page_dir) return std::unexpected(FaultCode::PageFault);
 
     const uint32_t l1_idx = addr >> 22;
     const uint32_t l2_idx = (addr >> 12) & 0x3FF;
@@ -68,11 +68,11 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     auto& chunk = page_dir->l1_directory[l1_idx];
     if (!chunk) {
         signal_fault(state, addr, (int)has_property(req_perm, Property::Write), op);
-        if (state && state->status == EmuStatus::Fault) return nullptr;
-        if (emu_status && *emu_status == EmuStatus::Fault) return nullptr;
+        if (state && state->status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
+        if (emu_status && *emu_status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
         if (!page_dir->l1_directory[l1_idx]) {
-            return nullptr;
+            return std::unexpected(FaultCode::PageFault);
         }
     }
 
@@ -80,10 +80,10 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     Property current_perm = chunk->permissions[l2_idx];
     if (!has_property(current_perm, req_perm)) {
         signal_fault(state, addr, (int)has_property(req_perm, Property::Write), op);
-        if (state && state->status != EmuStatus::Running) return nullptr;
-        if (emu_status && *emu_status != EmuStatus::Running) return nullptr;
+        if (state && state->status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
+        if (emu_status && *emu_status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
         current_perm = chunk->permissions[l2_idx];
-        if (!has_property(current_perm, req_perm)) return nullptr;
+        if (!has_property(current_perm, req_perm)) return std::unexpected(FaultCode::PageFault);
     }
 
     // Dirty Bit
@@ -114,8 +114,8 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 }
 
 // Resolve Ptr
-[[nodiscard]] FORCE_INLINE HostAddr Mmu::resolve_ptr(EmuState* state, GuestAddr addr, Property req_perm,
-                                                     DecodedOp* op) {
+[[nodiscard]] FORCE_INLINE MemResult<HostAddr> Mmu::resolve_ptr(EmuState* state, GuestAddr addr, Property req_perm,
+                                                                DecodedOp* op) {
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const uint32_t tag = addr & ~PAGE_MASK;
 
@@ -131,7 +131,7 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 
 // Read No UTLB
 template <typename T>
-[[nodiscard]] FORCE_INLINE T Mmu::read_no_utlb(EmuState* state, GuestAddr addr, DecodedOp* op) {
+[[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read_no_utlb(EmuState* state, GuestAddr addr, DecodedOp* op) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = end_addr & ~PAGE_MASK;
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
@@ -155,7 +155,7 @@ template <typename T>
 
 // Write No UTLB
 template <typename T>
-FORCE_INLINE void Mmu::write_no_utlb(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
+[[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write_no_utlb(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = end_addr & ~PAGE_MASK;
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
@@ -167,19 +167,19 @@ FORCE_INLINE void Mmu::write_no_utlb(EmuState* state, GuestAddr addr, T val, Dec
         stats.total_writes++;
 #endif
         *reinterpret_cast<T*>(entry.addend + addr) = val;
-        return;
+        return {};
     }
 
 #ifdef ENABLE_TLB_STATS
     stats.write_misses++;
     stats.total_writes++;
 #endif
-    write_slow<T>(state, addr, val, op);
+    return write_slow<T>(state, addr, val, op);
 }
 
 // Read
 template <typename T>
-[[nodiscard]] FORCE_INLINE T Mmu::read(EmuState* state, GuestAddr addr, MicroTLB* utlb, DecodedOp* op) {
+[[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(EmuState* state, GuestAddr addr, MicroTLB* utlb, DecodedOp* op) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = end_addr & ~PAGE_MASK;
 
@@ -218,7 +218,8 @@ template <typename T>
 
 // Write
 template <typename T>
-FORCE_INLINE void Mmu::write(EmuState* state, GuestAddr addr, T val, MicroTLB* utlb, DecodedOp* op) {
+[[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(EmuState* state, GuestAddr addr, T val, MicroTLB* utlb,
+                                                      DecodedOp* op) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = end_addr & ~PAGE_MASK;
 
@@ -228,7 +229,7 @@ FORCE_INLINE void Mmu::write(EmuState* state, GuestAddr addr, T val, MicroTLB* u
         stats.total_writes++;
 #endif
         *reinterpret_cast<T*>(utlb->addend + addr) = val;
-        return;
+        return {};
     }
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
@@ -244,7 +245,7 @@ FORCE_INLINE void Mmu::write(EmuState* state, GuestAddr addr, T val, MicroTLB* u
         utlb->addend = entry.addend;
         utlb->tag_r =
             has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
-        return;
+        return {};
     }
 
     utlb->tag_w = std::numeric_limits<decltype(utlb->tag_w)>::max();
@@ -252,19 +253,21 @@ FORCE_INLINE void Mmu::write(EmuState* state, GuestAddr addr, T val, MicroTLB* u
     stats.write_misses++;
     stats.total_writes++;
 #endif
-    write_slow<T>(state, addr, val, op);
+    return write_slow<T>(state, addr, val, op);
 }
 
 // Read Slow
 template <typename T>
-T Mmu::read_slow(EmuState* state, GuestAddr addr, DecodedOp* op) {
+[[nodiscard]] MemResult<T> Mmu::read_slow(EmuState* state, GuestAddr addr, DecodedOp* op) {
     T val;
     if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
-        val = read_cross_page<T>(state, addr, op);
+        auto res = read_cross_page<T>(state, addr, op);
+        if (!res) return res;
+        val = *res;
     } else {
-        HostAddr ptr = resolve_slow(state, addr, Property::Read, op);
-        if (!ptr) return T{};
-        val = *reinterpret_cast<T*>(ptr);
+        auto res = resolve_slow(state, addr, Property::Read, op);
+        if (!res) return std::unexpected(res.error());
+        val = *reinterpret_cast<T*>(*res);
     }
 
     if (mem_hook) {
@@ -280,7 +283,7 @@ T Mmu::read_slow(EmuState* state, GuestAddr addr, DecodedOp* op) {
 
 // Write Slow
 template <typename T>
-void Mmu::write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
+[[nodiscard]] MemResult<void> Mmu::write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
     if (mem_hook) {
         uint64_t hook_val = 0;
         if constexpr (sizeof(T) <= 8)
@@ -291,11 +294,12 @@ void Mmu::write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
     }
 
     if (((addr & PAGE_MASK) + sizeof(T)) > PAGE_SIZE) {
-        write_cross_page<T>(state, addr, val, op);
-        return;
+        return write_cross_page<T>(state, addr, val, op);
     }
 
-    HostAddr ptr = resolve_slow(state, addr, Property::Write, op);
+    auto res = resolve_slow(state, addr, Property::Write, op);
+    if (!res) return std::unexpected(res.error());
+    HostAddr ptr = *res;
 
     if (ptr && smc_handler) {
         Property p = get_property(addr);
@@ -305,11 +309,12 @@ void Mmu::write_slow(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
     }
 
     if (ptr) *reinterpret_cast<T*>(ptr) = val;
+    return {};
 }
 
 // Read Cross Page
 template <typename T>
-T Mmu::read_cross_page(EmuState* state, GuestAddr addr, DecodedOp* op) {
+[[nodiscard]] MemResult<T> Mmu::read_cross_page(EmuState* state, GuestAddr addr, DecodedOp* op) {
     static_assert(sizeof(T) <= PAGE_SIZE, "Access too large for read_cross_page");
 
     uint32_t page_offset = addr & PAGE_MASK;
@@ -318,23 +323,23 @@ T Mmu::read_cross_page(EmuState* state, GuestAddr addr, DecodedOp* op) {
 
     GuestAddr addr2 = addr + len1;
 
-    HostAddr p1 = resolve_ptr(state, addr, Property::Read, op);
-    if (!p1) return T{};
+    auto res1 = resolve_ptr(state, addr, Property::Read, op);
+    if (!res1) return std::unexpected(res1.error());
 
-    HostAddr p2 = resolve_ptr(state, addr2, Property::Read, op);
-    if (!p2) return T{};
+    auto res2 = resolve_ptr(state, addr2, Property::Read, op);
+    if (!res2) return std::unexpected(res2.error());
 
     T val;
     std::byte* dest = reinterpret_cast<std::byte*>(&val);
-    std::memcpy(dest, p1, len1);
-    std::memcpy(dest + len1, p2, len2);
+    std::memcpy(dest, *res1, len1);
+    std::memcpy(dest + len1, *res2, len2);
 
     return val;
 }
 
 // Write Cross Page
 template <typename T>
-void Mmu::write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
+[[nodiscard]] MemResult<void> Mmu::write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op) {
     static_assert(sizeof(T) <= PAGE_SIZE, "Access too large for write_cross_page");
 
     uint32_t page_offset = addr & PAGE_MASK;
@@ -343,11 +348,11 @@ void Mmu::write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op
 
     GuestAddr addr2 = addr + len1;
 
-    HostAddr p1 = resolve_ptr(state, addr, Property::Write, op);
-    if (!p1) return;
+    auto res1 = resolve_ptr(state, addr, Property::Write, op);
+    if (!res1) return std::unexpected(res1.error());
 
-    HostAddr p2 = resolve_ptr(state, addr2, Property::Write, op);
-    if (!p2) return;
+    auto res2 = resolve_ptr(state, addr2, Property::Write, op);
+    if (!res2) return std::unexpected(res2.error());
 
     if (smc_handler) {
         Property prop1 = get_property(addr);
@@ -358,21 +363,22 @@ void Mmu::write_cross_page(EmuState* state, GuestAddr addr, T val, DecodedOp* op
     }
 
     std::byte* src = reinterpret_cast<std::byte*>(&val);
-    std::memcpy(p1, src, len1);
-    std::memcpy(p2, src + len1, len2);
+    std::memcpy(*res1, src, len1);
+    std::memcpy(*res2, src + len1, len2);
+    return {};
 }
 
 // Copy Block
-FORCE_INLINE uint32_t Mmu::copy_block(EmuState* state, GuestAddr src_addr, GuestAddr dst_addr, uint32_t size,
-                                      DecodedOp* op) {
+[[nodiscard]] inline MemResult<void> Mmu::copy_block(EmuState* state, GuestAddr src_addr, GuestAddr dst_addr,
+                                                     uint32_t size, DecodedOp* op) {
     if (mem_hook) {
         for (uint32_t i = 0; i < size; ++i) {
-            uint8_t val = this->read_no_utlb<uint8_t>(state, src_addr + i, op);
-            if (emu_status && *emu_status != EmuStatus::Running) return i;
-            this->write_no_utlb<uint8_t>(state, dst_addr + i, val, op);
-            if (emu_status && *emu_status != EmuStatus::Running) return i;
+            auto val = this->read_no_utlb<uint8_t>(state, src_addr + i, op);
+            if (!val) return std::unexpected(val.error());
+            auto res = this->write_no_utlb<uint8_t>(state, dst_addr + i, *val, op);
+            if (!res) return res;
         }
-        return size;
+        return {};
     }
 
     uint32_t bytes_done = 0;
@@ -384,16 +390,16 @@ FORCE_INLINE uint32_t Mmu::copy_block(EmuState* state, GuestAddr src_addr, Guest
         uint32_t dst_rem = PAGE_SIZE - (curr_dst & PAGE_MASK);
         uint32_t chunk = std::min(size - bytes_done, std::min(src_rem, dst_rem));
 
-        HostAddr p_src = resolve_slow(state, curr_src, Property::Read, op);
-        if (!p_src) return bytes_done;
+        auto p_src_res = resolve_slow(state, curr_src, Property::Read, op);
+        if (!p_src_res) return std::unexpected(p_src_res.error());
 
-        HostAddr p_dst = resolve_slow(state, curr_dst, Property::Write, op);
-        if (!p_dst) return bytes_done;
+        auto p_dst_res = resolve_slow(state, curr_dst, Property::Write, op);
+        if (!p_dst_res) return std::unexpected(p_dst_res.error());
 
-        std::memmove(p_dst, p_src, chunk);
+        std::memmove(*p_dst_res, *p_src_res, chunk);
         bytes_done += chunk;
     }
-    return bytes_done;
+    return {};
 }
 
 // Read For Exec
@@ -407,7 +413,8 @@ template <typename T>
     if (entry.tag == tag) {
         ptr = reinterpret_cast<HostAddr>(entry.addend + addr);
     } else {
-        ptr = resolve_slow(state, addr, Property::Exec, nullptr);
+        auto res = resolve_slow(state, addr, Property::Exec, nullptr);
+        ptr = res.value_or(nullptr);
     }
 
     if (!ptr) return T{};
@@ -424,7 +431,8 @@ template <typename T>
         return reinterpret_cast<const std::byte*>(entry.addend + addr);
     }
 
-    return resolve_slow(state, addr, Property::Exec, nullptr);
+    auto res = resolve_slow(state, addr, Property::Exec, nullptr);
+    return reinterpret_cast<const std::byte*>(res.value_or(nullptr));
 }
 
 }  // namespace fiberish::mem

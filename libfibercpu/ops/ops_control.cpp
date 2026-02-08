@@ -51,30 +51,32 @@ static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
 JCC_WRAPPERS(0, O)
 JCC_WRAPPERS(1, NO)
 JCC_WRAPPERS(2, B)
-JCC_WRAPPERS(3, AE) JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S)
-    JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE)
-        JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
+JCC_WRAPPERS(3, AE)
+JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS)
+    JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE)
+        JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
             static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
-    // Push Return Address (Current EIP is already advanced to Next Insn by
-    // Wrapper/Step)
-    Push32(state, op->next_eip, utlb, op);
+    // Push Return Address
+    if (!Push32(state, op->next_eip, utlb, op)) return;
     // Jump relative to Next Insn
     op->branch_target = op->next_eip + (int32_t)op->imm;
 }
 
 static FORCE_INLINE void OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C3: RET
-    uint32_t ret_eip = Pop32(state, utlb, op);
-    op->branch_target = ret_eip;
+    auto val_res = Pop32(state, utlb, op);
+    if (!val_res) return;
+    op->branch_target = *val_res;
 }
 
 static FORCE_INLINE void OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C2: RET imm16
-    uint32_t ret_eip = Pop32(state, utlb, op);
-    op->branch_target = ret_eip;
+    auto val_res = Pop32(state, utlb, op);
+    if (!val_res) return;
+    op->branch_target = *val_res;
 
     // Pop imm16 bytes from stack
     uint32_t esp = GetReg(state, ESP);
@@ -85,13 +87,9 @@ static FORCE_INLINE void OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroT
 static FORCE_INLINE void OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9C: PUSHF/PUSHFD
     if (op->prefixes.flags.opsize) {
-        // PUSHF (16-bit)
-        Push16(state, (uint16_t)state->ctx.eflags, utlb, op);
+        if (!Push16(state, (uint16_t)state->ctx.eflags, utlb, op)) return;
     } else {
-        // PUSHFD (32-bit)
-        // Note: VM and RF flags are usually cleared in image pushed to stack?
-        // For simple emulation, we push raw.
-        Push32(state, state->ctx.eflags & 0x00FCFFFF, utlb, op);
+        if (!Push32(state, state->ctx.eflags & 0x00FCFFFF, utlb, op)) return;
     }
 }
 
@@ -99,24 +97,25 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     // 9D: POPF/POPFD
     if (op->prefixes.flags.opsize) {
         // POPF (16-bit)
-        uint16_t val = Pop16(state, utlb, op);
-        // Only update bits allowed by mask (and within 16-bit range)
+        auto val_res = Pop16(state, utlb, op);
+        if (!val_res) return;  // Abort on fault
+        uint16_t val = *val_res;
+
         uint32_t mask = state->ctx.eflags_mask & 0xFFFF;
-        // Also always preserve Reserved Bit 1 (Value 2)
         uint32_t original = state->ctx.eflags;
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
         state->ctx.eflags = new_flags;
     } else {
         // POPFD (32-bit)
-        uint32_t val = Pop32(state, utlb, op);
+        auto val_res = Pop32(state, utlb, op);
+        if (!val_res) return;  // Abort on fault
+        uint32_t val = *val_res;
+
         uint32_t mask = state->ctx.eflags_mask;
         uint32_t original = state->ctx.eflags;
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
-        // Reserved bits 3, 5, 15, 22..31 should strictly be preserved or zeroed
-        // depending on CPU model. But respecting mask is sufficient for user mode
-        // emulation.
         state->ctx.eflags = new_flags;
     }
 }
@@ -233,13 +232,15 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
         case 2:  // LDMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                state->ctx.mxcsr = state->mmu.read<uint32_t>(state, addr, utlb, op);
+                auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+                if (!val_res) return;
+                state->ctx.mxcsr = *val_res;
             }
             break;
         case 3:  // STMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                state->mmu.write<uint32_t>(state, addr, state->ctx.mxcsr, utlb, op);
+                if (!state->mmu.write<uint32_t>(state, addr, state->ctx.mxcsr, utlb, op)) return;
             }
             break;
         case 5:  // LFENCE (mod=3, rm=0)
@@ -329,12 +330,16 @@ static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* u
 
         if (op->prefixes.flags.opsize) {
             // 16-bit
-            uint16_t val = ReadModRM16(state, op, utlb);
+            auto val_res = ReadModRM16(state, op, utlb);
+            if (!val_res) return;
+            uint16_t val = *val_res;
             uint32_t current = state->ctx.regs[reg];
             state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
         } else {
             // 32-bit
-            uint32_t val = ReadModRM32(state, op, utlb);
+            auto val_res = ReadModRM32(state, op, utlb);
+            if (!val_res) return;
+            uint32_t val = *val_res;
             state->ctx.regs[reg] = val;
         }
     }

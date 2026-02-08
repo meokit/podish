@@ -16,7 +16,9 @@ static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::Micr
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -31,7 +33,9 @@ static FORCE_INLINE void OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::Micr
         state->ctx.eflags = flags;
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -51,7 +55,9 @@ static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::Micr
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -66,7 +72,9 @@ static FORCE_INLINE void OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::Micr
         state->ctx.eflags = flags;
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -88,7 +96,9 @@ static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::Micr
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -103,7 +113,9 @@ static FORCE_INLINE void OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::Micr
         state->ctx.eflags = flags;
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -123,7 +135,9 @@ static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::Micr
     if (count == 0) return;
 
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = (uint16_t)ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
         count &= 0x0F;
         if (count == 0) return;
@@ -138,7 +152,9 @@ static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::Micr
         state->ctx.eflags = flags;
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -153,10 +169,10 @@ static FORCE_INLINE void OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::Micr
 }
 
 void RegisterDoubleShiftOps() {
-    g_Handlers[0x1A4] = DispatchWrapper<OpShld_EvGvIb>;  // 0F A4: SHLD r/m32, r32, imm8
-    g_Handlers[0x1A5] = DispatchWrapper<OpShld_EvGvCl>;  // 0F A5: SHLD r/m32, r32, CL
-    g_Handlers[0x1AC] = DispatchWrapper<OpShrd_EvGvIb>;  // 0F AC: SHRD r/m32, r32, imm8
-    g_Handlers[0x1AD] = DispatchWrapper<OpShrd_EvGvCl>;  // 0F AD: SHRD r/m32, r32, CL
+    g_Handlers[0x1A4] = DispatchWrapper<OpShld_EvGvIb>;
+    g_Handlers[0x1A5] = DispatchWrapper<OpShld_EvGvCl>;
+    g_Handlers[0x1AC] = DispatchWrapper<OpShrd_EvGvIb>;
+    g_Handlers[0x1AD] = DispatchWrapper<OpShrd_EvGvCl>;
 }
 
 }  // namespace fiberish

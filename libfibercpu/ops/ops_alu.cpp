@@ -13,7 +13,10 @@ namespace fiberish {
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAdd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 00: ADD r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -23,12 +26,18 @@ template <bool UpdateFlags, Specialized S = Specialized::None>
 static FORCE_INLINE void OpAdd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 01: ADD r/m16/32, r16/32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -38,7 +47,10 @@ static FORCE_INLINE void OpAdd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAdd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 02: ADD r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, dest, src);
@@ -55,12 +67,18 @@ static FORCE_INLINE void OpAdd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 03: ADD r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -70,7 +88,10 @@ static FORCE_INLINE void OpAdd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAdc_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 10: ADC r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -81,12 +102,18 @@ static FORCE_INLINE void OpAdc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 11: ADC r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -96,7 +123,9 @@ static FORCE_INLINE void OpAdc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAdc_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 12: ADC r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, dest, src);
@@ -114,12 +143,18 @@ static FORCE_INLINE void OpAdc_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 13: ADC r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -131,12 +166,18 @@ static FORCE_INLINE void OpSub_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 29: SUB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -146,7 +187,10 @@ static FORCE_INLINE void OpSub_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAnd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 20: AND r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -157,12 +201,18 @@ static FORCE_INLINE void OpAnd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 21: AND r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -172,7 +222,10 @@ static FORCE_INLINE void OpAnd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpAnd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 22: AND r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, dest, src);
@@ -189,12 +242,18 @@ static FORCE_INLINE void OpAnd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 23: AND r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -206,12 +265,18 @@ static FORCE_INLINE void OpOr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB
     // 09: OR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -223,12 +288,18 @@ static FORCE_INLINE void OpXor_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 31: XOR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -326,7 +397,10 @@ static FORCE_INLINE void OpAdd_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
 template <bool UpdateFlags>
 static FORCE_INLINE void OpOr_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 08: OR r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -335,7 +409,10 @@ static FORCE_INLINE void OpOr_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB
 template <bool UpdateFlags>
 static FORCE_INLINE void OpOr_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0A: OR r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, dest, src);
@@ -352,12 +429,18 @@ static FORCE_INLINE void OpOr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB
     // 0B: OR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -427,7 +510,10 @@ static FORCE_INLINE void OpAdc_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
 template <bool UpdateFlags>
 static FORCE_INLINE void OpSbb_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 18: SBB r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -438,12 +524,18 @@ static FORCE_INLINE void OpSbb_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 19: SBB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = ReadModRM16(state, op, utlb);
+        auto dest_res = ReadModRM16(state, op, utlb);
+        if (!dest_res) return;
+        uint16_t dest = *dest_res;
+
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, dest, src);
         WriteModRM16(state, op, res, utlb);
     } else {
-        uint32_t dest = ReadModRM32(state, op, utlb);
+        auto dest_res = ReadModRM32(state, op, utlb);
+        if (!dest_res) return;
+        uint32_t dest = *dest_res;
+
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, dest, src);
         WriteModRM32(state, op, res, utlb);
@@ -453,7 +545,10 @@ static FORCE_INLINE void OpSbb_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpSbb_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 1A: SBB r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, dest, src);
@@ -470,12 +565,18 @@ static FORCE_INLINE void OpSbb_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 1B: SBB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -543,7 +644,10 @@ static FORCE_INLINE void OpAnd_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
 template <bool UpdateFlags>
 static FORCE_INLINE void OpSub_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 28: SUB r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -552,10 +656,14 @@ static FORCE_INLINE void OpSub_EbGb(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpSub_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2A: SUB r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, dest, src);
+
     uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
         *rptr = (*rptr & 0xFFFFFF00) | res;
@@ -568,12 +676,18 @@ static FORCE_INLINE void OpSub_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 2B: SUB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -612,7 +726,10 @@ static FORCE_INLINE void OpSub_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
 template <bool UpdateFlags>
 static FORCE_INLINE void OpXor_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 30: XOR r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, dest, src);
     WriteModRM8(state, op, res, utlb);
@@ -621,7 +738,10 @@ static FORCE_INLINE void OpXor_EbGb(EmuState* state, DecodedOp* op, mem::MicroTL
 template <bool UpdateFlags>
 static FORCE_INLINE void OpXor_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 32: XOR r8, r/m8
-    uint8_t src = ReadModRM8(state, op, utlb);
+    auto src_res = ReadModRM8(state, op, utlb);
+    if (!src_res) return;
+    uint8_t src = *src_res;
+
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, dest, src);
@@ -637,12 +757,18 @@ static FORCE_INLINE void OpXor_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
     // 33: XOR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        uint16_t src = ReadModRM16(state, op, utlb);
+        auto src_res = ReadModRM16(state, op, utlb);
+        if (!src_res) return;
+        uint16_t src = *src_res;
+
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t src = ReadModRM32(state, op, utlb);
+        auto src_res = ReadModRM32(state, op, utlb);
+        if (!src_res) return;
+        uint32_t src = *src_res;
+
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
@@ -700,7 +826,10 @@ static FORCE_INLINE void OpCmp_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
 
 static FORCE_INLINE void OpTest_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 84: TEST r/m8, r8
-    uint8_t dest = ReadModRM8(state, op, utlb);
+    auto dest_res = ReadModRM8(state, op, utlb);
+    if (!dest_res) return;
+    uint8_t dest = *dest_res;
+
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     AluAnd(state, dest, src);
 }

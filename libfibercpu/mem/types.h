@@ -2,8 +2,19 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 
 namespace fiberish::mem {
+
+enum class FaultCode : uint8_t {
+    None = 0,
+    PageFault = 14,
+    GeneralProtection = 13,
+    InvalidOpcode = 6,
+};
+
+template <typename T>
+using MemResult = std::expected<T, FaultCode>;
 
 using GuestAddr = uint32_t;
 using HostAddr = std::byte*;
