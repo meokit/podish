@@ -60,6 +60,8 @@ struct EmuState {
     InterruptHandler interrupt_handlers[256] = {nullptr};
     void* interrupt_userdata[256] = {nullptr};
 
+    bool eip_dirty = false;  // External API Set EIP?
+
     // TSC State
     uint64_t tsc_frequency = 1000000000;  // Default 1GHz
     uint64_t tsc_offset = 0;

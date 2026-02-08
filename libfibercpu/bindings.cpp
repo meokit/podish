@@ -227,7 +227,10 @@ void X86_RegWrite(EmuState* state, int reg_index, uint32_t val) {
 
 uint32_t X86_GetEIP(EmuState* state) { return state->ctx.eip; }
 
-void X86_SetEIP(EmuState* state, uint32_t eip) { state->ctx.eip = eip; }
+void X86_SetEIP(EmuState* state, uint32_t eip) {
+    state->ctx.eip = eip;
+    state->eip_dirty = true;
+}
 
 uint32_t X86_GetEFLAGS(EmuState* state) { return state->ctx.eflags; }
 

@@ -34,8 +34,11 @@ FORCE_INLINE void Mmu::signal_fault(EmuState* state, uint32_t addr, int is_write
         if (emu_fault_vector) *emu_fault_vector = 14;  // #PF
     }
 
+    bool eip_dirty = state->eip_dirty;  // Kernel set EIP, return to Run loop
+    state->eip_dirty = false;
+
     // 3. Swap Handler to Interrupt (Stop this block, return to RunLoop)
-    if (state->status != EmuStatus::Running && op) {
+    if ((state->status != EmuStatus::Running || eip_dirty) && op) {
         DecodedOp* next = op + 1;
         // Only swap if not already swapped (to avoid overwriting saved_handler)
         if (next->handler != (HandlerFunc)fiberish::HandlerInterrupt) {

@@ -309,7 +309,10 @@ static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::
         state->fault_vector = vector;
     }
 
-    if (state->status != EmuStatus::Running) {
+    bool eip_dirty = state->eip_dirty;  // Kernel set EIP, return to Run loop
+    state->eip_dirty = false;
+
+    if (state->status != EmuStatus::Running || eip_dirty) {
         DecodedOp* next = op + 1;
         // Only swap if not already swapped (to avoid overwriting saved_handler)
         if (next->handler != (HandlerFunc)fiberish::HandlerInterrupt) {

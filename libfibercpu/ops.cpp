@@ -30,8 +30,13 @@ void TriggerPreciseFault(EmuState* state, DecodedOp* op) {
     }
 
     state->status = EmuStatus::Fault;
-    // Precise Exception: roll back EIP to current instruction start
-    state->ctx.eip = op->next_eip - op->GetLength();
+
+    if (!state->eip_dirty) {
+        // Precise Exception: roll back EIP to current instruction start
+        state->ctx.eip = op->next_eip - op->GetLength();
+    }
+
+    state->eip_dirty = false;
 
     DecodedOp* next = op + 1;
     // Avoid re-swapping if already swapped
