@@ -54,11 +54,19 @@ JCC_WRAPPERS(2, B)
 JCC_WRAPPERS(3, AE)
 JCC_WRAPPERS(4, E)
 JCC_WRAPPERS(5, NE)
-JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP)
-    JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
+JCC_WRAPPERS(6, BE)
+JCC_WRAPPERS(7, A)
+JCC_WRAPPERS(8, S)
+JCC_WRAPPERS(9, NS)
+JCC_WRAPPERS(10, P)
+JCC_WRAPPERS(11, NP)
+JCC_WRAPPERS(12, L)
+JCC_WRAPPERS(13, GE)
+JCC_WRAPPERS(14, LE)
+JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
-        static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
     // Push Return Address
     if (!Push32(state, op->next_eip, utlb, op)) return;
@@ -288,7 +296,6 @@ static FORCE_INLINE void OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
 static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::MicroTLB* utlb) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
-    printf("[%u] Interrupt %d\n", state->ctx.eip, vector);
 
     // Check if hook handles it
     bool handled = false;

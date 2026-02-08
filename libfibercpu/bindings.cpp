@@ -519,16 +519,11 @@ int X86_Step(EmuState* state) {
 
     // Run first op
     HandlerFunc h = ops[0].handler;
+    ops[0].next_eip = state->ctx.eip + ops[0].GetLength();
 
     if (h) {
-        uint32_t old_eip = state->ctx.eip;
         MicroTLB utlb;
         h(state, &ops[0], 0, utlb);  // Limit 0 ensures it returns after 1 inst + sentinel
-
-        // Advance EIP if handler didn't change it AND no fault occurred.
-        if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
-            state->ctx.eip += ops[0].GetLength();
-        }
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;

@@ -31,6 +31,10 @@ class Program
         var traceOption = new Option<bool>(
             aliases: new[] { "--trace", "-t" },
             description: "Enable syscall tracing and detailed logging");
+        
+        var traceInstructionOption = new Option<bool>(
+            aliases: new[] { "--trace-instruction" },
+            description: "Enable instruction tracing");
 
         var statsOption = new Option<bool>(
             name: "--stats",
@@ -50,22 +54,23 @@ class Program
             rootOption,
             verboseOption,
             traceOption,
+            traceInstructionOption,
             statsOption,
             exeArgument,
             argsArgument
         };
 
-        rootCommand.SetHandler(async (rootfs, verbose, trace, stats, exe, exeArgs) =>
+        rootCommand.SetHandler(async (rootfs, verbose, trace, traceInstruction, stats, exe, exeArgs) =>
         {
             Verbose = verbose;
             ShowStats = stats;
-            Environment.ExitCode = await RunEmulator(rootfs, verbose, trace, stats, exe, exeArgs);
-        }, rootOption, verboseOption, traceOption, statsOption, exeArgument, argsArgument);
+            Environment.ExitCode = await RunEmulator(rootfs, verbose, trace, traceInstruction, stats, exe, exeArgs);
+        }, rootOption, verboseOption, traceOption, traceInstructionOption, statsOption, exeArgument, argsArgument);
 
         return await rootCommand.InvokeAsync(args);
     }
 
-    static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool stats, string exe, string[] exeArgs)
+    static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction, bool stats, string exe, string[] exeArgs)
     {
         // Initialize Logging
         Logging.LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
@@ -110,6 +115,8 @@ class Program
             ProcFsManager.Init(sys);
 
             var proc = new Process(Task.NextPID(), mm, sys);
+            proc.traceInstruction = traceInstruction;
+            
             mainTask = new Task(proc.TGID, proc, engine);
             Scheduler.Add(mainTask);
             ProcFsManager.OnProcessStart(sys, proc.TGID);

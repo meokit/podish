@@ -70,6 +70,8 @@ public class Process
 
     public Dictionary<int, SigAction> SignalActions { get; } = new();
 
+    public bool traceInstruction;
+
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
         TGID = tgid;
@@ -95,8 +97,8 @@ public partial class Task
     public int TID { get; set; }
     public Process Process { get; set; }
     public Engine CPU { get; set; }
+    
     private readonly Queue<string> _traceBuffer = new(1024);
-
     public int ExitCode { get; set; }
     public bool Exited { get; set; }
     public ManualResetEventSlim WaitEvent { get; } = new(false);
@@ -106,7 +108,6 @@ public partial class Task
     // Async support: the task that is currently blocking this emulator task
     public System.Threading.Tasks.Task? BlockingTask { get; set; }
 
-    // Cooperative scheduling: a TCS that the scheduler will complete to resume this task
     // Cooperative scheduling: a TCS that the scheduler will complete to resume this task
     public TaskCompletionSource<bool>? ResumeTcs { get; set; }
 
@@ -245,7 +246,7 @@ public partial class Task
                     while (!Exited)
                     {
                         // Increase instruction quantum to amortize context switch cost
-                        if (Process.Syscalls.Strace)
+                        if (Process.traceInstruction)
                         {
                             // Slow path with tracing
                             int stepRet = CPU.Step();

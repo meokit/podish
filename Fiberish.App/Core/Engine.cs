@@ -16,8 +16,6 @@ public class Engine : IDisposable
     // New resolver for synchronous fault handling during safe access
     public Func<uint, bool, bool>? PageFaultResolver { get; set; }
 
-    public bool TraceInstructions { get; set; } = false;
-
     public unsafe Engine()
     {
         State = X86Native.Create();
@@ -74,7 +72,6 @@ public class Engine : IDisposable
             FaultHandler = FaultHandler,
             InterruptHandler = InterruptHandler,
             PageFaultResolver = PageFaultResolver,
-            TraceInstructions = TraceInstructions
         };
         return newEngine;
     }
