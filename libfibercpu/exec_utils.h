@@ -308,13 +308,47 @@ inline uint32_t Pop32(EmuState* state, mem::MicroTLB* utlb) {
 // ALU Operations & Flags
 // ------------------------------------------------------------------------------------------------
 
-inline uint8_t Parity(uint8_t v) {
-    // Basic parity: even number of 1s -> 1
-    v ^= v >> 4;
-    v &= 0xf;
-    uint8_t res = (0x9669 >> v) & 1;
-    return res;
+// Use compiler builtins where possible
+#if defined(__GNUC__) || defined(__clang__)
+#define FIBER_POPCOUNT32(x) __builtin_popcount(x)
+#define FIBER_PARITY32(x) __builtin_parity(x)
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define FIBER_POPCOUNT32(x) __popcnt(x)
+// MSVC doesn't have a direct parity builtin, use popcount & 1
+#define FIBER_PARITY32(x) (__popcnt(x) & 1)
+#else
+// Fallback
+#define FIBER_POPCOUNT32(x) std::bitset<32>(x).count()
+#define FIBER_PARITY32(x) (FIBER_POPCOUNT32(x) & 1)
+#endif
+
+// 256-entry Parity Lookup Table (1 = Odd Parity i.e. odd number of 1s)
+static const uint8_t g_ParityLUT[256] = {
+    1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
+    0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0,
+    0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0,
+    1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1,
+    0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1,
+    0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1,
+    1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+};
+
+// Returns true if PF should be set (even number of 1s in low 8 bits)
+inline bool CalcPflag(uint8_t res_byte) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    // On x86, we can use builtins which map to efficient instructions or use a small sequence
+    // __builtin_parity returns 1 for odd, 0 for even.
+    // PF wants 1 for even, 0 for odd.
+    return !FIBER_PARITY32(res_byte);
+#else
+    // On non-x86 (like ARM64), use LUT to avoid bit-twiddling overhead
+    return g_ParityLUT[res_byte];
+#endif
 }
+
+// Backward compatibility for other ops files
+inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
 
 template <typename T, bool UpdateFlags = true>
 inline T AluAdd(EmuState* state, T dest, T src) {
@@ -322,28 +356,32 @@ inline T AluAdd(EmuState* state, T dest, T src) {
 
     if constexpr (UpdateFlags) {
         // PF, ZF, SF
+        // Clear all relevant flags first
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
+        // ZF: Zero Flag
         if (res == 0) flags |= ZF_MASK;
-        if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
 
-        // CF: Unsigned Overflow
+        // SF: Sign Flag (MSB)
+        uint32_t msb_idx = sizeof(T) * 8 - 1;
+        if ((res >> msb_idx) & 1) flags |= SF_MASK;
+
+        // PF: Parity Flag (Low 8 bits have even number of 1s)
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
+
+        // CF: Unsigned Overflow (Carry)
         // res < dest implies overflow for ADD
-        // Or (res < src)
         if (res < dest) flags |= CF_MASK;
 
         // OF: Signed Overflow
         // (dest^src) >= 0 (same sign) AND (dest^res) < 0 (sign changed)
-        T sign_mask = (T)1 << (sizeof(T) * 8 - 1);
-        bool s1 = (dest & sign_mask);
-        bool s2 = (src & sign_mask);
-        bool sr = (res & sign_mask);
+        // Optimization: ((dest ^ src ^ -1) & (dest ^ res)) & sign_mask
+        T sign_mask = (T)1 << msb_idx;
+        if (!((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        if (s1 == s2 && s1 != sr) flags |= OF_MASK;
-
-        // AF: Carry from bit 3 to 4
-        if (((dest & 0xF) + (src & 0xF)) > 0xF) flags |= AF_MASK;
+        // AF: Auxiliary Carry (Carry from bit 3 to 4)
+        // Branchless: (dest ^ src ^ res) & 0x10 means there was a carry/borrow into bit 4
+        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -358,23 +396,24 @@ inline T AluSub(EmuState* state, T dest, T src) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
-        if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+
+        uint32_t msb_idx = sizeof(T) * 8 - 1;
+        if ((res >> msb_idx) & 1) flags |= SF_MASK;
+
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF: Borrow
         if (dest < src) flags |= CF_MASK;
 
         // OF: Signed Overflow
         // (dest^src) < 0 (diff sign) AND (dest^res) < 0 (sign flipped from dest)
-        T sign_mask = (T)1 << (sizeof(T) * 8 - 1);
-        bool s1 = (dest & sign_mask);
-        bool s2 = (src & sign_mask);
-        bool sr = (res & sign_mask);
-
-        if (s1 != s2 && s1 != sr) flags |= OF_MASK;
+        // equivalent: ((dest ^ src) & (dest ^ res)) & sign_mask
+        T sign_mask = (T)1 << msb_idx;
+        if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
         // AF: Borrow from bit 3
-        if ((dest & 0xF) < (src & 0xF)) flags |= AF_MASK;
+        // For SUB, similar branchless formula: (dest ^ src ^ res) & 0x10
+        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -383,15 +422,11 @@ inline T AluSub(EmuState* state, T dest, T src) {
 
 template <typename T, bool UpdateFlags = true>
 inline T AluAdc(EmuState* state, T dest, T src) {
-    uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
+    uint32_t cf_in = (state->ctx.eflags & CF_MASK);  // 0 or 1 (CF_MASK is 1)
 
     using UT = std::make_unsigned_t<T>;
-    UT udest = (UT)dest;
-    UT usrc = (UT)src;
-
-    // Use wider type to check for carry
-    unsigned long long wdest = udest;
-    unsigned long long wsrc = usrc;
+    unsigned long long wdest = (UT)dest;
+    unsigned long long wsrc = (UT)src;
     unsigned long long wres = wdest + wsrc + cf_in;
 
     T res = (T)wres;
@@ -400,22 +435,21 @@ inline T AluAdc(EmuState* state, T dest, T src) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
-        if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+
+        uint32_t msb_idx = sizeof(T) * 8 - 1;
+        if ((res >> msb_idx) & 1) flags |= SF_MASK;
+
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF
         if (wres >> (sizeof(T) * 8)) flags |= CF_MASK;
 
         // OF: Signed Overflow
-        T sign_mask = (T)1 << (sizeof(T) * 8 - 1);
-        bool s1 = (dest & sign_mask);
-        bool s2 = (src & sign_mask);
-        bool sr = (res & sign_mask);
-
-        if (s1 == s2 && s1 != sr) flags |= OF_MASK;
+        T sign_mask = (T)1 << msb_idx;
+        if (!((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
         // AF
-        if (((dest & 0xF) + (src & 0xF) + cf_in) > 0xF) flags |= AF_MASK;
+        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -424,14 +458,11 @@ inline T AluAdc(EmuState* state, T dest, T src) {
 
 template <typename T, bool UpdateFlags = true>
 inline T AluSbb(EmuState* state, T dest, T src) {
-    uint32_t cf_in = (state->ctx.eflags & CF_MASK) ? 1 : 0;
+    uint32_t cf_in = (state->ctx.eflags & CF_MASK);  // 0 or 1
 
     using UT = std::make_unsigned_t<T>;
-    UT udest = (UT)dest;
-    UT usrc = (UT)src;
-
-    unsigned long long wdest = udest;
-    unsigned long long wsrc = usrc;
+    unsigned long long wdest = (UT)dest;
+    unsigned long long wsrc = (UT)src;
     unsigned long long wres = wdest - wsrc - cf_in;
 
     T res = (T)wres;
@@ -440,22 +471,21 @@ inline T AluSbb(EmuState* state, T dest, T src) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
-        if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+
+        uint32_t msb_idx = sizeof(T) * 8 - 1;
+        if ((res >> msb_idx) & 1) flags |= SF_MASK;
+
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF: Borrow
         if (wdest < (wsrc + cf_in)) flags |= CF_MASK;
 
         // OF: Signed Overflow
-        T sign_mask = (T)1 << (sizeof(T) * 8 - 1);
-        bool s1 = (dest & sign_mask);
-        bool s2 = (src & sign_mask);
-        bool sr = (res & sign_mask);
+        T sign_mask = (T)1 << msb_idx;
+        if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        if (s1 != s2 && s1 != sr) flags |= OF_MASK;
-
-        // AF: Borrow from bit 3
-        if ((dest & 0xF) < ((src & 0xF) + cf_in)) flags |= AF_MASK;
+        // AF
+        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -467,13 +497,12 @@ inline T AluAnd(EmuState* state, T dest, T src) {
     T res = dest & src;
 
     if constexpr (UpdateFlags) {
-        // CF=0, OF=0
+        // CF=0, OF=0, AF undefined (cleared)
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        // AF is undefined, let's clear it
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -489,7 +518,7 @@ inline T AluOr(EmuState* state, T dest, T src) {
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -505,7 +534,7 @@ inline T AluXor(EmuState* state, T dest, T src) {
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         state->ctx.eflags = flags;
     }
@@ -532,7 +561,7 @@ inline T AluShl(EmuState* state, T dest, uint8_t count) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (width - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = MSB(Res) ^ CF
@@ -561,7 +590,7 @@ inline T AluShr(EmuState* state, T dest, uint8_t count) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = MSB(Original)
@@ -593,7 +622,7 @@ inline T AluSar(EmuState* state, T dest, uint8_t count) {
         uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
+        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = 0
