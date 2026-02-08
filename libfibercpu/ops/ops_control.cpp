@@ -53,8 +53,9 @@ JCC_WRAPPERS(1, NO)
 JCC_WRAPPERS(2, B)
 JCC_WRAPPERS(3, AE)
 JCC_WRAPPERS(4, E)
-JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P)
-    JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
+JCC_WRAPPERS(5, NE)
+JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP)
+    JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
         static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
@@ -285,20 +286,30 @@ static FORCE_INLINE void OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
 
 // Helper for interrupts
 static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 1. Check if hook handles it
+    // Sync EIP
+    state->ctx.eip = op->next_eip;
+    printf("[%u] Interrupt %d\n", state->ctx.eip, vector);
+
+    // Check if hook handles it
+    bool handled = false;
     if (state->interrupt_handlers[vector]) {
-        // Hook is void (*)(...) or int (*)(...)
-        // In state.h: using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
-        // If it returns non-zero, it means handled?
-        if (state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector])) {
-            return;
-        }
+        handled = state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector]);
     }
 
-    // 2. Real Interrupt Emulation (Push Flags, CS, EIP)
     // For now, we just fault if not handled, as we don't fully emulate IDT in user mode runner.
-    state->status = EmuStatus::Fault;
-    state->fault_vector = vector;
+    if (!handled) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = vector;
+    }
+
+    if (state->status != EmuStatus::Running) {
+        DecodedOp* next = op + 1;
+        // Only swap if not already swapped (to avoid overwriting saved_handler)
+        if (next->handler != (HandlerFunc)fiberish::HandlerInterrupt) {
+            state->saved_handler = (int64_t (*)(EmuState*, DecodedOp*, int64_t, mem::MicroTLB))next->handler;
+            next->handler = (HandlerFunc)fiberish::HandlerInterrupt;
+        }
+    }
 }
 
 static FORCE_INLINE void OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
