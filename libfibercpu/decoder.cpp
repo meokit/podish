@@ -65,8 +65,10 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_index) {
     // Reset op
     std::memset(op, 0, sizeof(DecodedOp));
-    op->prefixes.flags.ea_base = 8;
-    op->prefixes.flags.ea_index = 8;
+    // Initialize MemPacked fields for "No Base", "No Index", "Scale 1"
+    op->mem.base_offset = 32;   // Index 8 * 4 (Zero Register)
+    op->mem.index_offset = 32;  // Index 8 * 4
+    op->mem.scale = 0;
     op->branch_target = std::numeric_limits<uint32_t>::max();  // Invalid branch target
 
     const uint8_t* start = code;
@@ -89,8 +91,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
                 break;
 
                 // Group 2: Segment Overrides
-#define ENABLE_UNUSED_SEGMENTS_DECODING 1
-#if ENABLE_UNUSED_SEGMENTS_DECODING
             case 0x2E:
                 op->prefixes.flags.segment = 2;
                 break;  // CS
@@ -103,7 +103,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
             case 0x26:
                 op->prefixes.flags.segment = 1;
                 break;  // ES
-#endif
             case 0x64:
                 op->prefixes.flags.segment = 5;
                 break;  // FS
@@ -182,10 +181,10 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
             op->meta.flags.has_disp = 1;
             if (disp_size == 1) {
                 int8_t d8 = (int8_t)*ptr;
-                op->disp = (uint32_t)(int32_t)d8;  // Sign extend!
+                op->mem.disp = (uint32_t)(int32_t)d8;  // Sign extend!
                 ptr += 1;
             } else {
-                op->disp = *reinterpret_cast<const uint32_t*>(ptr);
+                op->mem.disp = *reinterpret_cast<const uint32_t*>(ptr);
                 ptr += 4;
             }
         }
@@ -196,20 +195,20 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
             uint8_t index = (sib_byte >> 3) & 7;
             uint8_t base_reg = sib_byte & 7;
 
-            if (index != 4) op->prefixes.flags.ea_index = index;
-            op->meta.flags.ea_shift = scale;
+            if (index != 4) op->mem.index_offset = index * 4;
+            op->mem.scale = scale;
 
             if (mod == 0 && base_reg == 5) {
-                // Base is None (Disp32) - already initialized to 8
+                // Base is None (Disp32) - already initialized to 32
             } else {
-                op->prefixes.flags.ea_base = base_reg;
+                op->mem.base_offset = base_reg * 4;
             }
         } else {
             // No SIB
             if (mod == 0 && rm == 5) {
-                // Base is None (Disp32) - already initialized to 8
+                // Base is None (Disp32) - already initialized to 32
             } else {
-                op->prefixes.flags.ea_base = rm;
+                op->mem.base_offset = rm * 4;
             }
         }
     } else {
@@ -217,9 +216,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
         // INC/DEC/PUSH/POP)
         op->modrm = opcode & 7;
     }
-
-    // Store extra info (Condition Code or Low Opcode bits) in op->extra (4 bits)
-    op->extra = opcode & 0xF;
 
     // 4. Immediate
     uint8_t imm_type = kImmType[map][opcode];
@@ -250,7 +246,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
         ptr += imm_len;
     }
 
-    op->length = (ptr - start);
+    op->SetLength(ptr - start);
 
     // Rule 1: REP/REPNE prefixes always terminate blocks as they can loop (modify
     // EIP)
@@ -275,11 +271,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
     // Combine results and apply map safety filter (ensures 0x0F 0x0F maps don't
     // false positive)
     op->meta.flags.is_control_flow = is_rep | (is_map_match & (map <= 1));
-
-    // Store extra info (Condition Code or Low Opcode bits) in op->extra (4 bits)
-    // Useful for Jcc (70-7F, 0F 80-8F), Setcc (0F 90-9F), CMOVcc (0F 40-4F)
-    // All these have condition code in low 4 bits of opcode.
-    op->extra = opcode & 0xF;
 
     // Final Step: Calculate Relative Handler Offset
     // Specialized 32-bit MOV (0x89, 0x8B) - No Legacy Prefixes
@@ -372,7 +363,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                     "%02X %02X\n",
                     current_eip, buf[0], buf[1], buf[2], buf[3]);
             std::memset(&op, 0, sizeof(op));
-            op.length = 0;  // Fault: EIP points to instruction
+            op.SetLength(0);  // Fault: EIP points to instruction
 
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
             op.handler = ud2;
@@ -423,7 +414,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             opcode = *ptr;
         }
         op_indices.push_back((map << 8) | opcode);
-        op.next_eip = current_eip + op.length;
+        op.next_eip = current_eip + op.GetLength();
 
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
@@ -431,17 +422,20 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         if (is_nop && !temp_ops.empty() && !IsControlFlow(&temp_ops.back())) {
             // "Absorb" NOP into the previous instruction
             DecodedOp& prev = temp_ops.back();
-            prev.next_eip += op.length;
-            prev.length += op.length;
-            op_indices.pop_back();
-            // Advance EIP and continue
-            current_eip += op.length;
-            continue;
+            uint32_t new_len = (uint32_t)prev.GetLength() + op.GetLength();
+            if (new_len <= 255) {
+                prev.next_eip += op.GetLength();
+                prev.SetLength((uint8_t)new_len);
+                op_indices.pop_back();
+                // Advance EIP and continue
+                current_eip += op.GetLength();
+                continue;
+            }
         }
 
         temp_ops.push_back(op);
         inst_count++;
-        uint32_t inst_len = op.length;
+        uint32_t inst_len = op.GetLength();
 
         // Stop if Control Flow
         if (IsControlFlow(&op)) {

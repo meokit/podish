@@ -132,11 +132,14 @@ inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
 
 inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
-    // If ea_base or ea_index is 8, will fetch from the `zero` register
-    uint32_t base = state->ctx.regs[op->prefixes.flags.ea_base];
-    base += (state->ctx.regs[op->prefixes.flags.ea_index] << op->meta.flags.ea_shift);
-    base += op->disp;
-    return base;
+    // Branchless calculation using pre-calculated offsets to registers (or zero register)
+    const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
+    uint32_t base = *(const uint32_t*)(regs_base + op->mem.base_offset);
+    uint32_t index = *(const uint32_t*)(regs_base + op->mem.index_offset);
+
+    // index is usually 0 if no index (pointing to zero reg)
+    // base is usually 0 if no base (pointing to zero reg)
+    return base + (index << op->mem.scale) + op->mem.disp;
 }
 
 inline uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {

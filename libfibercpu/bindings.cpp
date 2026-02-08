@@ -506,7 +506,7 @@ int X86_Step(EmuState* state) {
     std::memset(ops, 0, sizeof(ops));
 
     if (!DecodeInstruction(buf, &ops[0], &handler_index)) {
-        ops[0].length = 1;
+        ops[0].SetLength(1);
         // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
         ops[0].handler = ud2;
@@ -527,7 +527,7 @@ int X86_Step(EmuState* state) {
 
         // Advance EIP if handler didn't change it AND no fault occurred.
         if (state->status != EmuStatus::Fault && state->ctx.eip == old_eip) {
-            state->ctx.eip += ops[0].length;
+            state->ctx.eip += ops[0].GetLength();
         }
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {

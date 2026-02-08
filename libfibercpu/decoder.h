@@ -57,40 +57,48 @@ using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, Decod
 struct BasicBlock;
 
 struct alignas(32) DecodedOp {
-    // Immediate and Displacement
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-#pragma clang diagnostic ignored "-Wnested-anon-types"
+    // 0-7: Memory Addressing Info (Packed load)
     union {
         struct {
-            uint32_t imm;
-            uint32_t disp;
-        };
+            uint32_t disp;         // 0-3
+            uint8_t base_offset;   // 4
+            uint8_t index_offset;  // 5
+            uint8_t scale;         // 6
+            uint8_t mem_flags;     // 7
+        } mem;
         BasicBlock* next_block;
+        uint64_t mem_packed;
     };
-#pragma clang diagnostic pop
 
-    // ------------ 8 BYTES ------------
+    // 8-11: Immediate
+    uint32_t imm;
 
-    // Prefixes
+    // 12-15: Next EIP
+    uint32_t next_eip;
+
+    // 16-23: Handler
+    HandlerFunc handler;
+
+    // 24-27: Branch Target (Dynamic)
+    uint32_t branch_target;
+
+    // 28: Prefixes (Compressed to 8 bits)
     union {
-        uint16_t all;
+        uint8_t all;
         struct {
-            uint16_t lock : 1;
-            uint16_t rep : 1;
-            uint16_t repne : 1;
-            uint16_t segment : 3;
-            uint16_t opsize : 1;
-            uint16_t addrsize : 1;
-            uint16_t ea_base : 4;   // 0-7: Reg, 8: None
-            uint16_t ea_index : 4;  // 0-7: Reg, 8: None
+            uint8_t lock : 1;
+            uint8_t rep : 1;
+            uint8_t repne : 1;
+            uint8_t segment : 3;
+            uint8_t opsize : 1;
+            uint8_t addrsize : 1;
         } flags;
     } prefixes;
 
-    // ------------ 10 BYTES ------------
+    // 29: ModRM
+    uint8_t modrm;
 
-    // Internal Flags
+    // 30: Meta
     union {
         uint8_t all;
         struct {
@@ -99,27 +107,20 @@ struct alignas(32) DecodedOp {
             uint8_t has_disp : 1;
             uint8_t has_imm : 1;
             uint8_t is_control_flow : 1;
-            uint8_t ea_shift : 2;
             uint8_t no_flags : 1;
         } flags;
     } meta;
 
-    // ModR/M
-    uint8_t modrm;
+    // 31: Length
+    uint8_t len;
 
-    // ------------ 12 BYTES ------------
-    int8_t length;
-    int8_t extra;
-    int8_t padding0;
-    int8_t padding1;
-    // ------------ 16 BYTES ------------
-    uint32_t next_eip;
-    uint32_t branch_target;
-
-    // ------------ 24 BYTES ------------
-    HandlerFunc handler;
-    // ------------ 32 BYTES ------------
+    // Helper accessors for length
+    uint8_t GetLength() const { return len; }
+    void SetLength(uint8_t l) { len = l; }
 };
+
+// Size check
+static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");
 
 // Size check
 // static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");

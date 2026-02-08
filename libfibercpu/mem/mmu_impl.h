@@ -24,7 +24,7 @@ FORCE_INLINE void Mmu::signal_fault(EmuState* state, uint32_t addr, int is_write
     // and allow retry (if handled) or stop (if not).
 
     // 1. Rollback EIP
-    if (op) state->ctx.eip = op->next_eip - op->length;
+    if (op) state->ctx.eip = op->next_eip - op->GetLength();
 
     // 2. Call User Handler (if any)
     if (fault_handler) {

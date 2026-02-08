@@ -116,125 +116,125 @@ MemResult<void> Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uin
     }
 }
 
-template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
-    bool is_byte = (op->extra == 0);
     uint32_t dest;
     if constexpr (S == Specialized::ModReg) {
         // Optimization: Skip ReadModRM call for Reg
         uint8_t rm = op->modrm & 7;
-        if (is_byte) {
+        if constexpr (IsByte) {
             uint32_t* rptr = GetRegPtr(state, rm & 3);
             if (rm < 4)
                 dest = (*rptr) & 0xFF;
             else
                 dest = ((*rptr) >> 8) & 0xFF;
-        } else if (op->prefixes.flags.opsize) {
-            dest = GetReg(state, rm) & 0xFFFF;
         } else {
-            dest = GetReg(state, rm);
+            if (op->prefixes.flags.opsize) {
+                dest = GetReg(state, rm) & 0xFFFF;
+            } else {
+                dest = GetReg(state, rm);
+            }
         }
     } else {
-        if (is_byte) {
+        if constexpr (IsByte) {
             auto res = ReadModRM8(state, op, utlb);
             if (!res) return;
             dest = *res;
-        } else if (op->prefixes.flags.opsize) {
-            auto res = ReadModRM16(state, op, utlb);
-            if (!res) return;
-            dest = *res;
         } else {
-            auto res = ReadModRM32(state, op, utlb);
-            if (!res) return;
-            dest = *res;
+            if (op->prefixes.flags.opsize) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            }
         }
     }
 
     uint8_t count = (uint8_t)op->imm;
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, is_byte, utlb)) return;
+    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb)) return;
 }
 
-template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D0: Shift r/m8, 1
     // D1: Shift r/m16/32, 1
-    bool is_byte = (op->extra == 0x0);
     uint32_t dest;
     uint8_t mod = (op->modrm >> 6) & 3;
     if (mod == 3) {
-        if (is_byte)
+        if constexpr (IsByte)
             dest = GetReg8(state, op->modrm & 7);
         else
             dest = GetReg(state, op->modrm & 7);
     } else {
-        if (is_byte) {
+        if constexpr (IsByte) {
             auto res = ReadModRM8(state, op, utlb);
             if (!res) return;
             dest = *res;
-        } else if (op->prefixes.flags.opsize) {
-            auto res = ReadModRM16(state, op, utlb);
-            if (!res) return;
-            dest = *res;
         } else {
-            auto res = ReadModRM32(state, op, utlb);
-            if (!res) return;
-            dest = *res;
+            if (op->prefixes.flags.opsize) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            }
         }
     }
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, 1, is_byte, utlb)) return;
+    if (!Helper_Group2<FixedSubOp>(state, op, dest, 1, IsByte, utlb)) return;
 }
 
-template <uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D2: r/m8, CL
     // D3: r/m32, CL
-    bool is_byte = (op->extra == 2);
     uint32_t dest;
     if constexpr (S == Specialized::ModReg) {
         uint8_t rm = op->modrm & 7;
-        if (is_byte) {
+        if constexpr (IsByte) {
             uint32_t* rptr = GetRegPtr(state, rm & 3);
             if (rm < 4)
                 dest = (*rptr) & 0xFF;
             else
                 dest = ((*rptr) >> 8) & 0xFF;
-        } else if (op->prefixes.flags.opsize) {
-            dest = GetReg(state, rm) & 0xFFFF;
         } else {
-            dest = GetReg(state, rm);
+            if (op->prefixes.flags.opsize) {
+                dest = GetReg(state, rm) & 0xFFFF;
+            } else {
+                dest = GetReg(state, rm);
+            }
         }
     } else {
-        if (is_byte) {
+        if constexpr (IsByte) {
             auto res = ReadModRM8(state, op, utlb);
             if (!res) return;
             dest = *res;
-        } else if (op->prefixes.flags.opsize) {
-            auto res = ReadModRM16(state, op, utlb);
-            if (!res) return;
-            dest = *res;
         } else {
-            auto res = ReadModRM32(state, op, utlb);
-            if (!res) return;
-            dest = *res;
+            if (op->prefixes.flags.opsize) {
+                auto res = ReadModRM16(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            } else {
+                auto res = ReadModRM32(state, op, utlb);
+                if (!res) return;
+                dest = *res;
+            }
         }
     }
 
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, is_byte, utlb)) return;
+    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb)) return;
 }
 
-static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE void OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A3: BT r/m16/32, r16/32
-    // 0F BA /4: BT r/m16/32, imm8
-    uint32_t bit_idx;
-    if (op->extra == 0xA) {  // 0xBA
-        bit_idx = (uint8_t)op->imm;
-    } else {  // 0x1A3
-        bit_idx = GetReg(state, (op->modrm >> 3) & 7);
-    }
-
+    uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     uint32_t bit_val = 0;
 
@@ -244,11 +244,11 @@ static FORCE_INLINE void OpBt_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB
         bit_val = (base >> (bit_idx & mask_val)) & 1;
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        addr += (int32_t)bit_idx >> 3;  // Bit index can offset the memory address
-        bit_idx &= 7;                   // Get bit within the byte
+        addr += (int32_t)bit_idx >> 3;   // Bit index can offset the memory address
+        uint8_t byte_idx = bit_idx & 7;  // Get bit within the byte
         auto val_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
         if (!val_res) return;  // Abort on memory fault
-        bit_val = (*val_res >> bit_idx) & 1;
+        bit_val = (*val_res >> byte_idx) & 1;
     }
 
     if (bit_val)
@@ -264,6 +264,8 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::Micr
     // 0F BA /7: BTC r/m16/32, imm8
 
     uint8_t subop = (op->modrm >> 3) & 7;
+    // Safety check: Decoder should route handling here only for Group8 (BA)
+
     bool opsize = op->prefixes.flags.opsize;
     uint8_t offset = op->imm & (opsize ? 15 : 31);
 
@@ -321,19 +323,13 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::Micr
             else
                 SetReg(state, op->modrm & 7, res);
         }
-    } else if (subop != 4) {  // subop 4 is BT, already handled by OpBt
-        OpUd2(state, op);
     }
+    // Subop 4 (BT) falls through here (no writeback), which is correct.
 }
 
-static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F B3 / 0F BA /6
-    uint32_t bit_idx;
-    if (op->extra == 0xA)  // 0xBA
-        bit_idx = (uint8_t)op->imm;
-    else  // 0x1B3
-        bit_idx = GetReg(state, (op->modrm >> 3) & 7);
-
+static FORCE_INLINE void OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F B3: BTR r/m16/32, r16/32
+    uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     if (mod == 3) {
         uint8_t rm = op->modrm & 7;
@@ -350,27 +346,23 @@ static FORCE_INLINE void OpBtr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
-        bit_idx &= 7;  // Get bit within the byte
+        uint8_t byte_idx = bit_idx & 7;
         auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
         if (!byte_res) return;  // Abort on memory fault
         uint8_t byte = *byte_res;
 
-        if ((byte >> bit_idx) & 1)
+        if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte & ~(1 << bit_idx), utlb, op)) return;  // Abort on memory fault
+        if (!state->mmu.write<uint8_t>(state, addr, byte & ~(1 << byte_idx), utlb, op))
+            return;  // Abort on memory fault
     }
 }
 
-static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F AB / 0F BA /5
-    uint32_t bit_idx;
-    if (op->extra == 0xA)  // 0xBA
-        bit_idx = (uint8_t)op->imm;
-    else  // 0x1AB
-        bit_idx = GetReg(state, (op->modrm >> 3) & 7);
-
+static FORCE_INLINE void OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F AB: BTS r/m16/32, r16/32
+    uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     if (mod == 3) {
         uint8_t rm = op->modrm & 7;
@@ -387,27 +379,22 @@ static FORCE_INLINE void OpBts_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
-        bit_idx &= 7;  // Get bit within the byte
+        uint8_t byte_idx = bit_idx & 7;
         auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
         if (!byte_res) return;  // Abort on memory fault
         uint8_t byte = *byte_res;
 
-        if ((byte >> bit_idx) & 1)
+        if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte | (1 << bit_idx), utlb, op)) return;  // Abort on memory fault
+        if (!state->mmu.write<uint8_t>(state, addr, byte | (1 << byte_idx), utlb, op)) return;  // Abort on memory fault
     }
 }
 
-static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F BB / 0F BA /7
-    uint32_t bit_idx;
-    if (op->extra == 0xA)  // 0xBA
-        bit_idx = (uint8_t)op->imm;
-    else  // 0x1BB
-        bit_idx = GetReg(state, (op->modrm >> 3) & 7);
-
+static FORCE_INLINE void OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F BB: BTC r/m16/32, r16/32
+    uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
     if (mod == 3) {
         uint8_t rm = op->modrm & 7;
@@ -424,16 +411,16 @@ static FORCE_INLINE void OpBtc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTL
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
-        bit_idx &= 7;  // Get bit within the byte
+        uint8_t byte_idx = bit_idx & 7;
         auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
         if (!byte_res) return;  // Abort on memory fault
         uint8_t byte = *byte_res;
 
-        if ((byte >> bit_idx) & 1)
+        if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte ^ (1 << bit_idx), utlb, op)) return;  // Abort on memory fault
+        if (!state->mmu.write<uint8_t>(state, addr, byte ^ (1 << byte_idx), utlb, op)) return;  // Abort on memory fault
     }
 }
 
@@ -501,91 +488,67 @@ static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroT
 }
 
 void RegisterShiftBitOps() {
-    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb<>>;
-    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb<>>;
-    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1<>>;
-    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1<>>;
-    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl<>>;
-    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl<>>;
+    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb<true>>;
+    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb<false>>;
+    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1<true>>;
+    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1<false>>;
+    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl<true>>;
+    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl<false>>;
 
-    // Specializations for SHL (4), SHR (5), SAR (7)
-    // Target 0xC1 (Imm8) and 0xD3 (CL), 32-bit (Ev)
-    // Target 0xD1 (1) - Common for simple doubling
+    // Specializations
+    // Explicit registration for common cases to ensure they are generated
 
-    // lambda to register for a specific opcode
-    auto RegisterShiftSpecs = [](uint16_t opcode) {
+    // SHL (4)
+    {
         SpecCriteria c;
-
-        // SHL (SubOp 4)
-        c.reg_mask = 0x7;
+        c.reg_mask = 7;
         c.reg_val = 4;
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<4>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<4>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<4>>::RegisterSpecialized(opcode, c);
+        DispatchRegistrar<OpGroup2_EvIb<false, 4>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 4>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 4>>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;  // ModReg
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<4, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-
-        // SHR (SubOp 5)
-        c.reg_mask = 0x7;
+        c.mod_val = 0xC0;
+        DispatchRegistrar<OpGroup2_EvIb<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+    }
+    // SHR (5)
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
         c.reg_val = 5;
-        c.mod_mask = 0;
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<5>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<5>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<5>>::RegisterSpecialized(opcode, c);
+        DispatchRegistrar<OpGroup2_EvIb<false, 5>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 5>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 5>>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;  // ModReg
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<5, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-
-        // SAR (SubOp 7)
-        c.reg_mask = 0x7;
+        c.mod_val = 0xC0;
+        DispatchRegistrar<OpGroup2_EvIb<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+    }
+    // SAR (7)
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
         c.reg_val = 7;
-        c.mod_mask = 0;
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<7>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<7>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<7>>::RegisterSpecialized(opcode, c);
+        DispatchRegistrar<OpGroup2_EvIb<false, 7>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 7>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 7>>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;  // ModReg
-        if (opcode == 0xC1 || opcode == 0xC0)
-            DispatchRegistrar<OpGroup2_EvIb<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD1 || opcode == 0xD0)
-            DispatchRegistrar<OpGroup2_Ev1<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-        else if (opcode == 0xD3 || opcode == 0xD2)
-            DispatchRegistrar<OpGroup2_EvCl<7, Specialized::ModReg>>::RegisterSpecialized(opcode, c);
-    };
+        c.mod_val = 0xC0;
+        DispatchRegistrar<OpGroup2_EvIb<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+    }
 
-    RegisterShiftSpecs(0xC1);  // r/m32, imm8 (Most common)
-    RegisterShiftSpecs(0xD1);  // r/m32, 1
-    RegisterShiftSpecs(0xD3);  // r/m32, CL
-    // 0xC0, 0xD0, 0xD2 are byte versions, less critical but included in logic if needed,
-    // but maybe skip to save binary size? Let's just do dword ones (C1, D1, D3).
-    g_Handlers[0x1A3] = DispatchWrapper<OpBt_EvGv>;
-    g_Handlers[0x1AB] = DispatchWrapper<OpBts_EvGv>;  // 0F AB
-    g_Handlers[0x1B3] = DispatchWrapper<OpBtr_EvGv>;
-    g_Handlers[0x1BB] = DispatchWrapper<OpBtc_EvGv>;  // 0F BB
-    g_Handlers[0x1BA] = DispatchWrapper<OpGroup8_EvIb>;
+    g_Handlers[0x1A3] = DispatchWrapper<OpBt_Reg>;
+    g_Handlers[0x1AB] = DispatchWrapper<OpBts_Reg>;  // 0F AB
+    g_Handlers[0x1B3] = DispatchWrapper<OpBtr_Reg>;
+    g_Handlers[0x1BB] = DispatchWrapper<OpBtc_Reg>;      // 0F BB
+    g_Handlers[0x1BA] = DispatchWrapper<OpGroup8_EvIb>;  // 0F BA (All subops)
     g_Handlers[0x1BD] = DispatchWrapper<OpBsr_GvEv>;
     g_Handlers[0x1BC] = DispatchWrapper<OpBsf_Tzcnt_GvEv>;  // 0F BC: BSF
     g_Handlers[0x2BC] = DispatchWrapper<OpBsf_Tzcnt_GvEv>;

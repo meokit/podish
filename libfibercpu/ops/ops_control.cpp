@@ -52,12 +52,12 @@ JCC_WRAPPERS(0, O)
 JCC_WRAPPERS(1, NO)
 JCC_WRAPPERS(2, B)
 JCC_WRAPPERS(3, AE)
-JCC_WRAPPERS(4, E) JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS)
-    JCC_WRAPPERS(10, P) JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE)
-        JCC_WRAPPERS(15, G)
+JCC_WRAPPERS(4, E)
+JCC_WRAPPERS(5, NE) JCC_WRAPPERS(6, BE) JCC_WRAPPERS(7, A) JCC_WRAPPERS(8, S) JCC_WRAPPERS(9, NS) JCC_WRAPPERS(10, P)
+    JCC_WRAPPERS(11, NP) JCC_WRAPPERS(12, L) JCC_WRAPPERS(13, GE) JCC_WRAPPERS(14, LE) JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
-            static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+        static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
     // Push Return Address
     if (!Push32(state, op->next_eip, utlb, op)) return;
@@ -320,7 +320,7 @@ static FORCE_INLINE void OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* u
 }
 
 // CMOV Implementation
-template <uint8_t Cond>
+template <uint8_t Cond, Specialized S = Specialized::None>
 static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
     // If condition is FALSE, NOP (no memory read).
@@ -328,26 +328,46 @@ static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     if (CheckConditionFixed<Cond>(state)) {
         uint8_t reg = (op->modrm >> 3) & 7;
 
-        if (op->prefixes.flags.opsize) {
-            // 16-bit
-            auto val_res = ReadModRM16(state, op, utlb);
-            if (!val_res) return;
-            uint16_t val = *val_res;
-            uint32_t current = state->ctx.regs[reg];
-            state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+        if constexpr (S == Specialized::ModReg) {
+            // Fast path: Register operand
+            uint8_t rm = op->modrm & 7;
+            if (op->prefixes.flags.opsize) {
+                // 16-bit
+                uint16_t val = (uint16_t)(GetReg(state, rm) & 0xFFFF);
+                uint32_t current = state->ctx.regs[reg];
+                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+            } else {
+                // 32-bit
+                uint32_t val = GetReg(state, rm);
+                state->ctx.regs[reg] = val;
+            }
         } else {
-            // 32-bit
-            auto val_res = ReadModRM32(state, op, utlb);
-            if (!val_res) return;
-            uint32_t val = *val_res;
-            state->ctx.regs[reg] = val;
+            if (op->prefixes.flags.opsize) {
+                // 16-bit
+                auto val_res = ReadModRM16(state, op, utlb);
+                if (!val_res) return;
+                uint16_t val = *val_res;
+                uint32_t current = state->ctx.regs[reg];
+                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+            } else {
+                // 32-bit
+                auto val_res = ReadModRM32(state, op, utlb);
+                if (!val_res) return;
+                uint32_t val = *val_res;
+                state->ctx.regs[reg] = val;
+            }
         }
     }
 }
 
 // Named wrappers for Cmov specializations
-#define CMOV_WRAPPERS(cond, name) \
-    static void OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpCmov<cond>(s, o, u); }
+#define CMOV_WRAPPERS(cond, name)                                                     \
+    static void OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
+        OpCmov<cond, Specialized::None>(s, o, u);                                     \
+    }                                                                                 \
+    static void OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        OpCmov<cond, Specialized::ModReg>(s, o, u);                                   \
+    }
 
 CMOV_WRAPPERS(0, O)
 CMOV_WRAPPERS(1, NO)
@@ -414,6 +434,32 @@ void RegisterControlOps() {
         g_Handlers[0x180 + i] = g_JccRel32Wrappers[i];  // Jcc rel32 (0F 8x)
         g_Handlers[0x140 + i] = g_CmovWrappers[i];      // CMOVcc
     }
+
+    // Register Specialized CMOV Handlers (ModReg)
+    SpecCriteria c;
+    c.mod_mask = 0x03;
+    c.mod_val = 0x03;
+
+#define REG_CMOV_SPEC(opcode, name) DispatchRegistrar<OpCmov_##name##_ModReg>::RegisterSpecialized(opcode, c)
+
+    REG_CMOV_SPEC(0x140, O);
+    REG_CMOV_SPEC(0x141, NO);
+    REG_CMOV_SPEC(0x142, B);
+    REG_CMOV_SPEC(0x143, AE);
+    REG_CMOV_SPEC(0x144, E);
+    REG_CMOV_SPEC(0x145, NE);
+    REG_CMOV_SPEC(0x146, BE);
+    REG_CMOV_SPEC(0x147, A);
+    REG_CMOV_SPEC(0x148, S);
+    REG_CMOV_SPEC(0x149, NS);
+    REG_CMOV_SPEC(0x14A, P);
+    REG_CMOV_SPEC(0x14B, NP);
+    REG_CMOV_SPEC(0x14C, L);
+    REG_CMOV_SPEC(0x14D, GE);
+    REG_CMOV_SPEC(0x14E, LE);
+    REG_CMOV_SPEC(0x14F, G);
+
+#undef REG_CMOV_SPEC
 
     g_Handlers[0xCE] = DispatchWrapper<OpInto>;
     g_Handlers[0x131] = DispatchWrapper<OpRdtsc>;       // 0F 31

@@ -27,10 +27,10 @@ static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::Micr
 }
 
 // Fixed Size Templates for Ev operations
-template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 81: Arith r/m, imm32
-    // 83: Arith r/m, imm8 (sign-extended)
+template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF, bool IsImm8 = false>
+static FORCE_INLINE void OpGroup1_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 81: Arith r/m, imm32 (IsImm8=false)
+    // 83: Arith r/m, imm8 (IsImm8=true)
     T dest;
     if constexpr (sizeof(T) == 2) {
         auto res = ReadModRM16(state, op, utlb);
@@ -43,13 +43,24 @@ static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::Mi
     }
 
     T src;
-    if (op->extra == 0x3) {                 // 0x83
+    if constexpr (IsImm8) {                 // 0x83
         src = (T)(int16_t)(int8_t)op->imm;  // Sign extend byte to T
     } else {                                // 0x81
         src = (T)op->imm;
     }
 
     Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
+}
+
+// Helper Wrappers for OpGroup1_Ev_T
+template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
+static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, false>(state, op, utlb);
+}
+
+template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
+static FORCE_INLINE void OpGroup1_EvIb_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, true>(state, op, utlb);
 }
 
 // =========================================================================================
@@ -236,6 +247,13 @@ static void OpGroup1_EvIz_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
         OpGroup1_EvIz_T<uint32_t, true>(s, o, u);
 }
 
+static void OpGroup1_EvIb_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+    if (o->prefixes.flags.opsize)
+        OpGroup1_EvIb_T<uint16_t, true>(s, o, u);
+    else
+        OpGroup1_EvIb_T<uint32_t, true>(s, o, u);
+}
+
 static void OpGroup3_Ev_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     if (o->prefixes.flags.opsize)
         OpGroup3_Ev_T<uint16_t, true>(s, o, u);
@@ -271,6 +289,7 @@ IMPL_G1_EB(6, OpGroup1_EbIb_Xor)
 IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
 
 // Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags
+// Param `func` is OpGroup1_EvIz_T or OpGroup1_EvIb_T
 #define IMPL_EV_SPEC(subop, name, func)                                                           \
     [[maybe_unused]] static void name##_32_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
         func<uint32_t, true, subop>(s, o, u);                                                     \
@@ -285,10 +304,15 @@ IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
         func<uint16_t, false, subop>(s, o, u);                                                    \
     }
 
-// Group 1
+// Group 1 Iz (0x81)
 IMPL_EV_SPEC(0, OpGroup1_EvIz_Add, OpGroup1_EvIz_T)
 IMPL_EV_SPEC(5, OpGroup1_EvIz_Sub, OpGroup1_EvIz_T)
 IMPL_EV_SPEC(7, OpGroup1_EvIz_Cmp, OpGroup1_EvIz_T)
+
+// Group 1 Ib (0x83)
+IMPL_EV_SPEC(0, OpGroup1_EvIb_Add, OpGroup1_EvIb_T)
+IMPL_EV_SPEC(5, OpGroup1_EvIb_Sub, OpGroup1_EvIb_T)
+IMPL_EV_SPEC(7, OpGroup1_EvIb_Cmp, OpGroup1_EvIb_T)
 
 // Group 3
 IMPL_EV_SPEC(2, OpGroup3_Ev_Not, OpGroup3_Ev_T)
@@ -333,7 +357,7 @@ IMPL_G3_EB(7, OpGroup3_Eb_Idiv)
 IMPL_G4_EB(0, OpGroup4_Eb_Inc)
 IMPL_G4_EB(1, OpGroup4_Eb_Dec)
 
-// Misc Ops (unchanged except include)
+// Misc Ops (unchanged)
 static FORCE_INLINE void OpCdq(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint32_t eax = GetReg(state, EAX);
     uint32_t edx = ((int32_t)eax < 0) ? 0xFFFFFFFF : 0;
@@ -388,20 +412,14 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
     }
 }
 
-static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // Simplified XADD (Generic)
-    uint32_t width = 4;
-    if (op->extra == 0x0)
-        width = 1;
-    else if (op->prefixes.flags.opsize)
-        width = 2;
-
-    uint32_t dest_val = 0;
-    if (width == 1) {
+template <typename T>
+static FORCE_INLINE void OpXadd_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    T dest_val = 0;
+    if constexpr (sizeof(T) == 1) {
         auto res = ReadModRM8(state, op, utlb);
         if (!res) return;
         dest_val = *res;
-    } else if (width == 2) {
+    } else if constexpr (sizeof(T) == 2) {
         auto res = ReadModRM16(state, op, utlb);
         if (!res) return;
         dest_val = *res;
@@ -412,25 +430,18 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op, mem::MicroT
     }
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t src_val = 0;
-    if (width == 1)
-        src_val = GetReg8(state, reg);
-    else if (width == 2)
-        src_val = GetReg(state, reg) & 0xFFFF;
+    T src_val = 0;
+    if constexpr (sizeof(T) == 1)
+        src_val = (T)GetReg8(state, reg);
+    else if constexpr (sizeof(T) == 2)
+        src_val = (T)GetReg(state, reg) & 0xFFFF;
     else
-        src_val = GetReg(state, reg);
+        src_val = (T)GetReg(state, reg);
 
-    uint32_t res = 0;
-    // Always update flags for XADD
-    if (width == 1)
-        res = AluAdd(state, (uint8_t)dest_val, (uint8_t)src_val);
-    else if (width == 2)
-        res = AluAdd(state, (uint16_t)dest_val, (uint16_t)src_val);
-    else
-        res = AluAdd(state, (uint32_t)dest_val, (uint32_t)src_val);
+    T res = AluAdd(state, dest_val, src_val);
 
     // Swap: Original Dest -> Src Reg
-    if (width == 1) {
+    if constexpr (sizeof(T) == 1) {
         uint32_t* rptr = GetRegPtr(state, reg & 3);
         uint32_t curr = *rptr;
         if (reg < 4)
@@ -438,7 +449,7 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op, mem::MicroT
         else
             curr = (curr & 0xFFFF00FF) | ((dest_val & 0xFF) << 8);
         *rptr = curr;
-    } else if (width == 2) {
+    } else if constexpr (sizeof(T) == 2) {
         uint32_t* rptr = GetRegPtr(state, reg);
         *rptr = (*rptr & 0xFFFF0000) | (dest_val & 0xFFFF);
     } else {
@@ -446,12 +457,23 @@ static FORCE_INLINE void OpXadd_Rm_R(EmuState* state, DecodedOp* op, mem::MicroT
     }
 
     // Result -> Dest Memory/Reg
-    if (width == 1)
-        WriteModRM8(state, op, (uint8_t)res, utlb);
-    else if (width == 2)
-        WriteModRM16(state, op, (uint16_t)res, utlb);
+    if constexpr (sizeof(T) == 1)
+        WriteModRM8(state, op, res, utlb);
+    else if constexpr (sizeof(T) == 2)
+        WriteModRM16(state, op, res, utlb);
     else
         WriteModRM32(state, op, res, utlb);
+}
+
+static FORCE_INLINE void OpXadd_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpXadd_T<uint8_t>(state, op, utlb);
+}
+
+static FORCE_INLINE void OpXadd_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    if (op->prefixes.flags.opsize)
+        OpXadd_T<uint16_t>(state, op, utlb);
+    else
+        OpXadd_T<uint32_t>(state, op, utlb);
 }
 
 // =========================================================================================
@@ -463,7 +485,7 @@ void RegisterGroupOps() {
     g_Handlers[0x80] = DispatchWrapper<OpGroup1_EbIb<true>>;
     g_Handlers[0x81] = DispatchWrapper<OpGroup1_EvIz_Generic>;
     g_Handlers[0x82] = DispatchWrapper<OpGroup1_EbIb<true>>;  // Alias of 80
-    g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIz_Generic>;
+    g_Handlers[0x83] = DispatchWrapper<OpGroup1_EvIb_Generic>;
 
     g_Handlers[0xF6] = DispatchWrapper<OpGroup3_Eb<true>>;
     g_Handlers[0xF7] = DispatchWrapper<OpGroup3_Ev_Generic>;
@@ -473,8 +495,8 @@ void RegisterGroupOps() {
     g_Handlers[0x98] = DispatchWrapper<OpCwde>;
     g_Handlers[0x99] = DispatchWrapper<OpCdq>;
     g_Handlers[0x1C7] = DispatchWrapper<OpGroup9>;
-    g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Rm_R>;
-    g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Rm_R>;
+    g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Byte>;
+    g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Word>;
     g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
 
 // Macro for Group 1 EbIb (Byte) - No Size variant needed, just NF
@@ -544,9 +566,9 @@ void RegisterGroupOps() {
     }
 
     // Group 1: 0x83 (Mostly used)
-    REG_EV_SPEC(0x83, 0, OpGroup1_EvIz_Add);
-    REG_EV_SPEC(0x83, 5, OpGroup1_EvIz_Sub);
-    REG_EV_SPEC(0x83, 7, OpGroup1_EvIz_Cmp);
+    REG_EV_SPEC(0x83, 0, OpGroup1_EvIb_Add);
+    REG_EV_SPEC(0x83, 5, OpGroup1_EvIb_Sub);
+    REG_EV_SPEC(0x83, 7, OpGroup1_EvIb_Cmp);
 
     // Group 1: 0x81 (Also used)
     REG_EV_SPEC(0x81, 0, OpGroup1_EvIz_Add);

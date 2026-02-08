@@ -82,10 +82,10 @@ static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroT
     }
 }
 
+template <uint8_t Cond>
 static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 9x: SETcc r/m8
-    uint8_t cond = op->extra;
-    uint8_t val = CheckCondition(state, cond) ? 1 : 0;
+    uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
     if (!WriteModRM8(state, op, val, utlb)) return;
 }
 
@@ -145,9 +145,23 @@ void RegisterCompareOps() {
     g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg<true>>;   // 0F B0
     g_Handlers[0x1B1] = DispatchWrapper<OpCmpxchg<false>>;  // 0F B1
 
-    for (int i = 0; i < 16; ++i) {
-        g_Handlers[0x190 + i] = DispatchWrapper<OpSetcc>;  // SETcc (0F 9x)
-    }
+    // SETcc (0F 9x)
+    g_Handlers[0x190] = DispatchWrapper<OpSetcc<0>>;
+    g_Handlers[0x191] = DispatchWrapper<OpSetcc<1>>;
+    g_Handlers[0x192] = DispatchWrapper<OpSetcc<2>>;
+    g_Handlers[0x193] = DispatchWrapper<OpSetcc<3>>;
+    g_Handlers[0x194] = DispatchWrapper<OpSetcc<4>>;
+    g_Handlers[0x195] = DispatchWrapper<OpSetcc<5>>;
+    g_Handlers[0x196] = DispatchWrapper<OpSetcc<6>>;
+    g_Handlers[0x197] = DispatchWrapper<OpSetcc<7>>;
+    g_Handlers[0x198] = DispatchWrapper<OpSetcc<8>>;
+    g_Handlers[0x199] = DispatchWrapper<OpSetcc<9>>;
+    g_Handlers[0x19A] = DispatchWrapper<OpSetcc<10>>;
+    g_Handlers[0x19B] = DispatchWrapper<OpSetcc<11>>;
+    g_Handlers[0x19C] = DispatchWrapper<OpSetcc<12>>;
+    g_Handlers[0x19D] = DispatchWrapper<OpSetcc<13>>;
+    g_Handlers[0x19E] = DispatchWrapper<OpSetcc<14>>;
+    g_Handlers[0x19F] = DispatchWrapper<OpSetcc<15>>;
 }
 
 }  // namespace fiberish

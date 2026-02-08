@@ -273,138 +273,6 @@ static FORCE_INLINE void OpXor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     }
 }
 
-static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t pred = (uint8_t)op->imm;
-    uint8_t reg = (op->modrm >> 3) & 7;
-    simde__m128* dest_ptr = &state->ctx.xmm[reg];
-
-    if (op->prefixes.flags.opsize) {
-        // 66 0F C2: CMPPD
-        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
-        simde__m128d src_pd = simde_mm_castps_pd(*src_res);
-
-        simde__m128d res = Helper_CmpPD(dest_pd, src_pd, pred);
-        *dest_ptr = simde_mm_castpd_ps(res);
-
-    } else if (op->prefixes.flags.repne) {
-        // F2 0F C2: CMPSD
-        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
-        simde__m128d src_pd;
-
-        if ((op->modrm >> 6) == 3) {
-            src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            if (!val_res) return;
-            src_pd = simde_mm_set_sd(*(double*)&(*val_res));
-        }
-
-        simde__m128d res = Helper_CmpSD(dest_pd, src_pd, pred);
-        *dest_ptr = simde_mm_castpd_ps(res);
-
-    } else if (op->prefixes.flags.rep) {
-        // F3 0F C2: CMPSS
-        simde__m128 src;
-        if ((op->modrm >> 6) == 3) {
-            src = state->ctx.xmm[op->modrm & 7];
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            if (!val_res) return;
-            src = simde_mm_set_ss(*(float*)&(*val_res));
-        }
-        *dest_ptr = Helper_CmpSS(*dest_ptr, src, pred);
-
-    } else {
-        // 0F C2: CMPPS
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
-        *dest_ptr = Helper_CmpPS(*dest_ptr, *src_res, pred);
-    }
-}
-
-static FORCE_INLINE void OpMaxMin_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F 5F: MAX (PD/SD/PS/SS)
-    // 0F 5D: MIN (PD/SD/PS/SS)
-    // 5D: MIN (extra=D), 5F: MAX (extra=F)
-
-    bool is_min = (op->extra == 0xD);
-    uint8_t reg_idx = (op->modrm >> 3) & 7;
-
-    if (op->prefixes.flags.repne) {  // F2: Scalar Double
-        double b;
-        if (op->modrm >= 0xC0) {
-            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto b_res = state->mmu.read<double>(state, addr, utlb, op);
-            if (!b_res) return;
-            b = *b_res;
-        }
-
-        double* dest = (double*)&state->ctx.xmm[reg_idx];  // [0]
-        if (is_min)
-            *dest = (*dest < b) ? *dest : b;
-        else
-            *dest = (*dest > b) ? *dest : b;
-        // High 64 bits unmodified
-
-    } else if (op->prefixes.flags.rep) {  // F3: Scalar Single
-        float b;
-        if (op->modrm >= 0xC0) {
-            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto b_res = state->mmu.read<float>(state, addr, utlb, op);
-            if (!b_res) return;
-            b = *b_res;
-        }
-
-        float* dest = (float*)&state->ctx.xmm[reg_idx];  // [0]
-        if (is_min)
-            *dest = (*dest < b) ? *dest : b;
-        else
-            *dest = (*dest > b) ? *dest : b;
-        // High 96 bits unmodified
-
-    } else if (op->prefixes.flags.opsize) {  // 66: Packed Double
-        auto val_res = ReadModRM128(state, op, utlb);
-        if (!val_res) return;
-        simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
-        simde__m128d b = simde_mm_castps_pd(*val_res);
-        simde__m128d res = is_min ? simde_mm_min_pd(a, b) : simde_mm_max_pd(a, b);
-        state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
-
-    } else {  // None: Packed Single
-        auto val_res = ReadModRM128(state, op, utlb);
-        if (!val_res) return;
-        simde__m128 a = state->ctx.xmm[reg_idx];
-        state->ctx.xmm[reg_idx] = is_min ? simde_mm_min_ps(a, *val_res) : simde_mm_max_ps(a, *val_res);
-    }
-}
-
-static FORCE_INLINE void OpMovAp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)
-    // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
-    // 28: extra=8 (Load), 29: extra=9 (Store)
-
-    bool is_load = (op->extra == 0x8);
-
-    if (is_load) {  // Load 0x28
-        auto val_res = ReadModRM128(state, op, utlb);
-        if (!val_res) return;
-        uint8_t reg = (op->modrm >> 3) & 7;
-        state->ctx.xmm[reg] = *val_res;
-    } else {  // Store 0x29
-        uint8_t reg = (op->modrm >> 3) & 7;
-        simde__m128 val = state->ctx.xmm[reg];
-        if (!WriteModRM128(state, op, val, utlb)) return;
-    }
-}
-
 simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred) {
     switch (pred & 7) {
         case 0:
@@ -491,6 +359,141 @@ simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred) {
             return simde_mm_cmpord_ss(a, b);
     }
     return a;
+}
+
+static FORCE_INLINE void OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    uint8_t pred = (uint8_t)op->imm;
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128* dest_ptr = &state->ctx.xmm[reg];
+
+    if (op->prefixes.flags.opsize) {
+        // 66 0F C2: CMPPD
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        simde__m128d src_pd = simde_mm_castps_pd(*src_res);
+
+        simde__m128d res = Helper_CmpPD(dest_pd, src_pd, pred);
+        *dest_ptr = simde_mm_castpd_ps(res);
+
+    } else if (op->prefixes.flags.repne) {
+        // F2 0F C2: CMPSD
+        simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
+        simde__m128d src_pd;
+
+        if ((op->modrm >> 6) == 3) {
+            src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src_pd = simde_mm_set_sd(*(double*)&(*val_res));
+        }
+
+        simde__m128d res = Helper_CmpSD(dest_pd, src_pd, pred);
+        *dest_ptr = simde_mm_castpd_ps(res);
+
+    } else if (op->prefixes.flags.rep) {
+        // F3 0F C2: CMPSS
+        simde__m128 src;
+        if ((op->modrm >> 6) == 3) {
+            src = state->ctx.xmm[op->modrm & 7];
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            if (!val_res) return;
+            src = simde_mm_set_ss(*(float*)&(*val_res));
+        }
+        *dest_ptr = Helper_CmpSS(*dest_ptr, src, pred);
+
+    } else {
+        // 0F C2: CMPPS
+        auto src_res = ReadModRM128(state, op, utlb);
+        if (!src_res) return;
+        *dest_ptr = Helper_CmpPS(*dest_ptr, *src_res, pred);
+    }
+}
+
+template <bool IsMin>
+static FORCE_INLINE void OpMaxMin_Sse_Impl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 5F: MAX (PD/SD/PS/SS)
+    // 0F 5D: MIN (PD/SD/PS/SS)
+
+    uint8_t reg_idx = (op->modrm >> 3) & 7;
+
+    if (op->prefixes.flags.repne) {  // F2: Scalar Double
+        double b;
+        if (op->modrm >= 0xC0) {
+            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto b_res = state->mmu.read<double>(state, addr, utlb, op);
+            if (!b_res) return;
+            b = *b_res;
+        }
+
+        double* dest = (double*)&state->ctx.xmm[reg_idx];  // [0]
+        if constexpr (IsMin)
+            *dest = (*dest < b) ? *dest : b;
+        else
+            *dest = (*dest > b) ? *dest : b;
+        // High 64 bits unmodified
+
+    } else if (op->prefixes.flags.rep) {  // F3: Scalar Single
+        float b;
+        if (op->modrm >= 0xC0) {
+            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
+        } else {
+            uint32_t addr = ComputeLinearAddress(state, op);
+            auto b_res = state->mmu.read<float>(state, addr, utlb, op);
+            if (!b_res) return;
+            b = *b_res;
+        }
+
+        float* dest = (float*)&state->ctx.xmm[reg_idx];  // [0]
+        if constexpr (IsMin)
+            *dest = (*dest < b) ? *dest : b;
+        else
+            *dest = (*dest > b) ? *dest : b;
+        // High 96 bits unmodified
+
+    } else if (op->prefixes.flags.opsize) {  // 66: Packed Double
+        auto val_res = ReadModRM128(state, op, utlb);
+        if (!val_res) return;
+        simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
+        simde__m128d b = simde_mm_castps_pd(*val_res);
+        simde__m128d res = IsMin ? simde_mm_min_pd(a, b) : simde_mm_max_pd(a, b);
+        state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
+
+    } else {  // None: Packed Single
+        auto val_res = ReadModRM128(state, op, utlb);
+        if (!val_res) return;
+        simde__m128 a = state->ctx.xmm[reg_idx];
+        state->ctx.xmm[reg_idx] = IsMin ? simde_mm_min_ps(a, *val_res) : simde_mm_max_ps(a, *val_res);
+    }
+}
+
+static FORCE_INLINE void OpMin_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMaxMin_Sse_Impl<true>(state, op, utlb);
+}
+
+static FORCE_INLINE void OpMax_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    OpMaxMin_Sse_Impl<false>(state, op, utlb);
+}
+
+static FORCE_INLINE void OpMovAp_Load(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)
+    auto val_res = ReadModRM128(state, op, utlb);
+    if (!val_res) return;
+    uint8_t reg = (op->modrm >> 3) & 7;
+    state->ctx.xmm[reg] = *val_res;
+}
+
+static FORCE_INLINE void OpMovAp_Store(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m128 val = state->ctx.xmm[reg];
+    if (!WriteModRM128(state, op, val, utlb)) return;
 }
 
 // Sqrt Unified
@@ -755,10 +758,10 @@ static FORCE_INLINE void OpUnpckh_Unified(EmuState* state, DecodedOp* op, mem::M
 void RegisterSseFpOps() {
     g_Handlers[0x1C2] = DispatchWrapper<OpCmp_Sse>;
     g_Handlers[0x15E] = DispatchWrapper<OpDiv_Sse>;
-    g_Handlers[0x128] = DispatchWrapper<OpMovAp_Sse>;
-    g_Handlers[0x129] = DispatchWrapper<OpMovAp_Sse>;
-    g_Handlers[0x15F] = DispatchWrapper<OpMaxMin_Sse>;
-    g_Handlers[0x15D] = DispatchWrapper<OpMaxMin_Sse>;
+    g_Handlers[0x128] = DispatchWrapper<OpMovAp_Load>;
+    g_Handlers[0x129] = DispatchWrapper<OpMovAp_Store>;
+    g_Handlers[0x15F] = DispatchWrapper<OpMax_Sse>;
+    g_Handlers[0x15D] = DispatchWrapper<OpMin_Sse>;
     g_Handlers[0x158] = DispatchWrapper<OpAdd_Sse>;
     g_Handlers[0x159] = DispatchWrapper<OpMul_Sse>;
     g_Handlers[0x15C] = DispatchWrapper<OpSub_Sse>;
