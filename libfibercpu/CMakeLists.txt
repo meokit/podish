@@ -58,6 +58,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
         -Wall -Wextra -Wpedantic
         -Wno-unused-parameter
+        -Wno-nested-anon-types
         -fno-rtti -fno-exceptions
     )
 endif()
