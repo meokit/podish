@@ -12,7 +12,7 @@ void OpUd2(EmuState* state, DecodedOp* op);
 void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);
 
 // Template Helper for Group 1 (ALU operations with immediate)
-template <typename T, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
 void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
@@ -20,33 +20,33 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB*
     } else {
         subop = (op->modrm >> 3) & 7;
     }
-    
+
     T res = 0;
 
     switch (subop) {
         case 0:
-            res = AluAdd(state, dest, src);
+            res = AluAdd<T, UpdateFlags>(state, dest, src);
             break;
         case 1:
-            res = AluOr(state, dest, src);
+            res = AluOr<T, UpdateFlags>(state, dest, src);
             break;
         case 2:
-            res = AluAdc(state, dest, src);
+            res = AluAdc<T, UpdateFlags>(state, dest, src);
             break;
         case 3:
-            res = AluSbb(state, dest, src);
+            res = AluSbb<T, UpdateFlags>(state, dest, src);
             break;
         case 4:
-            res = AluAnd(state, dest, src);
+            res = AluAnd<T, UpdateFlags>(state, dest, src);
             break;
         case 5:
-            res = AluSub(state, dest, src);
+            res = AluSub<T, UpdateFlags>(state, dest, src);
             break;
         case 6:
-            res = AluXor(state, dest, src);
+            res = AluXor<T, UpdateFlags>(state, dest, src);
             break;
         case 7:
-            AluSub(state, dest, src);
+            AluSub<T, UpdateFlags>(state, dest, src);
             return;  // CMP (No writeback)
         default:
             OpUd2(state, op);
@@ -63,7 +63,7 @@ void Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB*
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
-template <typename T, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
 void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
@@ -76,7 +76,7 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
         case 0:  // TEST imm
         case 1:  // TEST imm
         {
-            AluAnd(state, val, (T)op->imm);
+            AluAnd<T, UpdateFlags>(state, val, (T)op->imm);
             break;
         }
         case 2:  // NOT
@@ -89,11 +89,13 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
             break;
         case 3:  // NEG
         {
-            T res = AluSub(state, (T)0, val);
-            if (val != 0)
-                state->ctx.eflags |= CF_MASK;
-            else
-                state->ctx.eflags &= ~CF_MASK;
+            T res = AluSub<T, UpdateFlags>(state, (T)0, val);
+            if constexpr (UpdateFlags) {
+                if (val != 0)
+                    state->ctx.eflags |= CF_MASK;
+                else
+                    state->ctx.eflags &= ~CF_MASK;
+            }
 
             if constexpr (sizeof(T) == 1)
                 WriteModRM8(state, op, res, utlb);
@@ -112,10 +114,12 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 uint32_t* rax = GetRegPtr(state, EAX);
                 *rax = (*rax & 0xFFFF0000) | res;
 
-                if ((res & 0xFF00) != 0)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if ((res & 0xFF00) != 0)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
                 uint16_t ax = (uint16_t)(GetReg(state, EAX) & 0xFFFF);
                 uint32_t res = (uint32_t)ax * (uint32_t)val;
@@ -125,20 +129,24 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
                 *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
 
-                if ((res >> 16) != 0)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if ((res >> 16) != 0)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             } else {  // Dword: EDX:EAX = EAX * r/m32
                 uint32_t eax = GetReg(state, EAX);
                 uint64_t res = (uint64_t)eax * (uint64_t)val;
                 SetReg(state, EAX, (uint32_t)res);
                 SetReg(state, EDX, (uint32_t)(res >> 32));
 
-                if ((res >> 32) != 0)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if ((res >> 32) != 0)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             }
             break;
         }
@@ -151,10 +159,12 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 uint32_t* rax = GetRegPtr(state, EAX);
                 *rax = (*rax & 0xFFFF0000) | (uint16_t)res;
 
-                if (res != (int16_t)(int8_t)res)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if (res != (int16_t)(int8_t)res)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
                 int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
                 int32_t res = (int32_t)ax * (int32_t)(int16_t)val;
@@ -164,20 +174,24 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
                 *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
                 *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
 
-                if (res != (int32_t)(int16_t)res)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if (res != (int32_t)(int16_t)res)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             } else {  // Dword: EDX:EAX = EAX * r/m32
                 int32_t eax = (int32_t)GetReg(state, EAX);
                 int64_t res = (int64_t)eax * (int64_t)(int32_t)val;
                 SetReg(state, EAX, (uint32_t)res);
                 SetReg(state, EDX, (uint32_t)(res >> 32));
 
-                if (res != (int64_t)(int32_t)res)
-                    state->ctx.eflags |= (OF_MASK | CF_MASK);
-                else
-                    state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                if constexpr (UpdateFlags) {
+                    if (res != (int64_t)(int32_t)res)
+                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                    else
+                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                }
             }
             break;
         }
@@ -293,4 +307,4 @@ void Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     }
 }
 
-}  // namespace x86emu
+}  // namespace fiberish
