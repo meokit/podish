@@ -100,7 +100,7 @@ struct EmuState {
     std::variant<std::monostate, MemReadOperation, MemWriteOperation> mem_op;
 
     template <typename T>
-    mem::MemResult<T> request_read_and_check_pending(uint32_t addr, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<T> request_read_and_check_pending(uint32_t addr, uint32_t eip) {
         // Use pending value
         if (auto read_op = std::get_if<MemReadOperation>(&mem_op)) {
             if (read_op->done && read_op->eip == eip) {
@@ -117,7 +117,7 @@ struct EmuState {
     }
 
     template <typename T>
-    mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value, uint32_t eip) {
         static_assert(sizeof(T) <= 16);
 
         if (auto write_op = std::get_if<MemWriteOperation>(&mem_op)) {
@@ -139,7 +139,7 @@ struct EmuState {
     }
 
     template <typename T>
-    mem::MemResult<void> request_write_only(uint32_t addr, const T& value, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<void> request_write_only(uint32_t addr, const T& value, uint32_t eip) {
         static_assert(sizeof(T) <= 16);
 
         // No check for pending, just request

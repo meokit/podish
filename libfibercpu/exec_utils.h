@@ -236,7 +236,7 @@ enum class OpOnTLBMiss {
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -268,7 +268,7 @@ inline MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -317,7 +317,7 @@ inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb,
  * Generic Helper for Direct Memory Write
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const DecodedOp* op) {
+FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return state->mmu.write<T, false>(addr, val, utlb, op);
     } else {
@@ -339,7 +339,7 @@ inline MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::Micr
 // ------------------------------------------------------------------------------------------------
 
 template <typename T, bool fail_on_tlb_miss = false>
-inline MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
+FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
 
@@ -360,7 +360,7 @@ inline MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, Decoded
 }
 
 template <typename T, bool fail_on_tlb_miss = false>
-inline MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
+FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
 
@@ -379,14 +379,18 @@ inline MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
 
 // Explicit aliases for compatibility
 // Default to fail_on_tlb_miss = true for simple usage (ops_control)
-inline MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
+FORCE_INLINE MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
     return Push<uint16_t, true>(s, v, u, o);
 }
-inline MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
+FORCE_INLINE MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
     return Push<uint32_t, true>(s, v, u, o);
 }
-inline MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, DecodedOp* o) { return Pop<uint16_t, true>(s, u, o); }
-inline MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp* o) { return Pop<uint32_t, true>(s, u, o); }
+FORCE_INLINE MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
+    return Pop<uint16_t, true>(s, u, o);
+}
+FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
+    return Pop<uint32_t, true>(s, u, o);
+}
 
 // ------------------------------------------------------------------------------------------------
 // ALU Operations & Flags
