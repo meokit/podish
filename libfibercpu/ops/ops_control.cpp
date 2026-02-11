@@ -312,7 +312,7 @@ static FORCE_INLINE LogicFlow OpHlt(EmuState* state, DecodedOp* op, mem::MicroTL
     // HLT
     // TODO: Don't allow on userspace?
     state->status = EmuStatus::Stopped;
-    return LogicFlow::ExitOnNextEIP;
+    return LogicFlow::ExitOnCurrentEIP;
 }
 
 // Helper for interrupts
@@ -336,6 +336,7 @@ static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
 static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CD ib: INT n
     uint8_t vector = (uint8_t)op->imm;
+    utlb->invalidate();
     RaiseInterrupt(state, vector, op);
     if (state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
@@ -345,6 +346,7 @@ static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTL
 
 static FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CC: INT 3
+    utlb->invalidate();
     RaiseInterrupt(state, 3, op);
     if (state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
@@ -355,6 +357,7 @@ static FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroT
 static FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CE: INTO
     if (state->ctx.eflags & OF_MASK) {
+        utlb->invalidate();
         RaiseInterrupt(state, 4, op);
     }
     if (state->eip_dirty || state->status != EmuStatus::Running) {

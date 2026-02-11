@@ -95,21 +95,17 @@ def test_page_fault_handled_callback():
     assert captured[0][0] == 0x30000
     assert captured[0][1] == 0 # Read
     
-    # If a callback is provided and returns (void), SoftMMU currently:
-    # 1. Logs nothing.
-    # 2. Does NOT set Fault status (assumes handled).
-    # 3. Returns default value (0).
-    # So execution should continue (or Stop if step limit reached).
-    # Wait, in the test I assert status == 2. This FAILED with 1.
-    # So correct behavior for this emulator is Status!=2 (likely 1 Stopped).
-    # And EIP should have ADVANCED (trapped behavior, or just completed instruction garbage).
+    # If a callback is provided and returns False/None (Unhandled), SoftMMU currently:
+    # 1. Sets Fault status.
+    # 2. Stops execution.
     
     # Update assertions for current behavior:
-    assert emu.get_status() != 2, "Handled fault should not stop emulator with Fault status"
+    assert emu.get_status() == 2, "Unhandled fault (cb returned None) should stop emulator with Fault status"
     
-    # EIP should include opcode length (0x1005) because it "completed"
+    # EIP should NOT have advanced because the instruction fault was not resolved.
+    # It should be at the start of the instruction that caused the fault (0x1000)
     eip = emu.reg_read('EIP')
-    assert eip == 0x1005
+    assert eip == 0x1000
 
 def test_mmu_copy_block_logic():
     emu = X86EmuBackend()

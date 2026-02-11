@@ -23,20 +23,21 @@ extern "C" {
 // Internal Bridge Callbacks
 // ----------------------------------------------------------------------------
 
-static void InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
-    EmuState* state = static_cast<EmuState*>(opaque);
+static bool InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
+    auto* state = static_cast<EmuState*>(opaque);
     state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
     if (state->fault_handler) {
-        state->fault_handler(state, addr, is_write, state->fault_userdata);
+        return state->fault_handler(state, addr, is_write, state->fault_userdata);
     } else {
         // Default behavior if no user handler: Trigger Fault
         state->status = EmuStatus::Fault;
+        return false;
     }
 }
 
 static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val) {
-    EmuState* state = static_cast<EmuState*>(opaque);
+    auto* state = static_cast<EmuState*>(opaque);
     if (state->mem_hook) {
         state->mem_hook(state, addr, size, is_write, val, state->mem_userdata);
     }
@@ -456,17 +457,15 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 // Subtract the FIRST block's size from the limit
                 batch_limit -= block_ptr->inst_count;
 
-                // h will return the remaining budget
-                MicroTLB utlb;
-                int64_t remaining = h(state, head, batch_limit, utlb);
-                total_run_insts += (initial_batch_limit - remaining);
-
-                // TODO: Is really needed?
-                // Clear eip dirty flag
+                // Clear eip dirty flag before enter a handler chain
                 if (state->eip_dirty) {
                     state->eip_dirty = false;
                 }
 
+                // h will return the remaining budget
+                MicroTLB utlb;
+                int64_t remaining = h(state, head, batch_limit, utlb);
+                total_run_insts += (initial_batch_limit - remaining);
             } else {
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
@@ -574,9 +573,6 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
     state->hooks.set_interrupt_hook(vector, [vector](EmuState* s, uint8_t v) {
         if (s->interrupt_handlers[vector]) {
             bool handled = s->interrupt_handlers[vector](s, (uint32_t)v, s->interrupt_userdata[vector]) != 0;
-            if (handled && s->status == EmuStatus::Running) {
-                s->status = EmuStatus::Stopped;
-            }
             return handled;
         }
         return false;

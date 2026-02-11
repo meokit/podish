@@ -11,7 +11,7 @@ public class Engine : IDisposable
     private bool _disposed;
 
     // Callbacks
-    public Action<Engine, uint, bool>? FaultHandler { get; set; }
+    public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
     // New resolver for synchronous fault handling during safe access
     public Func<uint, bool, bool>? PageFaultResolver { get; set; }
@@ -39,14 +39,15 @@ public class Engine : IDisposable
     }
 
     [UnmanagedCallersOnly]
-    private static void OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
+    private static bool OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
     {
-        if (userdata == IntPtr.Zero) return;
+        if (userdata == IntPtr.Zero) return false;
         var handle = GCHandle.FromIntPtr(userdata);
         if (handle.Target is Engine engine)
         {
-            engine.FaultHandler?.Invoke(engine, addr, isWrite != 0);
+            return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
         }
+        return false;
     }
 
     [UnmanagedCallersOnly]

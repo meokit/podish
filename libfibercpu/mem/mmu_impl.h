@@ -27,9 +27,12 @@ inline EmuState* Mmu::get_state() {
     // Now the caller need to rollback eip itself
 
     // 2. Call User Handler (if any)
+    bool handled = false;
     if (fault_handler) {
-        fault_handler(fault_opaque, addr, is_write);
-    } else {
+        handled = fault_handler(fault_opaque, addr, is_write);
+    }
+
+    if (!handled) {
         get_state()->status = EmuStatus::Fault;
     }
 
@@ -96,6 +99,8 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     if (!mem_hook) {
         bool is_exec = has_property(current_perm, Property::Exec);
         tlb.fill(addr, page_base, current_perm);
+
+        // Trap SMC on executable pages
         if (is_exec) {
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
             tlb.write_tlb[idx].tag = 1;

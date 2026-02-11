@@ -19,10 +19,7 @@ public class CredentialTests
         var mm = new VMAManager();
         
         // Setup Fault Handler for demand paging
-        engine.FaultHandler = (eng, addr, isWrite) =>
-        {
-            mm.HandleFault(addr, isWrite, eng);
-        };
+        engine.FaultHandler = (eng, addr, isWrite) => mm.HandleFault(addr, isWrite, eng);
 
         // The constructor registers the engine in the global registry
         var sys = new SyscallManager(engine, mm, 0x1000000, Path.GetFullPath("."));

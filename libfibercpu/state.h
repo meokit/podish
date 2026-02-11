@@ -17,16 +17,15 @@ namespace fiberish {
 struct EmuState;
 
 // Callback signatures for internal storage and C bindings
-using FaultHandler = void (*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+using FaultHandler = bool (*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
 using MemHook = void (*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
 using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
-
-struct MemNoOp {};
 
 struct alignas(16) MemReadOperation {
     std::array<std::byte, 16> data;
     uint32_t addr;
     uint32_t size;
+    uint32_t eip;
     bool done;
 };
 
@@ -34,6 +33,7 @@ struct alignas(16) MemWriteOperation {
     std::array<std::byte, 16> data;
     uint32_t addr;
     uint32_t size;
+    uint32_t eip;
     bool done;
 };
 
@@ -97,37 +97,32 @@ struct EmuState {
     // includes decoder.h. decoder.h includes common.h. state.h includes decoder.h.
     int64_t (*saved_handler)(EmuState* RESTRICT, DecodedOp* RESTRICT, int64_t, mem::MicroTLB);
 
-    std::variant<MemNoOp, MemReadOperation, MemWriteOperation> mem_op;
+    std::variant<std::monostate, MemReadOperation, MemWriteOperation> mem_op;
 
     template <typename T>
-    mem::MemResult<T> request_read_and_check_pending(uint32_t addr) {
+    mem::MemResult<T> request_read_and_check_pending(uint32_t addr, uint32_t eip) {
         // Use pending value
         if (auto read_op = std::get_if<MemReadOperation>(&mem_op)) {
-            if (read_op->done) {
+            if (read_op->done && read_op->eip == eip) {
                 T pending{};
                 std::memcpy(&pending, read_op->data.data(), sizeof(T));
-                mem_op.emplace<MemNoOp>();  // Clear result
+                mem_op.emplace<0>();  // Clear result
                 return pending;
             }
         }
 
-        mem_op = MemReadOperation{
-            .addr = addr,
-            .size = sizeof(T),
-            .data = {},
-            .done = false,
-        };
+        mem_op = MemReadOperation{.addr = addr, .size = sizeof(T), .data = {}, .done = false, .eip = eip};
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
     template <typename T>
-    mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value) {
+    mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value, uint32_t eip) {
         static_assert(sizeof(T) <= 16);
 
         if (auto write_op = std::get_if<MemWriteOperation>(&mem_op)) {
-            if (write_op->done) {
-                mem_op.emplace<MemNoOp>();
+            if (write_op->done && write_op->eip == eip) {
+                mem_op.emplace<0>();
                 return {};
             }
         }
@@ -137,13 +132,14 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
+        op.eip = eip;
         std::memcpy(op.data.data(), &value, sizeof(T));
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
     template <typename T>
-    mem::MemResult<void> request_write_only(uint32_t addr, const T& value) {
+    mem::MemResult<void> request_write_only(uint32_t addr, const T& value, uint32_t eip) {
         static_assert(sizeof(T) <= 16);
 
         // No check for pending, just request
@@ -152,6 +148,7 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
+        op.eip = eip;
         std::memcpy(op.data.data(), &value, sizeof(T));
 
         return std::unexpected(mem::FaultCode::PageFault);

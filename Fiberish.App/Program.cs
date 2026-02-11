@@ -243,7 +243,7 @@ class Program
         return mainTask.ExitCode;
     }
 
-    private static void GlobalFaultHandler(Engine eng, uint addr, bool isWrite)
+    private static bool GlobalFaultHandler(Engine eng, uint addr, bool isWrite)
     {
         var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);
         if (t != null)
@@ -263,12 +263,15 @@ class Program
                 t.DumpTrace();
                 t.Process.Mem.LogVMAs();
                 eng.SetStatusFault();
+                return false;
             }
+            return true;
         }
         else
         {
             Logger.LogError("[Unknown Task - Eng: 0x{Eng:x}] SegFault at 0x{Addr:x} EIP=0x{Eip:x} - {Registers}", eng.State, addr, eng.Eip, eng.ToString());
             eng.SetStatusFault();
         }
+        return false;
     }
 }

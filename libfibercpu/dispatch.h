@@ -31,10 +31,12 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // (sentinel always valid)
             ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
         case LogicFlow::ExitOnCurrentEIP:
-            state->sync_eip_to_op_start(op);
+            if (!state->eip_dirty) state->sync_eip_to_op_start(op);
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
-            state->sync_eip_to_op_end(op);
+            if (!state->eip_dirty) state->sync_eip_to_op_end(op);
+            return instr_limit;
+        case LogicFlow::ExitWithoutSyncEIP:
             return instr_limit;
         case LogicFlow::RestartMemoryOp:
             ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb);

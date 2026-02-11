@@ -17,10 +17,7 @@ public class VFSRefCountTests
         var engine = new Engine();
         var mm = new VMAManager();
         
-        engine.FaultHandler = (eng, addr, isWrite) =>
-        {
-            mm.HandleFault(addr, isWrite, eng);
-        };
+        engine.FaultHandler = (eng, addr, isWrite) => mm.HandleFault(addr, isWrite, eng);
 
         var sys = new SyscallManager(engine, mm, 0x1000000, Path.GetFullPath("."));
         var proc = new Process(1001, mm, sys);

@@ -384,9 +384,10 @@ class X86EmuBackend(EmulatorBackend):
         cppyy.gbl.X86_EmuStop(self.state)
 
     def set_fault_callback(self, cb):
-        # New signature: void(*)(EmuState* state, uint32_t addr, int is_write, void* userdata)
+        # New signature: bool(*)(EmuState* state, uint32_t addr, int is_write, void* userdata)
         def wrapped_cb(state, addr, is_write, userdata):
-            cb(addr, is_write)
+            res = cb(addr, is_write)
+            return True if res else False
         self._cb = wrapped_cb
         cppyy.gbl.X86_SetFaultCallback(self.state, self._cb, cppyy.nullptr)
 

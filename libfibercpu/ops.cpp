@@ -59,7 +59,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     std::visit(
         [&](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, MemNoOp>) {
+            if constexpr (std::is_same_v<T, std::monostate>) {
                 // No-op
             } else if constexpr (std::is_same_v<T, MemReadOperation>) {
                 perform(arg.addr, arg.size, arg.data.data(), false);
@@ -79,7 +79,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     if (fault) {
         // Break calling chain
         // Note: eip will be synced on read or write
-        state->mem_op = MemNoOp{};
+        state->mem_op.emplace<0>();
         return instr_limit;
     }
 
@@ -88,7 +88,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb);
     }
 
-    state->mem_op = MemNoOp{};
+    state->mem_op.emplace<0>();
     ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
 }
 
@@ -114,6 +114,9 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
     } else {
         state->ctx.eip = last_op->next_eip;
     }
+
+    // Clear mem_op
+    state->mem_op.emplace<0>();
 
     // Basic Block Chaining
     // Optim: If next_block is dummy, is_valid is false, so we skip.
@@ -149,12 +152,6 @@ HandlerFunc g_ExitHandlers[32] = {
     INSTANTIATE_EXIT(20), INSTANTIATE_EXIT(21), INSTANTIATE_EXIT(22), INSTANTIATE_EXIT(23), INSTANTIATE_EXIT(24),
     INSTANTIATE_EXIT(25), INSTANTIATE_EXIT(26), INSTANTIATE_EXIT(27), INSTANTIATE_EXIT(28), INSTANTIATE_EXIT(29),
     INSTANTIATE_EXIT(30), INSTANTIATE_EXIT(31)};
-
-// Global dispatch table
-// This is initialized by HandlerInit static constructor below
-// Anchor variable to calculate offsets against
-static uint8_t g_HandlerBaseMarker = 0;
-void* g_HandlerBase = (void*)&g_HandlerBaseMarker;
 
 HandlerFunc g_Handlers[1024] = {nullptr};
 

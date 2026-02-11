@@ -20,13 +20,7 @@ public class VFSTests
         var mm = new VMAManager();
         
         // Setup Fault Handler for demand paging
-        engine.FaultHandler = (eng, addr, isWrite) =>
-        {
-            if (!mm.HandleFault(addr, isWrite, eng))
-            {
-                eng.SetStatusFault();
-            }
-        };
+        engine.FaultHandler = (eng, addr, isWrite) => mm.HandleFault(addr, isWrite, eng);
 
         // Current directory as host root for the tests
         var sys = new SyscallManager(engine, mm, 0x1000000, Path.GetFullPath("."));

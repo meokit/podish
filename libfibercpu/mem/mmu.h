@@ -44,7 +44,7 @@ struct PageTableChunk {
 
 // Callback Signatures
 // We use the same signatures as the original SoftMMU to allow easy integration
-using FaultHandler = void (*)(void* opaque, uint32_t addr, int is_write);
+using FaultHandler = bool (*)(void* opaque, uint32_t addr, int is_write);
 using MemHook = void (*)(void* opaque, uint32_t addr, uint32_t size, int is_write, uint64_t val);
 
 // Shared Memory State (Page Tables)

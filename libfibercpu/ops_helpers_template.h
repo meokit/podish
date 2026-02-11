@@ -261,7 +261,10 @@ LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* ut
                         state->status = EmuStatus::Fault;
                         return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    if (state->eip_dirty) {
+                        return LogicFlow::ExitWithoutSyncEIP;
+                    }
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
                 uint64_t q = edx_eax / val;
                 uint64_t r = edx_eax % val;

@@ -123,12 +123,12 @@ public unsafe partial class X86Native
     public static partial int GetStatus(IntPtr state);
 
     // Callbacks
-    // public delegate void FaultHandler(IntPtr state, uint addr, int isWrite, IntPtr userdata);
+    // public delegate bool FaultHandler(IntPtr state, uint addr, int isWrite, IntPtr userdata);
     // public delegate void MemHook(IntPtr state, uint addr, uint size, int isWrite, ulong val, IntPtr userdata);
     // public delegate int InterruptHandler(IntPtr state, uint vector, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetFaultCallback")]
-    public static partial void SetFaultCallback(IntPtr state, delegate* unmanaged<IntPtr, uint, int, IntPtr, void> handler, IntPtr userdata);
+    public static partial void SetFaultCallback(IntPtr state, delegate* unmanaged<IntPtr, uint, int, IntPtr, bool> handler, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetMemHook")]
     public static partial void SetMemHook(IntPtr state, delegate* unmanaged<IntPtr, uint, uint, int, ulong, IntPtr, void> hook, IntPtr userdata);
