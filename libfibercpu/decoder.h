@@ -47,12 +47,24 @@ namespace fiberish {
 struct EmuState;
 struct DecodedOp;
 
-// Logic Function (Standard ABI, implementation)
-using LogicFunc = void (*)(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb);  // Always inlined, no restrict needed
-
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb);
+
+enum class LogicFlow : uint8_t {
+    Continue = 0,
+    ExitOnCurrentEIP = 1,
+    ExitOnNextEIP = 2,
+    RestartMemoryOp = 3,
+    RetryMemoryOp = 4,
+};
+
+#define LogicFuncResult LogicFlow
+#define LogicFuncParams EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb
+
+// Logic Function (Standard ABI, implementation)
+// It may modify op and next_handler to control flow!
+using LogicFunc = LogicFuncResult (*)(LogicFuncParams);  // Always inlined, no restrict needed
 
 struct BasicBlock;
 

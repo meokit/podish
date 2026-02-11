@@ -11,44 +11,52 @@
 namespace fiberish {
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 00: ADD r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    // retry on TLB miss
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) {
+        return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags, Specialized S = Specialized::None>
-static FORCE_INLINE void OpAdd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 01: ADD r/m16/32, r16/32
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 02: ADD r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -60,71 +68,78 @@ static FORCE_INLINE void OpAdd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 03: ADD r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 10: ADC r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 11: ADC r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 12: ADC r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t dest = GetReg8(state, reg);
@@ -136,94 +151,104 @@ static FORCE_INLINE void OpAdc_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 13: ADC r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 29: SUB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 20: AND r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 21: AND r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 22: AND r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -235,79 +260,87 @@ static FORCE_INLINE void OpAnd_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 23: AND r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 09: OR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 31: XOR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpInc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpInc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 40+rd: INC r16/32
     // Opcode 40-47. Reg is opcode & 7.
     // We don't store opcode. But we store modrm? No, 40-47 has no modrm.
@@ -337,10 +370,11 @@ static FORCE_INLINE void OpInc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB
         if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpDec_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpDec_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 48+rd: DEC r16/32
     uint8_t reg = op->modrm & 7;
 
@@ -358,10 +392,11 @@ static FORCE_INLINE void OpDec_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB
         if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdd_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 04: ADD AL, imm8
     uint8_t dest = GetReg8(state, EAX);  // AL is Reg 0 low byte
     uint8_t src = (uint8_t)op->imm;
@@ -371,10 +406,11 @@ static FORCE_INLINE void OpAdd_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdd_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdd_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 05: ADD EAX, imm32
     if (op->prefixes.flags.opsize) {
         // ADD AX, imm16
@@ -392,25 +428,28 @@ static FORCE_INLINE void OpAdd_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 08: OR r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0A: OR r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -422,33 +461,35 @@ static FORCE_INLINE void OpOr_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0B: OR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0C: OR AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -457,10 +498,11 @@ static FORCE_INLINE void OpOr_AlImm(EmuState* state, DecodedOp* op, mem::MicroTL
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpOr_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpOr_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0D: OR EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -475,10 +517,11 @@ static FORCE_INLINE void OpOr_EaxImm(EmuState* state, DecodedOp* op, mem::MicroT
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 14: ADC AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -487,10 +530,11 @@ static FORCE_INLINE void OpAdc_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAdc_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAdc_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 15: ADC EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -505,48 +549,54 @@ static FORCE_INLINE void OpAdc_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 18: SBB r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 19: SBB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, dest, src);
-        WriteModRM16(state, op, res, utlb);
+
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, dest, src);
-        WriteModRM32(state, op, res, utlb);
+
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 1A: SBB r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -558,33 +608,35 @@ static FORCE_INLINE void OpSbb_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 1B: SBB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 1C: SBB AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -592,10 +644,11 @@ static FORCE_INLINE void OpSbb_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSbb_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSbb_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 1D: SBB EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -610,10 +663,11 @@ static FORCE_INLINE void OpSbb_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 24: AND AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -621,10 +675,11 @@ static FORCE_INLINE void OpAnd_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpAnd_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpAnd_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 25: AND EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -639,25 +694,28 @@ static FORCE_INLINE void OpAnd_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 28: SUB r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2A: SUB r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -669,33 +727,35 @@ static FORCE_INLINE void OpSub_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2B: SUB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2C: SUB AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -703,10 +763,11 @@ static FORCE_INLINE void OpSub_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpSub_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSub_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2D: SUB EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -721,25 +782,28 @@ static FORCE_INLINE void OpSub_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 30: XOR r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, dest, src);
-    WriteModRM8(state, op, res, utlb);
+
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 32: XOR r8, r/m8
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -750,33 +814,35 @@ static FORCE_INLINE void OpXor_GbEb(EmuState* state, DecodedOp* op, mem::MicroTL
         *rptr = (*rptr & 0xFFFFFF00) | res;
     else
         *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 33: XOR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
         uint16_t dest = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
         uint32_t dest = GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, reg, res);
     }
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 34: XOR AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
@@ -784,10 +850,11 @@ static FORCE_INLINE void OpXor_AlImm(EmuState* state, DecodedOp* op, mem::MicroT
     uint32_t val = GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
     SetReg(state, EAX, val);
+    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
-static FORCE_INLINE void OpXor_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXor_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 35: XOR EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -802,16 +869,18 @@ static FORCE_INLINE void OpXor_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, dest, src);
         SetReg(state, EAX, res);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmp_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3C: CMP AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
     AluSub(state, dest, src);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmp_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3D: CMP EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -822,26 +891,29 @@ static FORCE_INLINE void OpCmp_EaxImm(EmuState* state, DecodedOp* op, mem::Micro
         uint32_t src = op->imm;
         AluSub(state, dest, src);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpTest_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpTest_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 84: TEST r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     AluAnd(state, dest, src);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpTest_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpTest_AlImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A8: TEST AL, imm8
     uint8_t dest = GetReg8(state, EAX);
     uint8_t src = (uint8_t)op->imm;
     AluAnd(state, dest, src);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpTest_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpTest_EaxImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A9: TEST EAX, imm32
     if (op->prefixes.flags.opsize) {
         uint16_t dest = GetReg(state, EAX) & 0xFFFF;
@@ -852,6 +924,7 @@ static FORCE_INLINE void OpTest_EaxImm(EmuState* state, DecodedOp* op, mem::Micr
         uint32_t src = op->imm;
         AluAnd(state, dest, src);
     }
+    return LogicFlow::Continue;
 }
 
 void RegisterAluOps() {

@@ -10,13 +10,13 @@
 
 namespace fiberish {
 
-static FORCE_INLINE void OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 2A: CVTPI2PS (MMX) / CVTSI2SS (F3) / CVTSI2SD (F2)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
 
-    auto val_res = ReadModRM32(state, op, utlb);
-    if (!val_res) return;
+    auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
     int32_t val = (int32_t)*val_res;
 
     if (op->prefixes.flags.repne) {
@@ -28,11 +28,16 @@ static FORCE_INLINE void OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB*
         // F3: CVTSI2SS
         *dest_ptr = simde_mm_cvtsi32_ss(*dest_ptr, val);
     } else {
-        OpUd2(state, op);
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+        }
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 2C: CVTTSD2SI (F2), CVTTSS2SI (F3)
     uint32_t addr = 0;
     if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
@@ -43,8 +48,8 @@ static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0) {
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            auto b_res = state->mmu.read<double>(state, addr, utlb, op);
-            if (!b_res) return;
+            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
         // Truncate
@@ -54,19 +59,24 @@ static FORCE_INLINE void OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0) {
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            auto b_res = state->mmu.read<float>(state, addr, utlb, op);
-            if (!b_res) return;
+            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
         res = (int32_t)b;
     } else {
-        OpUd2(state, op);
-        return;
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+        }
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return LogicFlow::Continue;
     }
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 2D: CVTSD2SI (F2) / CVTSS2SI (F3)
     uint32_t addr = 0;
     if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
@@ -77,8 +87,8 @@ static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0) {
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            auto b_res = state->mmu.read<double>(state, addr, utlb, op);
-            if (!b_res) return;
+            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
         res = simde_mm_cvtsd_si32(simde_mm_set_sd(b));
@@ -87,27 +97,32 @@ static FORCE_INLINE void OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB*
         if (op->modrm >= 0xC0) {
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            auto b_res = state->mmu.read<float>(state, addr, utlb, op);
-            if (!b_res) return;
+            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
         res = simde_mm_cvtss_si32(simde_mm_set_ss(b));
     } else {
-        OpUd2(state, op);
-        return;
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+        }
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return LogicFlow::Continue;
     }
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
 
     if (op->prefixes.flags.opsize) {
         // 66: CVTPD2PS (xmm/m128 -> xmm)
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src_pd = simde_mm_castps_pd(*src_res);
         *dest_ptr = simde_mm_cvtpd_ps(src_pd);
 
@@ -118,8 +133,8 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            if (!val_res) return;
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!val_res) return LogicFlow::RestartMemoryOp;
             src_pd = simde_mm_set_sd(*(double*)&(*val_res));
         }
         *dest_ptr = simde_mm_cvtsd_ss(*dest_ptr, src_pd);
@@ -131,8 +146,8 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src_ss = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
-            if (!val_res) return;
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!val_res) return LogicFlow::RestartMemoryOp;
             src_ss = simde_mm_set_ss(*(float*)&(*val_res));
         }
 
@@ -147,8 +162,8 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
             src = state->ctx.xmm[op->modrm & 7];
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            if (!val_res) return;
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!val_res) return LogicFlow::RestartMemoryOp;
             uint64_t val = *val_res;
             uint32_t v0 = (uint32_t)val;
             uint32_t v1 = (uint32_t)(val >> 32);
@@ -157,14 +172,15 @@ static FORCE_INLINE void OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB*
         simde__m128d res = simde_mm_cvtps_pd(src);
         *dest_ptr = simde_mm_castpd_ps(res);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCvt_5B(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_5B(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 5B: CVTDQ2PS / CVTPS2DQ (66) / CVTTPS2DQ (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src = *src_res;
 
     if (op->prefixes.flags.opsize) {
@@ -180,17 +196,18 @@ static FORCE_INLINE void OpCvt_5B(EmuState* state, DecodedOp* op, mem::MicroTLB*
         simde__m128i isrc = simde_mm_castps_si128(src);
         *dest_ptr = simde_mm_cvtepi32_ps(isrc);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F E6: CVTPD2DQ (F2) / CVTDQ2PD (F3) / CVTTPD2DQ (66)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
 
     if (op->prefixes.flags.opsize) {
         // 66: CVTTPD2DQ (Truncate xmm/m128 -> xmm)
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src_pd = simde_mm_castps_pd(*src_res);
 
         simde__m128i res = simde_mm_cvttpd_epi32(src_pd);
@@ -205,8 +222,8 @@ static FORCE_INLINE void OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB*
             isrc = simde_mm_castps_si128(src);
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
-            if (!val_res) return;
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!val_res) return LogicFlow::RestartMemoryOp;
             uint64_t val = *val_res;
             uint32_t v0 = (uint32_t)val;
             uint32_t v1 = (uint32_t)(val >> 32);
@@ -218,15 +235,20 @@ static FORCE_INLINE void OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB*
 
     } else if (op->prefixes.flags.repne) {
         // F2: CVTPD2DQ (xmm/m128 -> xmm)
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src_pd = simde_mm_castps_pd(*src_res);
 
         simde__m128i res = simde_mm_cvtpd_epi32(src_pd);
         *dest_ptr = simde_mm_castsi128_ps(res);
     } else {
-        OpUd2(state, op);
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 6;
+        }
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
     }
+    return LogicFlow::Continue;
 }
 
 void RegisterSseCvtOps() {

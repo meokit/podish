@@ -12,7 +12,7 @@
 namespace fiberish {
 
 template <bool IsRel8>
-static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
     if (IsRel8) {
@@ -23,30 +23,32 @@ static FORCE_INLINE void OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB
         offset = (int32_t)op->imm;
     }
     op->branch_target = op->next_eip + offset;
+    return LogicFlow::Continue;
 }
 
 template <uint8_t Cond, bool IsRel8>
-static FORCE_INLINE void OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
-    // Condition check is compile-time specialized
-
     if (CheckConditionFixed<Cond>(state)) {
         int32_t offset;
         if constexpr (IsRel8) {
-            // 8-bit relative jump (0x7x opcodes)
             offset = (int32_t)(int8_t)(op->imm & 0xFF);
         } else {
-            // 32-bit relative jump (0F 8x opcodes)
             offset = (int32_t)op->imm;
         }
         op->branch_target = op->next_eip + offset;
     }
+    return LogicFlow::Continue;
 }
 
 // Named wrappers for Jcc specializations
-#define JCC_WRAPPERS(cond, name)                                                                                     \
-    static void OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpJcc_Rel<cond, true>(s, o, u); } \
-    static void OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpJcc_Rel<cond, false>(s, o, u); }
+#define JCC_WRAPPERS(cond, name)                                                         \
+    static LogicFlow OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {  \
+        return OpJcc_Rel<cond, true>(s, o, u);                                           \
+    }                                                                                    \
+    static LogicFlow OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpJcc_Rel<cond, false>(s, o, u);                                          \
+    }
 
 JCC_WRAPPERS(0, O)
 JCC_WRAPPERS(1, NO)
@@ -66,48 +68,56 @@ JCC_WRAPPERS(14, LE)
 JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
-static FORCE_INLINE void OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
     // Push Return Address
-    if (!Push32(state, op->next_eip, utlb, op)) return;
+    // If Push fails, we Restart. SP is guaranteed untouched by Push on failure.
+    // Use Push<T, true> to request Restart explicitly on TLB Miss.
+    if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
+
     // Jump relative to Next Insn
     op->branch_target = op->next_eip + (int32_t)op->imm;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C3: RET
-    auto val_res = Pop32(state, utlb, op);
-    if (!val_res) return;
+    // Use Pop<T, true> to request Restart explicitly on TLB Miss.
+    auto val_res = Pop<uint32_t, true>(state, utlb, op);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
     op->branch_target = *val_res;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C2: RET imm16
-    auto val_res = Pop32(state, utlb, op);
-    if (!val_res) return;
+    auto val_res = Pop<uint32_t, true>(state, utlb, op);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
     op->branch_target = *val_res;
 
     // Pop imm16 bytes from stack
     uint32_t esp = GetReg(state, ESP);
     esp += (uint16_t)op->imm;
     SetReg(state, ESP, esp);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9C: PUSHF/PUSHFD
     if (op->prefixes.flags.opsize) {
-        if (!Push16(state, (uint16_t)state->ctx.eflags, utlb, op)) return;
+        if (!Push<uint16_t, true>(state, (uint16_t)state->ctx.eflags, utlb, op)) return LogicFlow::RestartMemoryOp;
     } else {
-        if (!Push32(state, state->ctx.eflags & 0x00FCFFFF, utlb, op)) return;
+        if (!Push<uint32_t, true>(state, state->ctx.eflags & 0x00FCFFFF, utlb, op)) return LogicFlow::RestartMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9D: POPF/POPFD
     if (op->prefixes.flags.opsize) {
         // POPF (16-bit)
-        auto val_res = Pop16(state, utlb, op);
-        if (!val_res) return;  // Abort on fault
+        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
         uint16_t val = *val_res;
 
         uint32_t mask = state->ctx.eflags_mask & 0xFFFF;
@@ -117,8 +127,8 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
         state->ctx.eflags = new_flags;
     } else {
         // POPFD (32-bit)
-        auto val_res = Pop32(state, utlb, op);
-        if (!val_res) return;  // Abort on fault
+        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
         uint32_t val = *val_res;
 
         uint32_t mask = state->ctx.eflags_mask;
@@ -127,48 +137,56 @@ static FORCE_INLINE void OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* u
         new_flags |= 2;  // Reserved bit 1 is always 1
         state->ctx.eflags = new_flags;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpStc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpStc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F9: STC
     state->ctx.eflags |= CF_MASK;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpClc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpClc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F8: CLC
     state->ctx.eflags &= ~CF_MASK;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F5: CMC (Complement Carry)
     state->ctx.eflags ^= CF_MASK;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpStd(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpStd(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FD: STD (Set Direction Flag)
     state->ctx.eflags |= 0x400;  // DF Mask
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCld(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCld(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FC: CLD (Clear Direction Flag)
     state->ctx.eflags &= ~0x400;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FB: STI (Set Interrupt Flag)
     // Privileged Instruction. In User Mode (CPL=3, IOPL=0), this faults.
     state->status = EmuStatus::Fault;
-    state->fault_vector = 13;  // #GP
+    state->fault_vector = 13;    // #GP
+    return LogicFlow::Continue;  // Or ExitOnCurrentEIP? Standard flow handles Status check
 }
 
-static FORCE_INLINE void OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FA: CLI (Clear Interrupt Flag)
     // Privileged Instruction.
     state->status = EmuStatus::Fault;
     state->fault_vector = 13;  // #GP
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A2: CPUID
     uint32_t leaf = GetReg(state, EAX);
     // uint32_t ecx_in = GetReg(state, ECX);
@@ -199,9 +217,10 @@ static FORCE_INLINE void OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     SetReg(state, EBX, ebx);
     SetReg(state, ECX, ecx);
     SetReg(state, EDX, edx);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 31: RDTSC
     uint64_t tsc = 0;
     if (state->tsc_mode == 1) {
@@ -209,7 +228,6 @@ static FORCE_INLINE void OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* 
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - state->tsc_start_time).count();
         // tsc = offset + (elapsed_ns * frequency) / 1,000,000,000
-        // We use __int128 to prevent overflow during intermediate calculation if frequency is high
         unsigned __int128 val = (unsigned __int128)elapsed * state->tsc_frequency;
         tsc = state->tsc_offset + (uint64_t)(val / 1000000000ULL);
     } else {
@@ -223,15 +241,17 @@ static FORCE_INLINE void OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* 
 
     SetReg(state, EAX, low);
     SetReg(state, EDX, high);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpWait(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpWait(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9B: WAIT/FWAIT n
     // Check pending FPU exceptions?
     // For now NOP.
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AE /r
     uint8_t sub = (op->modrm >> 3) & 7;
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -241,15 +261,16 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
         case 2:  // LDMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                auto val_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
-                if (!val_res) return;
+                auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+                if (!val_res) return LogicFlow::RestartMemoryOp;
                 state->ctx.mxcsr = *val_res;
             }
             break;
         case 3:  // STMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
-                if (!state->mmu.write<uint32_t>(state, addr, state->ctx.mxcsr, utlb, op)) return;
+                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, addr, state->ctx.mxcsr, utlb, op))
+                    return LogicFlow::RetryMemoryOp;
             }
             break;
         case 5:  // LFENCE (mod=3, rm=0)
@@ -275,25 +296,27 @@ static FORCE_INLINE void OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::Micro
         default:
             break;
     }
+    return LogicFlow::Continue;
 }
 
 // ----------------------------------------------------------------------------
 // Missing Control Optimizations
 // ----------------------------------------------------------------------------
 
-static FORCE_INLINE void OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // NOP - Do nothing
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // HLT
-    // For user-mode emulation, this ends execution or waits?
-    // Stops execution for now.
+    // TODO: Don't allow on userspace?
     state->status = EmuStatus::Stopped;
+    return LogicFlow::ExitOnNextEIP;
 }
 
 // Helper for interrupts
-static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::MicroTLB* utlb) {
+static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
 
@@ -308,41 +331,41 @@ static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op, mem::
         state->status = EmuStatus::Fault;
         state->fault_vector = vector;
     }
-
-    bool eip_dirty = state->eip_dirty;  // Kernel set EIP, return to Run loop
-    state->eip_dirty = false;
-
-    if (state->status != EmuStatus::Running || eip_dirty) {
-        DecodedOp* next = op + 1;
-        // Only swap if not already swapped (to avoid overwriting saved_handler)
-        if (next->handler != (HandlerFunc)fiberish::HandlerInterrupt) {
-            state->saved_handler = (int64_t (*)(EmuState*, DecodedOp*, int64_t, mem::MicroTLB))next->handler;
-            next->handler = (HandlerFunc)fiberish::HandlerInterrupt;
-        }
-    }
 }
 
-static FORCE_INLINE void OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CD ib: INT n
     uint8_t vector = (uint8_t)op->imm;
-    RaiseInterrupt(state, vector, op, utlb);
+    RaiseInterrupt(state, vector, op);
+    if (state->eip_dirty || state->status != EmuStatus::Running) {
+        return LogicFlow::ExitOnNextEIP;
+    }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CC: INT 3
-    RaiseInterrupt(state, 3, op, utlb);
+    RaiseInterrupt(state, 3, op);
+    if (state->eip_dirty || state->status != EmuStatus::Running) {
+        return LogicFlow::ExitOnNextEIP;
+    }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CE: INTO
     if (state->ctx.eflags & OF_MASK) {
-        RaiseInterrupt(state, 4, op, utlb);
+        RaiseInterrupt(state, 4, op);
     }
+    if (state->eip_dirty || state->status != EmuStatus::Running) {
+        return LogicFlow::ExitOnNextEIP;
+    }
+    return LogicFlow::Continue;
 }
 
 // CMOV Implementation
 template <uint8_t Cond, Specialized S = Specialized::None>
-static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
     // If condition is FALSE, NOP (no memory read).
 
@@ -365,29 +388,30 @@ static FORCE_INLINE void OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* u
         } else {
             if (op->prefixes.flags.opsize) {
                 // 16-bit
-                auto val_res = ReadModRM16(state, op, utlb);
-                if (!val_res) return;
+                auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!val_res) return LogicFlow::RestartMemoryOp;
                 uint16_t val = *val_res;
                 uint32_t current = state->ctx.regs[reg];
                 state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
             } else {
                 // 32-bit
-                auto val_res = ReadModRM32(state, op, utlb);
-                if (!val_res) return;
+                auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!val_res) return LogicFlow::RestartMemoryOp;
                 uint32_t val = *val_res;
                 state->ctx.regs[reg] = val;
             }
         }
     }
+    return LogicFlow::Continue;
 }
 
 // Named wrappers for Cmov specializations
-#define CMOV_WRAPPERS(cond, name)                                                     \
-    static void OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
-        OpCmov<cond, Specialized::None>(s, o, u);                                     \
-    }                                                                                 \
-    static void OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        OpCmov<cond, Specialized::ModReg>(s, o, u);                                   \
+#define CMOV_WRAPPERS(cond, name)                                                          \
+    static LogicFlow OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
+        return OpCmov<cond, Specialized::None>(s, o, u);                                   \
+    }                                                                                      \
+    static LogicFlow OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpCmov<cond, Specialized::ModReg>(s, o, u);                                 \
     }
 
 CMOV_WRAPPERS(0, O)

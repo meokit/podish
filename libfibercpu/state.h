@@ -21,6 +21,22 @@ using FaultHandler = void (*)(EmuState* state, uint32_t addr, int is_write, void
 using MemHook = void (*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
 using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
 
+struct MemNoOp {};
+
+struct alignas(16) MemReadOperation {
+    std::array<std::byte, 16> data;
+    uint32_t addr;
+    uint32_t size;
+    bool done;
+};
+
+struct alignas(16) MemWriteOperation {
+    std::array<std::byte, 16> data;
+    uint32_t addr;
+    uint32_t size;
+    bool done;
+};
+
 struct EmuState {
     Context ctx;
     mem::Mmu mmu;
@@ -60,7 +76,7 @@ struct EmuState {
     InterruptHandler interrupt_handlers[256] = {nullptr};
     void* interrupt_userdata[256] = {nullptr};
 
-    bool eip_dirty = false;  // External API Set EIP?
+    bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
 
     // TSC State
     uint64_t tsc_frequency = 1000000000;  // Default 1GHz
@@ -69,6 +85,10 @@ struct EmuState {
     uint64_t tsc_fixed_counter = 0;  // For mode 0
     std::chrono::steady_clock::time_point tsc_start_time;
 
+    // Helper function to sync eip
+    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->GetLength(); }
+    void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = op->next_eip; }
+
     // Precise Exception Support
     // When a fault occurs in the fast dispatch loop, we swap the NEXT instruction's handler
     // with HandlerInterrupt. This field stores the original handler to be restored.
@@ -76,6 +96,66 @@ struct EmuState {
     // decoder.h include) Actually decoder.h is included. Wait, EmuState forward declared in decoder.h, but state.h
     // includes decoder.h. decoder.h includes common.h. state.h includes decoder.h.
     int64_t (*saved_handler)(EmuState* RESTRICT, DecodedOp* RESTRICT, int64_t, mem::MicroTLB);
+
+    std::variant<MemNoOp, MemReadOperation, MemWriteOperation> mem_op;
+
+    template <typename T>
+    mem::MemResult<T> request_read_and_check_pending(uint32_t addr) {
+        // Use pending value
+        if (auto read_op = std::get_if<MemReadOperation>(&mem_op)) {
+            if (read_op->done) {
+                T pending{};
+                std::memcpy(&pending, read_op->data.data(), sizeof(T));
+                mem_op.emplace<MemNoOp>();  // Clear result
+                return pending;
+            }
+        }
+
+        mem_op = MemReadOperation{
+            .addr = addr,
+            .size = sizeof(T),
+            .data = {},
+            .done = false,
+        };
+
+        return std::unexpected(mem::FaultCode::PageFault);
+    }
+
+    template <typename T>
+    mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value) {
+        static_assert(sizeof(T) <= 16);
+
+        if (auto write_op = std::get_if<MemWriteOperation>(&mem_op)) {
+            if (write_op->done) {
+                mem_op.emplace<MemNoOp>();
+                return {};
+            }
+        }
+
+        auto& op = mem_op.emplace<MemWriteOperation>();
+
+        op.addr = addr;
+        op.size = sizeof(T);
+        op.done = false;
+        std::memcpy(op.data.data(), &value, sizeof(T));
+
+        return std::unexpected(mem::FaultCode::PageFault);
+    }
+
+    template <typename T>
+    mem::MemResult<void> request_write_only(uint32_t addr, const T& value) {
+        static_assert(sizeof(T) <= 16);
+
+        // No check for pending, just request
+        auto& op = mem_op.emplace<MemWriteOperation>();
+
+        op.addr = addr;
+        op.size = sizeof(T);
+        op.done = false;
+        std::memcpy(op.data.data(), &value, sizeof(T));
+
+        return std::unexpected(mem::FaultCode::PageFault);
+    }
 };
 
 }  // namespace fiberish

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdio>
+#include <type_traits>
 #include "common.h"
 #include "decoder.h"
 #include "state.h"
@@ -148,185 +148,245 @@ inline uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// ModRM Read/Write (32-bit only for now)
+// Internal Helpers (Register Access & Memory Splits)
 // ------------------------------------------------------------------------------------------------
 
-// ------------------------------------------------------------------------------------------------
-// ModRM Read/Write (32-bit only for now)
-// ------------------------------------------------------------------------------------------------
-
-inline MemResult<uint32_t> ReadModRM32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register Operand
-        return GetReg(state, rm);
-    } else {
-        // Memory Operand
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint32_t>(state, addr, utlb, op);
-    }
-}
-
-inline MemResult<void> WriteModRM32(EmuState* state, DecodedOp* op, uint32_t val, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register Operand
-        SetReg(state, rm, val);
-        return {};
-    } else {
-        // Memory Operand
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.write<uint32_t>(state, addr, val, utlb, op);
-    }
-}
-
-inline MemResult<void> WriteModRM8(EmuState* state, DecodedOp* op, uint8_t val, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register (AL, CL, DL, BL, AH, CH, DH, BH)
-        uint32_t* rptr = GetRegPtr(state, rm & 3);
-        uint32_t curr = *rptr;
-        if (rm < 4) {
-            curr = (curr & 0xFFFFFF00) | val;
-        } else {
-            curr = (curr & 0xFFFF00FF) | (val << 8);
-        }
-        *rptr = curr;
-        return {};
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.write<uint8_t>(state, addr, val, utlb, op);
-    }
-}
-
-inline MemResult<void> WriteModRM16(EmuState* state, DecodedOp* op, uint16_t val, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register (AX, CX, DX, BX, SP, BP, SI, DI)
-        uint32_t* rptr = GetRegPtr(state, rm);
-        *rptr = (*rptr & 0xFFFF0000) | val;
-        return {};
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.write<uint16_t>(state, addr, val, utlb, op);
-    }
-}
-
-inline MemResult<uint8_t> ReadModRM8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register (AL, CL, DL, BL, AH, CH, DH, BH)
-        uint32_t val = GetReg(state, rm & 3);
-        if (rm < 4)
-            return static_cast<uint8_t>(val & 0xFF);
-        else
-            return static_cast<uint8_t>((val >> 8) & 0xFF);
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint8_t>(state, addr, utlb, op);
-    }
-}
-
-inline MemResult<uint16_t> ReadModRM16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
-        // Register (AX, CX, DX, BX, SP, BP, SI, DI)
-        return static_cast<uint16_t>(GetReg(state, rm) & 0xFFFF);
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
-        return state->mmu.read<uint16_t>(state, addr, utlb, op);
-    }
-}
-
-inline MemResult<simde__m128> ReadModRM128(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint8_t rm = op->modrm & 7;
-
-    if (mod == 3) {
+// Helper: Handle Register Reads for various sizes
+template <typename T>
+inline T ReadRegGeneric(EmuState* state, uint8_t rm) {
+    if constexpr (std::is_same_v<T, simde__m128>) {
+        // 128-bit XMM access
         return state->ctx.xmm[rm];
     } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
-        auto low = state->mmu.read<uint64_t>(state, addr, utlb, op);
-        if (!low) return std::unexpected(low.error());
+        // General Purpose Registers (8, 16, 32-bit)
+        uint32_t val = GetReg(state, rm & (std::is_same_v<T, uint8_t> ? 3 : 7));
 
-        auto high = state->mmu.read<uint64_t>(state, addr + 8, utlb, op);
-        if (!high) return std::unexpected(high.error());
-
-        // Combine into simde__m128
-        simde__m128 res;
-        uint64_t* ptr = (uint64_t*)&res;
-        ptr[0] = *low;
-        ptr[1] = *high;
-        return res;
+        if constexpr (std::is_same_v<T, uint8_t>) {
+            // 8-bit: Handle High byte (AH, CH, DH, BH) vs Low byte
+            if (rm < 4)
+                return static_cast<uint8_t>(val & 0xFF);
+            else
+                return static_cast<uint8_t>((val >> 8) & 0xFF);
+        } else if constexpr (std::is_same_v<T, uint16_t>) {
+            // 16-bit: Mask lower word
+            return static_cast<uint16_t>(val & 0xFFFF);
+        } else {
+            // 32-bit: Full register
+            return static_cast<T>(val);
+        }
     }
 }
 
-inline MemResult<void> WriteModRM128(EmuState* state, DecodedOp* op, simde__m128 val, mem::MicroTLB* utlb) {
+// Helper: Handle Register Writes (including partial register preservation)
+template <typename T>
+inline void WriteRegGeneric(EmuState* state, uint8_t rm, T val) {
+    if constexpr (std::is_same_v<T, simde__m128>) {
+        // 128-bit XMM write
+        state->ctx.xmm[rm] = val;
+    } else {
+        // General Purpose Registers
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            // 32-bit: Direct overwrite
+            SetReg(state, rm, val);
+        } else {
+            // 8-bit and 16-bit: Read-Modify-Write to preserve other bits
+            // Note: For 8-bit, index logic differs (rm & 3)
+            uint32_t regIdx = std::is_same_v<T, uint8_t> ? (rm & 3) : rm;
+            uint32_t* rptr = GetRegPtr(state, regIdx);
+            uint32_t curr = *rptr;
+
+            if constexpr (std::is_same_v<T, uint8_t>) {
+                if (rm < 4) {
+                    // Low byte (AL, CL...)
+                    curr = (curr & 0xFFFFFF00) | val;
+                } else {
+                    // High byte (AH, CH...)
+                    curr = (curr & 0xFFFF00FF) | (static_cast<uint32_t>(val) << 8);
+                }
+            } else if constexpr (std::is_same_v<T, uint16_t>) {
+                // 16-bit
+                curr = (curr & 0xFFFF0000) | val;
+            }
+            *rptr = curr;
+        }
+    }
+}
+
+/**
+ * Strategy for handling TLB Misses in memory operations.
+ */
+enum class OpOnTLBMiss {
+    // Block until the memory operation is complete (or fault).
+    // Corresponds to legacy fail_on_tlb_miss = false.
+    Blocking,
+
+    // Return failure logic flow to allow restarting the instruction.
+    // Checks for pending operation completion on re-entry.
+    // Corresponds to legacy fail_on_tlb_miss = true, request_retry = true (READ) / request_write_and_check (WRITE RMW).
+    Restart,
+
+    // Return failure logic flow to retry the operation from the next instruction boundary.
+    // Does NOT check for pending operation on re-entry (fire and forget).
+    // Corresponds to legacy fail_on_tlb_miss = true, request_retry = true (WRITE ONLY).
+    Retry
+};
+
+/**
+ * Reads a value from a Register or Memory based on the ModRM byte.
+ * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
+ */
+template <typename T, OpOnTLBMiss Strategy>
+inline MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) {
-        state->ctx.xmm[rm] = val;
+        // Register Operand
+        return ReadRegGeneric<T>(state, rm);
+    } else {
+        // Memory Operand
+        uint32_t addr = ComputeLinearAddress(state, op);
+
+        if constexpr (Strategy == OpOnTLBMiss::Blocking) {
+            return state->mmu.read<T, false>(addr, utlb, op);
+        } else {
+            // Restart or Retry (though Retry for Read is unusual, treating as Restart)
+            auto value = state->mmu.read<T, true>(addr, utlb, op);
+            if (!value) {
+                // For Read, we always need to check pending if we want to restart
+                // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
+                // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
+                value = state->request_read_and_check_pending<T>(addr);
+            }
+            return value;
+        }
+    }
+}
+
+/**
+ * Writes a value to a Register or Memory based on the ModRM byte.
+ * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
+ */
+template <typename T, OpOnTLBMiss Strategy>
+inline MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+
+    if (mod == 3) {
+        // Register Operand
+        WriteRegGeneric<T>(state, rm, val);
         return {};
     } else {
+        // Memory Operand
         uint32_t addr = ComputeLinearAddress(state, op);
-        uint64_t* ptr = (uint64_t*)&val;
-        auto res1 = state->mmu.write<uint64_t>(state, addr, ptr[0], utlb, op);
-        if (!res1) return res1;
-        return state->mmu.write<uint64_t>(state, addr + 8, ptr[1], utlb, op);
+
+        if constexpr (Strategy == OpOnTLBMiss::Blocking) {
+            return state->mmu.write<T, false>(addr, val, utlb, op);
+        } else {
+            auto result = state->mmu.write<T, true>(addr, val, utlb, op);
+            if (!result) {
+                if constexpr (Strategy == OpOnTLBMiss::Restart) {
+                    result = state->request_write_and_check_pending<T>(addr, val);
+                } else {
+                    // Retry
+                    result = state->request_write_only<T>(addr, val);
+                }
+            }
+            return result;
+        }
+    }
+}
+
+/**
+ * Generic Helper for Direct Memory Read
+ */
+template <typename T, OpOnTLBMiss Strategy>
+inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
+    if constexpr (Strategy == OpOnTLBMiss::Blocking) {
+        return state->mmu.read<T, false>(addr, utlb, op);
+    } else {
+        auto value = state->mmu.read<T, true>(addr, utlb, op);
+        if (!value) {
+            value = state->request_read_and_check_pending<T>(addr);
+        }
+        return value;
+    }
+}
+
+/**
+ * Generic Helper for Direct Memory Write
+ */
+template <typename T, OpOnTLBMiss Strategy>
+inline MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const DecodedOp* op) {
+    if constexpr (Strategy == OpOnTLBMiss::Blocking) {
+        return state->mmu.write<T, false>(addr, val, utlb, op);
+    } else {
+        auto result = state->mmu.write<T, true>(addr, val, utlb, op);
+        if (!result) {
+            if constexpr (Strategy == OpOnTLBMiss::Restart) {
+                result = state->request_write_and_check_pending<T>(addr, val);
+            } else {
+                // Retry
+                result = state->request_write_only<T>(addr, val);
+            }
+        }
+        return result;
     }
 }
 
 // ------------------------------------------------------------------------------------------------
-// Stack Operations
+// Stack Operations (Refactored)
 // ------------------------------------------------------------------------------------------------
 
-inline MemResult<void> Push16(EmuState* state, uint16_t val, mem::MicroTLB* utlb, DecodedOp* op) {
+template <typename T, bool fail_on_tlb_miss = false>
+inline MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
+    constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
-    auto res = state->mmu.write<uint16_t>(state, esp - 2, val, utlb, op);
+
+    // Write to memory (ESP - size)
+    auto res = state->mmu.write<T, fail_on_tlb_miss>(esp - size, val, utlb, op);
+
+    // Request a write and return
+    if (!res && fail_on_tlb_miss) {
+        // Push can satisfy "Retry" semantics (update ESP only on success)
+        res = state->request_write_and_check_pending<T>(esp - size, val);
+    }
+
     if (res) {
-        SetReg(state, ESP, esp - 2);
+        // Update ESP only if memory write succeeded
+        SetReg(state, ESP, esp - size);
     }
     return res;
 }
 
-inline MemResult<uint16_t> Pop16(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
+template <typename T, bool fail_on_tlb_miss = false>
+inline MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
+    constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
-    auto res = state->mmu.read<uint16_t>(state, esp, utlb, op);
-    if (res) {
-        SetReg(state, ESP, esp + 2);
+
+    // Read from memory (ESP)
+    auto res = state->mmu.read<T, fail_on_tlb_miss>(esp, utlb, op);
+    if (!res && fail_on_tlb_miss) {
+        res = state->request_read_and_check_pending<T>(esp);
     }
-    return res;
-}
-inline MemResult<void> Push32(EmuState* state, uint32_t val, mem::MicroTLB* utlb, DecodedOp* op) {
-    uint32_t esp = GetReg(state, ESP);
-    auto res = state->mmu.write<uint32_t>(state, esp - 4, val, utlb, op);
+
     if (res) {
-        SetReg(state, ESP, esp - 4);
+        // Update ESP only if memory read succeeded
+        SetReg(state, ESP, esp + size);
     }
     return res;
 }
 
-inline MemResult<uint32_t> Pop32(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
-    uint32_t esp = GetReg(state, ESP);
-    auto res = state->mmu.read<uint32_t>(state, esp, utlb, op);
-    if (res) {
-        SetReg(state, ESP, esp + 4);
-    }
-    return res;
+// Explicit aliases for compatibility
+// Default to fail_on_tlb_miss = true for simple usage (ops_control)
+inline MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
+    return Push<uint16_t, true>(s, v, u, o);
 }
+inline MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
+    return Push<uint32_t, true>(s, v, u, o);
+}
+inline MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, DecodedOp* o) { return Pop<uint16_t, true>(s, u, o); }
+inline MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp* o) { return Pop<uint32_t, true>(s, u, o); }
 
 // ------------------------------------------------------------------------------------------------
 // ALU Operations & Flags

@@ -16,29 +16,29 @@ namespace fiberish {
 // =========================================================================================
 
 template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup1_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 80: Arith r/m8, imm8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
     uint8_t src = (uint8_t)op->imm;
-    Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
+    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
 }
 
 // Fixed Size Templates for Ev operations
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF, bool IsImm8 = false>
-static FORCE_INLINE void OpGroup1_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup1_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 81: Arith r/m, imm32 (IsImm8=false)
     // 83: Arith r/m, imm8 (IsImm8=true)
     T dest;
     if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM16(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         dest = *res;
     } else {
-        auto res = ReadModRM32(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         dest = *res;
     }
 
@@ -49,18 +49,18 @@ static FORCE_INLINE void OpGroup1_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
         src = (T)op->imm;
     }
 
-    Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
+    return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
 }
 
 // Helper Wrappers for OpGroup1_Ev_T
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, false>(state, op, utlb);
+static FORCE_INLINE LogicFlow OpGroup1_EvIz_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, false>(state, op, utlb);
 }
 
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup1_EvIb_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, true>(state, op, utlb);
+static FORCE_INLINE LogicFlow OpGroup1_EvIb_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup1_Ev_T<T, UpdateFlags, FixedSubOp, true>(state, op, utlb);
 }
 
 // =========================================================================================
@@ -68,29 +68,30 @@ static FORCE_INLINE void OpGroup1_EvIb_T(EmuState* state, DecodedOp* op, mem::Mi
 // =========================================================================================
 
 template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup3_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup3_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F6
-    auto val_res = ReadModRM8(state, op, utlb);
-    if (!val_res) return;
+    auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t val = *val_res;
-    Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb);
+
+    return Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
 
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup3_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup3_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F7
     T val;
     if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM16(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         val = *res;
     } else {
-        auto res = ReadModRM32(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         val = *res;
     }
 
-    Helper_Group3<T, UpdateFlags, FixedSubOp>(state, op, val, utlb);
+    return Helper_Group3<T, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
 
 // =========================================================================================
@@ -98,39 +99,13 @@ static FORCE_INLINE void OpGroup3_Ev_T(EmuState* state, DecodedOp* op, mem::Micr
 // =========================================================================================
 
 template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FE
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
-
-    auto val_res = ReadModRM8(state, op, utlb);
-    if (!val_res) return;
+    auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t val = *val_res;
 
-    uint32_t old_cf = state->ctx.eflags & CF_MASK;
-
-    switch (subop) {
-        case 0:  // INC
-        {
-            uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, val, (uint8_t)1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
-            WriteModRM8(state, op, res, utlb);
-            break;
-        }
-        case 1:  // DEC
-        {
-            uint8_t res = AluSub<uint8_t, UpdateFlags>(state, val, (uint8_t)1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
-            WriteModRM8(state, op, res, utlb);
-            break;
-        }
-        default:
-            OpUd2(state, op);
-    }
+    return Helper_Group4<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
 
 // =========================================================================================
@@ -138,145 +113,67 @@ static FORCE_INLINE void OpGroup4_Eb(EmuState* state, DecodedOp* op, mem::MicroT
 // =========================================================================================
 
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
-static FORCE_INLINE void OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup5_Ev_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FF
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
+    // For INC/DEC/PUSH/CALL/JMP, we might need the ModRM value.
+    // However, Helper_Group5 expects `T val`.
+    // For PUSH/INC/DEC, `val` is the memory content.
+    // For CALL/JMP (Indirect), `val` is the target address read from memory.
+
+    // RMW Instructions!
+    // Must use Blocking memory op to avoid looping
+    T val;
+    if constexpr (sizeof(T) == 2) {
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+        if (!res) return LogicFlow::ExitOnCurrentEIP;
+        val = *res;
     } else {
-        subop = (op->modrm >> 3) & 7;
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+        if (!res) return LogicFlow::ExitOnCurrentEIP;
+        val = *res;
     }
 
-    switch (subop) {
-        case 0:  // INC Ev
-        {
-            T val;
-            if constexpr (sizeof(T) == 2) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            }
-
-            uint32_t old_cf = state->ctx.eflags & CF_MASK;
-            T res = AluAdd<T, UpdateFlags>(state, val, 1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
-
-            if constexpr (sizeof(T) == 2)
-                WriteModRM16(state, op, res, utlb);
-            else
-                WriteModRM32(state, op, res, utlb);
-            break;
-        }
-        case 1:  // DEC Ev
-        {
-            T val;
-            if constexpr (sizeof(T) == 2) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            }
-
-            uint32_t old_cf = state->ctx.eflags & CF_MASK;
-            T res = AluSub<T, UpdateFlags>(state, val, 1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
-
-            if constexpr (sizeof(T) == 2)
-                WriteModRM16(state, op, res, utlb);
-            else
-                WriteModRM32(state, op, res, utlb);
-            break;
-        }
-        case 2:  // CALL Ev (Near Indirect)
-        case 4:  // JMP Ev (Near Indirect)
-        case 6:  // PUSH Ev
-        {
-            // These Ops do not flag, so UpdateFlags ignored (effectively always false/true logic same)
-            // Reuse implementation from switch
-            uint32_t val = 0;  // Or target
-            if constexpr (sizeof(T) == 2) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
-                val = *res;
-            }
-
-            if (subop == 2) {  // Call
-                if constexpr (sizeof(T) == 2) {
-                    if (!Push16(state, (uint16_t)op->next_eip, utlb, op)) return;
-                    op->branch_target = val & 0xFFFF;
-                } else {
-                    if (!Push32(state, op->next_eip, utlb, op)) return;
-                    op->branch_target = val;
-                }
-            } else if (subop == 4) {  // Jmp
-                if constexpr (sizeof(T) == 2)
-                    op->branch_target = val & 0xFFFF;
-                else
-                    op->branch_target = val;
-            } else if (subop == 6) {  // Push
-                if constexpr (sizeof(T) == 2) {
-                    if (!Push16(state, (uint16_t)val, utlb, op)) return;
-                } else {
-                    if (!Push32(state, val, utlb, op)) return;
-                }
-            }
-            break;
-        }
-        default:
-            OpUd2(state, op);
-            break;
-    }
+    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, op, val, utlb);
 }
 
 // Wrappers for Dispatch (Generic fallback)
-static void OpGroup1_EvIz_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+static LogicFlow OpGroup1_EvIz_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     if (o->prefixes.flags.opsize)
-        OpGroup1_EvIz_T<uint16_t, true>(s, o, u);
+        return OpGroup1_EvIz_T<uint16_t, true>(s, o, u);
     else
-        OpGroup1_EvIz_T<uint32_t, true>(s, o, u);
+        return OpGroup1_EvIz_T<uint32_t, true>(s, o, u);
 }
 
-static void OpGroup1_EvIb_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+static LogicFlow OpGroup1_EvIb_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     if (o->prefixes.flags.opsize)
-        OpGroup1_EvIb_T<uint16_t, true>(s, o, u);
+        return OpGroup1_EvIb_T<uint16_t, true>(s, o, u);
     else
-        OpGroup1_EvIb_T<uint32_t, true>(s, o, u);
+        return OpGroup1_EvIb_T<uint32_t, true>(s, o, u);
 }
 
-static void OpGroup3_Ev_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+static LogicFlow OpGroup3_Ev_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     if (o->prefixes.flags.opsize)
-        OpGroup3_Ev_T<uint16_t, true>(s, o, u);
+        return OpGroup3_Ev_T<uint16_t, true>(s, o, u);
     else
-        OpGroup3_Ev_T<uint32_t, true>(s, o, u);
+        return OpGroup3_Ev_T<uint32_t, true>(s, o, u);
 }
 
-static void OpGroup5_Ev_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
+static LogicFlow OpGroup5_Ev_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {
     if (o->prefixes.flags.opsize)
-        OpGroup5_Ev_T<uint16_t, true>(s, o, u);
+        return OpGroup5_Ev_T<uint16_t, true>(s, o, u);
     else
-        OpGroup5_Ev_T<uint32_t, true>(s, o, u);
+        return OpGroup5_Ev_T<uint32_t, true>(s, o, u);
 }
 
-static void OpGroup4_Eb_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { OpGroup4_Eb<true>(s, o, u); }
+static LogicFlow OpGroup4_Eb_Generic(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { return OpGroup4_Eb<true>(s, o, u); }
 
 // Implements wrappers: e.g. OpGroup1_EbIb_0_Flags, OpGroup1_EbIb_0_NoFlags
-#define IMPL_G1_EB(subop, name)                                                                \
-    [[maybe_unused]] static void name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
-        OpGroup1_EbIb<true, subop>(s, o, u);                                                   \
-    }                                                                                          \
-    [[maybe_unused]] static void name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        OpGroup1_EbIb<false, subop>(s, o, u);                                                  \
+#define IMPL_G1_EB(subop, name)                                                                     \
+    [[maybe_unused]] static LogicFlow name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
+        return OpGroup1_EbIb<true, subop>(s, o, u);                                                 \
+    }                                                                                               \
+    [[maybe_unused]] static LogicFlow name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpGroup1_EbIb<false, subop>(s, o, u);                                                \
     }
 
 IMPL_G1_EB(0, OpGroup1_EbIb_Add)
@@ -290,18 +187,18 @@ IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
 
 // Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags
 // Param `func` is OpGroup1_EvIz_T or OpGroup1_EvIb_T
-#define IMPL_EV_SPEC(subop, name, func)                                                           \
-    [[maybe_unused]] static void name##_32_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
-        func<uint32_t, true, subop>(s, o, u);                                                     \
-    }                                                                                             \
-    [[maybe_unused]] static void name##_32_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        func<uint32_t, false, subop>(s, o, u);                                                    \
-    }                                                                                             \
-    [[maybe_unused]] static void name##_16_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
-        func<uint16_t, true, subop>(s, o, u);                                                     \
-    }                                                                                             \
-    [[maybe_unused]] static void name##_16_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        func<uint16_t, false, subop>(s, o, u);                                                    \
+#define IMPL_EV_SPEC(subop, name, func)                                                                \
+    [[maybe_unused]] static LogicFlow name##_32_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
+        return func<uint32_t, true, subop>(s, o, u);                                                   \
+    }                                                                                                  \
+    [[maybe_unused]] static LogicFlow name##_32_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return func<uint32_t, false, subop>(s, o, u);                                                  \
+    }                                                                                                  \
+    [[maybe_unused]] static LogicFlow name##_16_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
+        return func<uint16_t, true, subop>(s, o, u);                                                   \
+    }                                                                                                  \
+    [[maybe_unused]] static LogicFlow name##_16_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return func<uint16_t, false, subop>(s, o, u);                                                  \
     }
 
 // Group 1 Iz (0x81)
@@ -330,12 +227,12 @@ IMPL_EV_SPEC(4, OpGroup5_Ev_Jmp, OpGroup5_Ev_T)
 IMPL_EV_SPEC(6, OpGroup5_Ev_Push, OpGroup5_Ev_T)
 
 // Group 3 Eb
-#define IMPL_G3_EB(subop, name)                                                                \
-    [[maybe_unused]] static void name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
-        OpGroup3_Eb<true, subop>(s, o, u);                                                     \
-    }                                                                                          \
-    [[maybe_unused]] static void name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        OpGroup3_Eb<false, subop>(s, o, u);                                                    \
+#define IMPL_G3_EB(subop, name)                                                                     \
+    [[maybe_unused]] static LogicFlow name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
+        return OpGroup3_Eb<true, subop>(s, o, u);                                                   \
+    }                                                                                               \
+    [[maybe_unused]] static LogicFlow name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpGroup3_Eb<false, subop>(s, o, u);                                                  \
     }
 
 IMPL_G3_EB(2, OpGroup3_Eb_Not)
@@ -346,25 +243,26 @@ IMPL_G3_EB(6, OpGroup3_Eb_Div)
 IMPL_G3_EB(7, OpGroup3_Eb_Idiv)
 
 // Group 4 Eb
-#define IMPL_G4_EB(subop, name)                                                                \
-    [[maybe_unused]] static void name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
-        OpGroup4_Eb<true, subop>(s, o, u);                                                     \
-    }                                                                                          \
-    [[maybe_unused]] static void name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        OpGroup4_Eb<false, subop>(s, o, u);                                                    \
+#define IMPL_G4_EB(subop, name)                                                                     \
+    [[maybe_unused]] static LogicFlow name##_Flags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {   \
+        return OpGroup4_Eb<true, subop>(s, o, u);                                                   \
+    }                                                                                               \
+    [[maybe_unused]] static LogicFlow name##_NoFlags(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpGroup4_Eb<false, subop>(s, o, u);                                                  \
     }
 
 IMPL_G4_EB(0, OpGroup4_Eb_Inc)
 IMPL_G4_EB(1, OpGroup4_Eb_Dec)
 
 // Misc Ops (unchanged)
-static FORCE_INLINE void OpCdq(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCdq(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint32_t eax = GetReg(state, EAX);
     uint32_t edx = ((int32_t)eax < 0) ? 0xFFFFFFFF : 0;
     SetReg(state, EDX, edx);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCwde(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCwde(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize) {
         int8_t val = (int8_t)GetReg(state, EAX);
         uint32_t current = GetReg(state, EAX);
@@ -374,23 +272,25 @@ static FORCE_INLINE void OpCwde(EmuState* state, DecodedOp* op, mem::MicroTLB* u
         int16_t val = (int16_t)GetReg(state, EAX);
         SetReg(state, EAX, (uint32_t)(int32_t)val);
     }
+    return LogicFlow::Continue;
 }
 
-void OpUd2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpUd2_Groups(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!state->hooks.on_invalid_opcode(state)) {
-        TriggerPreciseFault(state, op);
         state->status = EmuStatus::Fault;
         state->fault_vector = 6;
+        return LogicFlow::ExitOnCurrentEIP;
     }
+    return LogicFlow::Continue;
 }
-void OpUd2(EmuState* state, DecodedOp* op) { OpUd2(state, op, nullptr); }
+static FORCE_INLINE LogicFlow OpUd2_Groups(EmuState* state, DecodedOp* op) { return OpUd2_Groups(state, op, nullptr); }
 
-static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t sub = (op->modrm >> 3) & 7;
     if (sub == 1) {  // CMPXCHG8B
         uint32_t addr = ComputeLinearAddress(state, op);
-        auto mem_res = state->mmu.read<uint64_t>(state, addr, utlb, op);
-        if (!mem_res) return;
+        auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!mem_res) return LogicFlow::RestartMemoryOp;  // Restart on read fail
         uint64_t mem_val = *mem_res;
 
         uint32_t eax = GetReg(state, EAX);
@@ -401,31 +301,37 @@ static FORCE_INLINE void OpGroup9(EmuState* state, DecodedOp* op, mem::MicroTLB*
             uint32_t ebx = GetReg(state, EBX);
             uint32_t ecx = GetReg(state, ECX);
             uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
-            (void)state->mmu.write<uint64_t>(state, addr, ecx_ebx, utlb, op);
+
+            // Retry on write fail
+            if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, addr, ecx_ebx, utlb, op))
+                return LogicFlow::RetryMemoryOp;
         } else {
             state->ctx.eflags &= ~ZF_MASK;
             SetReg(state, EAX, (uint32_t)mem_val);
             SetReg(state, EDX, (uint32_t)(mem_val >> 32));
         }
     } else {
-        OpUd2(state, op);
+        OpUd2_Groups(state, op);
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
     }
+    return LogicFlow::Continue;
 }
 
 template <typename T>
-static FORCE_INLINE void OpXadd_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXadd_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // Restart on read fail
     T dest_val = 0;
     if constexpr (sizeof(T) == 1) {
-        auto res = ReadModRM8(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         dest_val = *res;
     } else if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM16(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         dest_val = *res;
     } else {
-        auto res = ReadModRM32(state, op, utlb);
-        if (!res) return;
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
         dest_val = *res;
     }
 
@@ -456,24 +362,26 @@ static FORCE_INLINE void OpXadd_T(EmuState* state, DecodedOp* op, mem::MicroTLB*
         SetReg(state, reg, dest_val);
     }
 
-    // Result -> Dest Memory/Reg
-    if constexpr (sizeof(T) == 1)
-        WriteModRM8(state, op, res, utlb);
-    else if constexpr (sizeof(T) == 2)
-        WriteModRM16(state, op, res, utlb);
-    else
-        WriteModRM32(state, op, res, utlb);
+    // Result -> Dest Memory/Reg (Retry on fail)
+    if constexpr (sizeof(T) == 1) {
+        if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    } else if constexpr (sizeof(T) == 2) {
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    } else {
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpXadd_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    OpXadd_T<uint8_t>(state, op, utlb);
+static FORCE_INLINE LogicFlow OpXadd_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpXadd_T<uint8_t>(state, op, utlb);
 }
 
-static FORCE_INLINE void OpXadd_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpXadd_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        OpXadd_T<uint16_t>(state, op, utlb);
+        return OpXadd_T<uint16_t>(state, op, utlb);
     else
-        OpXadd_T<uint32_t>(state, op, utlb);
+        return OpXadd_T<uint32_t>(state, op, utlb);
 }
 
 // =========================================================================================
@@ -497,9 +405,11 @@ void RegisterGroupOps() {
     g_Handlers[0x1C7] = DispatchWrapper<OpGroup9>;
     g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Byte>;
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Word>;
-    g_Handlers[0x10B] = DispatchWrapper<OpUd2>;
+    g_Handlers[0x10B] = DispatchWrapper<OpUd2_Groups>;
 
-// Macro for Group 1 EbIb (Byte) - No Size variant needed, just NF
+    // Specializations (Call macros defined above)
+    // Re-invoke macros to register specialized handlers
+
 #define REG_G1_EB(opcode, subop, name)                                     \
     {                                                                      \
         SpecCriteria c;                                                    \
@@ -524,7 +434,6 @@ void RegisterGroupOps() {
     REG_G1_EB(0x80, 6, OpGroup1_EbIb_Xor);
     REG_G1_EB(0x80, 7, OpGroup1_EbIb_Cmp);
 
-// Macro for Group 1 EvIz, Group 5 Ev, etc. (Size + NF)
 #define REG_EV_SPEC(opcode, subop, name)                                      \
     /* 32-bit Normal */                                                       \
     {                                                                         \
@@ -575,7 +484,6 @@ void RegisterGroupOps() {
     REG_EV_SPEC(0x81, 5, OpGroup1_EvIz_Sub);
     REG_EV_SPEC(0x81, 7, OpGroup1_EvIz_Cmp);
 
-// Group 3: 0xF6 (Eb) - Only NF needed
 #define REG_G3_EB(opcode, subop, name)                                     \
     {                                                                      \
         SpecCriteria c;                                                    \

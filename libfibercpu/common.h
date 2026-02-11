@@ -84,7 +84,4 @@ struct alignas(64) Context {
 struct EmuState;
 struct DecodedOp;
 
-// Helper to trigger precise fault from MMU/Helpers by modifying the next instruction's handler
-void TriggerPreciseFault(EmuState* state, DecodedOp* op);
-
 }  // namespace fiberish

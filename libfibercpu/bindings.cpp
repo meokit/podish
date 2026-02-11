@@ -121,9 +121,6 @@ EmuState* X86_Create() {
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
 
-    // Link MMU to State Status
-    state->mmu.set_status_ptr(&state->status, &state->fault_vector);
-
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
@@ -155,7 +152,6 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // 3. Link Internal Pointers
     state->ctx.mmu = &state->mmu;
     state->ctx.hooks = &state->hooks;
-    state->mmu.set_status_ptr(&state->status, &state->fault_vector);
 
     // 4. Set Callbacks (Bridge to same handlers, but new 'state' passed)
     state->mmu.set_fault_callback(InternalFaultBridge, state);
@@ -337,15 +333,15 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
-        mem::MicroTLB utlb;
-        (void)state->mmu.write<uint8_t>(state, addr + i, data[i], &utlb, nullptr);
+        // TODO: We need a way to notify the write is failed
+        (void)state->mmu.write_no_utlb<uint8_t>(addr + i, data[i]);
     }
 }
 
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     for (uint32_t i = 0; i < size; ++i) {
-        mem::MicroTLB utlb;
-        auto res = state->mmu.read<uint8_t>(state, addr + i, &utlb, nullptr);
+        // TODO: We need a way to notify the read is failed
+        auto res = state->mmu.read_no_utlb<uint8_t>(addr + i);
         val[i] = res.value_or(0);
     }
 }
@@ -464,8 +460,18 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 MicroTLB utlb;
                 int64_t remaining = h(state, head, batch_limit, utlb);
                 total_run_insts += (initial_batch_limit - remaining);
+
+                // TODO: Is really needed?
+                // Clear eip dirty flag
+                if (state->eip_dirty) {
+                    state->eip_dirty = false;
+                }
+
             } else {
-                OpUd2(state, head);
+                if (!state->hooks.on_invalid_opcode(state)) {
+                    state->status = EmuStatus::Fault;
+                    state->fault_vector = 6;
+                }
                 break;
             }
         }
@@ -495,8 +501,7 @@ int X86_Step(EmuState* state) {
 
     uint8_t buf[16];
     for (int i = 0; i < 16; ++i) {
-        mem::MicroTLB utlb;
-        auto res = state->mmu.read<uint8_t>(state, state->ctx.eip + i, &utlb, nullptr);
+        auto res = state->mmu.read_no_utlb<uint8_t>(state->ctx.eip + i);
         buf[i] = res.value_or(0);
         if (state->status != EmuStatus::Running) {
             f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);

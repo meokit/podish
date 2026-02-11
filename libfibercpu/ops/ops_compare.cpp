@@ -1,5 +1,5 @@
 // Comparison & Test
-// Auto-generated from ops.cpp refactoring
+// Same logic as ops_alu.cpp: LogicFlow return, ReadModRM<T,true,true>, Restart/Retry.
 
 #include <simde/x86/sse.h>
 
@@ -10,130 +10,139 @@
 
 namespace fiberish {
 
-static FORCE_INLINE void OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 38: CMP r/m8, r8
-    auto dest_res = ReadModRM8(state, op, utlb);
-    if (!dest_res) return;
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
     AluCmp<uint8_t>(state, dest, src);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 39: CMP r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, reg);
         AluCmp<uint16_t>(state, dest, src);
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, reg);
         AluCmp<uint32_t>(state, dest, src);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3A: CMP r8, r/m8
     uint8_t dest = GetReg8(state, (op->modrm >> 3) & 7);
-    auto src_res = ReadModRM8(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
     AluCmp<uint8_t>(state, dest, src);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3B: CMP r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
         uint16_t dest = (uint16_t)GetReg(state, reg);
-        auto src_res = ReadModRM16(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
         AluCmp<uint16_t>(state, dest, src);
     } else {
         uint32_t dest = GetReg(state, reg);
-        auto src_res = ReadModRM32(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
         AluCmp<uint32_t>(state, dest, src);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 85: TEST r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM16(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, reg);
         AluAnd<uint16_t>(state, dest, src);
     } else {
-        auto dest_res = ReadModRM32(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, reg);
         AluAnd<uint32_t>(state, dest, src);
     }
+    return LogicFlow::Continue;
 }
 
 template <uint8_t Cond>
-static FORCE_INLINE void OpSetcc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpSetcc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 9x: SETcc r/m8
     uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
-    if (!WriteModRM8(state, op, val, utlb)) return;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) {
+        return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
 }
 
 template <bool IsByte>
-static FORCE_INLINE void OpCmpxchg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmpxchg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B0: CMPXCHG r/m8, r8
     // 0F B1: CMPXCHG r/m, r
     bool opsize = op->prefixes.flags.opsize;
 
     if constexpr (IsByte) {
-        auto dest_res = ReadModRM8(state, op, utlb);
-        if (!dest_res) return;
+        auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint8_t dest = *dest_res;
         uint8_t al = state->ctx.regs[EAX] & 0xFF;
         uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
         AluCmp<uint8_t>(state, al, dest);
         if (al == dest) {
-            if (!WriteModRM8(state, op, src, utlb)) return;
+            if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
         } else {
             state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFFFF00) | dest;
         }
     } else {
         if (opsize) {
-            auto dest_res = ReadModRM16(state, op, utlb);
-            if (!dest_res) return;
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
             uint16_t dest = *dest_res;
             uint16_t ax = state->ctx.regs[EAX] & 0xFFFF;
             uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
             AluCmp<uint16_t>(state, ax, dest);
             if (ax == dest) {
-                if (!WriteModRM16(state, op, src, utlb)) return;
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
             } else {
                 state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFF0000) | dest;
             }
         } else {
-            auto dest_res = ReadModRM32(state, op, utlb);
-            if (!dest_res) return;
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
             uint32_t dest = *dest_res;
             uint32_t eax = state->ctx.regs[EAX];
             uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
             AluCmp<uint32_t>(state, eax, dest);
             if (eax == dest) {
-                if (!WriteModRM32(state, op, src, utlb)) return;
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
             } else {
                 state->ctx.regs[EAX] = dest;
             }
         }
     }
+    return LogicFlow::Continue;
 }
 
 void RegisterCompareOps() {

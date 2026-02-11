@@ -10,9 +10,10 @@
 
 namespace fiberish {
 
+// Returns LogicFlow to propagate Restart/Retry
 template <uint8_t FixedSubOp = 0xFF>
-MemResult<void> Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte,
-                              mem::MicroTLB* utlb) {
+LogicFlow Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte,
+                        mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -22,7 +23,7 @@ MemResult<void> Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uin
     uint32_t res = dest;
 
     // Mask count
-    if (count == 0) return {};  // Nothing
+    if (count == 0) return LogicFlow::Continue;  // Nothing
 
     // Perform Op
     bool is_opsize = op->prefixes.flags.opsize;
@@ -86,11 +87,16 @@ MemResult<void> Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uin
                 res = AluSar<uint32_t>(state, dest, count);
             break;
         default:
-            OpUd2(state, op);
-            return {};
+            if (!state->hooks.on_invalid_opcode(state)) {
+                state->status = EmuStatus::Fault;
+                state->fault_vector = 6;
+            }
+            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::Continue;
     }
 
     // Write Back
+    // Use RetryMemoryOp on failure
     if (is_byte) {
         uint8_t mod = (op->modrm >> 6) & 3;
         uint8_t rm = op->modrm & 7;
@@ -103,21 +109,26 @@ MemResult<void> Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uin
                 val = (val & 0xFFFF00FF) | ((res & 0xFF) << 8);
             }
             *rptr = val;
-            return {};
+            return LogicFlow::Continue;
         } else {
             uint32_t addr = ComputeLinearAddress(state, op);
-            return state->mmu.write<uint8_t>(state, addr, (uint8_t)res, utlb, op);
+            if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, (uint8_t)res, utlb, op))
+                return LogicFlow::RetryMemoryOp;
+            return LogicFlow::Continue;
         }
     } else {
-        if (op->prefixes.flags.opsize)
-            return WriteModRM16(state, op, (uint16_t)res, utlb);
-        else
-            return WriteModRM32(state, op, res, utlb);
+        if (op->prefixes.flags.opsize) {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb))
+                return LogicFlow::RetryMemoryOp;
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
+    return LogicFlow::Continue;
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     uint32_t dest;
@@ -139,28 +150,28 @@ static FORCE_INLINE void OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::Micr
         }
     } else {
         if constexpr (IsByte) {
-            auto res = ReadModRM8(state, op, utlb);
-            if (!res) return;
+            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!res) return LogicFlow::RestartMemoryOp;
             dest = *res;
         } else {
             if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             }
         }
     }
 
     uint8_t count = (uint8_t)op->imm;
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb)) return;
+    return Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D0: Shift r/m8, 1
     // D1: Shift r/m16/32, 1
     uint32_t dest;
@@ -172,26 +183,26 @@ static FORCE_INLINE void OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::Micro
             dest = GetReg(state, op->modrm & 7);
     } else {
         if constexpr (IsByte) {
-            auto res = ReadModRM8(state, op, utlb);
-            if (!res) return;
+            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!res) return LogicFlow::RestartMemoryOp;
             dest = *res;
         } else {
             if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             }
         }
     }
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, 1, IsByte, utlb)) return;
+    return Helper_Group2<FixedSubOp>(state, op, dest, 1, IsByte, utlb);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     uint32_t dest;
@@ -212,27 +223,27 @@ static FORCE_INLINE void OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::Micr
         }
     } else {
         if constexpr (IsByte) {
-            auto res = ReadModRM8(state, op, utlb);
-            if (!res) return;
+            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!res) return LogicFlow::RestartMemoryOp;
             dest = *res;
         } else {
             if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM16(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             } else {
-                auto res = ReadModRM32(state, op, utlb);
-                if (!res) return;
+                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!res) return LogicFlow::RestartMemoryOp;
                 dest = *res;
             }
         }
     }
 
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    if (!Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb)) return;
+    return Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb);
 }
 
-static FORCE_INLINE void OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A3: BT r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -246,8 +257,9 @@ static FORCE_INLINE void OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB*
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;   // Bit index can offset the memory address
         uint8_t byte_idx = bit_idx & 7;  // Get bit within the byte
-        auto val_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
-        if (!val_res) return;  // Abort on memory fault
+        // Restart on read fail
+        auto val_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
         bit_val = (*val_res >> byte_idx) & 1;
     }
 
@@ -255,9 +267,10 @@ static FORCE_INLINE void OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB*
         state->ctx.eflags |= CF_MASK;
     else
         state->ctx.eflags &= ~CF_MASK;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BA /4: BT  r/m16/32, imm8
     // 0F BA /5: BTS r/m16/32, imm8
     // 0F BA /6: BTR r/m16/32, imm8
@@ -275,14 +288,16 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::Micr
 
     if (is_mem) {
         addr = ComputeLinearAddress(state, op);
-        MemResult<uint32_t> read_res;
+        // Restart on read fail
         if (opsize) {
-            read_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
+            auto read_res = ReadMem<uint16_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!read_res) return LogicFlow::RestartMemoryOp;
+            base = *read_res;
         } else {
-            read_res = state->mmu.read<uint32_t>(state, addr, utlb, op);
+            auto read_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!read_res) return LogicFlow::RestartMemoryOp;
+            base = *read_res;
         }
-        if (!read_res) return;  // Abort on memory fault
-        base = *read_res;
     } else {
         if (opsize) {
             base = GetReg(state, op->modrm & 7) & 0xFFFF;
@@ -312,10 +327,13 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::Micr
             res ^= mask;  // BTC
 
         if (is_mem) {
+            // Retry on write fail
             if (opsize) {
-                if (!state->mmu.write<uint16_t>(state, addr, (uint16_t)res, utlb, op)) return;
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, addr, (uint16_t)res, utlb, op))
+                    return LogicFlow::RetryMemoryOp;
             } else {
-                if (!state->mmu.write<uint32_t>(state, addr, res, utlb, op)) return;
+                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, addr, res, utlb, op))
+                    return LogicFlow::RetryMemoryOp;
             }
         } else {
             if (opsize)
@@ -325,9 +343,10 @@ static FORCE_INLINE void OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::Micr
         }
     }
     // Subop 4 (BT) falls through here (no writeback), which is correct.
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B3: BTR r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -347,20 +366,24 @@ static FORCE_INLINE void OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
         uint8_t byte_idx = bit_idx & 7;
-        auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
-        if (!byte_res) return;  // Abort on memory fault
+        // Restart on read fail
+        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!byte_res) return LogicFlow::RestartMemoryOp;
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte & ~(1 << byte_idx), utlb, op))
-            return;  // Abort on memory fault
+
+        // Retry on write fail
+        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte & ~(1 << byte_idx), utlb, op))
+            return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AB: BTS r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -380,19 +403,24 @@ static FORCE_INLINE void OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
         uint8_t byte_idx = bit_idx & 7;
-        auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
-        if (!byte_res) return;  // Abort on memory fault
+        // Restart on read fail
+        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!byte_res) return LogicFlow::RestartMemoryOp;
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte | (1 << byte_idx), utlb, op)) return;  // Abort on memory fault
+
+        // Retry on write fail
+        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte | (1 << byte_idx), utlb, op))
+            return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BB: BTC r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -412,23 +440,36 @@ static FORCE_INLINE void OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB
         uint32_t addr = ComputeLinearAddress(state, op);
         addr += (int32_t)bit_idx >> 3;
         uint8_t byte_idx = bit_idx & 7;
-        auto byte_res = state->mmu.read<uint8_t>(state, addr, utlb, op);
-        if (!byte_res) return;  // Abort on memory fault
+        // Restart on read fail
+        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!byte_res) return LogicFlow::RestartMemoryOp;
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
             state->ctx.eflags |= CF_MASK;
         else
             state->ctx.eflags &= ~CF_MASK;
-        if (!state->mmu.write<uint8_t>(state, addr, byte ^ (1 << byte_idx), utlb, op)) return;  // Abort on memory fault
+
+        // Retry on write fail
+        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte ^ (1 << byte_idx), utlb, op))
+            return LogicFlow::RetryMemoryOp;
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BD: BSR r16/32, r/m16/32
-    auto val_res = ReadModRM32(state, op, utlb);
-    if (!val_res) return;
-    uint32_t val = *val_res;
+    // Read only, Restart logic
+    uint32_t val;
+    if (op->prefixes.flags.opsize) {
+        auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        val = *val_res;
+    } else {
+        auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        val = *val_res;
+    }
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (val == 0) {
@@ -439,15 +480,24 @@ static FORCE_INLINE void OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTL
         while (((val >> count) & 1) == 0) count--;
         SetReg(state, reg, count);
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BC: BSF r32, r/m32
     // F3 0F BC: TZCNT r32, r/m32
 
-    auto src_res = ReadModRM32(state, op, utlb);
-    if (!src_res) return;
-    uint32_t src = *src_res;
+    uint32_t src;
+    if (op->prefixes.flags.opsize) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
+        src = *src_res;
+    } else {
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
+        src = *src_res;
+    }
+
     uint8_t reg = (op->modrm >> 3) & 7;
 
     if (op->prefixes.flags.rep) {
@@ -455,7 +505,7 @@ static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::M
         if (src == 0) {
             state->ctx.eflags |= CF_MASK;
             state->ctx.eflags &= ~ZF_MASK;
-            SetReg(state, reg, 32);  // Operand Size
+            SetReg(state, reg, op->prefixes.flags.opsize ? 16 : 32);  // Operand Size
         } else {
             state->ctx.eflags &= ~(CF_MASK | ZF_MASK);  // CF cleared
             // __builtin_ctz is undefined for 0, but we checked src==0
@@ -476,15 +526,17 @@ static FORCE_INLINE void OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::M
             // CF, OF, SF, AF, PF undefined.
         }
     }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F C8+rd: BSWAP r32
     // DecodeInstruction puts rd in op->modrm for non-ModRM ops
     uint8_t reg = op->modrm & 7;
     uint32_t val = GetReg(state, reg);
     uint32_t res = __builtin_bswap32(val);
     SetReg(state, reg, res);
+    return LogicFlow::Continue;
 }
 
 void RegisterShiftBitOps() {

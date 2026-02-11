@@ -1,3 +1,6 @@
+// SSE2 Integer Operations
+// Auto-generated from ops.cpp refactoring
+
 #include "ops_sse_int.h"
 
 #include <simde/x86/sse2.h>
@@ -6,384 +9,418 @@
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
+#include "../ops.h"
+#include "../state.h"
 
 namespace fiberish {
 
 // Logical
-static FORCE_INLINE void OpPand_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPand_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_and_si128(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPandn_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPandn_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_andnot_si128(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_or_si128(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPxor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPxor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_xor_si128(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Arithmetic
-static FORCE_INLINE void OpPaddb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_add_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_add_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_add_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_add_epi64(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sub_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sub_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sub_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sub_epi64(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmuludq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmuludq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mul_epu32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmaddwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmaddwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_madd_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Saturated Arithmetic
-static FORCE_INLINE void OpPaddusb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddusb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddusw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddusw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epu16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddsb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddsb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPaddsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPaddsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_adds_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubusb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubusb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubusw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubusw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epu16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubsb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubsb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsubsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsubsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_subs_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Multiplications
-static FORCE_INLINE void OpPmullw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmullw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mullo_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmulhw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmulhw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mulhi_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmulhuw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmulhuw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_mulhi_epu16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Average
-static FORCE_INLINE void OpPavgb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPavgb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_avg_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPavgw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPavgw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_avg_epu16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Sum of Absolute Differences
-static FORCE_INLINE void OpPsadbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsadbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sad_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Comparison
-static FORCE_INLINE void OpPcmpeqb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpeqb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpeq_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPcmpeqw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpeqw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpeq_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPcmpeqd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpeqd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpeq_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPcmpgtb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpgtb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpgt_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPcmpgtw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpgtw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpgt_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPcmpgtd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPcmpgtd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_cmpgt_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Max/Min
-static FORCE_INLINE void OpPmaxub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmaxub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_max_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPminub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPminub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_min_epu8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmaxsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmaxsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_max_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPminsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPminsw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_min_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Shifts
-// Shift operations have ModRM/Imm encoding differences.
-// Group 12/13/14 (0F 71/72/73) use ModRM.reg as opcode extension.
-// But some are also separate opcodes like PSLLW/D/Q (Register/Memory form).
-// The handler will be dispatched based on the primary opcode usually.
-// For Group opcodes, the dispatch table handles .reg.
-// For now, these handlers assume they are called for the correct operation.
-
 template <bool IsGroup>
-static FORCE_INLINE void OpPsllw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsllw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128i count;
     if constexpr (!IsGroup) {  // PSLLW xmm, xmm/m128
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     } else {  // Group 0F 71 /6
         count = simde_mm_set_epi64x(0, op->imm);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sll_epi16(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPslld_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPslld_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13
@@ -391,16 +428,17 @@ static FORCE_INLINE void OpPslld_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F F2
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi32(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsllq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsllq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 14 /6
@@ -408,16 +446,17 @@ static FORCE_INLINE void OpPsllq_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F F3
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi64(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsraw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsraw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 12 /4
@@ -425,16 +464,17 @@ static FORCE_INLINE void OpPsraw_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F E1
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi16(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsrad_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsrad_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13 /4
@@ -442,16 +482,17 @@ static FORCE_INLINE void OpPsrad_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F E2
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi32(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsrlw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsrlw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 12 /2
@@ -459,16 +500,17 @@ static FORCE_INLINE void OpPsrlw_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F D1
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi16(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsrld_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsrld_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13 /2
@@ -476,16 +518,17 @@ static FORCE_INLINE void OpPsrld_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F D2
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi32(dst, count));
+    return LogicFlow::Continue;
 }
 
 template <bool IsGroup>
-static FORCE_INLINE void OpPsrlq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsrlq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t dst_idx;
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 14 /2
@@ -493,15 +536,16 @@ static FORCE_INLINE void OpPsrlq_Sse(EmuState* state, DecodedOp* op, mem::MicroT
         count = simde_mm_set_epi64x(0, op->imm);
     } else {  // 0F D3
         dst_idx = (op->modrm >> 3) & 7;
-        auto src_res = ReadModRM128(state, op, utlb);
-        if (!src_res) return;
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi64(dst, count));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPslldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPslldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 73 /7: PSLLDQ xmm, imm8
     uint8_t reg = op->modrm & 7;
     simde__m128i dst_val = simde_mm_castps_si128(state->ctx.xmm[reg]);
@@ -521,11 +565,11 @@ static FORCE_INLINE void OpPslldq_Sse(EmuState* state, DecodedOp* op, mem::Micro
                 bytes[i] = 0;
         }
     }
-
     std::memcpy(&state->ctx.xmm[reg], bytes, 16);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPsrldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPsrldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 73 /3: PSRLDQ xmm, imm8
     uint8_t reg = op->modrm & 7;
     simde__m128i dst_val = simde_mm_castps_si128(state->ctx.xmm[reg]);
@@ -547,13 +591,14 @@ static FORCE_INLINE void OpPsrldq_Sse(EmuState* state, DecodedOp* op, mem::Micro
     }
 
     std::memcpy(&state->ctx.xmm[reg], bytes, 16);
+    return LogicFlow::Continue;
 }
 
 // Shuffle/Pack/Unpack
-static FORCE_INLINE void OpPshufd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPshufd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm = (uint8_t)op->imm;
 
@@ -567,12 +612,13 @@ static FORCE_INLINE void OpPshufd_Sse(EmuState* state, DecodedOp* op, mem::Micro
     res[3] = s[(imm >> 6) & 3];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_setr_epi32(res[0], res[1], res[2], res[3]));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPshufhw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPshufhw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm = (uint8_t)op->imm;
 
@@ -590,12 +636,13 @@ static FORCE_INLINE void OpPshufhw_Sse(EmuState* state, DecodedOp* op, mem::Micr
     res[7] = s[4 + ((imm >> 6) & 3)];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_loadu_si128((const simde__m128i*)res));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPshuflw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPshuflw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm = (uint8_t)op->imm;
 
@@ -613,109 +660,121 @@ static FORCE_INLINE void OpPshuflw_Sse(EmuState* state, DecodedOp* op, mem::Micr
     res[7] = s[7];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_loadu_si128((const simde__m128i*)res));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpckhbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpckhbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpackhi_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpckhwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpckhwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpackhi_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpckhdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpckhdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpackhi_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpckhqdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpckhqdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpackhi_epi64(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpcklbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpcklbw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpacklo_epi8(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpcklwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpcklwd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpacklo_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpckldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpckldq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpacklo_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPunpcklqdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPunpcklqdq_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_unpacklo_epi64(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPacksswb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPacksswb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_packs_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPackssdw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPackssdw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_packs_epi32(dst, src));
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPackuswb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPackuswb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    auto src_res = ReadModRM128(state, op, utlb);
-    if (!src_res) return;
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
     simde__m128i src = simde_mm_castps_si128(*src_res);
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_packus_epi16(dst, src));
+    return LogicFlow::Continue;
 }
 
 // Move / Extraction / Insertion
-static FORCE_INLINE void OpPextrw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPextrw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // PEXTRW reg32, xmm, imm8 (0F C5)
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -750,9 +809,10 @@ static FORCE_INLINE void OpPextrw_Sse(EmuState* state, DecodedOp* op, mem::Micro
             break;
     }
     state->ctx.regs[reg] = (uint32_t)val;
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPinsrw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPinsrw_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // PINSRW xmm, r32/m16, imm8 (0F C4)
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t imm = (uint8_t)op->imm & 7;
@@ -762,8 +822,8 @@ static FORCE_INLINE void OpPinsrw_Sse(EmuState* state, DecodedOp* op, mem::Micro
         val = (int)(uint16_t)state->ctx.regs[op->modrm & 7];
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
-        auto val_res = state->mmu.read<uint16_t>(state, addr, utlb, op);
-        if (!val_res) return;
+        auto val_res = ReadMem<uint16_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
         val = (int)*val_res;
     }
 
@@ -795,9 +855,10 @@ static FORCE_INLINE void OpPinsrw_Sse(EmuState* state, DecodedOp* op, mem::Micro
             break;
     }
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(dst);
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE void OpPmovmskb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpPmovmskb_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // PMOVMSKB reg32, xmm (0F D7)
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -805,77 +866,70 @@ static FORCE_INLINE void OpPmovmskb_Sse(EmuState* state, DecodedOp* op, mem::Mic
 
     int mask = simde_mm_movemask_epi8(src);
     state->ctx.regs[reg] = (uint32_t)mask;
+    return LogicFlow::Continue;
 }
 
 // Groups
-static FORCE_INLINE void OpGroup_Pshuf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup_Pshuf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 70
     if (op->prefixes.flags.opsize) {  // 66: PSHUFD
-        OpPshufd_Sse(state, op, utlb);
+        return OpPshufd_Sse(state, op, utlb);
     } else if (op->prefixes.flags.repne) {  // F2: PSHUFLW
-        OpPshuflw_Sse(state, op, utlb);
+        return OpPshuflw_Sse(state, op, utlb);
     } else if (op->prefixes.flags.rep) {  // F3: PSHUFHW
-        OpPshufhw_Sse(state, op, utlb);
+        return OpPshufhw_Sse(state, op, utlb);
     } else {
         // PSHUFW (MMX) - Not implemented
         // OpUd2(state, op);
+        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return LogicFlow::Continue;
     }
 }
 
-static FORCE_INLINE void OpGroup_Sse_Shift_Imm_W(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_W(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 71 /r
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrlw_Sse<true>(state, op, utlb);
-            break;
+            return OpPsrlw_Sse<true>(state, op, utlb);
         case 4:
-            OpPsraw_Sse<true>(state, op, utlb);
-            break;
+            return OpPsraw_Sse<true>(state, op, utlb);
         case 6:
-            OpPsllw_Sse<true>(state, op, utlb);
-            break;
+            return OpPsllw_Sse<true>(state, op, utlb);
         default:
-            break;  // #UD
+            return LogicFlow::Continue;  // #UD
     }
 }
 
-static FORCE_INLINE void OpGroup_Sse_Shift_Imm_D(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_D(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 72 /r
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrld_Sse<true>(state, op, utlb);
-            break;
+            return OpPsrld_Sse<true>(state, op, utlb);
         case 4:
-            OpPsrad_Sse<true>(state, op, utlb);
-            break;
+            return OpPsrad_Sse<true>(state, op, utlb);
         case 6:
-            OpPslld_Sse<true>(state, op, utlb);
-            break;
+            return OpPslld_Sse<true>(state, op, utlb);
         default:
-            break;
+            return LogicFlow::Continue;
     }
 }
 
-static FORCE_INLINE void OpGroup_Sse_Shift_Imm_Q(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_Q(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 73 /r
     uint8_t sub = (op->modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            OpPsrlq_Sse<true>(state, op, utlb);
-            break;
+            return OpPsrlq_Sse<true>(state, op, utlb);
         case 3:
-            OpPsrldq_Sse(state, op, utlb);  // Not templated yet? It uses imm8. Logic is fine.
-            break;
+            return OpPsrldq_Sse(state, op, utlb);  // Not templated yet? It uses imm8. Logic is fine.
         case 6:
-            OpPsllq_Sse<true>(state, op, utlb);
-            break;
+            return OpPsllq_Sse<true>(state, op, utlb);
         case 7:
-            OpPslldq_Sse(state, op, utlb);  // Not templated yet? It uses imm8. Logic is fine.
-            break;
+            return OpPslldq_Sse(state, op, utlb);  // Not templated yet? It uses imm8. Logic is fine.
         default:
-            break;
+            return LogicFlow::Continue;
     }
 }
 

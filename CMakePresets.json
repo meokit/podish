@@ -54,6 +54,18 @@
             "cacheVariables": {
                 "PGO_MODE": "USE"
             }
+        },
+        {
+            "name": "sanitize-address",
+            "displayName": "ASan + UBSan",
+            "inherits": "relwithdebinfo",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+                "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+                "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+                "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=address,undefined"
+            }
         }
     ],
     "buildPresets": [
@@ -76,6 +88,10 @@
         {
             "name": "pgo-use",
             "configurePreset": "pgo-use"
+        },
+        {
+            "name": "sanitize-address",
+            "configurePreset": "sanitize-address"
         }
     ]
 }

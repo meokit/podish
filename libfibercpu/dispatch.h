@@ -10,26 +10,39 @@ namespace fiberish {
 // External reference to handlers
 extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
-extern HandlerFunc g_Handlers[1024];
 
-ATTR_PRESERVE_NONE int64_t HandlerInterrupt(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                            mem::MicroTLB utlb);
+extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                  mem::MicroTLB utlb);
+extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                mem::MicroTLB utlb);
 
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb) {
+    // Prefetch next cache line
     PREFETCH((void*)(op + 2));
-    DecodedOp* RESTRICT next = op + 1;
-
     // Execute Logic
-    Target(state, op, &utlb);
+    auto flow = Target(state, op, &utlb);
 
-    HandlerFunc h = next->handler;  // May changed by Target
-
-    // Direct Relative Dispatch
-    // Note: We don't check for 0 here for speed, assuming well-formed blocks
-    // (sentinel always valid)
-    ATTR_MUSTTAIL return h(state, next, instr_limit, utlb);
+    switch (flow) {
+        case LogicFlow::Continue:
+            // Direct Relative Dispatch
+            // Note: We don't check for 0 here for speed, assuming well-formed blocks
+            // (sentinel always valid)
+            ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
+        case LogicFlow::ExitOnCurrentEIP:
+            state->sync_eip_to_op_start(op);
+            return instr_limit;
+        case LogicFlow::ExitOnNextEIP:
+            state->sync_eip_to_op_end(op);
+            return instr_limit;
+        case LogicFlow::RestartMemoryOp:
+            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb);
+        case LogicFlow::RetryMemoryOp:
+            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb);
+        default:
+            return instr_limit;
+    }
 }
 
 // Registration Helper

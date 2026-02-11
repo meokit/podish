@@ -6,44 +6,100 @@
 
 namespace fiberish {
 
-// Interrupt Handler for Precise Exceptions
-ATTR_PRESERVE_NONE int64_t HandlerInterrupt(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                            mem::MicroTLB utlb) {
-    // 1. Restore the original handler
-    if (state->saved_handler) {
-        op->handler = (HandlerFunc)state->saved_handler;
-        state->saved_handler = nullptr;
+template <bool restart>
+ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                           mem::MicroTLB utlb) {
+    bool fault = false;
+
+    auto execute_mem_op = [&]<typename T>(uint32_t addr, T* value, bool is_write) {
+        if (!is_write) {
+            auto res = state->mmu.read<T>(addr, &utlb, op);
+            if (!res) {
+                fault = true;
+            } else {
+                *value = *res;
+            }
+        } else {
+            if (!state->mmu.write<T>(addr, *value, &utlb, op)) fault = true;
+        }
+    };
+
+    auto perform = [&](uint32_t addr, uint32_t size, std::byte* value, bool is_write) {
+        struct TSize10 {
+            std::byte data[10];
+        };
+        struct TSize16 {
+            std::byte data[16];
+        };
+
+        switch (size) {
+            case 1:
+                execute_mem_op(addr, reinterpret_cast<uint8_t*>(value), is_write);
+                break;
+            case 2:
+                execute_mem_op(addr, reinterpret_cast<uint16_t*>(value), is_write);
+                break;
+            case 4:
+                execute_mem_op(addr, reinterpret_cast<uint32_t*>(value), is_write);
+                break;
+            case 8:
+                execute_mem_op(addr, reinterpret_cast<uint64_t*>(value), is_write);
+                break;
+            case 10:
+                execute_mem_op(addr, reinterpret_cast<TSize10*>(value), is_write);
+                break;  // 80-bit extended precision
+            case 16:
+                execute_mem_op(addr, reinterpret_cast<TSize16*>(value), is_write);
+                break;
+            default:
+                __builtin_unreachable();
+        }
+    };
+
+    std::visit(
+        [&](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, MemNoOp>) {
+                // No-op
+            } else if constexpr (std::is_same_v<T, MemReadOperation>) {
+                perform(arg.addr, arg.size, arg.data.data(), false);
+                if (!fault) {
+                    arg.done = true;
+                }
+            } else if constexpr (std::is_same_v<T, MemWriteOperation>) {
+                perform(arg.addr, arg.size, arg.data.data(), true);
+                if (!fault) {
+                    arg.done = true;
+                }
+            }
+        },
+        state->mem_op);
+
+    // Handle fault or restart
+    if (fault) {
+        // Break calling chain
+        // Note: eip will be synced on read or write
+        state->mem_op = MemNoOp{};
+        return instr_limit;
     }
 
-    // 2. Stop the chain (return current limit)
-    // The loop in RunLoop will check state->status and exit.
-    return instr_limit;
+    if constexpr (restart) {
+        // Don't clear mem_op, it's pending for restart
+        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb);
+    }
+
+    state->mem_op = MemNoOp{};
+    ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
 }
 
-void TriggerPreciseFault(EmuState* state, DecodedOp* op) {
-    if (!op) {
-        // Fallback for non-op context (e.g. loader/direct access)
-        if (state->status == EmuStatus::Running) {
-            state->status = EmuStatus::Fault;
-        }
-        return;
-    }
+ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                           mem::MicroTLB utlb) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb);
+}
 
-    state->status = EmuStatus::Fault;
-
-    if (!state->eip_dirty) {
-        // Precise Exception: roll back EIP to current instruction start
-        state->ctx.eip = op->next_eip - op->GetLength();
-    }
-
-    state->eip_dirty = false;
-
-    DecodedOp* next = op + 1;
-    // Avoid re-swapping if already swapped
-    if (next->handler == HandlerInterrupt) return;
-
-    state->saved_handler = (int64_t (*)(EmuState*, DecodedOp*, int64_t, mem::MicroTLB))next->handler;
-    next->handler = HandlerInterrupt;
+ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                         mem::MicroTLB utlb) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb);
 }
 
 // Sentinel Handler
