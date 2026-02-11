@@ -20,7 +20,7 @@ template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb) {
     // Prefetch next cache line
-    PREFETCH((void*)(op + 2));
+    PREFETCH((void*)(op + 4));
     // Execute Logic
     auto flow = Target(state, op, &utlb);
 

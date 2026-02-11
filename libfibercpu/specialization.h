@@ -41,6 +41,10 @@ enum class Specialized : uint8_t {
     // Operands
     Imm8,
     Imm32,
+
+    // Operand Size
+    Opsize16,
+    Opsize32,
 };
 
 // Criteria for specialization matching
