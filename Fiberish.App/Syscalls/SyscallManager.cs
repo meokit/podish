@@ -106,6 +106,38 @@ public unsafe partial class SyscallManager
         
         // Add console FDs
         InitStdio(devSb);
+
+        SetupVDSO();
+    }
+
+    public uint SigReturnAddr { get; private set; }
+    public uint RtSigReturnAddr { get; private set; }
+
+    private void SetupVDSO()
+    {
+        // Map vDSO page (RX) at a fixed high address to avoid overlap
+        uint vdsoAddr = 0x7FFF0000;
+        Mem.Mmap(vdsoAddr, 4096, Protection.Read | Protection.Exec, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
+        
+        // Directly allocate the page in the engine with RW permissions for initial setup
+        if (Engine.AllocatePage(vdsoAddr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
+            throw new Exception("Failed to allocate vDSO page");
+
+        // Write trampolines
+        // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80
+        byte[] sigret = { 0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80 };
+        if (!Engine.CopyToUser(vdsoAddr, sigret)) Logger.LogError("Failed to write sigreturn trampoline to vDSO");
+        SigReturnAddr = vdsoAddr;
+
+        // __kernel_rt_sigreturn: mov eax, 173; int 0x80
+        byte[] rtsigret = { 0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80 };
+        if (!Engine.CopyToUser(vdsoAddr + 16, rtsigret)) Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
+        RtSigReturnAddr = vdsoAddr + 16;
+
+        // Set final RX permissions in the engine
+        Engine.MemMap(vdsoAddr, 4096, (byte)(Protection.Read | Protection.Exec));
+        
+        Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr, SigReturnAddr, RtSigReturnAddr);
     }
 
     private void EnsureDirectory(Dentry parent, string name)
@@ -228,6 +260,17 @@ public unsafe partial class SyscallManager
 
     public bool Handle(Engine engine, uint vector)
     {
+        // Handle Breakpoint (INT 3)
+        if (vector == 3)
+        {
+            var t = Scheduler.GetByEngine(engine.State);
+            if (t != null)
+            {
+                t.PendingSignals |= (1UL << (5 - 1)); // SIGTRAP = 5
+            }
+            return true;
+        }
+
         if (vector != 0x80) return false;
 
         // Update current engine context (GIL ensures safety)
@@ -263,19 +306,57 @@ public unsafe partial class SyscallManager
             Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
         }
 
-        if (task != null && task.BlockingTask != null)
+        // Special handling for context-restoring syscalls
+        bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
+        
+        // Write return value to EAX unless it's a context restore or the task is now blocked
+        if (!isSigReturn && (task == null || task.BlockingTask == null))
         {
-            // If Syscall handler set a blocking task, it should also have set status to Yield.
-            if (Strace) Logger.LogTrace(" [Blocked]");
-            return true;
+            engine.RegWrite(Reg.EAX, (uint)ret);
         }
 
         if (Strace)
         {
-            Logger.LogTrace(" = {Ret}", ret);
+            if (task != null && task.BlockingTask != null) Logger.LogTrace(" [Blocked]");
+            else Logger.LogTrace(" = {Ret}", ret);
         }
 
-        engine.RegWrite(Reg.EAX, (uint)ret);
+        // Determine if we should yield
+        bool shouldYield = false;
+        if (task != null)
+        {
+            if (task.BlockingTask != null) shouldYield = true;
+            if (task.Exited) shouldYield = true;
+            if ((task.PendingSignals & ~task.SignalMask) != 0) shouldYield = true;
+
+            switch ((int)eax)
+            {
+                case X86SyscallNumbers.sched_yield:
+                case X86SyscallNumbers.nanosleep:
+                case X86SyscallNumbers.pause:
+                case X86SyscallNumbers.rt_sigsuspend:
+                case X86SyscallNumbers.select:
+                case X86SyscallNumbers._newselect:
+                case X86SyscallNumbers.poll:
+                case X86SyscallNumbers.exit:
+                case X86SyscallNumbers.exit_group:
+                case X86SyscallNumbers.execve:
+                case X86SyscallNumbers.kill: 
+                case X86SyscallNumbers.tkill: 
+                case X86SyscallNumbers.tgkill:
+                case X86SyscallNumbers.wait4:
+                case X86SyscallNumbers.waitpid:
+                case X86SyscallNumbers.waitid:
+                    shouldYield = true;
+                    break;
+            }
+        }
+
+        if (shouldYield)
+        {
+            engine.Yield();
+        }
+
         return true;
     }
 

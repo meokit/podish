@@ -28,6 +28,7 @@ public class Engine : IDisposable
         // Register callbacks
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
     }
 
     internal unsafe Engine(IntPtr state)
@@ -36,6 +37,7 @@ public class Engine : IDisposable
         _gcHandle = GCHandle.Alloc(this);
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
     }
 
     [UnmanagedCallersOnly]

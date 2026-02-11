@@ -2988,8 +2988,16 @@ public unsafe partial class SyscallManager
 
     private static int SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        // Legacy sigreturn, not implemented for now (using rt signals)
-        return 0;
+        var task = Scheduler.GetByEngine(state);
+        if (task == null) return -(int)Errno.EPERM;
+        
+        uint sp = task.CPU.RegRead(Reg.ESP);
+        
+        // On i386 sigreturn, ESP points to the saved sigcontext
+        // (after popl %eax which was done in __restore)
+        task.RestoreSigContext(sp); 
+        
+        return (int)task.CPU.RegRead(Reg.EAX);
     }
 
     private static int SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -3004,7 +3012,10 @@ public unsafe partial class SyscallManager
         // Layout 2 (Shifted):  [ESP]=SigInfo*, [ESP+4]=UContext*
         
         byte[] spBuf = new byte[4];
-        if (!task.CPU.CopyFromUser(sp, spBuf)) return -(int)Errno.EFAULT;
+        if (!task.CPU.CopyFromUser(sp, spBuf)) 
+        {
+            return -(int)Errno.EFAULT;
+        }
         uint val0 = BinaryPrimitives.ReadUInt32LittleEndian(spBuf);
         uint ucontextAddr;
         
@@ -3013,7 +3024,10 @@ public unsafe partial class SyscallManager
             // ESP points to Arg2
             // Arg3 (UContext*) is at ESP+4
             byte[] ptrBuf = new byte[4];
-            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) return -(int)Errno.EFAULT;
+            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) 
+            {
+                return -(int)Errno.EFAULT;
+            }
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
         else // Likely a small int (Sig) -> Standard stack
@@ -3021,30 +3035,16 @@ public unsafe partial class SyscallManager
             // ESP points to Arg1
             // Arg3 (UContext*) is at ESP+8
             byte[] ptrBuf = new byte[4];
-            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
+            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) 
+            {
+                return -(int)Errno.EFAULT;
+            }
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
         
         // Restore
         // ucontext.mcontext is at offset 20
         task.RestoreSigContext(ucontextAddr + 20);
-        
-        // Return value is irrelevant as EAX/EIP are restored
-        // But we must return *something* to the caller in SyscallManager to avoid clobbering EAX again?
-        // SyscallManager.Handle: `int res = handler(...)`. `CPU.RegWrite(Reg.EAX, (uint)res)`.
-        // DO NOT overwrite EAX if we just restored it!
-        // We need a way to tell SyscallManager "Do not write result".
-        // Exceptions? Or special return code?
-        // SyscallManager logic: `if (handler != null) { int res = handler(...); RegWrite(EAX, res); }`
-        // We need to modify SyscallManager to handle this, or:
-        // Hack: `SysRtSigReturn` restores EAX to desired value. Then returns that value.
-        // So SyscallManager writes it back.
-        // BUT, SyscallManager writes it back *after* `SysRtSigReturn` returns.
-        // If we restore EIP, we jump to somewhere.
-        // SyscllManager continues.
-        // `RegWrite` happens.
-        // Correct.
-        // So we just need to return `task.CPU.RegRead(Reg.EAX)`.
         
         return (int)task.CPU.RegRead(Reg.EAX); 
     }

@@ -72,6 +72,10 @@ public class Process
 
     public bool traceInstruction;
 
+    // vDSO addresses
+    public uint SigReturnAddr { get; set; }
+    public uint RtSigReturnAddr { get; set; }
+
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
         TGID = tgid;
@@ -503,24 +507,13 @@ public partial class Task
 
             // Return address (restorer or some trampoline)
             // If SA_RESTORER is set, we push that as return address.
-            // If not, we must provide a trampoline. Linux kernel puts one on stack (vdso or legacy stack).
-            // We will inject a legacy-style trampoline on the stack if Restorer is 0.
-            uint retAddr = action.Restorer;
+            // If not, we use the vDSO trampoline.
+            // NOTE: We force RT stack layout and thus must use rt_sigreturn.
+            // Even if libc provided a legacy restorer, we override it to use our vDSO rt_sigreturn
+            // because we don't support legacy sigreturn frames yet.
+            uint retAddr = Process.Syscalls.RtSigReturnAddr;
             uint frameEsp = sp; // Initialize frameEsp here
-            if (retAddr == 0)
-            {
-                 // Align 
-                 frameEsp = (frameEsp - 4u) & ~0xFu;
-                 
-                 // Allocate space for trampoline (mov eax, 173; int 0x80) -> 7 bytes
-                 frameEsp -= 8u; 
-                 // 0xB8 0xAD 0x00 0x00 0x00 (mov eax, 173)
-                 // 0xCD 0x80 (int 0x80)
-                 byte[] trampoline = { 0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80 };
-                 if (!CPU.CopyToUser(frameEsp, trampoline)) return;
-                 retAddr = frameEsp;
-            }
-
+            
             // Setup Stack with SA_SIGINFO support
             SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
             CPU.RegWrite(Reg.ESP, frameEsp);
@@ -607,11 +600,11 @@ public partial class Task
          // Align stack for arguments
          esp = (esp - 4u) & ~0xFu;
          
-         // Check if we force 3 args?
          // Push 3 args: sig, siginfo_ptr, ucontext_ptr
-         if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(ucontextAddr))) return;
+         // Linux x86 RT frame expects: [ESP+4]=sig, [ESP+8]=siginfo_ptr, [ESP+12]=ucontext_ptr
+         if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(ucontextAddr))) return;
          if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
-         if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(sig))) return;
+         if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(sig))) return;
          esp -= 12u;
          
          // Push Return Address

@@ -337,8 +337,14 @@ static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTL
     // CD ib: INT n
     uint8_t vector = (uint8_t)op->imm;
     utlb->invalidate();
+
+    // Set EIP to next instruction (return address)
+    state->ctx.eip = op->next_eip;
+
     RaiseInterrupt(state, vector, op);
-    if (state->eip_dirty || state->status != EmuStatus::Running) {
+
+    // If EIP changed (e.g. signal handler, sigreturn), exit block
+    if (state->ctx.eip != op->next_eip || state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
     }
     return LogicFlow::Continue;
