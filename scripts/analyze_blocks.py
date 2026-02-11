@@ -3,6 +3,8 @@ import sys
 import json
 import subprocess
 import os
+import argparse
+from collections import defaultdict
 
 def load_symbols(lib_path):
     """
@@ -96,13 +98,26 @@ def find_symbol(offset, symbols_map):
     return f"func_{offset:x}"
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python analyze_blocks.py <dump_file> <libfibercpu_path> [output_json]")
-        sys.exit(1)
-
-    dump_file = sys.argv[1]
-    lib_path = sys.argv[2]
-    output_file = sys.argv[3] if len(sys.argv) > 3 else "blocks_analysis.json"
+    parser = argparse.ArgumentParser(description='Analyze x86 emulator basic blocks')
+    parser.add_argument('dump_file', help='Binary dump file containing block data')
+    parser.add_argument('lib_path', help='Path to the library for symbol resolution')
+    parser.add_argument('--min-exec-count', type=int, default=0, 
+                        help='Minimum execution count to include a block (default: 0, no filter)')
+    parser.add_argument('--n-gram', type=int, default=0,
+                        help='Analyze N-Grams of symbol sequences within blocks. N=0 disables analysis.')
+    parser.add_argument('--top-n', type=int, default=0,
+                        help='Output only top N blocks sorted by execution count (default: 0, all blocks)')
+    parser.add_argument('--output', '-o', default='blocks_analysis.json',
+                        help='Output JSON file path')
+    
+    args = parser.parse_args()
+    
+    dump_file = args.dump_file
+    lib_path = args.lib_path
+    min_exec_count = args.min_exec_count
+    n_gram_size = args.n_gram
+    top_n = args.top_n
+    output_file = args.output
 
     print(f"Loading symbols from {lib_path}...")
     symbols = load_symbols(lib_path)
@@ -190,7 +205,7 @@ def main():
                     # "handler_offset": f"0x{handler_offset:x}",
                     "symbol": symbol_name,
                     "imm": f"0x{imm:x}",
-                    "branch_target": f"0x{branch_target:x}",
+                    # "branch_target": f"0x{branch_target:x}",
                     "len": f"0x{length:x}",
                     "prefixes": f"0x{prefixes:x}",
                     "modrm": f"0x{modrm:x}",
@@ -207,9 +222,67 @@ def main():
 
             blocks_data.append(block_info)
 
+    # Filter by execution count if threshold is set
+    if min_exec_count > 0:
+        original_count = len(blocks_data)
+        blocks_data = [b for b in blocks_data if b['exec_count'] >= min_exec_count]
+        print(f"Filtered blocks: {original_count} -> {len(blocks_data)} (min_exec_count >= {min_exec_count})")
+    
+    # Sort blocks by execution count (descending)
+    blocks_data.sort(key=lambda x: x['exec_count'], reverse=True)
+    
+    # Apply top-N limit
+    if top_n > 0:
+        blocks_data = blocks_data[:top_n]
+        print(f"Limited to top {top_n} blocks")
+
+    # N-Grams analysis
+    ngrams_data = {}
+    if n_gram_size > 0:
+        print(f"Analyzing {n_gram_size}-grams...")
+        ngram_counts = defaultdict(int)
+        
+        for block in blocks_data:
+            # Extract symbol sequence for this block
+            symbols_seq = [op['symbol'] for op in block['ops']]
+            
+            # Generate N-Grams
+            for i in range(len(symbols_seq) - n_gram_size + 1):
+                ngram = tuple(symbols_seq[i:i + n_gram_size])
+                # Weight by execution count
+                ngram_counts[ngram] += block['exec_count']
+        
+        # Sort by frequency (weighted execution count)
+        sorted_ngrams = sorted(ngram_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Store top N-Grams
+        ngrams_data = {
+            'n_gram_size': n_gram_size,
+            'total_unique_ngrams': len(sorted_ngrams),
+            'top_ngrams': [
+                {'ngram': ' -> '.join(ngram), 'weighted_exec_count': count}
+                for ngram, count in sorted_ngrams[:100]  # Top 100
+            ]
+        }
+        
+        print(f"Found {len(sorted_ngrams)} unique {n_gram_size}-grams")
+
     print(f"Writing analysis to {output_file}...")
+    
+    result = {
+        'blocks': blocks_data,
+        'metadata': {
+            'total_blocks': len(blocks_data),
+            'min_exec_count_filter': min_exec_count,
+            'n_gram_size': n_gram_size
+        }
+    }
+    
+    if n_gram_size > 0:
+        result['ngrams'] = ngrams_data
+    
     with open(output_file, "w") as f:
-        json.dump(blocks_data, f, indent=2)
+        json.dump(result, f, indent=2)
     print("Done.")
 
 if __name__ == "__main__":
