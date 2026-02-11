@@ -10,9 +10,16 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
+#include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
 #include "state.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 using namespace fiberish;
 using MicroTLB = mem::MicroTLB;
@@ -433,6 +440,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             continue;
         }
 
+        // Increment execution count
+        block_ptr->exec_count++;
+
         // Link previous block to this one for chaining
         if (state->last_block && state->last_block->inst_count > 0) {
             // Access the Sentinel Op (always at index inst_count)
@@ -624,6 +634,8 @@ void X86_SetTscOffset(EmuState* state, uint64_t offset) {
     if (state) state->tsc_offset = offset;
 }
 
+void X86_SetLogCallback(X86LogCallback callback) { SetGlobalLogCallback(callback); }
+
 void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats) {
 #ifdef ENABLE_TLB_STATS
     if (state && stats) {
@@ -667,6 +679,38 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
         return 2;
     }
     return -1;
+#endif
+}
+
+size_t X86_GetBlockCount(EmuState* state) {
+    if (!state) return 0;
+    return state->block_cache.size();
+}
+
+size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) {
+    if (!state || !buffer || max_count == 0) return 0;
+
+    size_t count = 0;
+    for (auto& pair : state->block_cache) {
+        if (count >= max_count) break;
+        buffer[count] = pair.second;
+        count++;
+    }
+    return count;
+}
+
+void* X86_GetLibAddress() {
+#if defined(_WIN32)
+    HMODULE hModule = NULL;
+    GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                      (LPCTSTR)X86_Create, &hModule);
+    return (void*)hModule;
+#else
+    Dl_info info;
+    if (dladdr((void*)X86_Create, &info)) {
+        return info.dli_fbase;
+    }
+    return nullptr;
 #endif
 }
 

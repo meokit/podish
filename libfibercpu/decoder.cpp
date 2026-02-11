@@ -568,6 +568,7 @@ finalize:
     block->start_eip = start_eip;
     block->end_eip = end_eip;
     block->inst_count = inst_count;
+    block->exec_count = 0;
     block->is_valid = true;
 
     // Copy ops

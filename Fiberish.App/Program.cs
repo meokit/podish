@@ -40,6 +40,10 @@ class Program
             name: "--stats",
             description: "Show TLB statistics on exit");
 
+        var dumpBlocksOption = new Option<string>(
+            name: "--dump-blocks",
+            description: "Dump Basic Blocks to file on exit");
+
         var exeArgument = new Argument<string>(
             name: "executable",
             description: "Path to the Linux executable to run");
@@ -56,21 +60,30 @@ class Program
             traceOption,
             traceInstructionOption,
             statsOption,
+            dumpBlocksOption,
             exeArgument,
             argsArgument
         };
 
-        rootCommand.SetHandler(async (rootfs, verbose, trace, traceInstruction, stats, exe, exeArgs) =>
+        rootCommand.SetHandler(async (rootfs, verbose, trace, traceInstruction, stats, dumpBlocks, exe, exeArgs) =>
         {
             Verbose = verbose;
             ShowStats = stats;
-            Environment.ExitCode = await RunEmulator(rootfs, verbose, trace, traceInstruction, stats, exe, exeArgs);
-        }, rootOption, verboseOption, traceOption, traceInstructionOption, statsOption, exeArgument, argsArgument);
+            int exitCode = await RunEmulator(rootfs, verbose, trace, traceInstruction, stats, dumpBlocks, exe, exeArgs);
+            if (!string.IsNullOrEmpty(dumpBlocks))
+            {
+                 // Assuming single engine/process for now, dumping from the last used engine would be ideal
+                 // But RunEmulator creates Engine locally.
+                 // We need to capture the Engine instance or pass the dump path to RunEmulator.
+                 // Let's modify RunEmulator to take the dump path.
+            }
+            Environment.ExitCode = exitCode;
+        }, rootOption, verboseOption, traceOption, traceInstructionOption, statsOption, dumpBlocksOption, exeArgument, argsArgument);
 
         return await rootCommand.InvokeAsync(args);
     }
 
-    static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction, bool stats, string exe, string[] exeArgs)
+    static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction, bool stats, string dumpBlocksDir, string exe, string[] exeArgs)
     {
         // Initialize Logging
         Logging.LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
@@ -85,6 +98,9 @@ class Program
             builder.SetMinimumLevel(trace ? LogLevel.Trace : (verbose ? LogLevel.Information : LogLevel.Warning));
         });
         Logger = Logging.CreateLogger<Program>();
+
+        // Register Native Logger
+        RegisterNativeLogger();
 
         // Combine exe and additional args
         string[] fullArgs = new[] { exe }.Concat(exeArgs).ToArray();
@@ -170,6 +186,12 @@ class Program
             var t = Scheduler.CurrentTask ?? Scheduler.GetByEngine(eng.State);
             if (t == null) return;
 
+            // Dump blocks on exit if requested
+            if (!string.IsNullOrEmpty(dumpBlocksDir))
+            {
+                DumpBlocks(eng, dumpBlocksDir, Path.GetFileName(exe), t.TID);
+            }
+
             if (group)
             {
                 lock (t.Process)
@@ -240,7 +262,71 @@ class Program
 
         // 10. Run
         await mainTask.RunLoopAsync();
+
         return mainTask.ExitCode;
+    }
+
+    private unsafe static void DumpBlocks(Engine engine, string dir, string exeName, int tid)
+    {
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string filename = $"{exeName}-{tid}-{timestamp}.bin";
+        string path = Path.Combine(dir, filename);
+        
+        Logger.LogInformation("Dumping Basic Blocks for Task {TID} to {Path}...", tid, path);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using var fs = File.OpenWrite(path);
+            using var writer = new BinaryWriter(fs);
+
+            // 1. Header: Base Address
+            IntPtr baseAddr = X86Native.GetLibAddress();
+            writer.Write((long)baseAddr);
+
+            // 2. Block Count
+            int count = X86Native.GetBlockCount(engine.State);
+            writer.Write(count);
+            
+            Logger.LogInformation("[Task {TID}] Base Address: 0x{Base:x}, Block Count: {Count}", tid, baseAddr, count);
+
+            if (count > 0)
+            {
+                IntPtr* blocks = (IntPtr*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)count * (nuint)sizeof(IntPtr));
+                try
+                {
+                    int fetched = X86Native.GetBlockList(engine.State, blocks, count);
+                    for (int i = 0; i < fetched; i++)
+                    {
+                        X86Native.BasicBlock* bb = (X86Native.BasicBlock*)blocks[i];
+                        
+                        // Block Header
+                        writer.Write(bb->start_eip);
+                        writer.Write(bb->end_eip);
+                        writer.Write(bb->inst_count);
+                        writer.Write(bb->exec_count);
+                        
+                        // Ops
+                        X86Native.DecodedOp* ops = (X86Native.DecodedOp*)((byte*)bb + 32); // Offset 32
+                        for (int j = 0; j < bb->inst_count; j++)
+                        {
+                            // Write raw DecodedOp (32 bytes)
+                            byte* ptr = (byte*)&ops[j];
+                            var span = new ReadOnlySpan<byte>(ptr, 32);
+                            writer.Write(span);
+                        }
+                    }
+                }
+                finally
+                {
+                    System.Runtime.InteropServices.NativeMemory.Free(blocks);
+                }
+            }
+            Logger.LogInformation("[Task {TID}] Dump complete.", tid);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[Task {TID}] Failed to dump blocks", tid);
+        }
     }
 
     private static bool GlobalFaultHandler(Engine eng, uint addr, bool isWrite)
@@ -273,5 +359,22 @@ class Program
             eng.SetStatusFault();
         }
         return false;
+    }
+
+    private static unsafe void RegisterNativeLogger()
+    {
+        X86Native.SetLogCallback(&LogCallback);
+    }
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly]
+    private static void LogCallback(int level, IntPtr messagePtr)
+    {
+        if (Logger == null) return;
+        
+        string? message = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(messagePtr);
+        if (message == null) return;
+
+        LogLevel logLevel = (LogLevel)level;
+        Logger.Log(logLevel, "[Native] {Message}", message);
     }
 }

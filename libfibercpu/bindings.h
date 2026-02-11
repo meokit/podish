@@ -6,12 +6,15 @@
 #include <cstdint>
 namespace fiberish {
 struct EmuState;
-}
+struct BasicBlock;
+}  // namespace fiberish
 typedef fiberish::EmuState EmuState;
+typedef fiberish::BasicBlock BasicBlock;
 #else
 #include <stddef.h>
 #include <stdint.h>
 typedef struct EmuState EmuState;
+typedef struct BasicBlock BasicBlock;
 #endif
 
 #ifdef __cplusplus
@@ -95,6 +98,11 @@ void X86_SetTscFrequency(EmuState* state, uint64_t freq);
 void X86_SetTscMode(EmuState* state, int mode);
 void X86_SetTscOffset(EmuState* state, uint64_t offset);
 
+// Logging
+// Matches Microsoft.Extensions.Logging.LogLevel
+typedef void (*X86LogCallback)(int level, const char* message);
+void X86_SetLogCallback(X86LogCallback callback);
+
 // TLB Statistics
 typedef struct {
     uint64_t l1_read_hits;
@@ -110,6 +118,15 @@ typedef struct {
 void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats);
 void X86_ResetTlbStats(EmuState* state);
 int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size);
+
+// Block Coverage
+// Returns pointer to internal BasicBlock structures
+// C# must match the struct layout to read them.
+size_t X86_GetBlockCount(EmuState* state);
+size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
+
+// Returns the base address of the fibercpu library (for symbol resolution)
+void* X86_GetLibAddress();
 
 #ifdef __cplusplus
 }

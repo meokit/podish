@@ -162,6 +162,46 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_InvalidateRange")]
     public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
 
+    [LibraryImport(LibName, EntryPoint = "X86_SetLogCallback")]
+    public static partial void SetLogCallback(delegate* unmanaged<int, IntPtr, void> callback);
+
     [LibraryImport(LibName, EntryPoint = "X86_DumpStats")]
     public static partial int DumpStats(IntPtr state, byte* buffer, nuint bufferSize);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetBlockCount")]
+    [SuppressGCTransition]
+    public static partial int GetBlockCount(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetBlockList")]
+    public static partial int GetBlockList(IntPtr state, IntPtr* buffer, int maxCount);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetLibAddress")]
+    public static partial IntPtr GetLibAddress();
+
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    public struct DecodedOp
+    {
+        [FieldOffset(0)] public ulong mem_packed;
+        [FieldOffset(8)] public uint imm;
+        [FieldOffset(12)] public uint next_eip;
+        [FieldOffset(16)] public IntPtr handler;
+        [FieldOffset(24)] public uint branch_target;
+        [FieldOffset(28)] public byte prefixes;
+        [FieldOffset(29)] public byte modrm;
+        [FieldOffset(30)] public byte meta;
+        [FieldOffset(31)] public byte len;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BasicBlock
+    {
+        public uint start_eip;
+        public uint end_eip;
+        public uint inst_count;
+        private uint padding; // align to 8 bytes for exec_count
+        public ulong exec_count;
+        public byte is_valid;
+        // Padding to 32 bytes implied before ops
+        // DecodedOp ops[1] follows at offset 32
+    }
 }

@@ -141,6 +141,7 @@ struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
+    uint64_t exec_count;  // Number of times block was executed
     bool is_valid = true;
 
     // Flexible Array Member - Must be last
