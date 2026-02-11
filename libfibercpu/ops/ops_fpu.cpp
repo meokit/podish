@@ -10,6 +10,7 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_fpu.h"
 
 namespace fiberish {
 
@@ -59,7 +60,9 @@ static inline mem::MemResult<float80> ReadF64(EmuState* state, DecodedOp* op, me
     return f80_from_double(*(double*)&val);
 }
 
-static FORCE_INLINE LogicFlow OpFpu_D8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+namespace op {
+
+FORCE_INLINE LogicFlow OpFpu_D8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D8: FPU Arith m32
     uint8_t subop = (op->modrm >> 3) & 7;
     auto val_res = ReadF32(state, op, utlb);
@@ -116,7 +119,7 @@ static FORCE_INLINE LogicFlow OpFpu_D8(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
@@ -290,7 +293,7 @@ static FORCE_INLINE LogicFlow OpFpu_D9(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DA: Int Arith m32
     if ((op->modrm >> 6) == 3) {
         // DA C0-C7: FCMOVB
@@ -370,7 +373,7 @@ static FORCE_INLINE LogicFlow OpFpu_DA(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DB: FILD/FIST
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -504,7 +507,7 @@ static FORCE_INLINE LogicFlow OpFpu_DB(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DC: FPU Arith m64 (double)
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -593,7 +596,7 @@ static FORCE_INLINE LogicFlow OpFpu_DC(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DD: Load/Store m64
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -651,7 +654,7 @@ static FORCE_INLINE LogicFlow OpFpu_DD(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DE: Arith (Pop)
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -751,7 +754,7 @@ static FORCE_INLINE LogicFlow OpFpu_DE(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // DF: m16 Int / Misc
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -854,15 +857,17 @@ static FORCE_INLINE LogicFlow OpFpu_DF(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
+}  // namespace op
+
 void RegisterFpuOps() {
-    g_Handlers[0xD8] = DispatchWrapper<OpFpu_D8>;
-    g_Handlers[0xD9] = DispatchWrapper<OpFpu_D9>;
-    g_Handlers[0xDA] = DispatchWrapper<OpFpu_DA>;
-    g_Handlers[0xDB] = DispatchWrapper<OpFpu_DB>;
-    g_Handlers[0xDC] = DispatchWrapper<OpFpu_DC>;
-    g_Handlers[0xDD] = DispatchWrapper<OpFpu_DD>;
-    g_Handlers[0xDE] = DispatchWrapper<OpFpu_DE>;
-    g_Handlers[0xDF] = DispatchWrapper<OpFpu_DF>;
+    g_Handlers[0xD8] = DispatchWrapper<op::OpFpu_D8>;
+    g_Handlers[0xD9] = DispatchWrapper<op::OpFpu_D9>;
+    g_Handlers[0xDA] = DispatchWrapper<op::OpFpu_DA>;
+    g_Handlers[0xDB] = DispatchWrapper<op::OpFpu_DB>;
+    g_Handlers[0xDC] = DispatchWrapper<op::OpFpu_DC>;
+    g_Handlers[0xDD] = DispatchWrapper<op::OpFpu_DD>;
+    g_Handlers[0xDE] = DispatchWrapper<op::OpFpu_DE>;
+    g_Handlers[0xDF] = DispatchWrapper<op::OpFpu_DF>;
 }
 
 }  // namespace fiberish

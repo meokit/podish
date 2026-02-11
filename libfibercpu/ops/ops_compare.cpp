@@ -7,6 +7,7 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_compare.h"
 
 namespace fiberish {
 
@@ -15,7 +16,7 @@ namespace fiberish {
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 39: CMP r/m16/32, r16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -48,7 +49,7 @@ static FORCE_INLINE LogicFlow OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::Mi
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3B: CMP r16/32, r/m16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -81,7 +82,7 @@ static FORCE_INLINE LogicFlow OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::Mi
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpTest_EvGv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 85: TEST r/m16/32, r16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -114,7 +115,7 @@ static FORCE_INLINE LogicFlow OpTest_EvGv(EmuState* state, DecodedOp* op, mem::M
 // ============================================================================
 
 template <bool IsByte, Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpCmpxchg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpCmpxchg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B0: CMPXCHG r/m8, r8
     // 0F B1: CMPXCHG r/m, r
 
@@ -170,47 +171,66 @@ static FORCE_INLINE LogicFlow OpCmpxchg(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-// ============================================================================
-// Specialized Wrappers
-// ============================================================================
-
-static FORCE_INLINE LogicFlow OpCmp_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_EvGv<Specialized::Opsize16>(state, op, utlb);
-}
-static FORCE_INLINE LogicFlow OpCmp_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_EvGv<Specialized::Opsize32>(state, op, utlb);
-}
-
-static FORCE_INLINE LogicFlow OpCmp_GvEv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_GvEv<Specialized::Opsize16>(state, op, utlb);
-}
-static FORCE_INLINE LogicFlow OpCmp_GvEv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_GvEv<Specialized::Opsize32>(state, op, utlb);
+template <uint8_t Cond>
+static FORCE_INLINE LogicFlow OpSetcc_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 9x: SETcc r/m8
+    uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) {
+        return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpTest_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpTest_EvGv<Specialized::Opsize16>(state, op, utlb);
+namespace op {
+
+FORCE_INLINE LogicFlow OpCmp_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_EvGv_Internal<Specialized::Opsize16>(state, op, utlb);
 }
-static FORCE_INLINE LogicFlow OpTest_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpTest_EvGv<Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_EvGv_Internal<Specialized::Opsize32>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_EvGv_Internal<Specialized::None>(state, op, utlb);
 }
 
-static FORCE_INLINE LogicFlow OpCmpxchg_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg<false, Specialized::Opsize16>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_GvEv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_GvEv_Internal<Specialized::Opsize16>(state, op, utlb);
 }
-static FORCE_INLINE LogicFlow OpCmpxchg_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg<false, Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_GvEv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_GvEv_Internal<Specialized::Opsize32>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmp_GvEv_Internal<Specialized::None>(state, op, utlb);
 }
 
-static FORCE_INLINE LogicFlow OpCmpxchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg<false>(state, op, utlb);
+FORCE_INLINE LogicFlow OpTest_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpTest_EvGv_Internal<Specialized::Opsize16>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpTest_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpTest_EvGv_Internal<Specialized::Opsize32>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpTest_EvGv_Internal<Specialized::None>(state, op, utlb);
+}
+
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmpxchg_Internal<false, Specialized::Opsize16>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmpxchg_Internal<false, Specialized::Opsize32>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmpxchg_Internal<false>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpCmpxchg_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpCmpxchg_Internal<true>(state, op, utlb);
 }
 
 // ============================================================================
 // Non-size-specific functions (unchanged)
 // ============================================================================
 
-static FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 38: CMP r/m8, r8
     auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
@@ -220,7 +240,7 @@ static FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 3A: CMP r8, r/m8
     uint8_t dest = GetReg8(state, (op->modrm >> 3) & 7);
     auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -230,17 +250,60 @@ static FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-template <uint8_t Cond>
-static FORCE_INLINE LogicFlow OpSetcc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F 9x: SETcc r/m8
-    uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) {
-        return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
+FORCE_INLINE LogicFlow OpSetcc_0(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<0>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<1>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<2>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<3>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_4(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<4>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_5(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<5>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_6(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<6>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_7(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<7>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<8>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<9>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_10(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<10>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_11(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<11>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_12(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<12>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_13(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<13>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_14(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<14>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpSetcc_15(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpSetcc_Internal<15>(state, op, utlb);
 }
 
+}  // namespace op
+
 void RegisterCompareOps() {
+    using namespace op;
+
     g_Handlers[0x38] = DispatchWrapper<OpCmp_EbGb>;
 
 #define REGISTER_OPSIZE(opcode, func_base)                                 \
@@ -265,7 +328,7 @@ void RegisterCompareOps() {
     // 85: TEST r/m16/32, r16/32
     REGISTER_OPSIZE(0x85, OpTest_EvGv);
 
-    g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg<true>>;  // 0F B0
+    g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg_Byte>;  // 0F B0
 
     // 0F B1: CMPXCHG r/m, r
     {
@@ -280,22 +343,22 @@ void RegisterCompareOps() {
 #undef REGISTER_OPSIZE
 
     // SETcc (0F 9x)
-    g_Handlers[0x190] = DispatchWrapper<OpSetcc<0>>;
-    g_Handlers[0x191] = DispatchWrapper<OpSetcc<1>>;
-    g_Handlers[0x192] = DispatchWrapper<OpSetcc<2>>;
-    g_Handlers[0x193] = DispatchWrapper<OpSetcc<3>>;
-    g_Handlers[0x194] = DispatchWrapper<OpSetcc<4>>;
-    g_Handlers[0x195] = DispatchWrapper<OpSetcc<5>>;
-    g_Handlers[0x196] = DispatchWrapper<OpSetcc<6>>;
-    g_Handlers[0x197] = DispatchWrapper<OpSetcc<7>>;
-    g_Handlers[0x198] = DispatchWrapper<OpSetcc<8>>;
-    g_Handlers[0x199] = DispatchWrapper<OpSetcc<9>>;
-    g_Handlers[0x19A] = DispatchWrapper<OpSetcc<10>>;
-    g_Handlers[0x19B] = DispatchWrapper<OpSetcc<11>>;
-    g_Handlers[0x19C] = DispatchWrapper<OpSetcc<12>>;
-    g_Handlers[0x19D] = DispatchWrapper<OpSetcc<13>>;
-    g_Handlers[0x19E] = DispatchWrapper<OpSetcc<14>>;
-    g_Handlers[0x19F] = DispatchWrapper<OpSetcc<15>>;
+    g_Handlers[0x190] = DispatchWrapper<OpSetcc_0>;
+    g_Handlers[0x191] = DispatchWrapper<OpSetcc_1>;
+    g_Handlers[0x192] = DispatchWrapper<OpSetcc_2>;
+    g_Handlers[0x193] = DispatchWrapper<OpSetcc_3>;
+    g_Handlers[0x194] = DispatchWrapper<OpSetcc_4>;
+    g_Handlers[0x195] = DispatchWrapper<OpSetcc_5>;
+    g_Handlers[0x196] = DispatchWrapper<OpSetcc_6>;
+    g_Handlers[0x197] = DispatchWrapper<OpSetcc_7>;
+    g_Handlers[0x198] = DispatchWrapper<OpSetcc_8>;
+    g_Handlers[0x199] = DispatchWrapper<OpSetcc_9>;
+    g_Handlers[0x19A] = DispatchWrapper<OpSetcc_10>;
+    g_Handlers[0x19B] = DispatchWrapper<OpSetcc_11>;
+    g_Handlers[0x19C] = DispatchWrapper<OpSetcc_12>;
+    g_Handlers[0x19D] = DispatchWrapper<OpSetcc_13>;
+    g_Handlers[0x19E] = DispatchWrapper<OpSetcc_14>;
+    g_Handlers[0x19F] = DispatchWrapper<OpSetcc_15>;
 }
 
 }  // namespace fiberish

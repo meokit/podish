@@ -7,11 +7,12 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_muldiv.h"
 
 namespace fiberish {
 
 template <typename T>
-static FORCE_INLINE LogicFlow OpImul_GvEv_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AF: IMUL r16/32, r/m16/32
     // Dest: Register (Gv)
     // Src:  r/m (Ev)
@@ -54,15 +55,8 @@ static FORCE_INLINE LogicFlow OpImul_GvEv_T(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpImul_GvEv_Generic(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    if (op->prefixes.flags.opsize)
-        return OpImul_GvEv_T<uint16_t>(state, op, utlb);
-    else
-        return OpImul_GvEv_T<uint32_t>(state, op, utlb);
-}
-
 template <typename T, bool IsImm8>
-static FORCE_INLINE LogicFlow OpImul_GvEvI_T(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 69: IMUL r, r/m, imm16/32
     // 6B: IMUL r, r/m, imm8
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -105,33 +99,40 @@ static FORCE_INLINE LogicFlow OpImul_GvEvI_T(EmuState* state, DecodedOp* op, mem
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpImul_GvEvIz_Generic(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+namespace op {
+
+FORCE_INLINE LogicFlow OpImul_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T<uint16_t, false>(state, op, utlb);
+        return OpImul_GvEv_T_Internal<uint16_t>(state, op, utlb);
     else
-        return OpImul_GvEvI_T<uint32_t, false>(state, op, utlb);
+        return OpImul_GvEv_T_Internal<uint32_t>(state, op, utlb);
 }
 
-static FORCE_INLINE LogicFlow OpImul_GvEvIb_Generic(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T<uint16_t, true>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint16_t, false>(state, op, utlb);
     else
-        return OpImul_GvEvI_T<uint32_t, true>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint32_t, false>(state, op, utlb);
 }
+
+FORCE_INLINE LogicFlow OpImul_GvEvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    if (op->prefixes.flags.opsize)
+        return OpImul_GvEvI_T_Internal<uint16_t, true>(state, op, utlb);
+    else
+        return OpImul_GvEvI_T_Internal<uint32_t, true>(state, op, utlb);
+}
+
+}  // namespace op
 
 // =========================================================================================
 // Registration
 // =========================================================================================
 
 void RegisterMulDivOps() {
-    g_Handlers[0x69] = DispatchWrapper<OpImul_GvEvIz_Generic>;
-    g_Handlers[0x6B] = DispatchWrapper<OpImul_GvEvIb_Generic>;
-    g_Handlers[0x1AF] = DispatchWrapper<OpImul_GvEv_Generic>;
-
-    // We can also register specialized versions if we want to micro-optimize,
-    // but the generic dispatch wrapper handles it well enough for now
-    // unless we see performance issues.
-    // Similar to ops_alu.cpp pattern.
+    using namespace op;
+    g_Handlers[0x69] = DispatchWrapper<OpImul_GvEvIz>;
+    g_Handlers[0x6B] = DispatchWrapper<OpImul_GvEvIb>;
+    g_Handlers[0x1AF] = DispatchWrapper<OpImul_GvEv>;
 }
 
 }  // namespace fiberish

@@ -13,7 +13,6 @@
 #include "ops/ops_double_shift.h"
 #include "ops/ops_fpu.h"
 #include "ops/ops_groups.h"
-#include "ops/ops_helpers.h"
 #include "ops/ops_muldiv.h"
 #include "ops/ops_shift_bit.h"
 #include "ops/ops_sse_cvt.h"

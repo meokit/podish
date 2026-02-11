@@ -8,11 +8,12 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_control.h"
 
 namespace fiberish {
 
 template <bool IsRel8>
-static FORCE_INLINE LogicFlow OpJmp_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpJmp_Rel_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
     if (IsRel8) {
@@ -27,7 +28,7 @@ static FORCE_INLINE LogicFlow OpJmp_Rel(EmuState* state, DecodedOp* op, mem::Mic
 }
 
 template <uint8_t Cond, bool IsRel8>
-static FORCE_INLINE LogicFlow OpJcc_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpJcc_Rel_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     if (CheckConditionFixed<Cond>(state)) {
         int32_t offset;
@@ -41,13 +42,82 @@ static FORCE_INLINE LogicFlow OpJcc_Rel(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
+// CMOV Implementation
+template <uint8_t Cond, Specialized S = Specialized::None>
+static FORCE_INLINE LogicFlow OpCmov_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
+    // If condition is FALSE, NOP (no memory read).
+
+    if (CheckConditionFixed<Cond>(state)) {
+        uint8_t reg = (op->modrm >> 3) & 7;
+
+        if constexpr (S == Specialized::ModReg) {
+            // Fast path: Register operand
+            uint8_t rm = op->modrm & 7;
+            if (op->prefixes.flags.opsize) {
+                // 16-bit
+                uint16_t val = (uint16_t)(GetReg(state, rm) & 0xFFFF);
+                uint32_t current = state->ctx.regs[reg];
+                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+            } else {
+                // 32-bit
+                uint32_t val = GetReg(state, rm);
+                state->ctx.regs[reg] = val;
+            }
+        } else {
+            if (op->prefixes.flags.opsize) {
+                // 16-bit
+                auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!val_res) return LogicFlow::RestartMemoryOp;
+                uint16_t val = *val_res;
+                uint32_t current = state->ctx.regs[reg];
+                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+            } else {
+                // 32-bit
+                auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                if (!val_res) return LogicFlow::RestartMemoryOp;
+                uint32_t val = *val_res;
+                state->ctx.regs[reg] = val;
+            }
+        }
+    }
+    return LogicFlow::Continue;
+}
+
+// Helper for interrupts
+static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
+    // Sync EIP
+    state->ctx.eip = op->next_eip;
+
+    // Check if hook handles it
+    bool handled = false;
+    if (state->interrupt_handlers[vector]) {
+        handled = state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector]);
+    }
+
+    // For now, we just fault if not handled, as we don't fully emulate IDT in user mode runner.
+    if (!handled) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = vector;
+    }
+}
+
+namespace op {
+
+FORCE_INLINE LogicFlow OpJmp_Rel8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpJmp_Rel_Internal<true>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpJmp_Rel32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpJmp_Rel_Internal<false>(state, op, utlb);
+}
+
 // Named wrappers for Jcc specializations
-#define JCC_WRAPPERS(cond, name)                                                         \
-    static LogicFlow OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {  \
-        return OpJcc_Rel<cond, true>(s, o, u);                                           \
-    }                                                                                    \
-    static LogicFlow OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpJcc_Rel<cond, false>(s, o, u);                                          \
+#define JCC_WRAPPERS(cond, name)                                                               \
+    FORCE_INLINE LogicFlow OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {  \
+        return OpJcc_Rel_Internal<cond, true>(s, o, u);                                        \
+    }                                                                                          \
+    FORCE_INLINE LogicFlow OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpJcc_Rel_Internal<cond, false>(s, o, u);                                       \
     }
 
 JCC_WRAPPERS(0, O)
@@ -68,7 +138,7 @@ JCC_WRAPPERS(14, LE)
 JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
-static FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // E8: CALL rel32
     // Push Return Address
     // If Push fails, we Restart. SP is guaranteed untouched by Push on failure.
@@ -80,7 +150,7 @@ static FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C3: RET
     // Use Pop<T, true> to request Restart explicitly on TLB Miss.
     auto val_res = Pop<uint32_t, true>(state, utlb, op);
@@ -89,7 +159,7 @@ static FORCE_INLINE LogicFlow OpRet(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C2: RET imm16
     auto val_res = Pop<uint32_t, true>(state, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -102,7 +172,7 @@ static FORCE_INLINE LogicFlow OpRet_Imm16(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9C: PUSHF/PUSHFD
     if (op->prefixes.flags.opsize) {
         if (!Push<uint16_t, true>(state, (uint16_t)state->ctx.eflags, utlb, op)) return LogicFlow::RestartMemoryOp;
@@ -112,7 +182,7 @@ static FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9D: POPF/POPFD
     if (op->prefixes.flags.opsize) {
         // POPF (16-bit)
@@ -140,37 +210,37 @@ static FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpStc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F9: STC
     state->ctx.eflags |= CF_MASK;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpClc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpClc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F8: CLC
     state->ctx.eflags &= ~CF_MASK;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpCmc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // F5: CMC (Complement Carry)
     state->ctx.eflags ^= CF_MASK;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpStd(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStd(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FD: STD (Set Direction Flag)
     state->ctx.eflags |= 0x400;  // DF Mask
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpCld(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCld(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FC: CLD (Clear Direction Flag)
     state->ctx.eflags &= ~0x400;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FB: STI (Set Interrupt Flag)
     // Privileged Instruction. In User Mode (CPL=3, IOPL=0), this faults.
     state->status = EmuStatus::Fault;
@@ -178,7 +248,7 @@ static FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;  // Or ExitOnCurrentEIP? Standard flow handles Status check
 }
 
-static FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // FA: CLI (Clear Interrupt Flag)
     // Privileged Instruction.
     state->status = EmuStatus::Fault;
@@ -186,7 +256,7 @@ static FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A2: CPUID
     uint32_t leaf = GetReg(state, EAX);
     // uint32_t ecx_in = GetReg(state, ECX);
@@ -220,7 +290,7 @@ static FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F 31: RDTSC
     uint64_t tsc = 0;
     if (state->tsc_mode == 1) {
@@ -244,14 +314,14 @@ static FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpWait(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpWait(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9B: WAIT/FWAIT n
     // Check pending FPU exceptions?
     // For now NOP.
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AE /r
     uint8_t sub = (op->modrm >> 3) & 7;
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -299,41 +369,19 @@ static FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-// ----------------------------------------------------------------------------
-// Missing Control Optimizations
-// ----------------------------------------------------------------------------
-
-static FORCE_INLINE LogicFlow OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // NOP - Do nothing
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // HLT
     // TODO: Don't allow on userspace?
     state->status = EmuStatus::Stopped;
     return LogicFlow::ExitOnCurrentEIP;
 }
 
-// Helper for interrupts
-static void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
-    // Sync EIP
-    state->ctx.eip = op->next_eip;
-
-    // Check if hook handles it
-    bool handled = false;
-    if (state->interrupt_handlers[vector]) {
-        handled = state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector]);
-    }
-
-    // For now, we just fault if not handled, as we don't fully emulate IDT in user mode runner.
-    if (!handled) {
-        state->status = EmuStatus::Fault;
-        state->fault_vector = vector;
-    }
-}
-
-static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CD ib: INT n
     uint8_t vector = (uint8_t)op->imm;
     utlb->invalidate();
@@ -350,7 +398,7 @@ static FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CC: INT 3
     utlb->invalidate();
     RaiseInterrupt(state, 3, op);
@@ -360,7 +408,7 @@ static FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // CE: INTO
     if (state->ctx.eflags & OF_MASK) {
         utlb->invalidate();
@@ -372,55 +420,13 @@ static FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-// CMOV Implementation
-template <uint8_t Cond, Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpCmov(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
-    // If condition is FALSE, NOP (no memory read).
-
-    if (CheckConditionFixed<Cond>(state)) {
-        uint8_t reg = (op->modrm >> 3) & 7;
-
-        if constexpr (S == Specialized::ModReg) {
-            // Fast path: Register operand
-            uint8_t rm = op->modrm & 7;
-            if (op->prefixes.flags.opsize) {
-                // 16-bit
-                uint16_t val = (uint16_t)(GetReg(state, rm) & 0xFFFF);
-                uint32_t current = state->ctx.regs[reg];
-                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
-            } else {
-                // 32-bit
-                uint32_t val = GetReg(state, rm);
-                state->ctx.regs[reg] = val;
-            }
-        } else {
-            if (op->prefixes.flags.opsize) {
-                // 16-bit
-                auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-                if (!val_res) return LogicFlow::RestartMemoryOp;
-                uint16_t val = *val_res;
-                uint32_t current = state->ctx.regs[reg];
-                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
-            } else {
-                // 32-bit
-                auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-                if (!val_res) return LogicFlow::RestartMemoryOp;
-                uint32_t val = *val_res;
-                state->ctx.regs[reg] = val;
-            }
-        }
-    }
-    return LogicFlow::Continue;
-}
-
 // Named wrappers for Cmov specializations
-#define CMOV_WRAPPERS(cond, name)                                                          \
-    static LogicFlow OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
-        return OpCmov<cond, Specialized::None>(s, o, u);                                   \
-    }                                                                                      \
-    static LogicFlow OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpCmov<cond, Specialized::ModReg>(s, o, u);                                 \
+#define CMOV_WRAPPERS(cond, name)                                                                \
+    FORCE_INLINE LogicFlow OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
+        return OpCmov_Internal<cond, Specialized::None>(s, o, u);                                \
+    }                                                                                            \
+    FORCE_INLINE LogicFlow OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpCmov_Internal<cond, Specialized::ModReg>(s, o, u);                              \
     }
 
 CMOV_WRAPPERS(0, O)
@@ -441,48 +447,54 @@ CMOV_WRAPPERS(14, LE)
 CMOV_WRAPPERS(15, G)
 #undef CMOV_WRAPPERS
 
+}  // namespace op
+
 static HandlerFunc g_JccRel8Wrappers[] = {
-    DispatchWrapper<OpJcc_O_Rel8>,  DispatchWrapper<OpJcc_NO_Rel8>, DispatchWrapper<OpJcc_B_Rel8>,
-    DispatchWrapper<OpJcc_AE_Rel8>, DispatchWrapper<OpJcc_E_Rel8>,  DispatchWrapper<OpJcc_NE_Rel8>,
-    DispatchWrapper<OpJcc_BE_Rel8>, DispatchWrapper<OpJcc_A_Rel8>,  DispatchWrapper<OpJcc_S_Rel8>,
-    DispatchWrapper<OpJcc_NS_Rel8>, DispatchWrapper<OpJcc_P_Rel8>,  DispatchWrapper<OpJcc_NP_Rel8>,
-    DispatchWrapper<OpJcc_L_Rel8>,  DispatchWrapper<OpJcc_GE_Rel8>, DispatchWrapper<OpJcc_LE_Rel8>,
-    DispatchWrapper<OpJcc_G_Rel8>};
+    DispatchWrapper<op::OpJcc_O_Rel8>,  DispatchWrapper<op::OpJcc_NO_Rel8>, DispatchWrapper<op::OpJcc_B_Rel8>,
+    DispatchWrapper<op::OpJcc_AE_Rel8>, DispatchWrapper<op::OpJcc_E_Rel8>,  DispatchWrapper<op::OpJcc_NE_Rel8>,
+    DispatchWrapper<op::OpJcc_BE_Rel8>, DispatchWrapper<op::OpJcc_A_Rel8>,  DispatchWrapper<op::OpJcc_S_Rel8>,
+    DispatchWrapper<op::OpJcc_NS_Rel8>, DispatchWrapper<op::OpJcc_P_Rel8>,  DispatchWrapper<op::OpJcc_NP_Rel8>,
+    DispatchWrapper<op::OpJcc_L_Rel8>,  DispatchWrapper<op::OpJcc_GE_Rel8>, DispatchWrapper<op::OpJcc_LE_Rel8>,
+    DispatchWrapper<op::OpJcc_G_Rel8>};
 
 static HandlerFunc g_JccRel32Wrappers[] = {
-    DispatchWrapper<OpJcc_O_Rel32>,  DispatchWrapper<OpJcc_NO_Rel32>, DispatchWrapper<OpJcc_B_Rel32>,
-    DispatchWrapper<OpJcc_AE_Rel32>, DispatchWrapper<OpJcc_E_Rel32>,  DispatchWrapper<OpJcc_NE_Rel32>,
-    DispatchWrapper<OpJcc_BE_Rel32>, DispatchWrapper<OpJcc_A_Rel32>,  DispatchWrapper<OpJcc_S_Rel32>,
-    DispatchWrapper<OpJcc_NS_Rel32>, DispatchWrapper<OpJcc_P_Rel32>,  DispatchWrapper<OpJcc_NP_Rel32>,
-    DispatchWrapper<OpJcc_L_Rel32>,  DispatchWrapper<OpJcc_GE_Rel32>, DispatchWrapper<OpJcc_LE_Rel32>,
-    DispatchWrapper<OpJcc_G_Rel32>};
+    DispatchWrapper<op::OpJcc_O_Rel32>,  DispatchWrapper<op::OpJcc_NO_Rel32>, DispatchWrapper<op::OpJcc_B_Rel32>,
+    DispatchWrapper<op::OpJcc_AE_Rel32>, DispatchWrapper<op::OpJcc_E_Rel32>,  DispatchWrapper<op::OpJcc_NE_Rel32>,
+    DispatchWrapper<op::OpJcc_BE_Rel32>, DispatchWrapper<op::OpJcc_A_Rel32>,  DispatchWrapper<op::OpJcc_S_Rel32>,
+    DispatchWrapper<op::OpJcc_NS_Rel32>, DispatchWrapper<op::OpJcc_P_Rel32>,  DispatchWrapper<op::OpJcc_NP_Rel32>,
+    DispatchWrapper<op::OpJcc_L_Rel32>,  DispatchWrapper<op::OpJcc_GE_Rel32>, DispatchWrapper<op::OpJcc_LE_Rel32>,
+    DispatchWrapper<op::OpJcc_G_Rel32>};
 
 static HandlerFunc g_CmovWrappers[] = {
-    DispatchWrapper<OpCmov_O>, DispatchWrapper<OpCmov_NO>, DispatchWrapper<OpCmov_B>,  DispatchWrapper<OpCmov_AE>,
-    DispatchWrapper<OpCmov_E>, DispatchWrapper<OpCmov_NE>, DispatchWrapper<OpCmov_BE>, DispatchWrapper<OpCmov_A>,
-    DispatchWrapper<OpCmov_S>, DispatchWrapper<OpCmov_NS>, DispatchWrapper<OpCmov_P>,  DispatchWrapper<OpCmov_NP>,
-    DispatchWrapper<OpCmov_L>, DispatchWrapper<OpCmov_GE>, DispatchWrapper<OpCmov_LE>, DispatchWrapper<OpCmov_G>};
+    DispatchWrapper<op::OpCmov_O>,  DispatchWrapper<op::OpCmov_NO>, DispatchWrapper<op::OpCmov_B>,
+    DispatchWrapper<op::OpCmov_AE>, DispatchWrapper<op::OpCmov_E>,  DispatchWrapper<op::OpCmov_NE>,
+    DispatchWrapper<op::OpCmov_BE>, DispatchWrapper<op::OpCmov_A>,  DispatchWrapper<op::OpCmov_S>,
+    DispatchWrapper<op::OpCmov_NS>, DispatchWrapper<op::OpCmov_P>,  DispatchWrapper<op::OpCmov_NP>,
+    DispatchWrapper<op::OpCmov_L>,  DispatchWrapper<op::OpCmov_GE>, DispatchWrapper<op::OpCmov_LE>,
+    DispatchWrapper<op::OpCmov_G>};
 
 void RegisterControlOps() {
+    using namespace op;
+
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
     g_Handlers[0x9B] = DispatchWrapper<OpWait>;
     g_Handlers[0xF4] = DispatchWrapper<OpHlt>;
     g_Handlers[0x9C] = DispatchWrapper<OpPushf>;
     g_Handlers[0x9D] = DispatchWrapper<OpPopf>;
-    g_Handlers[0xE9] = DispatchWrapper<OpJmp_Rel<false>>;  // JMP rel32
-    g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel<true>>;   // JMP rel8
-    g_Handlers[0xE8] = DispatchWrapper<OpCall_Rel>;        // CALL rel32
-    g_Handlers[0xC3] = DispatchWrapper<OpRet>;             // RET
-    g_Handlers[0xC2] = DispatchWrapper<OpRet_Imm16>;       // RET imm16
-    g_Handlers[0xCD] = DispatchWrapper<OpInt>;             // INT imm8
-    g_Handlers[0xCC] = DispatchWrapper<OpInt3>;            // INT3
-    g_Handlers[0xF5] = DispatchWrapper<OpCmc>;             // CMC
-    g_Handlers[0xF8] = DispatchWrapper<OpClc>;             // CLC
-    g_Handlers[0xF9] = DispatchWrapper<OpStc>;             // STC
-    g_Handlers[0xFA] = DispatchWrapper<OpCli>;             // CLI
-    g_Handlers[0xFB] = DispatchWrapper<OpSti>;             // STI
-    g_Handlers[0xFC] = DispatchWrapper<OpCld>;             // CLD
-    g_Handlers[0xFD] = DispatchWrapper<OpStd>;             // STD
+    g_Handlers[0xE9] = DispatchWrapper<OpJmp_Rel32>;  // JMP rel32
+    g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel8>;   // JMP rel8
+    g_Handlers[0xE8] = DispatchWrapper<OpCall_Rel>;   // CALL rel32
+    g_Handlers[0xC3] = DispatchWrapper<OpRet>;        // RET
+    g_Handlers[0xC2] = DispatchWrapper<OpRet_Imm16>;  // RET imm16
+    g_Handlers[0xCD] = DispatchWrapper<OpInt>;        // INT imm8
+    g_Handlers[0xCC] = DispatchWrapper<OpInt3>;       // INT3
+    g_Handlers[0xF5] = DispatchWrapper<OpCmc>;        // CMC
+    g_Handlers[0xF8] = DispatchWrapper<OpClc>;        // CLC
+    g_Handlers[0xF9] = DispatchWrapper<OpStc>;        // STC
+    g_Handlers[0xFA] = DispatchWrapper<OpCli>;        // CLI
+    g_Handlers[0xFB] = DispatchWrapper<OpSti>;        // STI
+    g_Handlers[0xFC] = DispatchWrapper<OpCld>;        // CLD
+    g_Handlers[0xFD] = DispatchWrapper<OpStd>;        // STD
     for (int i = 0; i < 16; i++) {
         g_Handlers[0x70 + i] = g_JccRel8Wrappers[i];    // Jcc rel8
         g_Handlers[0x180 + i] = g_JccRel32Wrappers[i];  // Jcc rel32 (0F 8x)

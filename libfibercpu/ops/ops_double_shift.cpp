@@ -1,16 +1,18 @@
 // Double-Shift Instructions (SHLD/SHRD)
 // Implements 0F A4/A5/AC/AD opcodes
 
+#include "ops_double_shift.h"
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
 
 namespace fiberish {
+namespace op {
 
 // SHLD: Double Precision Shift Left
 // dest = (dest << count) | (src >> (32 - count))
-static FORCE_INLINE LogicFlow OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A4: SHLD r/m16/32, r16/32, imm8
     uint8_t count = op->imm & 0x1F;
     if (count == 0) return LogicFlow::Continue;
@@ -52,7 +54,7 @@ static FORCE_INLINE LogicFlow OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A5: SHLD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return LogicFlow::Continue;
@@ -96,7 +98,7 @@ static FORCE_INLINE LogicFlow OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem:
 
 // SHRD: Double Precision Shift Right
 // dest = (dest >> count) | (src << (32 - count))
-static FORCE_INLINE LogicFlow OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AC: SHRD r/m16/32, r16/32, imm8
     uint8_t count = op->imm & 0x1F;
     if (count == 0) return LogicFlow::Continue;
@@ -138,7 +140,7 @@ static FORCE_INLINE LogicFlow OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AD: SHRD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return LogicFlow::Continue;
@@ -180,11 +182,13 @@ static FORCE_INLINE LogicFlow OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
+}  // namespace op
+
 void RegisterDoubleShiftOps() {
-    g_Handlers[0x1A4] = DispatchWrapper<OpShld_EvGvIb>;
-    g_Handlers[0x1A5] = DispatchWrapper<OpShld_EvGvCl>;
-    g_Handlers[0x1AC] = DispatchWrapper<OpShrd_EvGvIb>;
-    g_Handlers[0x1AD] = DispatchWrapper<OpShrd_EvGvCl>;
+    g_Handlers[0x1A4] = DispatchWrapper<op::OpShld_EvGvIb>;
+    g_Handlers[0x1A5] = DispatchWrapper<op::OpShld_EvGvCl>;
+    g_Handlers[0x1AC] = DispatchWrapper<op::OpShrd_EvGvIb>;
+    g_Handlers[0x1AD] = DispatchWrapper<op::OpShrd_EvGvCl>;
 }
 
 }  // namespace fiberish

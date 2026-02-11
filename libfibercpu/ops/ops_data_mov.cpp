@@ -7,6 +7,7 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_data_mov.h"
 
 namespace fiberish {
 
@@ -14,21 +15,8 @@ namespace fiberish {
 // Basic MOV / XCHG
 // ------------------------------------------------------------------------------------------------
 
-static FORCE_INLINE LogicFlow OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // MOV r/m16/32, r16/32 (0x89)
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        uint16_t val = (uint16_t)GetReg(state, reg);
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        uint32_t val = GetReg(state, reg);
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
-}
-
 template <Specialized SrcSpec = Specialized::None, Specialized DstSpec = Specialized::None>
-static FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
@@ -83,27 +71,8 @@ static FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Template(EmuState* state, DecodedOp
     return LogicFlow::Continue;
 }
 
-// Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
-#define MOV_EVGV_REG_WRAPPER(RegName, Spec)                                              \
-    static LogicFlow OpMov_EvGv_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_EvGv_Reg_Template<Spec>(s, o, u);                                   \
-    }
-
-MOV_EVGV_REG_WRAPPER(Eax, Specialized::RegEax)
-MOV_EVGV_REG_WRAPPER(Ecx, Specialized::RegEcx)
-MOV_EVGV_REG_WRAPPER(Edx, Specialized::RegEdx)
-MOV_EVGV_REG_WRAPPER(Ebx, Specialized::RegEbx)
-MOV_EVGV_REG_WRAPPER(Esp, Specialized::RegEsp)
-MOV_EVGV_REG_WRAPPER(Ebp, Specialized::RegEbp)
-MOV_EVGV_REG_WRAPPER(Esi, Specialized::RegEsi)
-MOV_EVGV_REG_WRAPPER(Edi, Specialized::RegEdi)
-
-static FORCE_INLINE LogicFlow OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_EvGv_Reg_Template<>(state, op, utlb);
-}
-
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV [mem], r32
     // ModRM.Reg is the Source Register
     uint32_t val;
@@ -136,40 +105,8 @@ static FORCE_INLINE LogicFlow OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem
     return LogicFlow::Continue;
 }
 
-// Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
-#define MOV_STORE_WRAPPER(RegName, Spec)                                                  \
-    static LogicFlow OpMov_Store_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_EvGv_Mem<Spec>(s, o, u);                                             \
-    }
-
-MOV_STORE_WRAPPER(Eax, Specialized::RegEax)
-MOV_STORE_WRAPPER(Ecx, Specialized::RegEcx)
-MOV_STORE_WRAPPER(Edx, Specialized::RegEdx)
-MOV_STORE_WRAPPER(Ebx, Specialized::RegEbx)
-MOV_STORE_WRAPPER(Esp, Specialized::RegEsp)
-MOV_STORE_WRAPPER(Ebp, Specialized::RegEbp)
-MOV_STORE_WRAPPER(Esi, Specialized::RegEsi)
-MOV_STORE_WRAPPER(Edi, Specialized::RegEdi)
-
-static FORCE_INLINE LogicFlow OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    // MOV r16/32, r/m16/32 (0x8B)
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        uint16_t val = *val_res;
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
-    } else {
-        auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        uint32_t val = *val_res;
-        SetReg(state, reg, val);
-    }
-    return LogicFlow::Continue;
-}
-
 template <Specialized DstSpec = Specialized::None, Specialized SrcSpec = Specialized::None>
-static FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Template(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
@@ -224,24 +161,8 @@ static FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Template(EmuState* state, DecodedOp
     return LogicFlow::Continue;
 }
 
-// Named wrappers for profiling visibility
-static LogicFlow OpMov_Ebp_Esp(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Template<Specialized::RegEbp, Specialized::RegEsp>(state, op, utlb);
-}
-static LogicFlow OpMov_Ecx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Template<Specialized::RegEcx, Specialized::RegEax>(state, op, utlb);
-}
-static LogicFlow OpMov_Edx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Template<Specialized::RegEdx, Specialized::RegEax>(state, op, utlb);
-}
-
-// Generic fallback
-static FORCE_INLINE LogicFlow OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Template<>(state, op, utlb);
-}
-
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpMov_OaMa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpMov_OaMa_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A3: MOV m32, EAX
     uint32_t addr = ComputeLinearAddress(state, op);
     uint32_t val = GetReg(state, EAX);
@@ -251,7 +172,7 @@ static FORCE_INLINE LogicFlow OpMov_OaMa(EmuState* state, DecodedOp* op, mem::Mi
 }
 
 template <Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // Specialized: MOV r32, [mem]
     uint32_t addr = ComputeLinearAddress(state, op);
     // Restart on TLB Miss
@@ -284,10 +205,96 @@ static FORCE_INLINE LogicFlow OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem
     return LogicFlow::Continue;
 }
 
+namespace op {
+
+FORCE_INLINE LogicFlow OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // MOV r/m16/32, r16/32 (0x89)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.opsize) {
+        uint16_t val = (uint16_t)GetReg(state, reg);
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
+    } else {
+        uint32_t val = GetReg(state, reg);
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
+}
+
+// Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
+#define MOV_EVGV_REG_WRAPPER(RegName, Spec)                                                    \
+    FORCE_INLINE LogicFlow OpMov_EvGv_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpMov_EvGv_Reg_Internal<Spec>(s, o, u);                                         \
+    }
+
+MOV_EVGV_REG_WRAPPER(Eax, Specialized::RegEax)
+MOV_EVGV_REG_WRAPPER(Ecx, Specialized::RegEcx)
+MOV_EVGV_REG_WRAPPER(Edx, Specialized::RegEdx)
+MOV_EVGV_REG_WRAPPER(Ebx, Specialized::RegEbx)
+MOV_EVGV_REG_WRAPPER(Esp, Specialized::RegEsp)
+MOV_EVGV_REG_WRAPPER(Ebp, Specialized::RegEbp)
+MOV_EVGV_REG_WRAPPER(Esi, Specialized::RegEsi)
+MOV_EVGV_REG_WRAPPER(Edi, Specialized::RegEdi)
+
+FORCE_INLINE LogicFlow OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_EvGv_Reg_Internal<>(state, op, utlb);
+}
+
+// Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
+#define MOV_STORE_WRAPPER(RegName, Spec)                                                        \
+    FORCE_INLINE LogicFlow OpMov_Store_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpMov_EvGv_Mem_Internal<Spec>(s, o, u);                                          \
+    }
+
+MOV_STORE_WRAPPER(Eax, Specialized::RegEax)
+MOV_STORE_WRAPPER(Ecx, Specialized::RegEcx)
+MOV_STORE_WRAPPER(Edx, Specialized::RegEdx)
+MOV_STORE_WRAPPER(Ebx, Specialized::RegEbx)
+MOV_STORE_WRAPPER(Esp, Specialized::RegEsp)
+MOV_STORE_WRAPPER(Ebp, Specialized::RegEbp)
+MOV_STORE_WRAPPER(Esi, Specialized::RegEsi)
+MOV_STORE_WRAPPER(Edi, Specialized::RegEdi)
+
+FORCE_INLINE LogicFlow OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_EvGv_Mem_Internal<>(state, op, utlb);
+}
+
+FORCE_INLINE LogicFlow OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    // MOV r16/32, r/m16/32 (0x8B)
+    uint8_t reg = (op->modrm >> 3) & 7;
+    if (op->prefixes.flags.opsize) {
+        auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        uint16_t val = *val_res;
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | val);
+    } else {
+        auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        uint32_t val = *val_res;
+        SetReg(state, reg, val);
+    }
+    return LogicFlow::Continue;
+}
+
+// Named wrappers for profiling visibility
+FORCE_INLINE LogicFlow OpMov_Ebp_Esp(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEbp, Specialized::RegEsp>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpMov_Ecx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEcx, Specialized::RegEax>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpMov_Edx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEdx, Specialized::RegEax>(state, op, utlb);
+}
+
+// Generic fallback
+FORCE_INLINE LogicFlow OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_GvEv_Reg_Internal<>(state, op, utlb);
+}
+
 // Named wrappers for OpMov_GvEv_Mem (Load) - Specializing Destination
-#define MOV_LOAD_WRAPPER(RegName, Spec)                                                  \
-    static LogicFlow OpMov_Load_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_GvEv_Mem<Spec>(s, o, u);                                            \
+#define MOV_LOAD_WRAPPER(RegName, Spec)                                                        \
+    FORCE_INLINE LogicFlow OpMov_Load_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
+        return OpMov_GvEv_Mem_Internal<Spec>(s, o, u);                                         \
     }
 
 MOV_LOAD_WRAPPER(Eax, Specialized::RegEax)
@@ -299,7 +306,11 @@ MOV_LOAD_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_LOAD_WRAPPER(Esi, Specialized::RegEsi)
 MOV_LOAD_WRAPPER(Edi, Specialized::RegEdi)
 
-static FORCE_INLINE LogicFlow OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpMov_GvEv_Mem_Internal<>(state, op, utlb);
+}
+
+FORCE_INLINE LogicFlow OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 86: XCHG r/m8, r8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -313,7 +324,7 @@ static FORCE_INLINE LogicFlow OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, r8 (0x88)
     // Store 8-bit Reg into ModRM
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -322,7 +333,7 @@ static FORCE_INLINE LogicFlow OpMov_EbGb(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r8, r/m8 (0x8A)
     // Load 8-bit ModRM into Reg
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -342,14 +353,14 @@ static FORCE_INLINE LogicFlow OpMov_GbEb(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m8, imm8 (0xC6)
     uint8_t val = (uint8_t)op->imm;
     if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // MOV r/m16/32, imm16/32 (0xC7)
     if (op->prefixes.flags.opsize) {
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)op->imm, utlb))
@@ -361,7 +372,7 @@ static FORCE_INLINE LogicFlow OpMov_EvIz(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_RegImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_RegImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // B8+reg: MOV r16/32, imm16/32
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -372,7 +383,7 @@ static FORCE_INLINE LogicFlow OpMov_RegImm(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // B0+reg: MOV r8, imm8
     uint8_t reg = op->modrm & 7;
     uint32_t val = op->imm & 0xFF;
@@ -389,7 +400,7 @@ static FORCE_INLINE LogicFlow OpMov_RegImm8(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A0: MOV AL, moffs8
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
@@ -400,7 +411,7 @@ static FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(EmuState* state, DecodedOp* 
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A1: MOV EAX, moffs32
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
@@ -416,7 +427,7 @@ static FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(EmuState* state, DecodedOp* 
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A2: MOV moffs8, AL
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
@@ -425,7 +436,7 @@ static FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(EmuState* state, DecodedOp*
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // A3: MOV moffs32, EAX
     uint32_t offset = op->imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
@@ -439,7 +450,7 @@ static FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(EmuState* state, DecodedOp*
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8C: MOV r/m16, Sreg
     uint16_t val = 0;
     if (op->prefixes.flags.opsize) {
@@ -450,7 +461,7 @@ static FORCE_INLINE LogicFlow OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8E: MOV Sreg, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -458,7 +469,7 @@ static FORCE_INLINE LogicFlow OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B6: MOVZX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -472,7 +483,7 @@ static FORCE_INLINE LogicFlow OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B7: MOVZX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -486,7 +497,7 @@ static FORCE_INLINE LogicFlow OpMovzx_Word(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BE: MOVSX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -500,7 +511,7 @@ static FORCE_INLINE LogicFlow OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BF: MOVSX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -514,7 +525,7 @@ static FORCE_INLINE LogicFlow OpMovsx_Word(EmuState* state, DecodedOp* op, mem::
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpLea(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLea(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8D: LEA r16/32, m
     uint32_t offset = op->mem.disp;
     if (op->mem.base_offset != 32) {
@@ -537,7 +548,7 @@ static FORCE_INLINE LogicFlow OpLea(EmuState* state, DecodedOp* op, mem::MicroTL
 // Stack Operations (Simple)
 // ------------------------------------------------------------------------------------------------
 
-static FORCE_INLINE LogicFlow OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 50+rd: PUSH r16/32
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -548,20 +559,20 @@ static FORCE_INLINE LogicFlow OpPush_Reg(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPush_Imm32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Imm32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 68: PUSH imm32
     if (!Push<uint32_t, true>(state, op->imm, utlb, op)) return LogicFlow::RestartMemoryOp;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPush_Imm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Imm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 6A: PUSH imm8
     int32_t val = (int32_t)(int8_t)op->imm;
     if (!Push<uint32_t, true>(state, val, utlb, op)) return LogicFlow::RestartMemoryOp;
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // POP r16/32 (0x58+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -576,7 +587,7 @@ static FORCE_INLINE LogicFlow OpPop_Reg(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPop_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPop_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 8F: POP r/m16/32
     if (op->prefixes.flags.opsize) {
         auto val_res = Pop<uint16_t, true>(state, utlb, op);
@@ -594,7 +605,7 @@ static FORCE_INLINE LogicFlow OpPop_Ev(EmuState* state, DecodedOp* op, mem::Micr
 // Stack Operations (Complex) - Use Blocking (fail_on_tlb_miss=false)
 // ------------------------------------------------------------------------------------------------
 
-static FORCE_INLINE LogicFlow OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 60: PUSHA/PUSHAD
     // Failures (faults) will set status to Fault.
     // Return ExitOnCurrentEIP if fatal error, though status check loop should handle it.
@@ -652,7 +663,7 @@ static FORCE_INLINE LogicFlow OpPusha(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 61: POPA/POPAD
     // Pops: DI, SI, BP, SP(skip), BX, DX, CX, AX
     // Atomic update implies we shouldn't change registers if memory access fails,
@@ -720,7 +731,7 @@ static FORCE_INLINE LogicFlow OpPopa(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
     uint16_t size = (uint16_t)op->imm;
@@ -770,7 +781,7 @@ static FORCE_INLINE LogicFlow OpEnter(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C9: LEAVE
     // MOV ESP, EBP
     // POP EBP
@@ -788,7 +799,7 @@ static FORCE_INLINE LogicFlow OpLeave(EmuState* state, DecodedOp* op, mem::Micro
 // ------------------------------------------------------------------------------------------------
 // Flag/Misc Operations (LAHF, SAHF, XCHG)
 // ------------------------------------------------------------------------------------------------
-static FORCE_INLINE LogicFlow OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9F: LAHF
     uint32_t flags = state->ctx.eflags;
     uint8_t ah = (flags & 0xD5) | 0x02;  // 0xD5 = 1101 0101 (Mask valid flags)
@@ -798,7 +809,7 @@ static FORCE_INLINE LogicFlow OpLahf(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 9E: SAHF
     uint32_t eax = GetReg(state, EAX);
     uint8_t ah = (eax >> 8) & 0xFF;
@@ -808,7 +819,7 @@ static FORCE_INLINE LogicFlow OpSahf(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 90+reg: XCHG EAX, r16/32
     uint8_t reg = op->modrm & 7;
     if (reg == 0) return LogicFlow::Continue;  // NOP
@@ -827,7 +838,7 @@ static FORCE_INLINE LogicFlow OpXchg_Reg(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // XCHG r/m16/32, r16/32 (0x87)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
@@ -891,11 +902,11 @@ bool Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-static FORCE_INLINE LogicFlow OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!Helper_Movs<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-static FORCE_INLINE LogicFlow OpMovs_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovs_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool res;
     if (op->prefixes.flags.opsize)
         res = Helper_Movs<uint16_t>(state, op, utlb);
@@ -906,7 +917,7 @@ static FORCE_INLINE LogicFlow OpMovs_Word(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);
     int32_t step = df ? -1 : 1;
     auto perform = [&]() -> bool {
@@ -930,7 +941,7 @@ static FORCE_INLINE LogicFlow OpStos_Byte(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool df = (state->ctx.eflags & 0x400);
     int32_t step = (op->prefixes.flags.opsize ? 2 : 4);
     if (df) step = -step;
@@ -1001,11 +1012,11 @@ bool Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-static FORCE_INLINE LogicFlow OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!Helper_Lods<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-static FORCE_INLINE LogicFlow OpLods_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLods_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool res;
     if (op->prefixes.flags.opsize)
         res = Helper_Lods<uint16_t>(state, op, utlb);
@@ -1065,11 +1076,11 @@ bool Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-static FORCE_INLINE LogicFlow OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!Helper_Scas<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-static FORCE_INLINE LogicFlow OpScas_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpScas_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool res;
     if (op->prefixes.flags.opsize)
         res = Helper_Scas<uint16_t>(state, op, utlb);
@@ -1128,11 +1139,11 @@ bool Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-static FORCE_INLINE LogicFlow OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     if (!Helper_Cmps<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-static FORCE_INLINE LogicFlow OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     bool res;
     if (op->prefixes.flags.opsize)
         res = Helper_Cmps<uint16_t>(state, op, utlb);
@@ -1143,16 +1154,20 @@ static FORCE_INLINE LogicFlow OpCmps_Word(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
+}  // namespace op
+
 void RegisterDataMovOps() {
+    using namespace op;
+
     g_Handlers[0x87] = DispatchWrapper<OpXchg_EvGv>;  // XCHG r/m32, r32
     g_Handlers[0x89] = DispatchWrapper<OpMov_EvGv>;
     g_Handlers[0x8B] = DispatchWrapper<OpMov_GvEv>;
 
     // Specialized 32-bit MOV
     g_Handlers[OP_MOV_RR_STORE] = DispatchWrapper<OpMov_EvGv_Reg>;
-    g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem<>>;
+    g_Handlers[OP_MOV_RM_STORE] = DispatchWrapper<OpMov_EvGv_Mem>;
     g_Handlers[OP_MOV_RR_LOAD] = DispatchWrapper<OpMov_GvEv_Reg>;
-    g_Handlers[OP_MOV_MR_LOAD] = DispatchWrapper<OpMov_GvEv_Mem<>>;
+    g_Handlers[OP_MOV_MR_LOAD] = DispatchWrapper<OpMov_GvEv_Mem>;
 
     // Register Specialized Load/Store helpers
     // Store (EvGv_Mem)

@@ -7,13 +7,14 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
+#include "ops_shift_bit.h"
 
 namespace fiberish {
 
 // Returns LogicFlow to propagate Restart/Retry
 template <uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count, bool is_byte,
-                        mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
+                                                     bool is_byte, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -128,7 +129,7 @@ LogicFlow Helper_Group2(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t c
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     uint32_t dest;
@@ -167,11 +168,11 @@ static FORCE_INLINE LogicFlow OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem:
     }
 
     uint8_t count = (uint8_t)op->imm;
-    return Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D0: Shift r/m8, 1
     // D1: Shift r/m16/32, 1
     uint32_t dest;
@@ -198,11 +199,11 @@ static FORCE_INLINE LogicFlow OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::
             }
         }
     }
-    return Helper_Group2<FixedSubOp>(state, op, dest, 1, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, 1, IsByte, utlb);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-static FORCE_INLINE LogicFlow OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+static FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     uint32_t dest;
@@ -240,10 +241,91 @@ static FORCE_INLINE LogicFlow OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem:
     }
 
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    return Helper_Group2<FixedSubOp>(state, op, dest, count, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb);
 }
 
-static FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+namespace op {
+
+FORCE_INLINE LogicFlow OpGroup2_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<true>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Eb1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<true>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EbCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<true>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false>(state, op, utlb);
+}
+
+// SHL Wrappers
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 4>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 4>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 4>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
+}
+
+// SHR Wrappers
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 5>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 5>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 5>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
+}
+
+// SAR Wrappers
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 7>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 7>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 7>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvIb_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_Ev1_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
+}
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    return OpGroup2_EvCl_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
+}
+
+FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F A3: BT r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -270,7 +352,7 @@ static FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::Micr
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BA /4: BT  r/m16/32, imm8
     // 0F BA /5: BTS r/m16/32, imm8
     // 0F BA /6: BTR r/m16/32, imm8
@@ -346,7 +428,7 @@ static FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem:
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F B3: BTR r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -383,7 +465,7 @@ static FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F AB: BTS r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -420,7 +502,7 @@ static FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BB: BTC r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -457,7 +539,7 @@ static FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BD: BSR r16/32, r/m16/32
     // Read only, Restart logic
     uint32_t val;
@@ -483,7 +565,7 @@ static FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::Mi
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F BC: BSF r32, r/m32
     // F3 0F BC: TZCNT r32, r/m32
 
@@ -529,7 +611,7 @@ static FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, m
     return LogicFlow::Continue;
 }
 
-static FORCE_INLINE LogicFlow OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     // 0F C8+rd: BSWAP r32
     // DecodeInstruction puts rd in op->modrm for non-ModRM ops
     uint8_t reg = op->modrm & 7;
@@ -539,13 +621,17 @@ static FORCE_INLINE LogicFlow OpBswap_Reg(EmuState* state, DecodedOp* op, mem::M
     return LogicFlow::Continue;
 }
 
+}  // namespace op
+
 void RegisterShiftBitOps() {
-    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EvIb<true>>;
-    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb<false>>;
-    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Ev1<true>>;
-    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1<false>>;
-    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EvCl<true>>;
-    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl<false>>;
+    using namespace op;
+
+    g_Handlers[0xC0] = DispatchWrapper<OpGroup2_EbIb>;
+    g_Handlers[0xC1] = DispatchWrapper<OpGroup2_EvIb>;
+    g_Handlers[0xD0] = DispatchWrapper<OpGroup2_Eb1>;
+    g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1>;
+    g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EbCl>;
+    g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
 
     // Specializations
     // Explicit registration for common cases to ensure they are generated
@@ -555,45 +641,45 @@ void RegisterShiftBitOps() {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 4;
-        DispatchRegistrar<OpGroup2_EvIb<false, 4>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 4>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 4>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shl>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shl>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shl>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 4, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shl_ModReg>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shl_ModReg>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shl_ModReg>::RegisterSpecialized(0xD3, c);
     }
     // SHR (5)
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 5;
-        DispatchRegistrar<OpGroup2_EvIb<false, 5>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 5>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 5>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shr>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shr>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shr>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 5, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shr_ModReg>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shr_ModReg>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shr_ModReg>::RegisterSpecialized(0xD3, c);
     }
     // SAR (7)
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 7;
-        DispatchRegistrar<OpGroup2_EvIb<false, 7>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 7>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 7>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Sar>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Sar>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Sar>::RegisterSpecialized(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl<false, 7, Specialized::ModReg>>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Sar_ModReg>::RegisterSpecialized(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Sar_ModReg>::RegisterSpecialized(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Sar_ModReg>::RegisterSpecialized(0xD3, c);
     }
 
     g_Handlers[0x1A3] = DispatchWrapper<OpBt_Reg>;
