@@ -86,16 +86,8 @@ struct EmuState {
     std::chrono::steady_clock::time_point tsc_start_time;
 
     // Helper function to sync eip
-    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->GetLength(); }
-    void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = op->next_eip; }
-
-    // Precise Exception Support
-    // When a fault occurs in the fast dispatch loop, we swap the NEXT instruction's handler
-    // with HandlerInterrupt. This field stores the original handler to be restored.
-    // Use void* to avoid circular dependency with decoder.h if HandlerFunc not visible here (it is visible via
-    // decoder.h include) Actually decoder.h is included. Wait, EmuState forward declared in decoder.h, but state.h
-    // includes decoder.h. decoder.h includes common.h. state.h includes decoder.h.
-    int64_t (*saved_handler)(EmuState* RESTRICT, DecodedOp* RESTRICT, int64_t, mem::MicroTLB);
+    void sync_eip_to_op_start(const ShimOp* op) { ctx.eip = op->next_eip - op->len; }
+    void sync_eip_to_op_end(const ShimOp* op) { ctx.eip = op->next_eip; }
 
     std::variant<std::monostate, MemReadOperation, MemWriteOperation> mem_op;
 

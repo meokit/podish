@@ -42,7 +42,7 @@ inline void UpdateFpuRoundingMode(EmuState* state) { f80_sync_to_soft(state->ctx
 
 // Helper to read float32 from memory and convert to float80
 // Uses Blocking Read (fail_on_tlb_miss = false)
-inline mem::MemResult<float80> ReadF32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+inline mem::MemResult<float80> ReadF32(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
     auto res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, ComputeLinearAddress(state, op), utlb, op);
     if (!res) return std::unexpected(res.error());
     uint32_t val = *res;
@@ -52,7 +52,7 @@ inline mem::MemResult<float80> ReadF32(EmuState* state, DecodedOp* op, mem::Micr
 
 // Helper to read float64 from memory and convert to float80
 // Uses Blocking Read (fail_on_tlb_miss = false)
-inline mem::MemResult<float80> ReadF64(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+inline mem::MemResult<float80> ReadF64(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
     auto res = ReadMem<uint64_t, OpOnTLBMiss::Blocking>(state, ComputeLinearAddress(state, op), utlb, op);
     if (!res) return std::unexpected(res.error());
     uint64_t val = *res;
@@ -61,7 +61,7 @@ inline mem::MemResult<float80> ReadF64(EmuState* state, DecodedOp* op, mem::Micr
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpFpu_D8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
     // D8: FPU Arith m32
     uint8_t subop = (op->modrm >> 3) & 7;
     auto val_res = ReadF32(state, op, utlb);
@@ -118,7 +118,7 @@ FORCE_INLINE LogicFlow OpFpu_D8(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
@@ -292,7 +292,7 @@ FORCE_INLINE LogicFlow OpFpu_D9(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
     // DA: Int Arith m32
     if ((op->modrm >> 6) == 3) {
         // DA C0-C7: FCMOVB
@@ -372,7 +372,7 @@ FORCE_INLINE LogicFlow OpFpu_DA(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
     // DB: FILD/FIST
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -506,7 +506,7 @@ FORCE_INLINE LogicFlow OpFpu_DB(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
     // DC: FPU Arith m64 (double)
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -595,7 +595,7 @@ FORCE_INLINE LogicFlow OpFpu_DC(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
     // DD: Load/Store m64
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -653,7 +653,7 @@ FORCE_INLINE LogicFlow OpFpu_DD(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
     // DE: Arith (Pop)
     uint8_t subop = (op->modrm >> 3) & 7;
 
@@ -753,7 +753,7 @@ FORCE_INLINE LogicFlow OpFpu_DE(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpFpu_DF(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
     // DF: m16 Int / Misc
     uint8_t subop = (op->modrm >> 3) & 7;
 

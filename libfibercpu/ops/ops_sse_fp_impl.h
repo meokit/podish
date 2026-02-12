@@ -101,7 +101,7 @@ FORCE_INLINE simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred
 }
 
 template <bool IsMin>
-FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
     // 0F 5F: MAX (PD/SD/PS/SS)
     // 0F 5D: MIN (PD/SD/PS/SS)
 
@@ -162,7 +162,7 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(EmuState* state, DecodedOp* op, mem::Mi
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpAdd_Sse(LogicFuncParams) {
     // 0F 58: ADDPS/ADDPD/ADDSS/ADDSD
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -215,7 +215,7 @@ FORCE_INLINE LogicFlow OpAdd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSub_Sse(LogicFuncParams) {
     // 0F 5C: SUBPS/SUBPD/SUBSS/SUBSD
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -265,7 +265,7 @@ FORCE_INLINE LogicFlow OpSub_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMul_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMul_Sse(LogicFuncParams) {
     // 0F 59: MULPS/MULPD/MULSS/MULSD
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -315,7 +315,7 @@ FORCE_INLINE LogicFlow OpMul_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpDiv_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpDiv_Sse(LogicFuncParams) {
     // 0F 5E: DIVPS/DIVPD/DIVSS/DIVSD
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t rm = op->modrm & 7;
@@ -365,7 +365,7 @@ FORCE_INLINE LogicFlow OpDiv_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpAnd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpAnd_Sse(LogicFuncParams) {
     // 0F 54: ANDPS/ANDPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
@@ -382,7 +382,7 @@ FORCE_INLINE LogicFlow OpAnd_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpAndn_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpAndn_Sse(LogicFuncParams) {
     // 0F 55: ANDNPS/ANDNPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
@@ -399,7 +399,7 @@ FORCE_INLINE LogicFlow OpAndn_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpOr_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpOr_Sse(LogicFuncParams) {
     // 0F 56: ORPS/ORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
@@ -416,7 +416,7 @@ FORCE_INLINE LogicFlow OpOr_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpXor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXor_Sse(LogicFuncParams) {
     // 0F 57: XORPS/XORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
@@ -433,8 +433,8 @@ FORCE_INLINE LogicFlow OpXor_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t pred = (uint8_t)op->imm;
+FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
+    uint8_t pred = (uint8_t)imm;
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
 
@@ -487,15 +487,11 @@ FORCE_INLINE LogicFlow OpCmp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMin_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMaxMin_Sse_Impl<true>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMin_Sse(LogicFuncParams) { return OpMaxMin_Sse_Impl<true>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpMax_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMaxMin_Sse_Impl<false>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMax_Sse(LogicFuncParams) { return OpMaxMin_Sse_Impl<false>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpMovAp_Load(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovAp_Load(LogicFuncParams) {
     // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)
     auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -504,7 +500,7 @@ FORCE_INLINE LogicFlow OpMovAp_Load(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovAp_Store(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovAp_Store(LogicFuncParams) {
     // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
@@ -512,7 +508,7 @@ FORCE_INLINE LogicFlow OpMovAp_Store(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSqrt_Sse(LogicFuncParams) {
     // 0F 51: SQRTPS
     // 66 0F 51: SQRTPD
     // F2 0F 51: SQRTSD
@@ -573,7 +569,7 @@ FORCE_INLINE LogicFlow OpSqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpUcomis_Unified(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
     // 0F 2E: UCOMISS
     // 66 0F 2E: UCOMISD
 
@@ -638,12 +634,12 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpComis_Unified(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpComis_Unified(LogicFuncParams) {
     // 0F 2F: COMISS / COMISD
-    return OpUcomis_Unified(state, op, utlb);
+    return OpUcomis_Unified(LogicPassParams);
 }
 
-FORCE_INLINE LogicFlow OpRcp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRcp_Sse(LogicFuncParams) {
     // 0F 53: RCPPS / RCPSS
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.rep) {  // F3: RCPSS
@@ -666,7 +662,7 @@ FORCE_INLINE LogicFlow OpRcp_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpRsqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRsqrt_Sse(LogicFuncParams) {
     // 0F 52: RSQRTPS / RSQRTSS
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.rep) {  // F3: RSQRTSS
@@ -689,11 +685,10 @@ FORCE_INLINE LogicFlow OpRsqrt_Sse(EmuState* state, DecodedOp* op, mem::MicroTLB
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpShuf_Unified(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShuf_Unified(LogicFuncParams) {
     // 0F C6: SHUFPS
     // 66 0F C6: SHUFPD
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t imm = op->imm;
 
     if (op->prefixes.flags.opsize) {  // 66: SHUFPD
         double* dest_arr = (double*)&state->ctx.xmm[reg];
@@ -724,7 +719,7 @@ FORCE_INLINE LogicFlow OpShuf_Unified(EmuState* state, DecodedOp* op, mem::Micro
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpUnpckl_Unified(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpUnpckl_Unified(LogicFuncParams) {
     // 0F 14: UNPCKLPS
     // 66 0F 14: UNPCKLPD
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -747,7 +742,7 @@ FORCE_INLINE LogicFlow OpUnpckl_Unified(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpUnpckh_Unified(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpUnpckh_Unified(LogicFuncParams) {
     // 0F 15: UNPCKHPS
     // 66 0F 15: UNPCKHPD
     uint8_t reg = (op->modrm >> 3) & 7;

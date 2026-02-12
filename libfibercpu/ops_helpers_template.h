@@ -9,7 +9,7 @@ namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb) {
+LogicFlow Helper_Group1(EmuState* state, ShimOp* op, T dest, T src, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -65,7 +65,7 @@ LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::Micr
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t imm) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -77,7 +77,7 @@ LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* ut
         case 0:  // TEST imm
         case 1:  // TEST imm
         {
-            AluAnd<T, UpdateFlags>(state, val, (T)op->imm);
+            AluAnd<T, UpdateFlags>(state, val, (T)imm);
             break;
         }
         case 2:  // NOT
@@ -380,7 +380,7 @@ LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* ut
 
 // Template Helper for Group 4 (INC, DEC)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+LogicFlow Helper_Group4(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -437,7 +437,7 @@ LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* ut
 
 // Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+LogicFlow Helper_Group5(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t* branch) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -487,19 +487,19 @@ LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* ut
                     if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, (uint16_t)op->next_eip, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
                     SetReg(state, ESP, esp);
-                    op->branch_target = val & 0xFFFF;
+                    *branch = val & 0xFFFF;
                 } else {
                     uint32_t esp = GetReg(state, ESP) - 4;
                     if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, op->next_eip, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
                     SetReg(state, ESP, esp);
-                    op->branch_target = val;
+                    *branch = val;
                 }
             } else if (subop == 4) {  // Jmp
                 if constexpr (sizeof(T) == 2)
-                    op->branch_target = val & 0xFFFF;
+                    *branch = val & 0xFFFF;
                 else
-                    op->branch_target = val;
+                    *branch = val;
             } else if (subop == 6) {  // Push
                 if constexpr (sizeof(T) == 2) {
                     uint32_t esp = GetReg(state, ESP) - 2;

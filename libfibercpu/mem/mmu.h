@@ -274,10 +274,10 @@ public:
     [[nodiscard]] FORCE_INLINE MemResult<void> write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb);
 
     template <typename T, bool fail_on_tlb_miss = false>
-    [[nodiscard]] FORCE_INLINE MemResult<T> read(GuestAddr addr, MicroTLB* utlb, const DecodedOp* cur_op);
+    [[nodiscard]] FORCE_INLINE MemResult<T> read(GuestAddr addr, MicroTLB* utlb, const ShimOp* cur_op);
 
     template <typename T, bool fail_on_tlb_miss = false>
-    [[nodiscard]] FORCE_INLINE MemResult<void> write(GuestAddr addr, T val, MicroTLB* utlb, const DecodedOp* cur_op);
+    [[nodiscard]] FORCE_INLINE MemResult<void> write(GuestAddr addr, T val, MicroTLB* utlb, const ShimOp* cur_op);
 
     template <typename T, bool fail_on_tlb_miss = false>
     [[nodiscard]] FORCE_INLINE MemResult<T> read(GuestAddr addr, MicroTLB* utlb, std::nullptr_t) = delete;

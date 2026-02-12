@@ -17,7 +17,7 @@ namespace fiberish {
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
     // 39: CMP r/m16/32, r16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -50,7 +50,7 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(EmuState* state, DecodedOp* op, mem::
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
     // 3B: CMP r16/32, r/m16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -83,7 +83,7 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(EmuState* state, DecodedOp* op, mem::
 // ============================================================================
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpTest_EvGv_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
     // 85: TEST r/m16/32, r16/32
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
@@ -116,7 +116,7 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(EmuState* state, DecodedOp* op, mem:
 // ============================================================================
 
 template <bool IsByte, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpCmpxchg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
     // 0F B0: CMPXCHG r/m8, r8
     // 0F B1: CMPXCHG r/m, r
 
@@ -173,7 +173,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(EmuState* state, DecodedOp* op, mem::M
 }
 
 template <uint8_t Cond>
-FORCE_INLINE LogicFlow OpSetcc_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
     // 0F 9x: SETcc r/m8
     uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
     if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) {
@@ -184,54 +184,44 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(EmuState* state, DecodedOp* op, mem::Mic
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpCmp_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_EvGv_Internal<Specialized::Opsize16>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_EvGv_16(LogicFuncParams) {
+    return OpCmp_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmp_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_EvGv_Internal<Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_EvGv_32(LogicFuncParams) {
+    return OpCmp_EvGv_Internal<Specialized::Opsize32>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmp_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_EvGv_Internal<Specialized::None>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpCmp_EvGv(LogicFuncParams) { return OpCmp_EvGv_Internal<Specialized::None>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpCmp_GvEv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_GvEv_Internal<Specialized::Opsize16>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_GvEv_16(LogicFuncParams) {
+    return OpCmp_GvEv_Internal<Specialized::Opsize16>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmp_GvEv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_GvEv_Internal<Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmp_GvEv_32(LogicFuncParams) {
+    return OpCmp_GvEv_Internal<Specialized::Opsize32>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmp_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmp_GvEv_Internal<Specialized::None>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpCmp_GvEv(LogicFuncParams) { return OpCmp_GvEv_Internal<Specialized::None>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpTest_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpTest_EvGv_Internal<Specialized::Opsize16>(state, op, utlb);
+FORCE_INLINE LogicFlow OpTest_EvGv_16(LogicFuncParams) {
+    return OpTest_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpTest_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpTest_EvGv_Internal<Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpTest_EvGv_32(LogicFuncParams) {
+    return OpTest_EvGv_Internal<Specialized::Opsize32>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpTest_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpTest_EvGv_Internal<Specialized::None>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpTest_EvGv(LogicFuncParams) { return OpTest_EvGv_Internal<Specialized::None>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv_16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg_Internal<false, Specialized::Opsize16>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv_16(LogicFuncParams) {
+    return OpCmpxchg_Internal<false, Specialized::Opsize16>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv_32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg_Internal<false, Specialized::Opsize32>(state, op, utlb);
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv_32(LogicFuncParams) {
+    return OpCmpxchg_Internal<false, Specialized::Opsize32>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg_Internal<false>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpCmpxchg_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpCmpxchg_Internal<true>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpCmpxchg_EvGv(LogicFuncParams) { return OpCmpxchg_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpCmpxchg_Byte(LogicFuncParams) { return OpCmpxchg_Internal<true>(LogicPassParams); }
 
 // ============================================================================
 // Non-size-specific functions (unchanged)
 // ============================================================================
 
-FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_EbGb(LogicFuncParams) {
     // 38: CMP r/m8, r8
     auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
@@ -241,7 +231,7 @@ FORCE_INLINE LogicFlow OpCmp_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmp_GbEb(LogicFuncParams) {
     // 3A: CMP r8, r/m8
     uint8_t dest = GetReg8(state, (op->modrm >> 3) & 7);
     auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -251,54 +241,22 @@ FORCE_INLINE LogicFlow OpCmp_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSetcc_0(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<0>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<1>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_2(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<2>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<3>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_4(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<4>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_5(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<5>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_6(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<6>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_7(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<7>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<8>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_9(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<9>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_10(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<10>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_11(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<11>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_12(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<12>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_13(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<13>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_14(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<14>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpSetcc_15(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpSetcc_Internal<15>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpSetcc_0(LogicFuncParams) { return OpSetcc_Internal<0>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_1(LogicFuncParams) { return OpSetcc_Internal<1>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_2(LogicFuncParams) { return OpSetcc_Internal<2>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_3(LogicFuncParams) { return OpSetcc_Internal<3>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_4(LogicFuncParams) { return OpSetcc_Internal<4>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_5(LogicFuncParams) { return OpSetcc_Internal<5>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_6(LogicFuncParams) { return OpSetcc_Internal<6>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_7(LogicFuncParams) { return OpSetcc_Internal<7>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_8(LogicFuncParams) { return OpSetcc_Internal<8>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_9(LogicFuncParams) { return OpSetcc_Internal<9>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_10(LogicFuncParams) { return OpSetcc_Internal<10>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_11(LogicFuncParams) { return OpSetcc_Internal<11>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_12(LogicFuncParams) { return OpSetcc_Internal<12>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_13(LogicFuncParams) { return OpSetcc_Internal<13>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_14(LogicFuncParams) { return OpSetcc_Internal<14>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSetcc_15(LogicFuncParams) { return OpSetcc_Internal<15>(LogicPassParams); }
 
 }  // namespace op
 

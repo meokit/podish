@@ -14,38 +14,38 @@
 namespace fiberish {
 
 template <bool IsRel8>
-FORCE_INLINE LogicFlow OpJmp_Rel_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
     // E9: JMP rel32, EB: JMP rel8
     int32_t offset;
     if (IsRel8) {
         // 8-bit relative jump
-        offset = (int32_t)(int8_t)(op->imm & 0xFF);
+        offset = (int32_t)(int8_t)(imm & 0xFF);
     } else {
         // 32-bit relative jump (E9)
-        offset = (int32_t)op->imm;
+        offset = (int32_t)imm;
     }
-    op->branch_target = op->next_eip + offset;
+    *branch = op->next_eip + offset;
     return LogicFlow::Continue;
 }
 
 template <uint8_t Cond, bool IsRel8>
-FORCE_INLINE LogicFlow OpJcc_Rel_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     if (CheckConditionFixed<Cond>(state)) {
         int32_t offset;
         if constexpr (IsRel8) {
-            offset = (int32_t)(int8_t)(op->imm & 0xFF);
+            offset = (int32_t)(int8_t)(imm & 0xFF);
         } else {
-            offset = (int32_t)op->imm;
+            offset = (int32_t)imm;
         }
-        op->branch_target = op->next_eip + offset;
+        *branch = op->next_eip + offset;
     }
     return LogicFlow::Continue;
 }
 
 // CMOV Implementation
 template <uint8_t Cond, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpCmov_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
     // If condition is FALSE, NOP (no memory read).
 
@@ -86,7 +86,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(EmuState* state, DecodedOp* op, mem::Micr
 }
 
 // Helper for interrupts
-inline void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
+inline void RaiseInterrupt(EmuState* state, uint8_t vector, ShimOp* op) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
 
@@ -105,20 +105,16 @@ inline void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpJmp_Rel8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpJmp_Rel_Internal<true>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpJmp_Rel32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpJmp_Rel_Internal<false>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpJmp_Rel8(LogicFuncParams) { return OpJmp_Rel_Internal<true>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpJmp_Rel32(LogicFuncParams) { return OpJmp_Rel_Internal<false>(LogicPassParams); }
 
 // Named wrappers for Jcc specializations
-#define JCC_WRAPPERS(cond, name)                                                               \
-    FORCE_INLINE LogicFlow OpJcc_##name##_Rel8(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {  \
-        return OpJcc_Rel_Internal<cond, true>(s, o, u);                                        \
-    }                                                                                          \
-    FORCE_INLINE LogicFlow OpJcc_##name##_Rel32(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpJcc_Rel_Internal<cond, false>(s, o, u);                                       \
+#define JCC_WRAPPERS(cond, name)                                   \
+    FORCE_INLINE LogicFlow OpJcc_##name##_Rel8(LogicFuncParams) {  \
+        return OpJcc_Rel_Internal<cond, true>(LogicPassParams);    \
+    }                                                              \
+    FORCE_INLINE LogicFlow OpJcc_##name##_Rel32(LogicFuncParams) { \
+        return OpJcc_Rel_Internal<cond, false>(LogicPassParams);   \
     }
 
 JCC_WRAPPERS(0, O)
@@ -139,7 +135,7 @@ JCC_WRAPPERS(14, LE)
 JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
-FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
     // E8: CALL rel32
     // Push Return Address
     // If Push fails, we Restart. SP is guaranteed untouched by Push on failure.
@@ -147,33 +143,33 @@ FORCE_INLINE LogicFlow OpCall_Rel(EmuState* state, DecodedOp* op, mem::MicroTLB*
     if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
 
     // Jump relative to Next Insn
-    op->branch_target = op->next_eip + (int32_t)op->imm;
+    *branch = op->next_eip + (int32_t)imm;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpRet(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
     // C3: RET
     // Use Pop<T, true> to request Restart explicitly on TLB Miss.
     auto val_res = Pop<uint32_t, true>(state, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
-    op->branch_target = *val_res;
+    *branch = *val_res;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpRet_Imm16(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     // C2: RET imm16
     auto val_res = Pop<uint32_t, true>(state, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
-    op->branch_target = *val_res;
+    *branch = *val_res;
 
     // Pop imm16 bytes from stack
     uint32_t esp = GetReg(state, ESP);
-    esp += (uint16_t)op->imm;
+    esp += (uint16_t)imm;
     SetReg(state, ESP, esp);
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
     // 9C: PUSHF/PUSHFD
     if (op->prefixes.flags.opsize) {
         if (!Push<uint16_t, true>(state, (uint16_t)state->ctx.eflags, utlb, op)) return LogicFlow::RestartMemoryOp;
@@ -183,7 +179,7 @@ FORCE_INLINE LogicFlow OpPushf(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
     // 9D: POPF/POPFD
     if (op->prefixes.flags.opsize) {
         // POPF (16-bit)
@@ -211,37 +207,37 @@ FORCE_INLINE LogicFlow OpPopf(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpStc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStc(LogicFuncParams) {
     // F9: STC
     state->ctx.eflags |= CF_MASK;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpClc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpClc(LogicFuncParams) {
     // F8: CLC
     state->ctx.eflags &= ~CF_MASK;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCmc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmc(LogicFuncParams) {
     // F5: CMC (Complement Carry)
     state->ctx.eflags ^= CF_MASK;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpStd(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStd(LogicFuncParams) {
     // FD: STD (Set Direction Flag)
     state->ctx.eflags |= 0x400;  // DF Mask
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCld(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCld(LogicFuncParams) {
     // FC: CLD (Clear Direction Flag)
     state->ctx.eflags &= ~0x400;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSti(LogicFuncParams) {
     // FB: STI (Set Interrupt Flag)
     // Privileged Instruction. In User Mode (CPL=3, IOPL=0), this faults.
     state->status = EmuStatus::Fault;
@@ -249,7 +245,7 @@ FORCE_INLINE LogicFlow OpSti(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb
     return LogicFlow::Continue;  // Or ExitOnCurrentEIP? Standard flow handles Status check
 }
 
-FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCli(LogicFuncParams) {
     // FA: CLI (Clear Interrupt Flag)
     // Privileged Instruction.
     state->status = EmuStatus::Fault;
@@ -257,7 +253,7 @@ FORCE_INLINE LogicFlow OpCli(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCpuid(LogicFuncParams) {
     // 0F A2: CPUID
     uint32_t leaf = GetReg(state, EAX);
     // uint32_t ecx_in = GetReg(state, ECX);
@@ -291,7 +287,7 @@ FORCE_INLINE LogicFlow OpCpuid(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpRdtsc(LogicFuncParams) {
     // 0F 31: RDTSC
     uint64_t tsc = 0;
     if (state->tsc_mode == 1) {
@@ -315,14 +311,14 @@ FORCE_INLINE LogicFlow OpRdtsc(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpWait(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpWait(LogicFuncParams) {
     // 9B: WAIT/FWAIT n
     // Check pending FPU exceptions?
     // For now NOP.
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup_0FAE(LogicFuncParams) {
     // 0F AE /r
     uint8_t sub = (op->modrm >> 3) & 7;
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -370,21 +366,21 @@ FORCE_INLINE LogicFlow OpGroup_0FAE(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpNop(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpNop(LogicFuncParams) {
     // NOP - Do nothing
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpHlt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpHlt(LogicFuncParams) {
     // HLT
     // TODO: Don't allow on userspace?
     state->status = EmuStatus::Stopped;
     return LogicFlow::ExitOnCurrentEIP;
 }
 
-FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
     // CD ib: INT n
-    uint8_t vector = (uint8_t)op->imm;
+    uint8_t vector = (uint8_t)imm;
     utlb->invalidate();
 
     // Set EIP to next instruction (return address)
@@ -399,7 +395,7 @@ FORCE_INLINE LogicFlow OpInt(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
     // CC: INT 3
     utlb->invalidate();
     RaiseInterrupt(state, 3, op);
@@ -409,7 +405,7 @@ FORCE_INLINE LogicFlow OpInt3(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpInto(LogicFuncParams) {
     // CE: INTO
     if (state->ctx.eflags & OF_MASK) {
         utlb->invalidate();
@@ -422,12 +418,12 @@ FORCE_INLINE LogicFlow OpInto(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
 }
 
 // Named wrappers for Cmov specializations
-#define CMOV_WRAPPERS(cond, name)                                                                \
-    FORCE_INLINE LogicFlow OpCmov_##name(EmuState* s, DecodedOp* o, mem::MicroTLB* u) {          \
-        return OpCmov_Internal<cond, Specialized::None>(s, o, u);                                \
-    }                                                                                            \
-    FORCE_INLINE LogicFlow OpCmov_##name##_ModReg(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpCmov_Internal<cond, Specialized::ModReg>(s, o, u);                              \
+#define CMOV_WRAPPERS(cond, name)                                           \
+    FORCE_INLINE LogicFlow OpCmov_##name(LogicFuncParams) {                 \
+        return OpCmov_Internal<cond, Specialized::None>(LogicPassParams);   \
+    }                                                                       \
+    FORCE_INLINE LogicFlow OpCmov_##name##_ModReg(LogicFuncParams) {        \
+        return OpCmov_Internal<cond, Specialized::ModReg>(LogicPassParams); \
     }
 
 CMOV_WRAPPERS(0, O)

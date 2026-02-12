@@ -13,9 +13,9 @@ namespace op {
 
 // SHLD: Double Precision Shift Left
 // dest = (dest << count) | (src >> (32 - count))
-FORCE_INLINE LogicFlow OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShld_EvGvIb(LogicFuncParams) {
     // 0F A4: SHLD r/m16/32, r16/32, imm8
-    uint8_t count = op->imm & 0x1F;
+    uint8_t count = imm & 0x1F;
     if (count == 0) return LogicFlow::Continue;
 
     if (op->prefixes.flags.opsize) {
@@ -55,7 +55,7 @@ FORCE_INLINE LogicFlow OpShld_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShld_EvGvCl(LogicFuncParams) {
     // 0F A5: SHLD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return LogicFlow::Continue;
@@ -99,9 +99,9 @@ FORCE_INLINE LogicFlow OpShld_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroT
 
 // SHRD: Double Precision Shift Right
 // dest = (dest >> count) | (src << (32 - count))
-FORCE_INLINE LogicFlow OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShrd_EvGvIb(LogicFuncParams) {
     // 0F AC: SHRD r/m16/32, r16/32, imm8
-    uint8_t count = op->imm & 0x1F;
+    uint8_t count = imm & 0x1F;
     if (count == 0) return LogicFlow::Continue;
 
     if (op->prefixes.flags.opsize) {
@@ -141,7 +141,7 @@ FORCE_INLINE LogicFlow OpShrd_EvGvIb(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpShrd_EvGvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpShrd_EvGvCl(LogicFuncParams) {
     // 0F AD: SHRD r/m16/32, r16/32, CL
     uint8_t count = GetReg(state, ECX) & 0x1F;
     if (count == 0) return LogicFlow::Continue;

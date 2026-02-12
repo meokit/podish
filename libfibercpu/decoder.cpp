@@ -70,7 +70,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
     op->mem.base_offset = 32;   // Index 8 * 4 (Zero Register)
     op->mem.index_offset = 32;  // Index 8 * 4
     op->mem.scale = 0;
-    op->branch_target = std::numeric_limits<uint32_t>::max();  // Invalid branch target
 
     const uint8_t* start = code;
     const uint8_t* ptr = code;

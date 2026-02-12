@@ -17,7 +17,7 @@ namespace fiberish {
 // ------------------------------------------------------------------------------------------------
 
 template <Specialized SrcSpec = Specialized::None, Specialized DstSpec = Specialized::None>
-FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
@@ -73,7 +73,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(EmuState* state, DecodedOp* op, m
 }
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
     // Specialized: MOV [mem], r32
     // ModRM.Reg is the Source Register
     uint32_t val;
@@ -107,7 +107,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(EmuState* state, DecodedOp* op, m
 }
 
 template <Specialized DstSpec = Specialized::None, Specialized SrcSpec = Specialized::None>
-FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
     // Specialized: MOV r32, r32
     // Dst = Src
     uint32_t val;
@@ -163,7 +163,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(EmuState* state, DecodedOp* op, m
 }
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpMov_OaMa_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_OaMa_Internal(LogicFuncParams) {
     // A3: MOV m32, EAX
     uint32_t addr = ComputeLinearAddress(state, op);
     uint32_t val = GetReg(state, EAX);
@@ -173,7 +173,7 @@ FORCE_INLINE LogicFlow OpMov_OaMa_Internal(EmuState* state, DecodedOp* op, mem::
 }
 
 template <Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(LogicFuncParams) {
     // Specialized: MOV r32, [mem]
     uint32_t addr = ComputeLinearAddress(state, op);
     // Restart on TLB Miss
@@ -208,7 +208,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(EmuState* state, DecodedOp* op, m
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EvGv(LogicFuncParams) {
     // MOV r/m16/32, r16/32 (0x89)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
@@ -222,9 +222,9 @@ FORCE_INLINE LogicFlow OpMov_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB*
 }
 
 // Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
-#define MOV_EVGV_REG_WRAPPER(RegName, Spec)                                                    \
-    FORCE_INLINE LogicFlow OpMov_EvGv_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_EvGv_Reg_Internal<Spec>(s, o, u);                                         \
+#define MOV_EVGV_REG_WRAPPER(RegName, Spec)                        \
+    FORCE_INLINE LogicFlow OpMov_EvGv_##RegName(LogicFuncParams) { \
+        return OpMov_EvGv_Reg_Internal<Spec>(LogicPassParams);     \
     }
 
 MOV_EVGV_REG_WRAPPER(Eax, Specialized::RegEax)
@@ -236,14 +236,12 @@ MOV_EVGV_REG_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_EVGV_REG_WRAPPER(Esi, Specialized::RegEsi)
 MOV_EVGV_REG_WRAPPER(Edi, Specialized::RegEdi)
 
-FORCE_INLINE LogicFlow OpMov_EvGv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_EvGv_Reg_Internal<>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMov_EvGv_Reg(LogicFuncParams) { return OpMov_EvGv_Reg_Internal<>(LogicPassParams); }
 
 // Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
-#define MOV_STORE_WRAPPER(RegName, Spec)                                                        \
-    FORCE_INLINE LogicFlow OpMov_Store_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_EvGv_Mem_Internal<Spec>(s, o, u);                                          \
+#define MOV_STORE_WRAPPER(RegName, Spec)                            \
+    FORCE_INLINE LogicFlow OpMov_Store_##RegName(LogicFuncParams) { \
+        return OpMov_EvGv_Mem_Internal<Spec>(LogicPassParams);      \
     }
 
 MOV_STORE_WRAPPER(Eax, Specialized::RegEax)
@@ -255,11 +253,9 @@ MOV_STORE_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_STORE_WRAPPER(Esi, Specialized::RegEsi)
 MOV_STORE_WRAPPER(Edi, Specialized::RegEdi)
 
-FORCE_INLINE LogicFlow OpMov_EvGv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_EvGv_Mem_Internal<>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMov_EvGv_Mem(LogicFuncParams) { return OpMov_EvGv_Mem_Internal<>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GvEv(LogicFuncParams) {
     // MOV r16/32, r/m16/32 (0x8B)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
@@ -277,25 +273,23 @@ FORCE_INLINE LogicFlow OpMov_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB*
 }
 
 // Named wrappers for profiling visibility
-FORCE_INLINE LogicFlow OpMov_Ebp_Esp(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEbp, Specialized::RegEsp>(state, op, utlb);
+FORCE_INLINE LogicFlow OpMov_Ebp_Esp(LogicFuncParams) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEbp, Specialized::RegEsp>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpMov_Ecx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEcx, Specialized::RegEax>(state, op, utlb);
+FORCE_INLINE LogicFlow OpMov_Ecx_Eax(LogicFuncParams) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEcx, Specialized::RegEax>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpMov_Edx_Eax(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEdx, Specialized::RegEax>(state, op, utlb);
+FORCE_INLINE LogicFlow OpMov_Edx_Eax(LogicFuncParams) {
+    return OpMov_GvEv_Reg_Internal<Specialized::RegEdx, Specialized::RegEax>(LogicPassParams);
 }
 
 // Generic fallback
-FORCE_INLINE LogicFlow OpMov_GvEv_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Reg_Internal<>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMov_GvEv_Reg(LogicFuncParams) { return OpMov_GvEv_Reg_Internal<>(LogicPassParams); }
 
 // Named wrappers for OpMov_GvEv_Mem (Load) - Specializing Destination
-#define MOV_LOAD_WRAPPER(RegName, Spec)                                                        \
-    FORCE_INLINE LogicFlow OpMov_Load_##RegName(EmuState* s, DecodedOp* o, mem::MicroTLB* u) { \
-        return OpMov_GvEv_Mem_Internal<Spec>(s, o, u);                                         \
+#define MOV_LOAD_WRAPPER(RegName, Spec)                            \
+    FORCE_INLINE LogicFlow OpMov_Load_##RegName(LogicFuncParams) { \
+        return OpMov_GvEv_Mem_Internal<Spec>(LogicPassParams);     \
     }
 
 MOV_LOAD_WRAPPER(Eax, Specialized::RegEax)
@@ -307,11 +301,9 @@ MOV_LOAD_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_LOAD_WRAPPER(Esi, Specialized::RegEsi)
 MOV_LOAD_WRAPPER(Edi, Specialized::RegEdi)
 
-FORCE_INLINE LogicFlow OpMov_GvEv_Mem(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpMov_GvEv_Mem_Internal<>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpMov_GvEv_Mem(LogicFuncParams) { return OpMov_GvEv_Mem_Internal<>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXchg_EbGb(LogicFuncParams) {
     // 86: XCHG r/m8, r8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -325,7 +317,7 @@ FORCE_INLINE LogicFlow OpXchg_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EbGb(LogicFuncParams) {
     // MOV r/m8, r8 (0x88)
     // Store 8-bit Reg into ModRM
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -334,7 +326,7 @@ FORCE_INLINE LogicFlow OpMov_EbGb(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_GbEb(LogicFuncParams) {
     // MOV r8, r/m8 (0x8A)
     // Load 8-bit ModRM into Reg
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -354,40 +346,38 @@ FORCE_INLINE LogicFlow OpMov_GbEb(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EbIb(LogicFuncParams) {
     // MOV r/m8, imm8 (0xC6)
-    uint8_t val = (uint8_t)op->imm;
+    uint8_t val = (uint8_t)imm;
     if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_EvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
     // MOV r/m16/32, imm16/32 (0xC7)
     if (op->prefixes.flags.opsize) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)op->imm, utlb))
-            return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)imm, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)op->imm, utlb))
-            return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)imm, utlb)) return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_RegImm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {
     // B8+reg: MOV r16/32, imm16/32
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)op->imm);
+        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)imm);
     } else {
-        SetReg(state, reg, op->imm);
+        SetReg(state, reg, imm);
     }
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_RegImm8(LogicFuncParams) {
     // B0+reg: MOV r8, imm8
     uint8_t reg = op->modrm & 7;
-    uint32_t val = op->imm & 0xFF;
+    uint32_t val = imm & 0xFF;
 
     uint32_t* rptr = GetRegPtr(state, reg & 3);
     uint32_t curr = *rptr;
@@ -401,9 +391,9 @@ FORCE_INLINE LogicFlow OpMov_RegImm8(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(LogicFuncParams) {
     // A0: MOV AL, moffs8
-    uint32_t offset = op->imm;
+    uint32_t offset = imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
     auto val_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, linear, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -412,9 +402,9 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(EmuState* state, DecodedOp* op, mem
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(LogicFuncParams) {
     // A1: MOV EAX, moffs32
-    uint32_t offset = op->imm;
+    uint32_t offset = imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
     if (op->prefixes.flags.opsize) {
         auto val_res = ReadMem<uint16_t, OpOnTLBMiss::Restart>(state, linear, utlb, op);
@@ -428,18 +418,18 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(EmuState* state, DecodedOp* op, mem
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(LogicFuncParams) {
     // A2: MOV moffs8, AL
-    uint32_t offset = op->imm;
+    uint32_t offset = imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
     uint8_t val = GetReg8(state, EAX);
     if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, linear, val, utlb, op)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(LogicFuncParams) {
     // A3: MOV moffs32, EAX
-    uint32_t offset = op->imm;
+    uint32_t offset = imm;
     uint32_t linear = offset + GetSegmentBase(state, op);
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, EAX);
@@ -451,7 +441,7 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(EmuState* state, DecodedOp* op, me
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Rm_Sreg(LogicFuncParams) {
     // 8C: MOV r/m16, Sreg
     uint16_t val = 0;
     if (op->prefixes.flags.opsize) {
@@ -462,7 +452,7 @@ FORCE_INLINE LogicFlow OpMov_Rm_Sreg(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMov_Sreg_Rm(LogicFuncParams) {
     // 8E: MOV Sreg, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -470,7 +460,7 @@ FORCE_INLINE LogicFlow OpMov_Sreg_Rm(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovzx_Byte(LogicFuncParams) {
     // 0F B6: MOVZX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -484,7 +474,7 @@ FORCE_INLINE LogicFlow OpMovzx_Byte(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovzx_Word(LogicFuncParams) {
     // 0F B7: MOVZX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -498,7 +488,7 @@ FORCE_INLINE LogicFlow OpMovzx_Word(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovsx_Byte(LogicFuncParams) {
     // 0F BE: MOVSX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -512,7 +502,7 @@ FORCE_INLINE LogicFlow OpMovsx_Byte(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) {
     // 0F BF: MOVSX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -526,7 +516,7 @@ FORCE_INLINE LogicFlow OpMovsx_Word(EmuState* state, DecodedOp* op, mem::MicroTL
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLea(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
     // 8D: LEA r16/32, m
     uint32_t offset = op->mem.disp;
     if (op->mem.base_offset != 32) {
@@ -549,7 +539,7 @@ FORCE_INLINE LogicFlow OpLea(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb
 // Stack Operations (Simple)
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE LogicFlow OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
     // 50+rd: PUSH r16/32
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -560,20 +550,20 @@ FORCE_INLINE LogicFlow OpPush_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPush_Imm32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Imm32(LogicFuncParams) {
     // 68: PUSH imm32
-    if (!Push<uint32_t, true>(state, op->imm, utlb, op)) return LogicFlow::RestartMemoryOp;
+    if (!Push<uint32_t, true>(state, imm, utlb, op)) return LogicFlow::RestartMemoryOp;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPush_Imm8(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
     // 6A: PUSH imm8
-    int32_t val = (int32_t)(int8_t)op->imm;
+    int32_t val = (int32_t)(int8_t)imm;
     if (!Push<uint32_t, true>(state, val, utlb, op)) return LogicFlow::RestartMemoryOp;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) {
     // POP r16/32 (0x58+rd)
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
@@ -588,7 +578,7 @@ FORCE_INLINE LogicFlow OpPop_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPop_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPop_Ev(LogicFuncParams) {
     // 8F: POP r/m16/32
     if (op->prefixes.flags.opsize) {
         auto val_res = Pop<uint16_t, true>(state, utlb, op);
@@ -606,7 +596,7 @@ FORCE_INLINE LogicFlow OpPop_Ev(EmuState* state, DecodedOp* op, mem::MicroTLB* u
 // Stack Operations (Complex) - Use Blocking (fail_on_tlb_miss=false)
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE LogicFlow OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
     // 60: PUSHA/PUSHAD
     // Failures (faults) will set status to Fault.
     // Return ExitOnCurrentEIP if fatal error, though status check loop should handle it.
@@ -664,7 +654,7 @@ FORCE_INLINE LogicFlow OpPusha(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) {
     // 61: POPA/POPAD
     // Pops: DI, SI, BP, SP(skip), BX, DX, CX, AX
     // Atomic update implies we shouldn't change registers if memory access fails,
@@ -732,11 +722,11 @@ FORCE_INLINE LogicFlow OpPopa(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) {
     // C8 iw ib: ENTER imm16, imm8
     // imm16 is alloc size, imm8 is nesting level
-    uint16_t size = (uint16_t)op->imm;
-    uint8_t level = (uint8_t)(op->imm >> 16);
+    uint16_t size = (uint16_t)imm;
+    uint8_t level = (uint8_t)(imm >> 16);
 
     // We need to be careful with atomicity.
     uint32_t esp = GetReg(state, ESP);
@@ -782,7 +772,7 @@ FORCE_INLINE LogicFlow OpEnter(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
     // C9: LEAVE
     // MOV ESP, EBP
     // POP EBP
@@ -800,7 +790,7 @@ FORCE_INLINE LogicFlow OpLeave(EmuState* state, DecodedOp* op, mem::MicroTLB* ut
 // ------------------------------------------------------------------------------------------------
 // Flag/Misc Operations (LAHF, SAHF, XCHG)
 // ------------------------------------------------------------------------------------------------
-FORCE_INLINE LogicFlow OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLahf(LogicFuncParams) {
     // 9F: LAHF
     uint32_t flags = state->ctx.eflags;
     uint8_t ah = (flags & 0xD5) | 0x02;  // 0xD5 = 1101 0101 (Mask valid flags)
@@ -810,7 +800,7 @@ FORCE_INLINE LogicFlow OpLahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpSahf(LogicFuncParams) {
     // 9E: SAHF
     uint32_t eax = GetReg(state, EAX);
     uint8_t ah = (eax >> 8) & 0xFF;
@@ -820,7 +810,7 @@ FORCE_INLINE LogicFlow OpSahf(EmuState* state, DecodedOp* op, mem::MicroTLB* utl
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXchg_Reg(LogicFuncParams) {
     // 90+reg: XCHG EAX, r16/32
     uint8_t reg = op->modrm & 7;
     if (reg == 0) return LogicFlow::Continue;  // NOP
@@ -839,7 +829,7 @@ FORCE_INLINE LogicFlow OpXchg_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpXchg_EvGv(LogicFuncParams) {
     // XCHG r/m16/32, r16/32 (0x87)
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
@@ -867,7 +857,7 @@ FORCE_INLINE LogicFlow OpXchg_EvGv(EmuState* state, DecodedOp* op, mem::MicroTLB
 // ------------------------------------------------------------------------------------------------
 
 template <typename T>
-bool Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+bool Helper_Movs(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -903,22 +893,22 @@ bool Helper_Movs(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-FORCE_INLINE LogicFlow OpMovs_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    if (!Helper_Movs<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
+FORCE_INLINE LogicFlow OpMovs_Byte(LogicFuncParams) {
+    if (!Helper_Movs<uint8_t>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-FORCE_INLINE LogicFlow OpMovs_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpMovs_Word(LogicFuncParams) {
     bool res;
     if (op->prefixes.flags.opsize)
-        res = Helper_Movs<uint16_t>(state, op, utlb);
+        res = Helper_Movs<uint16_t>(LogicPassParams);
     else
-        res = Helper_Movs<uint32_t>(state, op, utlb);
+        res = Helper_Movs<uint32_t>(LogicPassParams);
 
     if (!res) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);
     int32_t step = df ? -1 : 1;
     auto perform = [&]() -> bool {
@@ -942,7 +932,7 @@ FORCE_INLINE LogicFlow OpStos_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);
     int32_t step = (op->prefixes.flags.opsize ? 2 : 4);
     if (df) step = -step;
@@ -974,7 +964,7 @@ FORCE_INLINE LogicFlow OpStos_Word(EmuState* state, DecodedOp* op, mem::MicroTLB
 }
 
 template <typename T>
-bool Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+bool Helper_Lods(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -1013,23 +1003,23 @@ bool Helper_Lods(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-FORCE_INLINE LogicFlow OpLods_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    if (!Helper_Lods<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
+FORCE_INLINE LogicFlow OpLods_Byte(LogicFuncParams) {
+    if (!Helper_Lods<uint8_t>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-FORCE_INLINE LogicFlow OpLods_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
     bool res;
     if (op->prefixes.flags.opsize)
-        res = Helper_Lods<uint16_t>(state, op, utlb);
+        res = Helper_Lods<uint16_t>(LogicPassParams);
     else
-        res = Helper_Lods<uint32_t>(state, op, utlb);
+        res = Helper_Lods<uint32_t>(LogicPassParams);
 
     if (!res) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 template <typename T>
-bool Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+bool Helper_Scas(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -1077,23 +1067,23 @@ bool Helper_Scas(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-FORCE_INLINE LogicFlow OpScas_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    if (!Helper_Scas<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
+FORCE_INLINE LogicFlow OpScas_Byte(LogicFuncParams) {
+    if (!Helper_Scas<uint8_t>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-FORCE_INLINE LogicFlow OpScas_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
     bool res;
     if (op->prefixes.flags.opsize)
-        res = Helper_Scas<uint16_t>(state, op, utlb);
+        res = Helper_Scas<uint16_t>(LogicPassParams);
     else
-        res = Helper_Scas<uint32_t>(state, op, utlb);
+        res = Helper_Scas<uint32_t>(LogicPassParams);
 
     if (!res) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 template <typename T>
-bool Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+bool Helper_Cmps(LogicFuncParams) {
     bool df = (state->ctx.eflags & 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -1140,16 +1130,16 @@ bool Helper_Cmps(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     return true;
 }
 
-FORCE_INLINE LogicFlow OpCmps_Byte(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    if (!Helper_Cmps<uint8_t>(state, op, utlb)) return LogicFlow::ExitOnCurrentEIP;
+FORCE_INLINE LogicFlow OpCmps_Byte(LogicFuncParams) {
+    if (!Helper_Cmps<uint8_t>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
-FORCE_INLINE LogicFlow OpCmps_Word(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCmps_Word(LogicFuncParams) {
     bool res;
     if (op->prefixes.flags.opsize)
-        res = Helper_Cmps<uint16_t>(state, op, utlb);
+        res = Helper_Cmps<uint16_t>(LogicPassParams);
     else
-        res = Helper_Cmps<uint32_t>(state, op, utlb);
+        res = Helper_Cmps<uint32_t>(LogicPassParams);
 
     if (!res) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;

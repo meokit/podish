@@ -13,7 +13,7 @@
 namespace fiberish {
 namespace op {
 
-FORCE_INLINE LogicFlow OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
     // 0F 2A: CVTPI2PS (MMX) / CVTSI2SS (F3) / CVTSI2SD (F2)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
@@ -40,7 +40,7 @@ FORCE_INLINE LogicFlow OpCvt_2A(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
     // 2C: CVTTSD2SI (F2), CVTTSS2SI (F3)
     uint32_t addr = 0;
     if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
@@ -79,7 +79,7 @@ FORCE_INLINE LogicFlow OpCvt_2C(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) {
     // 0F 2D: CVTSD2SI (F2) / CVTSS2SI (F3)
     uint32_t addr = 0;
     if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
@@ -117,7 +117,7 @@ FORCE_INLINE LogicFlow OpCvt_2D(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
     // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
@@ -178,7 +178,7 @@ FORCE_INLINE LogicFlow OpCvt_5A(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_5B(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_5B(LogicFuncParams) {
     // 0F 5B: CVTDQ2PS / CVTPS2DQ (66) / CVTTPS2DQ (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
@@ -202,7 +202,7 @@ FORCE_INLINE LogicFlow OpCvt_5B(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_E6(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
     // 0F E6: CVTPD2DQ (F2) / CVTDQ2PD (F3) / CVTTPD2DQ (66)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];

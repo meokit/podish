@@ -27,7 +27,6 @@ extern void* g_HandlerBase;
 
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
-extern HandlerFunc g_Handlers[1024];
 extern HandlerFunc g_ExitHandlers[32];
 
 // Specialized Opcode Indices

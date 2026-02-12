@@ -13,7 +13,7 @@
 namespace fiberish {
 
 template <typename T>
-FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
     // 0F AF: IMUL r16/32, r/m16/32
     // Dest: Register (Gv)
     // Src:  r/m (Ev)
@@ -57,7 +57,7 @@ FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(EmuState* state, DecodedOp* op, me
 }
 
 template <typename T, bool IsImm8>
-FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
     // 69: IMUL r, r/m, imm16/32
     // 6B: IMUL r, r/m, imm8
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -75,9 +75,9 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(EmuState* state, DecodedOp* op, m
 
     T val2;  // Immediate
     if constexpr (IsImm8) {
-        val2 = (T)(int16_t)(int8_t)op->imm;  // Sign-extend imm8
+        val2 = (T)(int16_t)(int8_t)imm;  // Sign-extend imm8
     } else {
-        val2 = (T)op->imm;
+        val2 = (T)imm;
     }
 
     if constexpr (sizeof(T) == 2) {
@@ -102,25 +102,25 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(EmuState* state, DecodedOp* op, m
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpImul_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEv(LogicFuncParams) {
     if (op->prefixes.flags.opsize)
-        return OpImul_GvEv_T_Internal<uint16_t>(state, op, utlb);
+        return OpImul_GvEv_T_Internal<uint16_t>(LogicPassParams);
     else
-        return OpImul_GvEv_T_Internal<uint32_t>(state, op, utlb);
+        return OpImul_GvEv_T_Internal<uint32_t>(LogicPassParams);
 }
 
-FORCE_INLINE LogicFlow OpImul_GvEvIz(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEvIz(LogicFuncParams) {
     if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T_Internal<uint16_t, false>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint16_t, false>(LogicPassParams);
     else
-        return OpImul_GvEvI_T_Internal<uint32_t, false>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint32_t, false>(LogicPassParams);
 }
 
-FORCE_INLINE LogicFlow OpImul_GvEvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpImul_GvEvIb(LogicFuncParams) {
     if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T_Internal<uint16_t, true>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint16_t, true>(LogicPassParams);
     else
-        return OpImul_GvEvI_T_Internal<uint32_t, true>(state, op, utlb);
+        return OpImul_GvEvI_T_Internal<uint32_t, true>(LogicPassParams);
 }
 
 }  // namespace op

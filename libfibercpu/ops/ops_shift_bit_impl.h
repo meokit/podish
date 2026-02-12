@@ -14,8 +14,8 @@ namespace fiberish {
 
 // Returns LogicFlow to propagate Restart/Retry
 template <uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
-                                              bool is_byte, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, ShimOp* op, uint32_t dest, uint8_t count, bool is_byte,
+                                              mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -130,7 +130,7 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, ui
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(LogicFuncParams) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     uint32_t dest;
@@ -168,12 +168,12 @@ FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(EmuState* state, DecodedOp* op, me
         }
     }
 
-    uint8_t count = (uint8_t)op->imm;
+    uint8_t count = (uint8_t)imm;
     return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(LogicFuncParams) {
     // D0: Shift r/m8, 1
     // D1: Shift r/m16/32, 1
     uint32_t dest;
@@ -204,7 +204,7 @@ FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(EmuState* state, DecodedOp* op, mem
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     uint32_t dest;
@@ -247,86 +247,56 @@ FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(EmuState* state, DecodedOp* op, me
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpGroup2_EbIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<true>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_Eb1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<true>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EbCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<true>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false>(state, op, utlb);
-}
+FORCE_INLINE LogicFlow OpGroup2_EbIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<true>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_Eb1(LogicFuncParams) { return OpGroup2_Ev1_Internal<true>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_Ev1(LogicFuncParams) { return OpGroup2_Ev1_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EbCl(LogicFuncParams) { return OpGroup2_EvCl_Internal<true>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvCl(LogicFuncParams) { return OpGroup2_EvCl_Internal<false>(LogicPassParams); }
 
 // SHL Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 4>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 4>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 4>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 4>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl_ModReg(LogicFuncParams) {
+    return OpGroup2_EvIb_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 4>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl_ModReg(LogicFuncParams) {
+    return OpGroup2_Ev1_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 4>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 4, Specialized::ModReg>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl_ModReg(LogicFuncParams) {
+    return OpGroup2_EvCl_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
 }
 
 // SHR Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 5>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 5>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 5>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 5>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr_ModReg(LogicFuncParams) {
+    return OpGroup2_EvIb_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 5>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr_ModReg(LogicFuncParams) {
+    return OpGroup2_Ev1_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 5>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 5, Specialized::ModReg>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr_ModReg(LogicFuncParams) {
+    return OpGroup2_EvCl_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
 }
 
 // SAR Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 7>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 7>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 7>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 7>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar_ModReg(LogicFuncParams) {
+    return OpGroup2_EvIb_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 7>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar_ModReg(LogicFuncParams) {
+    return OpGroup2_Ev1_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
 }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 7>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvIb_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_Ev1_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar_ModReg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
-    return OpGroup2_EvCl_Internal<false, 7, Specialized::ModReg>(state, op, utlb);
+FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar_ModReg(LogicFuncParams) {
+    return OpGroup2_EvCl_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
 }
 
-FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBt_Reg(LogicFuncParams) {
     // 0F A3: BT r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -353,7 +323,7 @@ FORCE_INLINE LogicFlow OpBt_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* u
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpGroup8_EvIb(LogicFuncParams) {
     // 0F BA /4: BT  r/m16/32, imm8
     // 0F BA /5: BTS r/m16/32, imm8
     // 0F BA /6: BTR r/m16/32, imm8
@@ -363,7 +333,7 @@ FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroT
     // Safety check: Decoder should route handling here only for Group8 (BA)
 
     bool opsize = op->prefixes.flags.opsize;
-    uint8_t offset = op->imm & (opsize ? 15 : 31);
+    uint8_t offset = imm & (opsize ? 15 : 31);
 
     bool is_mem = ((op->modrm >> 6) & 3) != 3;
     uint32_t base = 0;
@@ -429,7 +399,7 @@ FORCE_INLINE LogicFlow OpGroup8_EvIb(EmuState* state, DecodedOp* op, mem::MicroT
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBtr_Reg(LogicFuncParams) {
     // 0F B3: BTR r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -466,7 +436,7 @@ FORCE_INLINE LogicFlow OpBtr_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBts_Reg(LogicFuncParams) {
     // 0F AB: BTS r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -503,7 +473,7 @@ FORCE_INLINE LogicFlow OpBts_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBtc_Reg(LogicFuncParams) {
     // 0F BB: BTC r/m16/32, r16/32
     uint32_t bit_idx = GetReg(state, (op->modrm >> 3) & 7);
     uint8_t mod = (op->modrm >> 6) & 3;
@@ -540,7 +510,7 @@ FORCE_INLINE LogicFlow OpBtc_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* 
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBsr_GvEv(LogicFuncParams) {
     // 0F BD: BSR r16/32, r/m16/32
     // Read only, Restart logic
     uint32_t val;
@@ -566,7 +536,7 @@ FORCE_INLINE LogicFlow OpBsr_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB*
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(LogicFuncParams) {
     // 0F BC: BSF r32, r/m32
     // F3 0F BC: TZCNT r32, r/m32
 
@@ -612,7 +582,7 @@ FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(EmuState* state, DecodedOp* op, mem::Mic
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBswap_Reg(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow OpBswap_Reg(LogicFuncParams) {
     // 0F C8+rd: BSWAP r32
     // DecodeInstruction puts rd in op->modrm for non-ModRM ops
     uint8_t reg = op->modrm & 7;

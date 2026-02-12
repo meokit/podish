@@ -12,36 +12,35 @@ extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
 
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                  mem::MicroTLB utlb);
+                                                  mem::MicroTLB utlb, uint32_t branch);
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                mem::MicroTLB utlb);
-
+                                                mem::MicroTLB utlb, uint32_t branch);
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb) {
+                                           mem::MicroTLB utlb, uint32_t branch) {
     // Prefetch next cache line
     PREFETCH((void*)(op + 4));
     // Execute Logic
-    auto flow = Target(state, op, &utlb);
+    auto flow = Target(state, reinterpret_cast<ShimOp*>(op), &utlb, op->imm, &branch);
 
     switch (flow) {
         case LogicFlow::Continue:
             // Direct Relative Dispatch
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
-            ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
+            ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb, branch);
         case LogicFlow::ExitOnCurrentEIP:
-            if (!state->eip_dirty) state->sync_eip_to_op_start(op);
+            if (!state->eip_dirty) state->sync_eip_to_op_start(reinterpret_cast<ShimOp*>(op));
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
-            if (!state->eip_dirty) state->sync_eip_to_op_end(op);
+            if (!state->eip_dirty) state->sync_eip_to_op_end(reinterpret_cast<ShimOp*>(op));
             return instr_limit;
         case LogicFlow::ExitWithoutSyncEIP:
             return instr_limit;
         case LogicFlow::RestartMemoryOp:
-            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb);
+            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch);
         case LogicFlow::RetryMemoryOp:
-            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb);
+            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch);
         default:
             return instr_limit;
     }

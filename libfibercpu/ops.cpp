@@ -8,19 +8,19 @@ namespace fiberish {
 
 template <bool restart>
 ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb) {
+                                           mem::MicroTLB utlb, uint32_t branch) {
     bool fault = false;
 
     auto execute_mem_op = [&]<typename T>(uint32_t addr, T* value, bool is_write) {
         if (!is_write) {
-            auto res = state->mmu.read<T>(addr, &utlb, op);
+            auto res = state->mmu.read<T>(addr, &utlb, reinterpret_cast<ShimOp*>(op));
             if (!res) {
                 fault = true;
             } else {
                 *value = *res;
             }
         } else {
-            if (!state->mmu.write<T>(addr, *value, &utlb, op)) fault = true;
+            if (!state->mmu.write<T>(addr, *value, &utlb, reinterpret_cast<ShimOp*>(op))) fault = true;
         }
     };
 
@@ -85,32 +85,31 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
 
     if constexpr (restart) {
         // Don't clear mem_op, it's pending for restart
-        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb);
+        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb, branch);
     }
 
     state->mem_op.emplace<0>();
-    ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb);
+    ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb, branch);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb);
+                                           mem::MicroTLB utlb, uint32_t branch) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb, branch);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                         mem::MicroTLB utlb) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb);
+                                         mem::MicroTLB utlb, uint32_t branch) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb, branch);
 }
 
 // Sentinel Handler
 template <int I>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                       mem::MicroTLB utlb) {
+                                       mem::MicroTLB utlb, uint32_t branch) {
     auto* last_op = op - 1;
 
-    if (last_op->branch_target != std::numeric_limits<uint32_t>::max()) {
-        state->ctx.eip = last_op->branch_target;
-        last_op->branch_target = std::numeric_limits<uint32_t>::max();
+    if (branch != std::numeric_limits<uint32_t>::max()) {
+        state->ctx.eip = branch;
     } else {
         state->ctx.eip = last_op->next_eip;
     }
@@ -134,13 +133,14 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
             op->next_block->exec_count++;
 
             if (op->next_block->jit_func != nullptr) {
-                ATTR_MUSTTAIL return op->next_block->jit_func(state, next_head, instr_limit, utlb);
+                ATTR_MUSTTAIL return op->next_block->jit_func(state, next_head, instr_limit, utlb,
+                                                              std::numeric_limits<uint32_t>::max());
             }
 
             // Direct Relative Dispatch
             auto handler = next_head->handler;
             if (handler != nullptr) {
-                ATTR_MUSTTAIL return handler(state, next_head, instr_limit, utlb);
+                ATTR_MUSTTAIL return handler(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max());
             }
         }
     }

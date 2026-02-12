@@ -46,10 +46,11 @@ namespace fiberish {
 
 struct EmuState;
 struct DecodedOp;
+struct ShimOp;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                 mem::MicroTLB utlb);
+                                                 mem::MicroTLB utlb, uint32_t branch);
 
 enum class LogicFlow : uint8_t {
     Continue = 0,
@@ -60,78 +61,80 @@ enum class LogicFlow : uint8_t {
     RetryMemoryOp = 5,
 };
 
-#define LogicFuncResult LogicFlow
-#define LogicFuncParams EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb
+#define LogicFuncParams \
+    EmuState *RESTRICT state, ShimOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch
+#define LogicPassParams state, op, utlb, imm, branch
 
 // Logic Function (Standard ABI, implementation)
 // It may modify op and next_handler to control flow!
-using LogicFunc = LogicFuncResult (*)(LogicFuncParams);  // Always inlined, no restrict needed
+using LogicFunc = LogicFlow (*)(LogicFuncParams);  // Always inlined, no restrict needed
 
 struct BasicBlock;
 
+#define COMMON_OP_FIELDS                    \
+    union {                                 \
+        struct {                            \
+            uint32_t disp;        /* 0-3 */ \
+            uint8_t base_offset;  /* 4   */ \
+            uint8_t index_offset; /* 5   */ \
+            uint8_t scale;        /* 6   */ \
+            uint8_t mem_flags;    /* 7   */ \
+        } mem;                              \
+        BasicBlock* next_block;             \
+        uint64_t mem_packed;                \
+    };                                      \
+    uint32_t next_eip; /* 8-11  */          \
+    uint8_t len;       /* 12    */          \
+    uint8_t modrm;     /* 13    */          \
+    union {                                 \
+        uint8_t all;                        \
+        struct {                            \
+            uint8_t lock : 1;               \
+            uint8_t rep : 1;                \
+            uint8_t repne : 1;              \
+            uint8_t segment : 3;            \
+            uint8_t opsize : 1;             \
+            uint8_t addrsize : 1;           \
+        } flags;                            \
+    } prefixes; /* 14    */                 \
+    union {                                 \
+        uint8_t all;                        \
+        struct {                            \
+            uint8_t has_modrm : 1;          \
+            uint8_t has_sib : 1;            \
+            uint8_t has_disp : 1;           \
+            uint8_t has_imm : 1;            \
+            uint8_t is_control_flow : 1;    \
+            uint8_t no_flags : 1;           \
+            uint8_t is_first : 1;           \
+            uint8_t is_last : 1;            \
+        } flags;                            \
+    } meta /* 15    */
+
+struct alignas(16) ShimOp {
+    COMMON_OP_FIELDS;
+};
+
 struct alignas(32) DecodedOp {
-    // 0-7
-    union {
-        struct {
-            uint32_t disp;         // 0-3
-            uint8_t base_offset;   // 4
-            uint8_t index_offset;  // 5
-            uint8_t scale;         // 6
-            uint8_t mem_flags;     // 7
-        } mem;
-        BasicBlock* next_block;
-        uint64_t mem_packed;
-    };
+    COMMON_OP_FIELDS;
 
-    // 8-11: Immediate Value (up to 32 bits, sign-extended if needed)
     uint32_t imm;
-
-    // 12: Instruction Length
-    uint8_t len;
-
-    // 13: ModRM
-    uint8_t modrm;
-
-    // 14: Prefixes
-    union {
-        uint8_t all;
-        struct {
-            uint8_t lock : 1;
-            uint8_t rep : 1;
-            uint8_t repne : 1;
-            uint8_t segment : 3;
-            uint8_t opsize : 1;
-            uint8_t addrsize : 1;
-        } flags;
-    } prefixes;
-
-    // 15: Meta flags
-    union {
-        uint8_t all;
-        struct {
-            uint8_t has_modrm : 1;
-            uint8_t has_sib : 1;
-            uint8_t has_disp : 1;
-            uint8_t has_imm : 1;
-            uint8_t is_control_flow : 1;
-            uint8_t no_flags : 1;
-            uint8_t is_first : 1;
-            uint8_t is_last : 1;
-        } flags;
-    } meta;
-
-    // 16-23
+    uint32_t padding0;
     HandlerFunc handler;
-
-    // 24-27
-    uint32_t branch_target;
-
-    // 28-31: Next EIP
-    uint32_t next_eip;
 
     uint8_t GetLength() const { return len; }
     void SetLength(uint8_t l) { len = l; }
 };
+
+static_assert(sizeof(ShimOp) == 16, "ShimOp must be exactly 16 bytes");
+static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
+
+static_assert(offsetof(ShimOp, next_eip) == offsetof(DecodedOp, next_eip), "Layout mismatch: next_eip");
+static_assert(offsetof(ShimOp, meta) == offsetof(DecodedOp, meta), "Layout mismatch: meta");
+static_assert(offsetof(DecodedOp, imm) == 16, "DecodedOp: imm must start at offset 16");
+static_assert(offsetof(DecodedOp, handler) == 24, "DecodedOp: handler must start at offset 24");
+
+#undef COMMON_OP_FIELDS
 
 // Size check
 static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");
