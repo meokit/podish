@@ -9,7 +9,7 @@ namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group1(EmuState* state, ShimOp* op, T dest, T src, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, ShimOp* op, T dest, T src, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -65,7 +65,7 @@ LogicFlow Helper_Group1(EmuState* state, ShimOp* op, T dest, T src, mem::MicroTL
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t imm) {
+FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t imm) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -380,7 +380,7 @@ LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb,
 
 // Template Helper for Group 4 (INC, DEC)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group4(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -437,7 +437,7 @@ LogicFlow Helper_Group4(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb)
 
 // Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-LogicFlow Helper_Group5(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t* branch) {
+FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb, uint32_t* branch) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
