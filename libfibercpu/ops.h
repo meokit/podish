@@ -57,12 +57,10 @@ void RegisterSseMovOps();
 // Sentinel Handler (Inline)
 static inline ATTR_PRESERVE_NONE int64_t ExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                    int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
-    auto* last_op = op - 1;
-
     if (branch != std::numeric_limits<uint32_t>::max()) {
         state->ctx.eip = branch;
     } else {
-        state->ctx.eip = last_op->next_eip;
+        state->ctx.eip = op->next_eip;  // == (op - 1)->next_eip
     }
 
     // Clear mem_op

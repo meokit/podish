@@ -230,7 +230,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
     }
 
     if (imm_len > 0) {
-        op->meta.flags.has_imm = 1;
+        // op->meta.flags.has_imm = 1;
         if (imm_len == 1)
             op->imm = *reinterpret_cast<const uint8_t*>(ptr);
         else if (imm_len == 2)

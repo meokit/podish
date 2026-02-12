@@ -103,11 +103,10 @@ struct BasicBlock;
             uint8_t has_modrm : 1;          \
             uint8_t has_sib : 1;            \
             uint8_t has_disp : 1;           \
-            uint8_t has_imm : 1;            \
             uint8_t is_control_flow : 1;    \
             uint8_t no_flags : 1;           \
             uint8_t is_first : 1;           \
-            uint8_t is_last : 1;            \
+            uint8_t shim : 1;               \
         } flags;                            \
     } meta /* 15    */
 

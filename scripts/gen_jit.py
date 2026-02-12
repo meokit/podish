@@ -11,19 +11,21 @@ def generate_trie_node(blocks, depth=0):
     code = ""
 
     if relevant_blocks:
-        # 按照当前深度的 Op 符号进行分组
+        # 按照当前深度的 Op 符号和立即数进行分组
         groups = {}
         for b in relevant_blocks:
-            sym = b['ops'][depth]['symbol']
-            groups.setdefault(sym, []).append(b)
+            op = b['ops'][depth]
+            sym = op['symbol']
+            imm = op['imm']
+            groups.setdefault((sym, imm), []).append(b)
         
         # 逐个生成 if / else if
         first = True
-        for sym, sub_blocks in groups.items():
+        for (sym, imm), sub_blocks in groups.items():
             prefix = "if" if first else "else if"
             target = f"(void*)DispatchWrapper<fiberish::op::{sym}>"
             
-            code += f"{indent}{prefix} (handlers[{depth}] == {target}) {{\n"
+            code += f"{indent}{prefix} ((void*)ops[{depth}].handler == {target} && ops[{depth}].imm == {imm}) {{\n"
             code += generate_trie_node(sub_blocks, depth + 1)
             code += f"{indent}}}\n"
             first = False
@@ -85,8 +87,8 @@ FORCE_INLINE int64_t JitHandleFlow(LogicFlow flow, EmuState* state, DecodedOp* o
 // Forward Declarations
 {" ".join([f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);" for i in range(len(blocks))])}
 
-HandlerFunc FindJitBlock(const std::vector<void*>& handlers) {{
-    if (handlers.empty()) return nullptr;
+HandlerFunc FindJitBlock(DecodedOp* ops) {{
+    if (!ops) return nullptr;
 {trie_code}
 }}
 
@@ -97,11 +99,23 @@ HandlerFunc FindJitBlock(const std::vector<void*>& handlers) {{
         ops = b['ops']
         cpp += f"// Block {i} | Exec: {b['exec_count']}\n"
         cpp += f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {{\n"
+        
+        if ops:
+            cpp += "    LogicFlow err_flow;\n"
+            cpp += "    DecodedOp* err_op;\n"
+
         for j, op in enumerate(ops):
             sym = op['symbol']
-            cpp += f"    {{ auto flow = fiberish::op::{sym}(state, reinterpret_cast<ShimOp*>(&op[{j}]), &utlb, op[{j}].imm, &branch);\n"
-            cpp += f"      if (flow != LogicFlow::Continue) return JitHandleFlow(flow, state, &op[{j}], instr_limit, utlb, branch); }}\n"
+            imm_val = op['imm']
+            cpp += f"    {{ auto flow = fiberish::op::{sym}(state, reinterpret_cast<ShimOp*>(&op[{j}]), &utlb, {imm_val}, &branch);\n"
+            cpp += f"      if (flow != LogicFlow::Continue) [[unlikely]] {{ err_flow = flow; err_op = &op[{j}]; goto handle_flow; }} }}\n"
+        
         cpp += f"    ATTR_MUSTTAIL return ExitBlock(state, op + {len(ops)}, instr_limit, utlb, branch);\n"
+        
+        if ops:
+            cpp += "handle_flow:\n"
+            cpp += "    return JitHandleFlow(err_flow, state, err_op, instr_limit, utlb, branch);\n"
+        
         cpp += "}\n\n"
 
     cpp += "} // namespace fiberish\n"

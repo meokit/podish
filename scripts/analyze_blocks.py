@@ -103,6 +103,8 @@ def main():
     parser.add_argument('lib_path', help='Path to the library for symbol resolution')
     parser.add_argument('--min-exec-count', type=int, default=0, 
                         help='Minimum execution count to include a block (default: 0, no filter)')
+    parser.add_argument('--min-instr', type=int, default=0,
+                        help='Minimum number of instructions to include a block (default: 0, no filter)')
     parser.add_argument('--n-gram', type=int, default=0,
                         help='Analyze N-Grams of symbol sequences within blocks. N=0 disables analysis.')
     parser.add_argument('--top-n', type=int, default=0,
@@ -115,6 +117,7 @@ def main():
     dump_file = args.dump_file
     lib_path = args.lib_path
     min_exec_count = args.min_exec_count
+    min_instr = args.min_instr
     n_gram_size = args.n_gram
     top_n = args.top_n
     output_file = args.output
@@ -226,8 +229,14 @@ def main():
         blocks_data = [b for b in blocks_data if b['exec_count'] >= min_exec_count]
         print(f"Filtered blocks: {original_count} -> {len(blocks_data)} (min_exec_count >= {min_exec_count})")
     
-    # Sort blocks by execution count (descending)
-    blocks_data.sort(key=lambda x: x['exec_count'], reverse=True)
+    # Filter by minimum instructions
+    if min_instr > 0:
+        original_count = len(blocks_data)
+        blocks_data = [b for b in blocks_data if b['inst_count'] >= min_instr]
+        print(f"Filtered blocks: {original_count} -> {len(blocks_data)} (min_instr >= {min_instr})")
+    
+    # Sort blocks by execution count * instruction count (descending)
+    blocks_data.sort(key=lambda x: x['exec_count'] * x['inst_count'], reverse=True)
     
     # Apply top-N limit
     if top_n > 0:
@@ -272,6 +281,7 @@ def main():
         'metadata': {
             'total_blocks': len(blocks_data),
             'min_exec_count_filter': min_exec_count,
+            'min_instr_filter': min_instr,
             'n_gram_size': n_gram_size
         }
     }
