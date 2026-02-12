@@ -581,8 +581,11 @@ finalize:
         for (size_t i = 0; i < inst_count; ++i) {
             sig.push_back((void*)block->ops[i].handler);
         }
-        block->jit_func = FindJitBlock(sig);
+        block->entry = FindJitBlock(sig);
     }
+
+    // JIT Entry or First Op Handler Fallback
+    block->entry = block->entry ? block->entry : block->ops[0].handler;
 
     return block;
 }

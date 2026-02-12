@@ -71,19 +71,19 @@ def main():
 namespace fiberish {{
 
 // Flow Handler
-FORCE_INLINE int64_t JitHandleFlow(LogicFlow flow, EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb) {{
+FORCE_INLINE int64_t JitHandleFlow(LogicFlow flow, EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {{
     switch (flow) {{
-        case LogicFlow::ExitOnCurrentEIP: if (!state->eip_dirty) state->sync_eip_to_op_start(op); return instr_limit;
-        case LogicFlow::ExitOnNextEIP: if (!state->eip_dirty) state->sync_eip_to_op_end(op); return instr_limit;
+        case LogicFlow::ExitOnCurrentEIP: if (!state->eip_dirty) state->sync_eip_to_op_start(reinterpret_cast<ShimOp*>(op)); return instr_limit;
+        case LogicFlow::ExitOnNextEIP: if (!state->eip_dirty) state->sync_eip_to_op_end(reinterpret_cast<ShimOp*>(op)); return instr_limit;
         case LogicFlow::ExitWithoutSyncEIP: return instr_limit;
-        case LogicFlow::RestartMemoryOp: return MemoryOpRestart(state, op, instr_limit, utlb);
-        case LogicFlow::RetryMemoryOp: return MemoryOpRetry(state, op, instr_limit, utlb);
+        case LogicFlow::RestartMemoryOp: return MemoryOpRestart(state, op, instr_limit, utlb, branch);
+        case LogicFlow::RetryMemoryOp: return MemoryOpRetry(state, op, instr_limit, utlb, branch);
         default: return instr_limit;
     }}
 }}
 
 // Forward Declarations
-{" ".join([f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb);" for i in range(len(blocks))])}
+{" ".join([f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);" for i in range(len(blocks))])}
 
 HandlerFunc FindJitBlock(const std::vector<void*>& handlers) {{
     if (handlers.empty()) return nullptr;
@@ -96,12 +96,12 @@ HandlerFunc FindJitBlock(const std::vector<void*>& handlers) {{
         i = b['index']
         ops = b['ops']
         cpp += f"// Block {i} | Exec: {b['exec_count']}\n"
-        cpp += f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb) {{\n"
+        cpp += f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {{\n"
         for j, op in enumerate(ops):
             sym = op['symbol']
-            cpp += f"    {{ auto flow = fiberish::op::{sym}(state, &op[{j}], &utlb);\n"
-            cpp += f"      if (flow != LogicFlow::Continue) return JitHandleFlow(flow, state, &op[{j}], instr_limit, utlb); }}\n"
-        cpp += f"    ATTR_MUSTTAIL return (op + {len(ops)})->handler(state, op + {len(ops)}, instr_limit, utlb);\n"
+            cpp += f"    {{ auto flow = fiberish::op::{sym}(state, reinterpret_cast<ShimOp*>(&op[{j}]), &utlb, op[{j}].imm, &branch);\n"
+            cpp += f"      if (flow != LogicFlow::Continue) return JitHandleFlow(flow, state, &op[{j}], instr_limit, utlb, branch); }}\n"
+        cpp += f"    ATTR_MUSTTAIL return ExitBlock(state, op + {len(ops)}, instr_limit, utlb, branch);\n"
         cpp += "}\n\n"
 
     cpp += "} // namespace fiberish\n"

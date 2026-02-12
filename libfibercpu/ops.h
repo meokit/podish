@@ -20,6 +20,8 @@
 #include "ops/ops_sse_int.h"
 #include "ops/ops_sse_mov.h"
 
+#include <limits>
+
 namespace fiberish {
 
 // Handler Base Anchor (Used for calculating relative offsets)
@@ -51,5 +53,44 @@ void RegisterSseCvtOps();
 void RegisterSseFpOps();
 void RegisterSseIntOps();
 void RegisterSseMovOps();
+
+// Sentinel Handler (Inline)
+static inline ATTR_PRESERVE_NONE int64_t ExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                   int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
+    auto* last_op = op - 1;
+
+    if (branch != std::numeric_limits<uint32_t>::max()) {
+        state->ctx.eip = branch;
+    } else {
+        state->ctx.eip = last_op->next_eip;
+    }
+
+    // Clear mem_op
+    state->mem_op.emplace<0>();
+
+    // Basic Block Chaining
+    // Optim: If next_block is dummy, is_valid is false, so we skip.
+    // If next_block is real but invalidated, is_valid is false, so we skip.
+    if (op->next_block->is_valid && op->next_block->start_eip == state->ctx.eip) {
+        // Check instruction limit before chaining
+        if (instr_limit > 0) {
+            // Subtract the NEXT block's size from the limit
+            instr_limit -= op->next_block->inst_count;
+
+            state->last_block = op->next_block;
+            // ops is now flexible array member, essentially ops[0]
+            DecodedOp* next_head = &op->next_block->ops[0];
+
+            op->next_block->exec_count++;
+
+            if (op->next_block->entry != nullptr) {
+                ATTR_MUSTTAIL return op->next_block->entry(state, next_head, instr_limit, utlb,
+                                                           std::numeric_limits<uint32_t>::max());
+            }
+        }
+    }
+    // Returns to X86_Run loop.
+    return instr_limit;
+}
 
 }  // namespace fiberish

@@ -149,7 +149,7 @@ struct BasicBlock {
     uint8_t padding1;
     bool is_valid = true;
     uint64_t exec_count;  // Number of times block was executed
-    HandlerFunc jit_func = nullptr;
+    HandlerFunc entry = nullptr;
 
     // Flexible Array Member - Must be last
     // We expect max 64 instructions per block + 1 sentinel + 1 fault handling = ~66

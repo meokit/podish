@@ -456,8 +456,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         if (block_ptr->inst_count > 0) {
             DecodedOp* head = &block_ptr->ops[0];
 
-            // JIT Execution
-            if (block_ptr->jit_func) {
+            if (block_ptr->entry) {
                 int64_t batch_limit = 1000;
                 if (max_insts != 0) {
                     uint64_t remaining_budget = max_insts - total_run_insts;
@@ -471,33 +470,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
                 MicroTLB utlb;
                 int64_t remaining =
-                    block_ptr->jit_func(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max());
-                total_run_insts += (initial_batch_limit - remaining);
-                continue;
-            }
-
-            HandlerFunc h = head->handler;
-            if (h) {
-                int64_t batch_limit = 1000;
-                if (max_insts != 0) {
-                    uint64_t remaining_budget = max_insts - total_run_insts;
-                    if (remaining_budget < (uint64_t)batch_limit) {
-                        batch_limit = (int64_t)remaining_budget;
-                    }
-                }
-
-                int64_t initial_batch_limit = batch_limit;
-                // Subtract the FIRST block's size from the limit
-                batch_limit -= block_ptr->inst_count;
-
-                // Clear eip dirty flag before enter a handler chain
-                if (state->eip_dirty) {
-                    state->eip_dirty = false;
-                }
-
-                // h will return the remaining budget
-                MicroTLB utlb;
-                int64_t remaining = h(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max());
+                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max());
                 total_run_insts += (initial_batch_limit - remaining);
             } else {
                 if (!state->hooks.on_invalid_opcode(state)) {

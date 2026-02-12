@@ -182,14 +182,13 @@ public unsafe partial class X86Native
     public struct DecodedOp
     {
         [FieldOffset(0)] public ulong mem_packed;
-        [FieldOffset(8)] public uint imm;
-        [FieldOffset(12)] public uint next_eip;
-        [FieldOffset(16)] public IntPtr handler;
-        [FieldOffset(24)] public uint branch_target;
-        [FieldOffset(28)] public byte prefixes;
-        [FieldOffset(29)] public byte modrm;
-        [FieldOffset(30)] public byte meta;
-        [FieldOffset(31)] public byte len;
+        [FieldOffset(8)] public uint next_eip;
+        [FieldOffset(12)] public byte len;
+        [FieldOffset(13)] public byte modrm;
+        [FieldOffset(14)] public byte prefixes;
+        [FieldOffset(15)] public byte meta;
+        [FieldOffset(16)] public uint imm;
+        [FieldOffset(24)] public IntPtr handler;
     }
 
     [StructLayout(LayoutKind.Sequential)]

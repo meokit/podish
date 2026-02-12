@@ -163,17 +163,16 @@ def main():
                 
                 # Layout:
                 # 0-7: mem_packed (Q)
-                # 8-11: imm (I)
-                # 12-15: next_eip (I)
-                # 16-23: handler (Q - ptr)
-                # 24-27: branch_target (I)
-                # 28: prefixes (B)
-                # 29: modrm (B)
-                # 30: meta (B)
-                # 31: len (B)
+                # 8-11: next_eip (I)
+                # 12: len (B)
+                # 13: modrm (B)
+                # 14: prefixes (B)
+                # 15: meta (B)
+                # 16-19: imm (I)
+                # 20-23: padding (I)
+                # 24-31: handler (Q - ptr)
                 
-                (mem_packed, imm, next_eip, handler_ptr, branch_target, 
-                 prefixes, modrm, meta, length) = struct.unpack("<QIIQIBBBB", op_bytes)
+                (mem_packed, next_eip, length, modrm, prefixes, meta, imm, padding, handler_ptr) = struct.unpack("<QIBBBBIIQ", op_bytes)
 
                 # Decode mem_packed
                 # struct {
@@ -205,7 +204,6 @@ def main():
                     # "handler_offset": f"0x{handler_offset:x}",
                     "symbol": symbol_name,
                     "imm": f"0x{imm:x}",
-                    # "branch_target": f"0x{branch_target:x}",
                     "len": f"0x{length:x}",
                     "prefixes": f"0x{prefixes:x}",
                     "modrm": f"0x{modrm:x}",
