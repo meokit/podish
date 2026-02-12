@@ -5,5 +5,5 @@
 
 namespace fiberish {
 void RegisterJitBlocks();
-HandlerFunc FindJitBlock(const std::vector<void*>& handlers);
+HandlerFunc FindJitBlock(DecodedOp* ops);
 }  // namespace fiberish

@@ -574,17 +574,8 @@ finalize:
     // Copy ops
     std::memcpy(block->ops, temp_ops.data(), temp_ops.size() * sizeof(DecodedOp));
 
-    // JIT Lookup
-    {
-        std::vector<void*> sig;
-        sig.reserve(inst_count);
-        for (size_t i = 0; i < inst_count; ++i) {
-            sig.push_back((void*)block->ops[i].handler);
-        }
-        block->entry = FindJitBlock(sig);
-    }
-
     // JIT Entry or First Op Handler Fallback
+    block->entry = FindJitBlock(block->ops);
     block->entry = block->entry ? block->entry : block->ops[0].handler;
 
     return block;
