@@ -108,6 +108,24 @@ namespace op {
 FORCE_INLINE LogicFlow OpJmp_Rel8(LogicFuncParams) { return OpJmp_Rel_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpJmp_Rel32(LogicFuncParams) { return OpJmp_Rel_Internal<false>(LogicPassParams); }
 
+FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
+    // E3: JECXZ/JCXZ rel8
+    bool jump = false;
+    if (op->prefixes.flags.addrsize) {
+        // 16-bit address size: CX
+        jump = (GetReg(state, ECX) & 0xFFFF) == 0;
+    } else {
+        // 32-bit address size: ECX
+        jump = GetReg(state, ECX) == 0;
+    }
+
+    if (jump) {
+        int32_t offset = (int32_t)(int8_t)(imm & 0xFF);
+        *branch = op->next_eip + offset;
+    }
+    return LogicFlow::Continue;
+}
+
 // Named wrappers for Jcc specializations
 #define JCC_WRAPPERS(cond, name)                                   \
     FORCE_INLINE LogicFlow OpJcc_##name##_Rel8(LogicFuncParams) {  \

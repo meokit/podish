@@ -2,6 +2,6 @@
 #include "jit_ops.h"
 
 namespace fiberish {
-__attribute__((weak)) HandlerFunc FindJitBlock(const std::vector<void*>& handlers) { return nullptr; }
+__attribute__((weak)) HandlerFunc FindJitBlock(const DecodedOp* op) { return nullptr; }
 
 }  // namespace fiberish
