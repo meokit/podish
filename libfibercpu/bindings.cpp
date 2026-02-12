@@ -10,6 +10,7 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
+#include "jit_ops.h"
 #include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
@@ -98,6 +99,7 @@ EmuState* X86_Create() {
         signal(SIGBUS, SignalHandler);
         g_SignalRegistered = true;
     }
+
     EmuState* state = new EmuState();
     // Zero entire context first
     std::memset(&state->ctx, 0, sizeof(state->ctx));
@@ -453,6 +455,26 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         state->last_block = block_ptr;
         if (block_ptr->inst_count > 0) {
             DecodedOp* head = &block_ptr->ops[0];
+
+            // JIT Execution
+            if (block_ptr->jit_func) {
+                int64_t batch_limit = 1000;
+                if (max_insts != 0) {
+                    uint64_t remaining_budget = max_insts - total_run_insts;
+                    if (remaining_budget < (uint64_t)batch_limit) {
+                        batch_limit = (int64_t)remaining_budget;
+                    }
+                }
+                int64_t initial_batch_limit = batch_limit;
+                batch_limit -= block_ptr->inst_count;
+                if (state->eip_dirty) state->eip_dirty = false;
+
+                MicroTLB utlb;
+                int64_t remaining = block_ptr->jit_func(state, head, batch_limit, utlb);
+                total_run_insts += (initial_batch_limit - remaining);
+                continue;
+            }
+
             HandlerFunc h = head->handler;
             if (h) {
                 int64_t batch_limit = 1000;

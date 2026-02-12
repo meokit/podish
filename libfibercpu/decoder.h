@@ -29,7 +29,7 @@
 #include <intrin.h>
 #if defined(_M_X64) || defined(_M_IX86)
 #define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
-#define PREFETCH_WRITE(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)  // x86写预取指令支持有限
+#define PREFETCH_WRITE(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
 #elif defined(_M_ARM64) || defined(_M_ARM)
 #define PREFETCH(addr) __prefetch((const void*)(addr))
 #define PREFETCH_WRITE(addr) __prefetchw((const void*)(addr))
@@ -141,8 +141,11 @@ struct BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
-    uint64_t exec_count;  // Number of times block was executed
+    uint16_t padding0;    // Align to 8 bytes for exec_count
+    uint8_t padding1;
     bool is_valid = true;
+    uint64_t exec_count;  // Number of times block was executed
+    HandlerFunc jit_func = nullptr;
 
     // Flexible Array Member - Must be last
     // We expect max 64 instructions per block + 1 sentinel + 1 fault handling = ~66

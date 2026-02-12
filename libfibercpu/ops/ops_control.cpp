@@ -1,6 +1,31 @@
 #include "ops_control_impl.h"
 
 namespace fiberish {
+
+static HandlerFunc g_JccRel8Wrappers[] = {
+    DispatchWrapper<op::OpJcc_O_Rel8>,  DispatchWrapper<op::OpJcc_NO_Rel8>, DispatchWrapper<op::OpJcc_B_Rel8>,
+    DispatchWrapper<op::OpJcc_AE_Rel8>, DispatchWrapper<op::OpJcc_E_Rel8>,  DispatchWrapper<op::OpJcc_NE_Rel8>,
+    DispatchWrapper<op::OpJcc_BE_Rel8>, DispatchWrapper<op::OpJcc_A_Rel8>,  DispatchWrapper<op::OpJcc_S_Rel8>,
+    DispatchWrapper<op::OpJcc_NS_Rel8>, DispatchWrapper<op::OpJcc_P_Rel8>,  DispatchWrapper<op::OpJcc_NP_Rel8>,
+    DispatchWrapper<op::OpJcc_L_Rel8>,  DispatchWrapper<op::OpJcc_GE_Rel8>, DispatchWrapper<op::OpJcc_LE_Rel8>,
+    DispatchWrapper<op::OpJcc_G_Rel8>};
+
+static HandlerFunc g_JccRel32Wrappers[] = {
+    DispatchWrapper<op::OpJcc_O_Rel32>,  DispatchWrapper<op::OpJcc_NO_Rel32>, DispatchWrapper<op::OpJcc_B_Rel32>,
+    DispatchWrapper<op::OpJcc_AE_Rel32>, DispatchWrapper<op::OpJcc_E_Rel32>,  DispatchWrapper<op::OpJcc_NE_Rel32>,
+    DispatchWrapper<op::OpJcc_BE_Rel32>, DispatchWrapper<op::OpJcc_A_Rel32>,  DispatchWrapper<op::OpJcc_S_Rel32>,
+    DispatchWrapper<op::OpJcc_NS_Rel32>, DispatchWrapper<op::OpJcc_P_Rel32>,  DispatchWrapper<op::OpJcc_NP_Rel32>,
+    DispatchWrapper<op::OpJcc_L_Rel32>,  DispatchWrapper<op::OpJcc_GE_Rel32>, DispatchWrapper<op::OpJcc_LE_Rel32>,
+    DispatchWrapper<op::OpJcc_G_Rel32>};
+
+static HandlerFunc g_CmovWrappers[] = {
+    DispatchWrapper<op::OpCmov_O>,  DispatchWrapper<op::OpCmov_NO>, DispatchWrapper<op::OpCmov_B>,
+    DispatchWrapper<op::OpCmov_AE>, DispatchWrapper<op::OpCmov_E>,  DispatchWrapper<op::OpCmov_NE>,
+    DispatchWrapper<op::OpCmov_BE>, DispatchWrapper<op::OpCmov_A>,  DispatchWrapper<op::OpCmov_S>,
+    DispatchWrapper<op::OpCmov_NS>, DispatchWrapper<op::OpCmov_P>,  DispatchWrapper<op::OpCmov_NP>,
+    DispatchWrapper<op::OpCmov_L>,  DispatchWrapper<op::OpCmov_GE>, DispatchWrapper<op::OpCmov_LE>,
+    DispatchWrapper<op::OpCmov_G>};
+
 void RegisterControlOps() {
     using namespace op;
 

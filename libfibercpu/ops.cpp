@@ -131,6 +131,12 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
             // ops is now flexible array member, essentially ops[0]
             DecodedOp* next_head = &op->next_block->ops[0];
 
+            op->next_block->exec_count++;
+
+            if (op->next_block->jit_func != nullptr) {
+                ATTR_MUSTTAIL return op->next_block->jit_func(state, next_head, instr_limit, utlb);
+            }
+
             // Direct Relative Dispatch
             auto handler = next_head->handler;
             if (handler != nullptr) {

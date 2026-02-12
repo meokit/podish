@@ -5,7 +5,8 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
-#include "ops.h"         // For g_Handlers
+#include "jit_ops.h"
+#include "ops.h"  // For g_Handlers
 #include "specialization.h"
 #include "state.h"
 
@@ -573,6 +574,16 @@ finalize:
 
     // Copy ops
     std::memcpy(block->ops, temp_ops.data(), temp_ops.size() * sizeof(DecodedOp));
+
+    // JIT Lookup
+    {
+        std::vector<void*> sig;
+        sig.reserve(inst_count);
+        for (size_t i = 0; i < inst_count; ++i) {
+            sig.push_back((void*)block->ops[i].handler);
+        }
+        block->jit_func = FindJitBlock(sig);
+    }
 
     return block;
 }

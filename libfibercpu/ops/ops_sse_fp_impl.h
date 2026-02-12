@@ -12,7 +12,7 @@
 
 namespace fiberish {
 
-simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred) {
+FORCE_INLINE simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred) {
     switch (pred & 7) {
         case 0:
             return simde_mm_cmpeq_pd(a, b);
@@ -34,7 +34,7 @@ simde__m128d Helper_CmpPD(simde__m128d a, simde__m128d b, uint8_t pred) {
     return a;
 }
 
-simde__m128d Helper_CmpSD(simde__m128d a, simde__m128d b, uint8_t pred) {
+FORCE_INLINE simde__m128d Helper_CmpSD(simde__m128d a, simde__m128d b, uint8_t pred) {
     switch (pred & 7) {
         case 0:
             return simde_mm_cmpeq_sd(a, b);
@@ -56,7 +56,7 @@ simde__m128d Helper_CmpSD(simde__m128d a, simde__m128d b, uint8_t pred) {
     return a;
 }
 
-simde__m128 Helper_CmpPS(simde__m128 a, simde__m128 b, uint8_t pred) {
+FORCE_INLINE simde__m128 Helper_CmpPS(simde__m128 a, simde__m128 b, uint8_t pred) {
     switch (pred & 7) {
         case 0:
             return simde_mm_cmpeq_ps(a, b);
@@ -78,7 +78,7 @@ simde__m128 Helper_CmpPS(simde__m128 a, simde__m128 b, uint8_t pred) {
     return a;
 }
 
-simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred) {
+FORCE_INLINE simde__m128 Helper_CmpSS(simde__m128 a, simde__m128 b, uint8_t pred) {
     switch (pred & 7) {
         case 0:
             return simde_mm_cmpeq_ss(a, b);

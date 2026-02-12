@@ -198,9 +198,11 @@ public unsafe partial class X86Native
         public uint start_eip;
         public uint end_eip;
         public uint inst_count;
-        private uint padding; // align to 8 bytes for exec_count
-        public ulong exec_count;
+        private ushort padding0; // align to 8 bytes for exec_count
+        private byte padding1;
         public byte is_valid;
+        public ulong exec_count;
+        public IntPtr jit_func;
         // Padding to 32 bytes implied before ops
         // DecodedOp ops[1] follows at offset 32
     }
