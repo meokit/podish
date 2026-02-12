@@ -259,6 +259,7 @@ void RegisterDataMovOps() {
     g_Handlers[0x1B7] = DispatchWrapper<OpMovzx_Word>;
     g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
     g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
+    g_Handlers[0xD7] = DispatchWrapper<OpXlat>;
 }
 
 }  // namespace fiberish

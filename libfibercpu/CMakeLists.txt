@@ -33,6 +33,7 @@ CPMAddPackage(
 
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
 option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
+option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
 
 set(PGO_MODE "OFF" CACHE STRING "PGO build mode (OFF, GENERATE, USE)")
 set_property(CACHE PGO_MODE PROPERTY STRINGS "OFF" "GENERATE" "USE")
@@ -76,7 +77,11 @@ if(USE_SOFTFLOAT)
 endif()
 
 # Generate library as 'fibercpu'
-add_library(fibercpu SHARED ${SOURCES})
+set(FIBERCPU_LIBRARY_TYPE SHARED)
+if(FIBERCPU_BUILD_STATIC)
+    set(FIBERCPU_LIBRARY_TYPE STATIC)
+endif()
+add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${SOURCES})
 
 target_include_directories(fibercpu PRIVATE . ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
@@ -90,18 +95,23 @@ endif()
 if(ENABLE_TLB_STATS)
     target_compile_definitions(fibercpu PRIVATE ENABLE_TLB_STATS)
 endif()
+if(FIBERCPU_BUILD_STATIC)
+    target_compile_definitions(fibercpu PUBLIC FIBERCPU_STATIC_BUILD=1)
+endif()
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT result OUTPUT error)
 if(result)
-    #set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+    message(STATUS "LTO: Interprocedural Optimization (LTO) enabled for fibercpu")
+    set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    message(WARNING "LTO: Interprocedural Optimization (LTO) is NOT supported: ${error}")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
-        # "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>" 
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-g -fno-omit-frame-pointer>" 
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>" 
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
     )
 endif()

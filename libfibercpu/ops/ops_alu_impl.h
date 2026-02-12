@@ -1065,4 +1065,212 @@ FORCE_INLINE LogicFlow OpTest_EaxImm(LogicFuncParams) {
 
 }  // namespace op
 
+// ------------------------------------------------------------------------------------------------
+// BCD / ASCII Operations
+// ------------------------------------------------------------------------------------------------
+
+template <typename T>
+FORCE_INLINE void UpdateResultFlags(T res, uint32_t& flags) {
+    if (res == 0) flags |= ZF_MASK;
+    if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
+    if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
+}
+
+FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
+    // 27: DAA
+    // Decimal Adjust AL after Addition
+    uint8_t al = GetReg8(state, EAX);
+    uint32_t flags = state->ctx.eflags;
+    bool cf = (flags & CF_MASK);
+    bool af = (flags & AF_MASK);
+    bool new_cf = cf;
+    bool new_af = false;
+
+    if ((al & 0x0F) > 9 || af) {
+        al += 6;
+        new_af = true;
+    }
+
+    if (al > 0x9F || cf) {
+        al += 0x60;
+        new_cf = true;
+    }
+
+    // Update flags
+    flags &= ~(CF_MASK | AF_MASK | SF_MASK | ZF_MASK | PF_MASK);
+    if (new_cf) flags |= CF_MASK;
+    if (new_af) flags |= AF_MASK;
+    UpdateResultFlags<uint8_t>(al, flags);  // Updates SF, ZF, PF
+
+    SetReg8(state, EAX, al);
+    state->ctx.eflags = flags;
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpDas(LogicFuncParams) {
+    // 2F: DAS
+    // Decimal Adjust AL after Subtraction
+    uint8_t al = GetReg8(state, EAX);
+    uint32_t flags = state->ctx.eflags;
+    bool cf = (flags & CF_MASK);
+    bool af = (flags & AF_MASK);
+    bool new_cf = cf;
+    bool new_af = false;
+
+    // Logic from Intel Manual:
+    // IF (AL AND 0Fh) > 9 OR AF = 1 THEN
+    //   AL = AL - 6;
+    //   AF = 1;
+    // ELSE AF = 0; FI;
+    // IF (old_AL > 99h) OR CF = 1 THEN
+    //   AL = AL - 60h;
+    //   CF = 1;
+    // ELSE CF = 0; FI;
+
+    uint8_t old_al = al;
+
+    if ((al & 0x0F) > 9 || af) {
+        al -= 6;
+        new_af = true;
+    }
+
+    if (old_al > 0x99 || cf) {
+        al -= 0x60;
+        new_cf = true;
+    }
+
+    // Update flags
+    flags &= ~(CF_MASK | AF_MASK | SF_MASK | ZF_MASK | PF_MASK);
+    if (new_cf) flags |= CF_MASK;
+    if (new_af) flags |= AF_MASK;
+    UpdateResultFlags<uint8_t>(al, flags);
+
+    SetReg8(state, EAX, al);
+    state->ctx.eflags = flags;
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
+    // 37: AAA
+    // ASCII Adjust after Addition
+    uint8_t al = GetReg8(state, EAX);
+    uint8_t ah = GetReg8(state, EAX + 1);  // Not exactly +1 but high byte
+    ah = (GetReg(state, EAX) >> 8) & 0xFF;
+
+    uint32_t flags = state->ctx.eflags;
+    bool af = (flags & AF_MASK);
+    bool new_af = false;
+    bool new_cf = false;
+
+    if ((al & 0x0F) > 9 || af) {
+        al += 6;
+        ah += 1;
+        new_af = true;
+        new_cf = true;
+    }
+
+    al &= 0x0F;
+
+    // Update flags: AF and CF are set to same value. Others undefined, but we leave them?
+    // Manual says: SF, ZF, PF, OF are undefined. We won't touch them or clear them.
+    flags &= ~(CF_MASK | AF_MASK);
+    if (new_cf) flags |= CF_MASK;
+    if (new_af) flags |= AF_MASK;
+
+    // Update Regs
+    uint32_t eax = GetReg(state, EAX);
+    eax &= 0xFFFF0000;
+    eax |= (uint16_t)((ah << 8) | al);
+    SetReg(state, EAX, eax);
+
+    state->ctx.eflags = flags;
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
+    // 3F: AAS
+    // ASCII Adjust after Subtraction
+    uint8_t al = GetReg8(state, EAX);
+    uint8_t ah = (GetReg(state, EAX) >> 8) & 0xFF;
+
+    uint32_t flags = state->ctx.eflags;
+    bool af = (flags & AF_MASK);
+    bool new_af = false;
+    bool new_cf = false;
+
+    if ((al & 0x0F) > 9 || af) {
+        al -= 6;
+        ah -= 1;
+        new_af = true;
+        new_cf = true;
+    }
+
+    al &= 0x0F;
+
+    flags &= ~(CF_MASK | AF_MASK);
+    if (new_cf) flags |= CF_MASK;
+    if (new_af) flags |= AF_MASK;
+
+    uint32_t eax = GetReg(state, EAX);
+    eax &= 0xFFFF0000;
+    eax |= (uint16_t)((ah << 8) | al);
+    SetReg(state, EAX, eax);
+
+    state->ctx.eflags = flags;
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpAam(LogicFuncParams) {
+    // D4 ib: AAM imm8
+    uint8_t al = GetReg8(state, EAX);
+    uint8_t base = (uint8_t)imm;
+    if (base == 0) {
+        // Divide by zero
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 0;             // #DE
+        return LogicFlow::ExitOnCurrentEIP;  // Handled by loop
+    }
+
+    uint8_t ah = al / base;
+    uint8_t new_al = al % base;
+
+    uint32_t eax = GetReg(state, EAX);
+    eax &= 0xFFFF0000;
+    eax |= (uint16_t)((ah << 8) | new_al);
+    SetReg(state, EAX, eax);
+
+    // SF, ZF, PF are modified based on AL logic (result in AL?)
+    // Manual says: The flags SF, ZF, and PF are set according to the resulting binary value in the AL register.
+    // OF, AF, CF undefined.
+    uint32_t flags = state->ctx.eflags;
+    flags &= ~(SF_MASK | ZF_MASK | PF_MASK);
+    UpdateResultFlags<uint8_t>(new_al, flags);
+    state->ctx.eflags = flags;
+
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpAad(LogicFuncParams) {
+    // D5 ib: AAD imm8
+    uint8_t al = GetReg8(state, EAX);
+    uint8_t ah = (GetReg(state, EAX) >> 8) & 0xFF;
+    uint8_t base = (uint8_t)imm;
+
+    uint8_t temp_al = (uint8_t)(al + (ah * base));
+    uint8_t temp_ah = 0;
+
+    uint32_t eax = GetReg(state, EAX);
+    eax &= 0xFFFF0000;
+    eax |= (uint16_t)((temp_ah << 8) | temp_al);
+    SetReg(state, EAX, eax);
+
+    // SF, ZF, PF set according to AL
+    uint32_t flags = state->ctx.eflags;
+    flags &= ~(SF_MASK | ZF_MASK | PF_MASK);
+    UpdateResultFlags<uint8_t>(temp_al, flags);
+    state->ctx.eflags = flags;
+
+    return LogicFlow::Continue;
+}
+
 }  // namespace fiberish

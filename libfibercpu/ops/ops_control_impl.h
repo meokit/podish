@@ -85,7 +85,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-// Helper for interrupts
+// Helper for interrupts (Traps/Interrupts - EIP points to next instruction)
 inline void RaiseInterrupt(EmuState* state, uint8_t vector, ShimOp* op) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
@@ -461,6 +461,54 @@ CMOV_WRAPPERS(13, GE)
 CMOV_WRAPPERS(14, LE)
 CMOV_WRAPPERS(15, G)
 #undef CMOV_WRAPPERS
+
+FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
+    // 62: BOUND r16/32, m16&16 / m32&32
+    // Check if value (r) is within bounds [m_low, m_high]
+    // Signed check!
+
+    // Bounds are [Lower, Upper] at effective address
+    uint32_t addr = ComputeLinearAddress(state, op);
+
+    if (op->prefixes.flags.opsize) {
+        // 16-bit
+        int16_t val = (int16_t)GetReg(state, (op->modrm >> 3) & 7);
+
+        auto low_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!low_res) return LogicFlow::RestartMemoryOp;
+        int16_t lower = *low_res;
+
+        auto high_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, addr + 2, utlb, op);
+        if (!high_res) return LogicFlow::RestartMemoryOp;
+        int16_t upper = *high_res;
+
+        if (val < lower || val > upper) {
+            utlb->invalidate();
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 5;  // #BR
+            return LogicFlow::ExitOnCurrentEIP;
+        }
+    } else {
+        // 32-bit
+        int32_t val = (int32_t)GetReg(state, (op->modrm >> 3) & 7);
+
+        auto low_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        if (!low_res) return LogicFlow::RestartMemoryOp;
+        int32_t lower = *low_res;
+
+        auto high_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, addr + 4, utlb, op);
+        if (!high_res) return LogicFlow::RestartMemoryOp;
+        int32_t upper = *high_res;
+
+        if (val < lower || val > upper) {
+            utlb->invalidate();
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 5;  // #BR
+            return LogicFlow::ExitOnCurrentEIP;
+        }
+    }
+    return LogicFlow::Continue;
+}
 
 }  // namespace op
 }  // namespace fiberish

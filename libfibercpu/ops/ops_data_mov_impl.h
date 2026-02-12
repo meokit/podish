@@ -1145,6 +1145,26 @@ FORCE_INLINE LogicFlow OpCmps_Word(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+FORCE_INLINE LogicFlow OpXlat(LogicFuncParams) {
+    // D7: XLAT/XLATB
+    // AL = [DS:EBX + AL]
+    uint32_t ebx = GetReg(state, EBX);
+    uint32_t al = GetReg(state, EAX) & 0xFF;
+    // Segment override is possible, but default is DS.
+    // op->mem.base_offset is not set up for this specific instruction by decoder usually,
+    // so we rely on GetSegmentBase(state, op) and manual calculation.
+    // XLAT implies DS unless overridden.
+    uint32_t addr = ebx + al + GetSegmentBase(state, op);
+
+    auto val_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+    if (!val_res) return LogicFlow::RestartMemoryOp;
+
+    uint32_t eax = GetReg(state, EAX);
+    eax = (eax & 0xFFFFFF00) | *val_res;
+    SetReg(state, EAX, eax);
+    return LogicFlow::Continue;
+}
+
 }  // namespace op
 
 }  // namespace fiberish
