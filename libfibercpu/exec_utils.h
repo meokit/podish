@@ -121,7 +121,7 @@ inline bool CheckCondition(EmuState* state, uint8_t cond) {
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
-inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = op->prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
     if (seg >= 5) {
@@ -130,7 +130,7 @@ inline uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     return 0;
 }
 
-inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
+FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
     // Branchless calculation using pre-calculated offsets to registers (or zero register)
     const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
@@ -142,7 +142,7 @@ inline uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     return base + (index << op->mem.scale) + op->mem.disp;
 }
 
-inline uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
+FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
     uint32_t ea = ComputeEA(state, op);
     return ea + GetSegmentBase(state, op);
 }

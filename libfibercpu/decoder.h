@@ -70,7 +70,7 @@ using LogicFunc = LogicFuncResult (*)(LogicFuncParams);  // Always inlined, no r
 struct BasicBlock;
 
 struct alignas(32) DecodedOp {
-    // 0-7: Memory Addressing Info (Packed load)
+    // 0-7
     union {
         struct {
             uint32_t disp;         // 0-3
@@ -83,19 +83,16 @@ struct alignas(32) DecodedOp {
         uint64_t mem_packed;
     };
 
-    // 8-11: Immediate
+    // 8-11: Immediate Value (up to 32 bits, sign-extended if needed)
     uint32_t imm;
 
-    // 12-15: Next EIP
-    uint32_t next_eip;
+    // 12: Instruction Length
+    uint8_t len;
 
-    // 16-23: Handler
-    HandlerFunc handler;
+    // 13: ModRM
+    uint8_t modrm;
 
-    // 24-27: Branch Target (Dynamic)
-    uint32_t branch_target;
-
-    // 28: Prefixes (Compressed to 8 bits)
+    // 14: Prefixes
     union {
         uint8_t all;
         struct {
@@ -108,10 +105,7 @@ struct alignas(32) DecodedOp {
         } flags;
     } prefixes;
 
-    // 29: ModRM
-    uint8_t modrm;
-
-    // 30: Meta
+    // 15: Meta flags
     union {
         uint8_t all;
         struct {
@@ -121,13 +115,20 @@ struct alignas(32) DecodedOp {
             uint8_t has_imm : 1;
             uint8_t is_control_flow : 1;
             uint8_t no_flags : 1;
+            uint8_t is_first : 1;
+            uint8_t is_last : 1;
         } flags;
     } meta;
 
-    // 31: Length
-    uint8_t len;
+    // 16-23
+    HandlerFunc handler;
 
-    // Helper accessors for length
+    // 24-27
+    uint32_t branch_target;
+
+    // 28-31: Next EIP
+    uint32_t next_eip;
+
     uint8_t GetLength() const { return len; }
     void SetLength(uint8_t l) { len = l; }
 };
