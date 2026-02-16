@@ -28,3 +28,4 @@ benchmark/coremark/
 *.profraw
 ia32_test
 tests/test_safe_access
+Fiberish.X86/build_native

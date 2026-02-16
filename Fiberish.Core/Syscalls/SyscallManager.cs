@@ -7,7 +7,7 @@ using Bifrost.Diagnostics;
 
 namespace Bifrost.Syscalls;
 
-public unsafe partial class SyscallManager
+public partial class SyscallManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly Dictionary<IntPtr, SyscallManager> _registry = new();
@@ -41,7 +41,7 @@ public unsafe partial class SyscallManager
     }
     public List<MountInfo> MountList { get; } = new();
 
-    public delegate int SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
+    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
     private SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private const int MaxSyscalls = 512;
 
@@ -56,12 +56,12 @@ public unsafe partial class SyscallManager
         RegisterHandlers();
 
         // 1. Initialize Registry and Register Filesystems
-        FileSystemRegistry.Register(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
-        FileSystemRegistry.Register(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
-        FileSystemRegistry.Register(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() }); // devtmpfs uses tmpfs implementation
-        FileSystemRegistry.Register(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
-        // procfs needs implementation or reuse tmpfs for now
-        FileSystemRegistry.Register(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() }); 
+        // 1. Initialize Registry and Register Filesystems
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() }); 
 
         // 2. Setup Rootfs (OverlayFS: Lower=Hostfs, Upper=Tmpfs)
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
@@ -263,7 +263,7 @@ public unsafe partial class SyscallManager
         // Handle Breakpoint (INT 3)
         if (vector == 3)
         {
-            var t = Scheduler.GetByEngine(engine.State);
+            var t = engine.Owner as FiberTask;
             if (t != null)
             {
                 t.PendingSignals |= (1UL << (5 - 1)); // SIGTRAP = 5
@@ -276,12 +276,9 @@ public unsafe partial class SyscallManager
         // Update current engine context (GIL ensures safety)
         Engine = engine;
 
-        var task = Scheduler.GetByEngine(engine.State);
-        if (task != null)
-        {
-            task.BlockingTask = null; // Clear previous blocking task
-        }
-
+        // Get current FiberTask (New Model Only) via Engine.Owner
+        var fiberTask = engine.Owner as FiberTask;
+        
         uint eax = engine.RegRead(Reg.EAX);
         uint ebx = engine.RegRead(Reg.EBX);
         uint ecx = engine.RegRead(Reg.ECX);
@@ -296,39 +293,70 @@ public unsafe partial class SyscallManager
                 eax, ebx, ecx, edx, esi, edi, ebp);
         }
 
-        int ret = -38; // ENOSYS
+        ValueTask<int> retTask = new ValueTask<int>(-38); // ENOSYS
+
         if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
         {
-            ret = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
+            retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
         }
         else if (!Strace)
         {
             Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
         }
 
-        // Special handling for context-restoring syscalls
-        bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
-        
-        // Write return value to EAX unless it's a context restore or the task is now blocked
-        if (!isSigReturn && (task == null || task.BlockingTask == null))
+        // --- Handling Async Syscalls ---
+        if (retTask.IsCompleted)
         {
-            engine.RegWrite(Reg.EAX, (uint)ret);
-        }
+             int ret = retTask.Result;
+             
+             // Special handling for context-restoring syscalls
+             bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
+             
+             
+             if (!isSigReturn)
+             {
+                 engine.RegWrite(Reg.EAX, (uint)ret);
+             }
 
-        if (Strace)
+             if (Strace)
+             {
+                 Logger.LogTrace(" = {Ret}", ret);
+             }
+        }
+        else
         {
-            if (task != null && task.BlockingTask != null) Logger.LogTrace(" [Blocked]");
-            else Logger.LogTrace(" = {Ret}", ret);
+            // Async completion (Blocking)
+            if (fiberTask != null)
+            {
+                // Suspend the task
+                fiberTask.PendingSyscall = () => retTask;
+                fiberTask.Status = FiberTaskStatus.Waiting; 
+                
+                // Tracing
+                if (Strace) Logger.LogTrace(" [Suspended]");
+                
+                // Force yield
+                engine.Yield();
+                return true;
+            }
+            else
+            {
+                // Should not happen in new model
+                Logger.LogError("Async syscall initiated but no FiberTask attached!");
+                engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
+            }
         }
 
         // Determine if we should yield
         bool shouldYield = false;
-        if (task != null)
+        
+        if (fiberTask != null)
         {
-            if (task.BlockingTask != null) shouldYield = true;
-            if (task.Exited) shouldYield = true;
-            if ((task.PendingSignals & ~task.SignalMask) != 0) shouldYield = true;
-
+            if (fiberTask.PendingSyscall != null) shouldYield = true;
+            if (fiberTask.Exited) shouldYield = true;
+            if ((fiberTask.PendingSignals & ~fiberTask.SignalMask) != 0) shouldYield = true;
+            
+            // Force Yield if specific syscalls
             switch ((int)eax)
             {
                 case X86SyscallNumbers.sched_yield:

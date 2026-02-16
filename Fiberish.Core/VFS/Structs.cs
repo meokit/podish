@@ -131,17 +131,23 @@ public abstract class Inode
 
     public virtual int Read(File file, Span<byte> buffer, long offset) => 0;
     public virtual int Write(File file, ReadOnlySpan<byte> buffer, long offset) => 0;
+    
+    // Async blocking support
+    public virtual ValueTask WaitForRead(File file) => ValueTask.CompletedTask;
+    public virtual ValueTask WaitForWrite(File file) => ValueTask.CompletedTask;
+
     public virtual void Truncate(long size) => throw new NotSupportedException();
 
     // File operations hooks
     public virtual void Open(File file) { }
     public virtual void Release(File file) { }
-
+    
     public virtual void Sync(File file) { }
 
     // For directories, we need iteration. 
     public virtual List<DirectoryEntry> GetEntries() => new();
 }
+
 
 public struct DirectoryEntry
 {
@@ -228,6 +234,9 @@ public class File
         if (n > 0) Position += n;
         return n;
     }
+
+    public virtual ValueTask WaitForRead() => Dentry.Inode!.WaitForRead(this);
+    public virtual ValueTask WaitForWrite() => Dentry.Inode!.WaitForWrite(this);
 
     public virtual void Sync()
     {

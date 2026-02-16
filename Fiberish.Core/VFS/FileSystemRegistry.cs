@@ -20,6 +20,19 @@ public static class FileSystemRegistry
         }
     }
 
+    public static bool TryRegister(FileSystemType fsType)
+    {
+        lock (_lock)
+        {
+            if (_registry.ContainsKey(fsType.Name))
+            {
+                return false;
+            }
+            _registry[fsType.Name] = fsType;
+            return true;
+        }
+    }
+
     public static void Unregister(string name)
     {
         lock (_lock)

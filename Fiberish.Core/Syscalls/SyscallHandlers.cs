@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Buffers.Binary;
 using System.Text;
@@ -7,11 +8,10 @@ using Bifrost.Native;
 using Bifrost.Memory;
 using Bifrost.VFS;
 using Microsoft.Extensions.Logging;
-using Task = Bifrost.Core.Task;
 
 namespace Bifrost.Syscalls;
 
-public unsafe partial class SyscallManager
+public partial class SyscallManager
 {
     private void RegisterHandlers()
     {
@@ -160,7 +160,7 @@ public unsafe partial class SyscallManager
         Register(239, SysSendfile64);
     }
 
-    internal static int SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static async ValueTask<int> SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
         var sm = Get(state);
@@ -214,22 +214,10 @@ public unsafe partial class SyscallManager
 
                 if (bytesRead <= 0) 
                 {
-                    var task = Scheduler.GetCurrent();
-                    if (bytesRead == 0 && task?.BlockingTask != null)
+                    if (bytesRead == 0) // EOF
                     {
-                        if (totalWritten > 0)
-                        {
-                            task.BlockingTask = null;
-                            break; 
-                        }
-                        else
-                        {
-                            var waitTask = task.BlockingTask;
-                            task.BlockingTask = SyscallAsyncHelpers.ContinueSendfile(waitTask, state, a1, a2, a3, a4, a5, a6);
-                            return 0; 
-                        }
-                    }
-                    break; 
+                        break; 
+                    } 
                 }
 
                 // Write to out_fd
@@ -262,7 +250,7 @@ public unsafe partial class SyscallManager
         }
     }
 
-    private static int SysPipe(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPipe(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
 
         var sm = Get(state);
@@ -300,13 +288,13 @@ public unsafe partial class SyscallManager
         }
     }
 
-    private static int SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // creat(path, mode) is open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
-        return SysOpen(state, a1, (uint)(FileFlags.O_CREAT | FileFlags.O_WRONLY | FileFlags.O_TRUNC), a2, a4, a5, a6);
+        return await SysOpen(state, a1, (uint)(FileFlags.O_CREAT | FileFlags.O_WRONLY | FileFlags.O_TRUNC), a2, a4, a5, a6);
     }
 
-    private static int SysLink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -339,7 +327,7 @@ public unsafe partial class SyscallManager
         }
     }
 
-    private static int SysChdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysChdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -356,7 +344,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -384,7 +372,7 @@ public unsafe partial class SyscallManager
                 var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
                 if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-                var t = Scheduler.GetByEngine(sm.Engine.State);
+                var t = (sm.Engine.Owner as FiberTask);
                 int uid = t?.Process.EUID ?? 0;
                 int gid = t?.Process.EGID ?? 0;
 
@@ -424,7 +412,7 @@ public unsafe partial class SyscallManager
         }
     }
 
-    private static int SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -435,7 +423,7 @@ public unsafe partial class SyscallManager
         return ImplOpen(sm, path, a2, a3);
     }
 
-    private static int SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -458,7 +446,7 @@ public unsafe partial class SyscallManager
         return ImplOpen(sm, path, flags, mode, startAt);
     }
 
-    private static int SysOpenAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysOpenAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -489,7 +477,7 @@ public unsafe partial class SyscallManager
         return ImplOpen(sm, path, (uint)flags, (uint)mode, startAt);
     }
 
-    private static int SysDup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysDup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -501,7 +489,7 @@ public unsafe partial class SyscallManager
         return sm.AllocFD(f);
     }
 
-    private static int SysDup2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysDup2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -524,13 +512,13 @@ public unsafe partial class SyscallManager
         return newfd;
     }
 
-    private static int SysDup3(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysDup3(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // For now ignore flags like O_CLOEXEC
-        return SysDup2(state, a1, a2, a3, a4, a5, a6);
+        return await SysDup2(state, a1, a2, a3, a4, a5, a6);
     }
 
-    private static int SysPRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -556,7 +544,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EIO; }
     }
 
-    private static int SysPWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -579,7 +567,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EIO; }
     }
 
-    private static int SysReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -615,7 +603,7 @@ public unsafe partial class SyscallManager
         return totalRead;
     }
 
-    private static int SysPReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -651,7 +639,7 @@ public unsafe partial class SyscallManager
         return totalRead;
     }
 
-    private static int SysPWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -688,7 +676,7 @@ public unsafe partial class SyscallManager
         return totalWritten;
     }
 
-    private static int SysMkdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMkdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -702,7 +690,7 @@ public unsafe partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         int uid = t?.Process.EUID ?? 0;
         int gid = t?.Process.EGID ?? 0;
 
@@ -715,7 +703,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -746,7 +734,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysMkdirAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMkdirAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -769,7 +757,7 @@ public unsafe partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         int uid = t?.Process.EUID ?? 0;
         int gid = t?.Process.EGID ?? 0;
 
@@ -782,7 +770,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysUnlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUnlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -828,7 +816,7 @@ public unsafe partial class SyscallManager
     }
 
 
-    private static int SysGetdents(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetdents(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -891,7 +879,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EIO; }
     }
 
-    private static int SysNewFstatAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysNewFstatAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -902,7 +890,7 @@ public unsafe partial class SyscallManager
 
         if (path == "" && (flags & 0x1000) != 0) // AT_EMPTY_PATH
         {
-            return SysFstat64(state, a1, a3, 0, 0, 0, 0);
+            return await SysFstat64(state, a1, a3, 0, 0, 0, 0);
         }
 
         Dentry? startAt = null;
@@ -920,7 +908,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysUtimensAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUtimensAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -944,7 +932,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysFchownAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFchownAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -966,10 +954,10 @@ public unsafe partial class SyscallManager
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         // Redirect to SysChown logic or similar
-        return SysChown(state, a2, a3, a4, 0, 0, 0); // Simplified: should use dentry directly
+        return await SysChown(state, a2, a3, a4, 0, 0, 0); // Simplified: should use dentry directly
     }
 
-    private static int SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -988,10 +976,10 @@ public unsafe partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        return SysChmod(state, a2, a3, 0, 0, 0, 0);
+        return await SysChmod(state, a2, a3, 0, 0, 0, 0);
     }
 
-    private static int SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1010,10 +998,10 @@ public unsafe partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        return SysAccess(state, a2, a3, 0, 0, 0, 0);
+        return await SysAccess(state, a2, a3, 0, 0, 0, 0);
     }
 
-    private static int SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1023,14 +1011,14 @@ public unsafe partial class SyscallManager
         return ImplRename(sm, -100, oldPath, -100, newPath, 0);
     }
 
-    private static int SysRenameAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRenameAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), 0);
     }
 
-    private static int SysRenameAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRenameAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1076,7 +1064,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysStat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysStat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1088,7 +1076,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysLstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1100,7 +1088,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysFstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1112,7 +1100,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysStatx(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysStatx(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1147,12 +1135,36 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysExit(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysExit(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var task = Scheduler.GetByEngine(state);
+        int exitCode = (int)a1;
+        var fiberTask = sm.Engine.Owner as FiberTask;
+        if (fiberTask != null)
+        {
+            fiberTask.Exited = true;
+            fiberTask.ExitStatus = exitCode;
+            
+            // Notify Parent
+            var ppid = fiberTask.Process.PPID;
+            if (ppid > 0)
+            {
+                // We still need KernelScheduler to find OTHER tasks (parent).
+                // KernelScheduler SHOULD be available via FiberTask reference?
+                // Yes, FiberTask.CommonKernel property.
+                var parentTask = fiberTask.CommonKernel.GetTask(ppid);
+                if (parentTask != null)
+                {
+                    // Signaling child exit usually means handling SIGCHLD.
+                    parentTask.HandleSignal(17); // SIGCHLD = 17
+                }
+            }
+            return 0;
+        }
+
+        var task = (sm.Engine.Owner as FiberTask);
         if (task != null)
         {
             // Remove from /proc
@@ -1171,29 +1183,14 @@ public unsafe partial class SyscallManager
             if (task.TID == task.Process.TGID)
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
 
-            task.ExitCode = (int)a1;
+            task.ExitStatus = (int)a1;
             task.Exited = true;
 
-            // CRITICAL: Set process to zombie state BEFORE signaling events
-            // to avoid race condition where parent wakes up before state is set
-            lock (task.Process)
-            {
-                task.Process.State = ProcessState.Zombie;
-                task.Process.ExitStatus = (int)a1;
+            task.Process.State = ProcessState.Zombie;
+            task.Process.ExitStatus = (int)a1;
 
-                // Signal zombie event for waitpid
-                task.Process.ZombieEvent.Set();
-            }
-
-            // Wake vfork parent if exists
-            if (task.VforkParent != null)
-            {
-                // Vfork parent is waiting, signal it to continue
-                task.VforkParent = null;
-            }
-
-            // Signal after state is set
-            task.WaitEvent.Set();
+            // Signal zombie event for waitpid
+            task.Process.ZombieEvent.Set();
         }
 
         int code = (int)a1;
@@ -1202,12 +1199,12 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysExitGroup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysExitGroup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (task != null)
         {
              ProcFsManager.OnProcessExit(sm, task.Process.TGID);
@@ -1221,49 +1218,30 @@ public unsafe partial class SyscallManager
 
     // ... SysRead ... (omitted)
 
-    private static int SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -(int)Errno.ENOSYS;
-
-        if (sm.CloneHandler == null) return -(int)Errno.ENOSYS;
-
-        var (tid, err) = sm.CloneHandler((int)a1, a2, a3, a4, a5);
-        if (err != null) return -(int)Errno.EAGAIN;
+        if (sm == null) return -(int)Errno.EPERM;
         
-        // Hook ProcFs
-        var newTask = Scheduler.Get(tid);
-        if (newTask != null && newTask.TID == newTask.Process.TGID)
-        {
-            ProcFsManager.OnProcessStart(sm, newTask.Process.TGID);
-        }
+        var current = sm.Engine.Owner as FiberTask;
+        if (current == null) return -(int)Errno.EPERM;
 
-        if (((int)a1 & (int)LinuxConstants.CLONE_VFORK) != 0)
-        {
-            // Parent should be suspended until child exits
-            var child = Scheduler.Get(tid);
-            var task = Scheduler.GetByEngine(state);
-            if (child != null && task != null)
-            {
-                // Suspend parent using BlockingTask pattern
-                var tcs = new TaskCompletionSource<int>();
-                task.BlockingTask = tcs.Task;
+        uint flags = a1;
+        uint stackPtr = a2;
+        uint ptidPtr = a3;
+        uint tlsPtr = a4;
+        uint ctidPtr = a5;
 
-                // Spawn task to wait for child and wake parent
-                _ = System.Threading.Tasks.Task.Run(() =>
-                {
-                    child.WaitEvent.Wait();
-                    tcs.SetResult(0);
-                });
+        // Clone
+        var child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
+        
+        // TODO: Re-verify ProcFsManager compatibility
+        // ProcFsManager.OnProcessStart(sm, child.TID);
 
-                sm.Engine.Yield();
-            }
-        }
-
-        return tid;
+        return child.TID; 
     }
 
-    internal static int SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static async ValueTask<int> SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1271,67 +1249,124 @@ public unsafe partial class SyscallManager
         uint bufAddr = a2;
         int count = (int)a3;
 
-        try
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+        
+        // TODO: Access checks
+
+        byte[] buf = new byte[count];
+        
+        while (true)
         {
-            var f = sm.GetFD(fd);
-            if (f != null)
+            try
             {
-                byte[] buf = new byte[count];
                 int n = f.Read(buf.AsSpan(0, count));
                 
-                if (n == 0 && count > 0)
+                if (n == -(int)Errno.EAGAIN)
                 {
-                    var task = Scheduler.GetCurrent();
-                    if (task?.BlockingTask != null)
+                    if ((f.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
+                    
+                    // Blocking Read
+                    var currentTask = sm.Engine.Owner as FiberTask;
+                    if (currentTask == null) return -(int)Errno.EAGAIN; // Should not happen
+
+                    // Wait for read or interrupt
+                    var tcs = new TaskCompletionSource<bool>();
+                    currentTask.RegisterBlockingSyscall(() => tcs.TrySetResult(false)); // False = Interrupted
+                    
+                    try
                     {
-                        var waitTask = task.BlockingTask;
-                        task.BlockingTask = SyscallAsyncHelpers.ContinueRead(waitTask, state, a1, a2, a3, a4, a5, a6);
-                        return 0;
+                        var waitTask = f.WaitForRead().AsTask();
+                        var interruptTask = tcs.Task;
+                        
+                        var finishedTask = await System.Threading.Tasks.Task.WhenAny(waitTask, interruptTask);
+                        
+                        if (finishedTask == interruptTask)
+                        {
+                            return -(int)Errno.EINTR;
+                        }
+                        
+                        // File is ready, retry read
+                        continue;
+                    }
+                    finally
+                    {
+                        currentTask.ClearInterrupt();
                     }
                 }
-
-                if (n > 0) 
+                
+                if (n >= 0)
                 {
-                    if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
-                        return -(int)Errno.EFAULT;
+                    if (n > 0) 
+                    {
+                        if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
+                            return -(int)Errno.EFAULT;
+                    }
+                    return n;
                 }
-                return n;
+                
+                return n; // Other error
+            }
+            catch (Exception ex) 
+            { 
+                Console.WriteLine($"SysRead Exception: {ex}");
+                return -(int)Errno.EIO; 
             }
         }
-        catch { return -(int)Errno.EIO; }
-
-        return -(int)Errno.EBADF;
     }
 
-    internal static int SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static async ValueTask<int> SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         int fd = (int)a1;
         uint bufAddr = a2;
         int count = (int)a3;
+
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
 
         // Verify read access to buffer before writing
         var data = new byte[count];
         if (!sm.Engine.CopyFromUser(bufAddr, data))
             return -(int)Errno.EFAULT;
 
-        var f = sm.GetFD(fd);
-        if (f != null)
+        while (true)
         {
             try
             {
                 int n = f.Write(data);
                 
-                if (n == 0 && count > 0)
+                if (n == -(int)Errno.EAGAIN)
                 {
-                    var task = Scheduler.GetCurrent();
-                    if (task?.BlockingTask != null)
-                    {
-                        var waitTask = task.BlockingTask;
-                        task.BlockingTask = SyscallAsyncHelpers.ContinueWrite(waitTask, state, a1, a2, a3, a4, a5, a6);
-                        return 0;
+                    if ((f.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
+                    
+                    // Blocking Write
+                    var currentTask = sm.Engine.Owner as FiberTask;
+                    if (currentTask == null) return -(int)Errno.EAGAIN; 
 
+                    // Wait for write or interrupt
+                    var tcs = new TaskCompletionSource<bool>();
+                    currentTask.RegisterBlockingSyscall(() => tcs.TrySetResult(false)); 
+                    
+                    try
+                    {
+                        var waitTask = f.WaitForWrite().AsTask(); // Allocation! Optimize later
+                        var interruptTask = tcs.Task;
+                        
+                        var finishedTask = await System.Threading.Tasks.Task.WhenAny(waitTask, interruptTask);
+                        
+                        if (finishedTask == interruptTask)
+                        {
+                            return -(int)Errno.EINTR;
+                        }
+                        
+                        // File is ready, retry write
+                        continue;
+                    }
+                    finally
+                    {
+                        currentTask.ClearInterrupt();
                     }
                 }
 
@@ -1339,13 +1374,11 @@ public unsafe partial class SyscallManager
             }
             catch { return -(int)Errno.EIO; }
         }
-
-        return -(int)Errno.EBADF;
     }
 
 
 
-    private static int SysLseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -1369,7 +1402,7 @@ public unsafe partial class SyscallManager
         return (int)newPos;
     }
 
-    private static int SysLlseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLlseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -1398,7 +1431,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysClose(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClose(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -1406,7 +1439,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysBrk(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysBrk(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -1429,19 +1462,19 @@ public unsafe partial class SyscallManager
 
 
 
-    private static int SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // fork = clone(0, 0, NULL, NULL, NULL) - no flags, copy everything
-        return SysClone(state, 0, 0, 0, 0, 0, 0);
+        return await SysClone(state, 0, 0, 0, 0, 0, 0);
     }
 
-    private static int SysVfork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysVfork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // vfork = clone(CLONE_VM | CLONE_VFORK, 0, NULL, NULL, NULL)
-        return SysClone(state, LinuxConstants.CLONE_VM | LinuxConstants.CLONE_VFORK, 0, 0, 0, 0, 0);
+        return await SysClone(state, LinuxConstants.CLONE_VM | LinuxConstants.CLONE_VFORK, 0, 0, 0, 0, 0);
     }
 
-    private static int SysFutex(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFutex(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.ENOSYS;
@@ -1461,15 +1494,16 @@ public unsafe partial class SyscallManager
 
             var waiter = sm.Futex.PrepareWait(uaddr);
 
-            // Non-blocking: set the Task to await and yield the engine
-            var task = Scheduler.GetByEngine(state);
+            var task = (sm.Engine.Owner as FiberTask);
             if (task != null)
             {
-                // Use wrapper to avoid CS4004 (await in unsafe context)
-                task.BlockingTask = SyscallAsyncWrappers.WaitFutexAsync(waiter.Tcs.Task);
+                task.RegisterBlockingSyscall(() => waiter.Tcs.TrySetResult(false));
+                try
+                {
+                    if (!await waiter.Tcs.Task) return -(int)Errno.EINTR;
+                }
+                finally { task.ClearInterrupt(); }
             }
-            sm.Engine.Yield();
-
             return 0;
         }
         else if (opCode == 1) // WAKE
@@ -1481,7 +1515,7 @@ public unsafe partial class SyscallManager
         return -(int)Errno.ENOSYS;
     }
 
-    private static int SysSetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1506,7 +1540,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetTidAddress(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetTidAddress(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1514,11 +1548,11 @@ public unsafe partial class SyscallManager
         return 1;
     }
 
-    private static int SysUname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var t = Scheduler.GetByEngine(state);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t == null) return -(int)Errno.EPERM;
 
         var uts = t.Process.UTS;
@@ -1541,16 +1575,16 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSysinfo(IntPtr state, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSysinfo(IntPtr state, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         
-        var t = Bifrost.Core.Scheduler.GetByEngine(state);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t == null) return -(int)Errno.EPERM;
 
         var info = new SysInfo();
-        info.Uptime = (int)((DateTime.UtcNow - Bifrost.Program.StartTime).TotalSeconds);
+        info.Uptime = (int)((DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds);
         info.Loads = new int[] { 65536, 65536, 65536 };
         info.TotalRam = 256 * 1024 * 1024;
         info.FreeRam = 128 * 1024 * 1024;
@@ -1558,7 +1592,7 @@ public unsafe partial class SyscallManager
         info.BufferRam = 0;
         info.TotalSwap = 0;
         info.FreeSwap = 0;
-        info.Procs = (short)Bifrost.Core.Scheduler.ProcessCount;
+        info.Procs = 1; // Simplified for now: current processes count is not easily accessible via public API without listing.
         info.TotalHigh = 0;
         info.FreeHigh = 0;
         info.MemUnit = 1;
@@ -1581,38 +1615,43 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSignal(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSignal(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return 0;
     }
 
-    private static int SysGetUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         return t?.Process.UID ?? 0;
     }
 
-    private static int SysGetEUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetEUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         return t?.Process.EUID ?? 0;
     }
 
-    private static int SysGetGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         return t?.Process.GID ?? 0;
     }
 
-    private static int SysGetEGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetEGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         return t?.Process.EGID ?? 0;
     }
 
-    private static int SysSetUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             t.Process.UID = t.Process.EUID = t.Process.SUID = t.Process.FSUID = (int)a1;
@@ -1620,9 +1659,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             t.Process.GID = t.Process.EGID = t.Process.SGID = t.Process.FSGID = (int)a1;
@@ -1630,16 +1670,17 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysGetUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysGetUid(state, a1, a2, a3, a4, a5, a6);
-    private static int SysGetGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysGetGid(state, a1, a2, a3, a4, a5, a6);
-    private static int SysGetEUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysGetEUid(state, a1, a2, a3, a4, a5, a6);
-    private static int SysGetEGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysGetEGid(state, a1, a2, a3, a4, a5, a6);
-    private static int SysSetUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysSetUid(state, a1, a2, a3, a4, a5, a6);
-    private static int SysSetGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => SysSetGid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysGetUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysGetUid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysGetGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysGetGid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysGetEUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysGetEUid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysGetEGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysGetEGid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysSetUid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysSetUid(state, a1, a2, a3, a4, a5, a6);
+    private static async ValueTask<int> SysSetGid32(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => await SysSetGid(state, a1, a2, a3, a4, a5, a6);
 
-    private static int SysSetReUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetReUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             if (a1 != 0xFFFFFFFF) t.Process.UID = (int)a1;
@@ -1650,9 +1691,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetReGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetReGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             if (a1 != 0xFFFFFFFF) t.Process.GID = (int)a1;
@@ -1663,9 +1705,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetResUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetResUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             if (a1 != 0xFFFFFFFF) t.Process.UID = (int)a1;
@@ -1676,10 +1719,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysGetResUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetResUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        var t = Scheduler.GetByEngine(state);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && sm != null)
         {
             if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes(t.Process.UID))) return -(int)Errno.EFAULT;
@@ -1689,9 +1732,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetResGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetResGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             if (a1 != 0xFFFFFFFF) t.Process.GID = (int)a1;
@@ -1702,10 +1746,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysGetResGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetResGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        var t = Scheduler.GetByEngine(state);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && sm != null)
         {
             if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes(t.Process.GID))) return -(int)Errno.EFAULT;
@@ -1715,9 +1759,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetFsUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetFsUid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             int old = t.Process.FSUID;
@@ -1727,9 +1772,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetFsGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetFsGid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var t = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var t = (sm?.Engine.Owner as FiberTask);
         if (t != null)
         {
             int old = t.Process.FSGID;
@@ -1739,7 +1785,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysChmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysChmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1751,7 +1797,7 @@ public unsafe partial class SyscallManager
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
         // Permission check: only owner or root can chmod
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
             return -(int)Errno.EPERM;
 
@@ -1760,7 +1806,7 @@ public unsafe partial class SyscallManager
         dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
-    private static int SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1772,7 +1818,7 @@ public unsafe partial class SyscallManager
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
         // Permission check
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != f.Dentry.Inode.Uid)
             return -(int)Errno.EPERM;
 
@@ -1780,7 +1826,7 @@ public unsafe partial class SyscallManager
         f.Dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
-    private static int SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1793,7 +1839,7 @@ public unsafe partial class SyscallManager
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
         // Permission check: only root can chown
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && t.Process.EUID != 0)
             return -1; // EPERM
 
@@ -1803,7 +1849,7 @@ public unsafe partial class SyscallManager
         dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
-    private static int SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1816,7 +1862,7 @@ public unsafe partial class SyscallManager
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
         // Permission check: only root can chown
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         if (t != null && t.Process.EUID != 0)
             return -1; // EPERM
 
@@ -1825,16 +1871,16 @@ public unsafe partial class SyscallManager
         f.Dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
-    private static int SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // Since we don't have symlinks yet, behave like chown
-        return SysChown(state, a1, a2, a3, a4, a5, a6);
+        return await SysChown(state, a1, a2, a3, a4, a5, a6);
     }
-    private static int SysSetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
-    private static int SysGetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
+    private static async ValueTask<int> SysSetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
+    private static async ValueTask<int> SysGetGroups(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) => 0;
 
 
-    private static int SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1862,7 +1908,7 @@ public unsafe partial class SyscallManager
         return cwd.Length + 1;
     }
 
-    private static int SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1892,7 +1938,7 @@ public unsafe partial class SyscallManager
         return total;
     }
 
-    private static int SysMmap2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMmap2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1926,7 +1972,7 @@ public unsafe partial class SyscallManager
         }
     }
 
-    private static int SysMunmap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMunmap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1935,7 +1981,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysMprotect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMprotect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1968,51 +2014,54 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysGetPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm?.GetTGID != null) return sm.GetTGID(sm.Engine);
         return 1000;
     }
 
-    private static int SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (task == null) return -(int)Errno.EPERM;
 
         return task.Process.PPID;
     }
 
-    private static int SysGettid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGettid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var task = (sm?.Engine.Owner as FiberTask);
         return task?.TID ?? -1;
     }
 
-    private static int SysGetpgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetpgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var task = (sm?.Engine.Owner as FiberTask);
         // Simple PGID = TGID for now
         return task?.Process.TGID ?? -1;
     }
 
-    private static int SysUmask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUmask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var task = (sm?.Engine.Owner as FiberTask);
         if (task == null) return 0;
         int old = task.Process.Umask;
         task.Process.Umask = (int)(a1 & 0x1FF);
         return old;
     }
 
-    private static int SysSethostname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSethostname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
 
         string name = sm.ReadString(a1);
@@ -2020,11 +2069,11 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSetdomainname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetdomainname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
 
         string name = sm.ReadString(a1);
@@ -2032,21 +2081,21 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSchedYield(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSchedYield(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         sm?.Engine.Yield();
         return 0;
     }
 
-    private static int SysPause(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPause(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         sm?.Engine.Yield();
         return 0;
     }
 
-    private static int SysSync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -2057,7 +2106,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysFsync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFsync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -2067,17 +2116,17 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysFdatasync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFdatasync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return SysFsync(state, a1, a2, a3, a4, a5, a6);
+        return await SysFsync(state, a1, a2, a3, a4, a5, a6);
     }
 
-    private static int SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return 0; // No-op
     }
 
-    private static int SysMsync(IntPtr state, uint addr, uint len, uint flags, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMsync(IntPtr state, uint addr, uint len, uint flags, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -2089,97 +2138,198 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)
+    private static async ValueTask<int> SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-
-        IdType idtype;
-        int id;
-
-        if ((int)pid < -1)
+        
+        int pidVal = (int)pid;
+        int optVal = (int)options;
+        bool hang = (optVal & 1) != 0; // WNOHANG
+        
+        var fiberTask = sm.Engine.Owner as FiberTask;
+        if (fiberTask == null) return -(int)Errno.ECHILD;
+        
+        var currentProc = fiberTask.Process;
+        var kernel = KernelScheduler.Instance;
+        
+        // Loop for retrying wait
+        while (true)
         {
-            // Wait for process group
-            return -(int)Errno.ENOSYS;
+            // Scan children
+            bool hasChildren = false;
+            
+            List<Process> candidates = new();
+            
+            // Iterate over copy to allow modification if needed? No, removing from dict is what matters.
+            // currentProc.Children is List<int>.
+            // We can iterate it directly.
+            
+            foreach (var childPid in currentProc.Children)
+            {
+                var childProc = kernel.GetProcess(childPid);
+                if (childProc == null) continue; 
+                
+                bool match = false;
+                if (pidVal == -1) match = true;
+                else if (pidVal > 0) match = childPid == pidVal;
+                else if (pidVal == 0) match = childProc.PGID == currentProc.PGID;
+                else match = childProc.PGID == -pidVal;
+                
+                if (match)
+                {
+                    hasChildren = true;
+                    if (childProc.State == ProcessState.Zombie)
+                    {
+                        // Found REAPABLE child
+                        if (statusPtr != 0)
+                        {
+                            byte[] stBuf = new byte[4];
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, childProc.ExitStatus);
+                            if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
+                        }
+                        
+                        // Reap
+                        currentProc.Children.Remove(childPid);
+                        // Also remove from global table? Or let it be garbage collected if no other refs?
+                        // If we remove from global table, PID can be reused properly (if allocator reuses).
+                        // Current allocator is monotonic increment.
+                        
+                        return childPid;
+                    }
+                    candidates.Add(childProc);
+                }
+            }
+            
+            if (!hasChildren) return -(int)Errno.ECHILD;
+            
+            if (hang) return 0;
+            
+            // Block until ONE of candidates becomes zombie
+            // Use TaskCompletionSource and register on all candidates
+            var tcs = new TaskCompletionSource<bool>();
+            
+            Action continuation = () => tcs.TrySetResult(true);
+            
+            foreach (var c in candidates)
+            {
+                c.ZombieEvent.Register(continuation);
+            }
+            
+            fiberTask.RegisterBlockingSyscall(() => {
+                tcs.TrySetResult(false); // Interrupted
+            });
+            
+            try
+            {
+                bool success = await tcs.Task;
+                if (!success) return -(int)Errno.EINTR;
+            }
+            finally
+            {
+                fiberTask.ClearInterrupt();
+            }
         }
-        else if ((int)pid == -1)
-        {
-            idtype = IdType.P_ALL;
-            id = 0;
-        }
-        else if (pid == 0)
-        {
-            // Wait for same process group
-            return -(int)Errno.ENOSYS;
-        }
-        else
-        {
-            idtype = IdType.P_PID;
-            id = (int)pid;
-        }
-
-        var task = Scheduler.GetByEngine(state);
-        if (task == null) return -(int)Errno.ECHILD;
-
-        var infop = new SigInfo();
-        var (result, tcs) = WaitHelpers.KernelWaitId(task, idtype, id, infop, (int)options);
-
-        if (tcs != null)
-        {
-            // Need to block - set BlockingTask and yield
-            task.BlockingTask = SyscallAsyncWrappers.SysWait4Async(sm, task, idtype, id, statusPtr, (int)options, tcs.Task);
-            sm.Engine.Yield();
-            return 0;
-        }
-
-        if (result > 0 && statusPtr != 0)
-        {
-            // Write exit status (WEXITSTATUS macro format)
-            int status = (infop.si_status & 0xFF) << 8;
-            byte[] statusBuf = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(statusBuf, status);
-            if (!sm.Engine.CopyToUser(statusPtr, statusBuf)) return -(int)Errno.EFAULT;
-        }
-
-        // rusagePtr ignored for now
-
-        return result;
     }
 
 
 
-    private static int SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4, uint a5, uint a6)
     {
         // waitpid(pid, status, options) = wait4(pid, status, options, NULL)
-        return SysWait4(state, pid, statusPtr, options, 0, 0, 0);
+        return await SysWait4(state, pid, statusPtr, options, 0, 0, 0);
     }
 
-    private static int SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options, uint rusagePtr, uint a6)
+    private static async ValueTask<int> SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options, uint rusagePtr, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var task = Scheduler.GetByEngine(state);
-        if (task == null) return -(int)Errno.ECHILD;
+        var fiberTask = sm.Engine.Owner as FiberTask;
+        if (fiberTask == null) return -(int)Errno.ECHILD;
 
-        var info = new SigInfo();
-        var (result, tcs) = WaitHelpers.KernelWaitId(task, (IdType)idtype, (int)id, info, (int)options);
+        // Logic similar to SysWait4 but with idtype
+        var currentProc = fiberTask.Process;
+        var kernel = KernelScheduler.Instance;
+        
+        bool wnohang = ((int)options & 1) != 0;
+        bool wexited = ((int)options & 4) != 0;
+        // Other flags ignored for now
+        if (options == 0) wexited = true; // Default?
 
-        if (tcs != null)
+        while (true)
         {
-            // Need to block - yield and child will run
-            task.BlockingTask = SyscallAsyncWrappers.SysWaitIdAsync(sm, task, (IdType)idtype, (int)id, infop, (int)options, tcs.Task);
-            sm.Engine.Yield();
-            return 0;
-        }
+            List<Process> candidates = new();
+            bool hasChildren = false;
 
-        if (result >= 0 && infop != 0)
-        {
-            // Write siginfo_t structure
-            if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
+            foreach (var childPid in currentProc.Children)
+            {
+                var childProc = kernel.GetProcess(childPid);
+                if (childProc == null) continue;
+                
+                bool match = false;
+                if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_ALL) match = true;
+                else if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_PID && childPid == (int)id) match = true;
+                else if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_PGID && childProc.PGID == (int)id) match = true;
+                
+                if (match)
+                {
+                    hasChildren = true;
+                    if (wexited && childProc.State == ProcessState.Zombie)
+                    {
+                        // Found
+                         if (infop != 0)
+                        {
+                            var info = new SigInfo();
+                            info.si_signo = 17; // SIGCHLD
+                            info.si_pid = childProc.TGID;
+                            info.si_status = childProc.ExitStatus;
+                            info.si_code = 1; // CLD_EXITED
+                            
+                            if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
+                        }
+                        
+                        // Waitid keeps child unless WNOWAIT? 
+                        // "waitid()... If WNOWAIT is set... leave the child in a waitable state"
+                        bool wnowait = ((int)options & 0x01000000) != 0;
+                        if (!wnowait)
+                        {
+                            lock(currentProc.Children) currentProc.Children.Remove(childPid);
+                        }
+                        
+                        return 0; // Success
+                    }
+                    candidates.Add(childProc);
+                }
+            }
+            
+            if (!hasChildren) return -(int)Errno.ECHILD;
+            if (wnohang) return 0;
+            
+            // Block
+            var tcs = new TaskCompletionSource<bool>();
+            Action continuation = () => tcs.TrySetResult(true);
+            
+            foreach (var c in candidates)
+            {
+                c.ZombieEvent.Register(continuation);
+            }
+            
+            fiberTask.RegisterBlockingSyscall(() => {
+                tcs.TrySetResult(false);
+            });
+            
+            try
+            {
+                bool success = await tcs.Task;
+                if (!success) return -(int)Errno.EINTR;
+            }
+            finally
+            {
+                fiberTask.ClearInterrupt();
+            }
         }
-
-        return result >= 0 ? 0 : result;
     }
 
     private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
@@ -2194,7 +2344,7 @@ public unsafe partial class SyscallManager
         return sm.Engine.CopyToUser(addr, buf);
     }
 
-    private static int SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2216,7 +2366,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.ENOENT; }
     }
 
-    private static int SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
@@ -2226,12 +2376,12 @@ public unsafe partial class SyscallManager
         return -(int)Errno.ENOENT;
     }
 
-    private static int SysIoctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysIoctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return 0;
     }
 
-    private static int SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2380,12 +2530,12 @@ public unsafe partial class SyscallManager
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
 
-    private static int SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ImplStat64(state, a1, a2);
     }
 
-    private static int SysLstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ImplStat64(state, a1, a2);
     }
@@ -2409,7 +2559,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2433,7 +2583,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysClockGetTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockGetTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2469,7 +2619,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysClockGetTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockGetTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2504,7 +2654,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysFstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2516,7 +2666,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysSymlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSymlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2530,7 +2680,7 @@ public unsafe partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         int uid = t?.Process.EUID ?? 0;
         int gid = t?.Process.EGID ?? 0;
 
@@ -2543,7 +2693,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysReadlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysReadlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2562,7 +2712,7 @@ public unsafe partial class SyscallManager
         return len;
     }
 
-    private static int SysReadlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysReadlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2590,7 +2740,7 @@ public unsafe partial class SyscallManager
         return len;
     }
 
-    private static int SysSymlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSymlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -2613,7 +2763,7 @@ public unsafe partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = Scheduler.GetByEngine(sm.Engine.State);
+        var t = (sm.Engine.Owner as FiberTask);
         int uid = t?.Process.EUID ?? 0;
         int gid = t?.Process.EGID ?? 0;
 
@@ -2626,7 +2776,7 @@ public unsafe partial class SyscallManager
         catch { return -(int)Errno.EACCES; }
     }
 
-    private static int SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
         int sig = (int)a1;
@@ -2637,7 +2787,7 @@ public unsafe partial class SyscallManager
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
         var sm = Get(state);
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (sm == null || task == null) return -(int)Errno.EPERM;
 
         if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
@@ -2679,8 +2829,10 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
         // a1: how, a2: set, a3: oldset, a4: sigsetsize
         int how = (int)a1;
         uint setPtr = a2;
@@ -2689,7 +2841,7 @@ public unsafe partial class SyscallManager
 
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (task == null) return -(int)Errno.EPERM;
 
         if (oldSetPtr != 0)
@@ -2728,9 +2880,11 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = (sm.Engine.Owner as FiberTask);
         if (task == null) return -(int)Errno.EPERM;
 
         int pid = (int)a1;
@@ -2741,68 +2895,62 @@ public unsafe partial class SyscallManager
         // Simplified: only support current process/group for now or direct PID match
         // Kill 0: current process group. Kill -1: all processes. Kill < -1: process group -pid.
         
-        List<Bifrost.Core.Task> targets = new();
+        List<FiberTask> targets = new();
 
         if (pid > 0)
         {
-            var proc = Scheduler.GetProcessByPID(pid);
+            var proc = KernelScheduler.Instance.GetProcess(pid);
             if (proc != null)
             {
-                // Deliver to any thread in process? usually main thread or any.
-                // We'll broadcast to all threads in the process for now or pick one.
-                // In Linux, signal to process is delivered to one arbitrary thread that doesn't block it.
-                // For simplicity, we find the main thread (thread with TID=TGID) or just first found.
-                // Actually, Scheduler stores Tasks by TID. We don't have easy lookup for threads of a process
-                // except inside Process struct maybe? Oh wait, Scheduler doesn't list threads of process directly.
-                // But Process doesn't list threads either? 
-                // Wait, in my `Process` implementation earlier, I didn't see a `Threads` list, only `Children` (child processes).
-                // Ah, `Task` has `Process`. I need to find tasks belonging to this process.
-                // `Scheduler._tasks` is private. I might need `Scheduler.FindProcessTasks`.
-                // Existing code usage: `Scheduler.Get(tid)`.
-                
-                // Hack: If pid == current process, we use current task.
-                if (pid == task.Process.TGID)
+                lock(proc.Threads)
                 {
-                    targets.Add(task);
-                }
-                else
-                {
-                     // Fallback check if pid is a TID
-                     var t = Scheduler.Get(pid);
-                     if (t != null) targets.Add(t);
+                    if (proc.Threads.Count > 0)
+                        targets.Add(proc.Threads[0]); // Target main/first thread
                 }
             }
+            else
+            {
+                // Might be a TID?
+                var t = KernelScheduler.Instance.GetTask(pid);
+                if (t != null) targets.Add(t);
+            }
         }
-        else if (pid == 0)
+        else if (pid == 0) // Current process group
         {
-            // Current process group. (Simplified: just current process)
-            targets.Add(task);
+             // Simplified: Signal current process
+             lock(task.Process.Threads)
+             {
+                 if (task.Process.Threads.Count > 0) targets.Add(task.Process.Threads[0]);
+             }
+        }
+        else if (pid == -1)
+        {
+            // All processes. Dangerous!
+            return -(int)Errno.EPERM; 
+        }
+        else // pid < -1: PGRP = -pid
+        {
+             // Not implemented PGRP signaling yet.
+             return -(int)Errno.ESRCH;
         }
 
         if (targets.Count == 0) return -(int)Errno.ESRCH;
 
-        if (sig == 0) return 0; // Check existence
-
         foreach (var t in targets)
         {
-            t.PendingSignals |= (1UL << (sig - 1));
-            // Wake up if sleeping
-            if (t.Process.State == ProcessState.Sleeping)
-            {
-                // Interrupt sleep? We need to interrupt `PauseAsync` or `BlockingTask`.
-                // For `PauseAsync`, `ResumeTcs` handles it.
-                // For `BlockingTask`, it's tougher (e.g. read from socket).
-                // We'll rely on periodic checks or `ResumeTcs`.
-                try { t.ResumeTcs?.TrySetResult(true); } catch { }
-            }
+            t.HandleSignal(sig);
         }
 
-        return 0;
+        return 0;      
     }
 
-    private static int SysTkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+
+    private static async ValueTask<int> SysTkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         int tid = (int)a1;
@@ -2810,42 +2958,38 @@ public unsafe partial class SyscallManager
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var target = Scheduler.Get(tid);
+        var target = KernelScheduler.Instance.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
 
-        if (sig != 0)
-        {
-            target.PendingSignals |= (1UL << (sig - 1));
-             // Wake up
-            try { target.ResumeTcs?.TrySetResult(true); } catch { }
-        }
+        if (sig != 0) target.HandleSignal(sig);
 
         return 0;
     }
 
-    private static int SysTgkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTgkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        // int tgid = (int)a1; // Not used yet?
+        // int tid = (int)a2;
+        // int sig = (int)a3;
+        
         int tgid = (int)a1;
         int tid = (int)a2;
         int sig = (int)a3;
         
-        var target = Scheduler.Get(tid);
+        var target = KernelScheduler.Instance.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid && tgid != -1) return -(int)Errno.ESRCH;
 
-         if (sig != 0)
-        {
-            target.PendingSignals |= (1UL << (sig - 1));
-             // Wake up
-            try { target.ResumeTcs?.TrySetResult(true); } catch { }
-        }
+         if (sig != 0) target.HandleSignal(sig);
         return 0;
     }
 
-    private static int SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        var task = Scheduler.GetByEngine(state);
+        var task = (sm.Engine.Owner as FiberTask);
         if (sm == null || task == null) return -(int)Errno.EPERM;
         
         Logger.LogDebug("[SysExecve] sm.Engine==task.CPU? {Same}, sm.Engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}", 
@@ -2986,9 +3130,10 @@ public unsafe partial class SyscallManager
         // return 0; 
     }
 
-    private static int SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var task = (sm?.Engine.Owner as FiberTask);
         if (task == null) return -(int)Errno.EPERM;
         
         uint sp = task.CPU.RegRead(Reg.ESP);
@@ -3000,9 +3145,10 @@ public unsafe partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX);
     }
 
-    private static int SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = Scheduler.GetByEngine(state);
+        var sm = Get(state);
+        var task = (sm?.Engine.Owner as FiberTask);
         if (task == null) return -(int)Errno.EPERM;
         
         uint sp = task.CPU.RegRead(Reg.ESP);
@@ -3049,61 +3195,61 @@ public unsafe partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX); 
     }
 
-    private static int SysNanosleep(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysNanosleep(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var task = Scheduler.GetByEngine(state);
         
-        // a1: req, a2: rem
         byte[] reqBuf = new byte[8];
         if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         int sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         int nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
+        // 1 tick = 1 microsecond?
+        long totalTicks = sec * 1000000L + nsec / 1000L;
+        if (totalTicks < 0) return 0;
         
-        long totalMs = sec * 1000L + nsec / 1000000L;
-        if (totalMs < 0) return 0;
-        
-        // Chunked sleep to handle signals
-        int slice = 20;
-        while (totalMs > 0)
+        var fiberTask = sm.Engine.Owner as FiberTask;
+        if (fiberTask != null)
         {
-            if (task != null && (task.PendingSignals & ~task.SignalMask) != 0)
-            {
-                // Interrupted!
-                // Update rem if non-null
-                if (a2 != 0)
-                {
-                    byte[] remBuf = new byte[8];
-                    BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(0, 4), (int)(totalMs / 1000));
-                    BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(4, 4), (int)((totalMs % 1000) * 1000000));
-                    if (!sm.Engine.CopyToUser(a2, remBuf)) return -(int)Errno.EFAULT;
-                }
-                
-                // Return ERESTARTSYS (512) so Task.cs can handle restart logic
-                // NOTE: Linux nanosleep returns EINTR + remaining time, it doesn't auto-restart via ERESTARTSYS usually unless using clock_nanosleep?
-                // Actually man nanosleep: "If the call is interrupted... returns -1 and sets errno to EINTR... remaining time...".
-                // If SA_RESTART is set?
-                // "nanosleep() is not restarted by SA_RESTART signal handler" (man 7 signal).
-                // Ah! nanosleep is NEVER restarted.
-                // So returning EINTR is correct.
-                
-                // BUT, to demonstrate SA_RESTART, I should use a syscall that IS restartable, like read() or restartable clock_nanosleep.
-                // `read` from pipe.
-                
-                // For now, I will treat nanosleep as INTERRUPTIBLE but NOT RESTARTABLE.
-                return -(int)Errno.EINTR;
-            }
-            
-            int wait = (int)Math.Min(totalMs, slice);
-            Thread.Sleep(wait);
-            totalMs -= wait;
+             // Register Interruption Logic
+             // If interrupted, return EINTR and remaining time?
+             // For now simpler: Just return EINTR if interrupted, or 0 if success.
+             
+             // We can't easily use 'await' if we want to handle cancellation via callback logic in FiberTask.
+             // But WaitHandle/TimerAwaiter supports normal await.
+             // If signal interrupts, FiberTask.TryInterrupt() calls the callback.
+             // The callback should cancel the Timer.
+             
+             // My Timer implementation has 'Cancel()'.
+             // TimerAwaiter uses 'ScheduleTimer'. ScheduleTimer returns Timer object.
+             // But TimerAwaiter.OnCompleted doesn't expose Timer object easily to the caller of await.
+             // We need a more manual usage or improved Awaiter.
+             
+             // Manual usage for interruptibility:
+             var tcs = new TaskCompletionSource<int>();
+             var timer = KernelScheduler.Instance.ScheduleTimer(totalTicks + KernelScheduler.Instance.CurrentTick, () => tcs.TrySetResult(0));
+             
+             fiberTask.RegisterBlockingSyscall(() => {
+                 timer.Cancel();
+                 tcs.TrySetResult(-(int)Errno.EINTR);
+             });
+             
+             try
+             {
+                 int ret = await tcs.Task;
+                 // If success (0), we are done.
+                 return ret;
+             }
+             finally
+             {
+                 fiberTask.ClearInterrupt();
+             }
         }
-        
         return 0;
     }
 
-    private static int SysMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -3193,7 +3339,7 @@ public unsafe partial class SyscallManager
         return -22; // EINVAL
     }
 
-    private static int SysUmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -3247,7 +3393,7 @@ public unsafe partial class SyscallManager
         return -22; // EINVAL
     }
 
-    private static int SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -3305,7 +3451,7 @@ public unsafe partial class SyscallManager
         return 0;
     }
 
-    private static int SysChroot(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysChroot(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -3319,7 +3465,7 @@ public unsafe partial class SyscallManager
         sm.ProcessRoot = dentry;
         return 0;
     }
-    private static int SysFcntl64(IntPtr state, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFcntl64(IntPtr state, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -3349,26 +3495,5 @@ public unsafe partial class SyscallManager
                 // Unimplemented fcntl64 cmd (suppress unless verbose)
                 return -(int)Errno.EINVAL;
         }
-    }
-}
-
-internal static class SyscallAsyncHelpers
-{
-    public static async System.Threading.Tasks.Task<int> ContinueRead(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        await waitTask;
-        return SyscallManager.SysRead(state, a1, a2, a3, a4, a5, a6);
-    }
-
-    public static async System.Threading.Tasks.Task<int> ContinueWrite(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        await waitTask;
-        return SyscallManager.SysWrite(state, a1, a2, a3, a4, a5, a6);
-    }
-
-    public static async System.Threading.Tasks.Task<int> ContinueSendfile(System.Threading.Tasks.Task waitTask, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        await waitTask;
-        return SyscallManager.SysSendfile64(state, a1, a2, a3, a4, a5, a6);
     }
 }

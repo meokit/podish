@@ -15,6 +15,9 @@ public class Engine : IDisposable
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
     // New resolver for synchronous fault handling during safe access
     public Func<uint, bool, bool>? PageFaultResolver { get; set; }
+    
+    // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
+    public object? Owner { get; set; }
 
     public unsafe Engine()
     {
@@ -43,11 +46,18 @@ public class Engine : IDisposable
     [UnmanagedCallersOnly]
     private static bool OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
     {
-        if (userdata == IntPtr.Zero) return false;
-        var handle = GCHandle.FromIntPtr(userdata);
-        if (handle.Target is Engine engine)
+        try
         {
-            return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
+            if (userdata == IntPtr.Zero) return false;
+            var handle = GCHandle.FromIntPtr(userdata);
+            if (handle.Target is Engine engine)
+            {
+                return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Engine] Exception in OnNativeFault: {ex}");
         }
         return false;
     }
@@ -55,14 +65,21 @@ public class Engine : IDisposable
     [UnmanagedCallersOnly]
     private static int OnNativeInterrupt(IntPtr state, uint vector, IntPtr userdata)
     {
-        if (userdata == IntPtr.Zero) return 0;
-        var handle = GCHandle.FromIntPtr(userdata);
-        if (handle.Target is Engine engine)
+        try
         {
-            if (engine.InterruptHandler != null)
+            if (userdata == IntPtr.Zero) return 0;
+            var handle = GCHandle.FromIntPtr(userdata);
+            if (handle.Target is Engine engine)
             {
-                return engine.InterruptHandler(engine, vector) ? 1 : 0;
+                if (engine.InterruptHandler != null)
+                {
+                    return engine.InterruptHandler(engine, vector) ? 1 : 0;
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Engine] Exception in OnNativeInterrupt: {ex}");
         }
         return 0;
     }
@@ -298,7 +315,9 @@ public class Engine : IDisposable
 
     public void Dispose()
     {
+        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
         Dispose(true);
+        Console.WriteLine($"[Engine] Disposed.");
         GC.SuppressFinalize(this);
     }
 

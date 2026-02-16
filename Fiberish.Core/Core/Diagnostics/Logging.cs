@@ -12,14 +12,7 @@ public static class Logging
         {
             if (_loggerFactory == null)
             {
-                _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
-                {
-                    builder.AddConsole(options =>
-                    {
-                        options.LogToStandardErrorThreshold = LogLevel.Trace; // Send all logs to stderr
-                    });
-                    builder.SetMinimumLevel(LogLevel.Information);
-                });
+                return new LoggerFactory();
             }
             return _loggerFactory;
         }
