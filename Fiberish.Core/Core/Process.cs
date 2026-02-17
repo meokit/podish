@@ -2,6 +2,7 @@ using Fiberish.Loader;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.X86.Native;
 
 namespace Fiberish.Core;
@@ -167,14 +168,14 @@ public class Process
     }
 
     public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
-        bool strace, KernelScheduler scheduler)
+        bool strace, KernelScheduler scheduler, TtyDiscipline? tty = null)
     {
         // 1. Init System Components
         var engine = new Engine();
         var mm = new VMAManager();
 
         // 2. Init Syscalls
-        var sys = new SyscallManager(engine, mm, 0, rootRes)
+        var sys = new SyscallManager(engine, mm, 0, rootRes, tty)
         {
             Strace = strace
         };

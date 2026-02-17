@@ -1,16 +1,21 @@
+using Fiberish.Core.VFS.TTY;
+using Fiberish.Native;
+
 namespace Fiberish.VFS;
 
 public class ConsoleInode : Inode
 {
+    private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
 
-    public ConsoleInode(SuperBlock sb, bool isInput)
+    public ConsoleInode(SuperBlock sb, bool isInput, TtyDiscipline? discipline = null)
     {
         SuperBlock = sb;
         Type = InodeType.CharDev;
         Mode = 0x1B6; // 666
         _isInput = isInput;
         Ino = 1; // Dummy
+        _discipline = discipline;
     }
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
@@ -39,12 +44,31 @@ public class ConsoleInode : Inode
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
+        
+        if (_discipline != null)
+        {
+            return _discipline.Read(buffer, linuxFile.Flags);
+        }
+        
         return _stdin.Read(buffer);
+    }
+    
+    public override async ValueTask WaitForRead(LinuxFile linuxFile)
+    {
+        if (!_isInput || _discipline == null) return;
+        
+        await _discipline.DataAvailable;
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
+        
+        if (_discipline != null)
+        {
+            return _discipline.Write(buffer);
+        }
+        
         _stdout.Write(buffer);
         _stdout.Flush();
         return buffer.Length;

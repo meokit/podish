@@ -5,8 +5,48 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysIoctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysIoctl(IntPtr state, uint fd, uint request, uint arg, uint a4, uint a5, uint a6)
     {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+
+        // TTY specific ioctls
+        if (sm.Tty != null)
+        {
+            switch (request)
+            {
+                case LinuxConstants.TCGETS:
+                {
+                    var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+                    int ret = sm.Tty.GetAttr(termios);
+                    if (ret != 0) return ret;
+                    if (!sm.Engine.CopyToUser(arg, termios)) return -(int)Errno.EFAULT;
+                    return 0;
+                }
+                case LinuxConstants.TCSETS:
+                case LinuxConstants.TCSETSW:
+                case LinuxConstants.TCSETSF:
+                {
+                    var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+                    if (!sm.Engine.CopyFromUser(arg, termios)) return -(int)Errno.EFAULT;
+                    return sm.Tty.SetAttr((int)(request - LinuxConstants.TCGETS), termios);
+                }
+                case LinuxConstants.TIOCGWINSZ:
+                {
+                    var buf = new byte[8];
+                    int ret = sm.Tty.GetWindowSize(buf);
+                    if (ret == 0)
+                    {
+                        if (!sm.Engine.CopyToUser(arg, buf)) return -(int)Errno.EFAULT;
+                    }
+                    return ret;
+                }
+            }
+        }
+
+        // Generic ioctls or ignore
         return 0;
     }
 

@@ -200,6 +200,35 @@ public class KernelScheduler
         }
     }
 
+    public void SignalProcessGroup(int pgid, int signal)
+    {
+        lock (_processes)
+        {
+            foreach (var p in _processes.Values)
+            {
+                if (p.PGID == pgid)
+                {
+                    // Signal all threads? Usually signal is delivered to process, 
+                    // and one thread handles it. But for job control (SIGINT/SIGTSTP), 
+                    // it affects the whole group.
+                    // In Linux, it's sent to all processes in group. 
+                    // For each process, we signal its main thread or all threads?
+                    // Typically signal pending on process, handled by any eligible thread.
+                    // Simplified: Signal the main thread (TID=TGID).
+                    
+                    var mainTask = GetTask(p.TGID);
+                    mainTask?.HandleSignal(signal);
+                }
+            }
+        }
+    }
+
+    public void SignalTask(int tid, int signal)
+    {
+        var task = GetTask(tid);
+        task?.HandleSignal(signal);
+    }
+
     public readonly struct TimerAwaiter(long ticks) : INotifyCompletion
     {
         private readonly long _ticks = ticks;

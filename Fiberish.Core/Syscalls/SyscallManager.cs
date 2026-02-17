@@ -3,6 +3,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 
@@ -18,11 +19,14 @@ public partial class SyscallManager
     private static readonly object _registryLock = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot)
+    public TtyDiscipline? Tty { get; }
+
+    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot, TtyDiscipline? tty = null)
     {
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
+        Tty = tty;
         Futex = new FutexManager();
 
         RegisterEngine(engine);
@@ -82,13 +86,13 @@ public partial class SyscallManager
         Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime");
 
         // Add console FDs
-        InitStdio(devSb);
+        InitStdio(devSb, tty);
 
         SetupVDSO();
     }
 
     private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk, bool strace,
-        Dentry root, Dentry cwd, Dentry procRoot)
+        Dentry root, Dentry cwd, Dentry procRoot, TtyDiscipline? tty)
     {
         Mem = mem;
         FDs = fds;
@@ -98,6 +102,7 @@ public partial class SyscallManager
         Root = root; // Global root (shared)
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
+        Tty = tty;
 
         Root.Inode!.Get();
         CurrentWorkingDirectory.Inode!.Get();
@@ -187,7 +192,7 @@ public partial class SyscallManager
         MountList.Add(new MountInfo { Source = source, Target = targetPath, FsType = fstype, Options = options });
     }
 
-    private void InitStdio(SuperBlock devSb)
+    private void InitStdio(SuperBlock devSb, TtyDiscipline? tty)
     {
         // 0: Stdin, 1: Stdout, 2: Stderr
         // In devtmpfs, we should create /dev/console, /dev/null, /dev/tty etc.
@@ -199,11 +204,11 @@ public partial class SyscallManager
         // We need Dentry for these to support Fstat correctly if they are fully virtual.
         // Or we use the manually created ones.
 
-        var stdinInode = new ConsoleInode(devSb, true);
+        var stdinInode = new ConsoleInode(devSb, true, tty);
         var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb); // Parent should be /dev root really
         FDs[0] = new VFS.LinuxFile(stdinDentry, FileFlags.O_RDONLY);
 
-        var stdoutInode = new ConsoleInode(devSb, false);
+        var stdoutInode = new ConsoleInode(devSb, false, tty);
         var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
         FDs[1] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
         FDs[2] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
@@ -234,7 +239,7 @@ public partial class SyscallManager
         }
 
         var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory,
-            ProcessRoot)
+            ProcessRoot, Tty)
         {
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,

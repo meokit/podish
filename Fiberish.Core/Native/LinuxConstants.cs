@@ -94,6 +94,8 @@ public static class LinuxConstants
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
 
+    public const int TERMIOS_SIZE_I386 = 60;
+
     public const uint MinMmapAddr = 0x10000;
     public const uint TaskSize32 = 0xC0000000;
 
@@ -229,4 +231,14 @@ public static class LinuxConstants
     public const int CLOCK_REALTIME_COARSE = 5;
     public const int CLOCK_MONOTONIC_COARSE = 6;
     public const int CLOCK_BOOTTIME = 7;
+
+    // TTY IOCTLs
+    public const uint TCGETS = 0x5401;
+    public const uint TCSETS = 0x5402;
+    public const uint TCSETSW = 0x5403;
+    public const uint TCSETSF = 0x5404;
+    public const uint TIOCGWINSZ = 0x5413;
+    public const uint TIOCSWINSZ = 0x5414;
+    public const uint TIOCGPGRP = 0x540F;
+    public const uint TIOCSPGRP = 0x5410;
 }
