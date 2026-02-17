@@ -1,8 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj" />
-    <ProjectReference Include="..\Fiberish.X86\Fiberish.X86.csproj" />
+    <ProjectReference Include="../Fiberish.Core/Fiberish.Core.csproj" />
+    <ProjectReference Include="../Fiberish.X86/Fiberish.X86.csproj" />
   </ItemGroup>
 
   <ItemGroup>

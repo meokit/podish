@@ -3,6 +3,7 @@ using Bifrost.Memory;
 using Bifrost.Syscalls;
 using Bifrost.Native;
 using System.Buffers.Binary;
+using Microsoft.Extensions.Logging;
 
 namespace Bifrost.Core;
 
@@ -47,6 +48,8 @@ public class FiberTask
     private Action? _interruptHandler;
     public bool WasInterrupted { get; private set; }
 
+    public Microsoft.Extensions.Logging.ILogger Logger { get; }
+
     public FiberTask(int tid, Process process, Engine cpu, KernelScheduler kernel)
     {
         TID = tid;
@@ -57,6 +60,12 @@ public class FiberTask
         CPU = cpu;
         CPU.Owner = this;
         CommonKernel = kernel;
+
+        Logger = kernel.LoggerFactory.CreateLogger($"Bifrost.Task.{TID}");
+        CPU.LogHandler = (engine, level, msg) => 
+        {
+            Logger.Log((Microsoft.Extensions.Logging.LogLevel)level, "[Native] {Message}", msg);
+        };
 
         kernel.RegisterTask(this);
 

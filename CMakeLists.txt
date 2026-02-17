@@ -6,4 +6,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_subdirectory(libfibercpu)
-# add_subdirectory(Fiberish.App) # Removed - Project refactored
+
+# Build Fiberish.Cli with NativeAOT
+add_custom_target(FiberishCli
+    COMMAND dotnet publish ${CMAKE_SOURCE_DIR}/Fiberish.Cli/Fiberish.Cli.csproj -c Release -p:PublishAot=true
+    COMMENT "Building Fiberish.Cli with NativeAOT"
+    VERBATIM
+)

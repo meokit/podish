@@ -14,6 +14,8 @@ public class KernelScheduler
     public long CurrentTick => _timerSystem.CurrentTick;
     public bool Running { get; set; } = true;
 
+    public ILoggerFactory LoggerFactory { get; set; } = new Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory();
+
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
     private readonly Dictionary<int, FiberTask> _tasks = [];

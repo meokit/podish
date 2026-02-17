@@ -97,8 +97,6 @@ class Program
         });
         Logger = Logging.CreateLogger<Program>();
 
-        // Register Native Logger
-        RegisterNativeLogger();
 
         // Combine exe and additional args
         string[] fullArgs = new[] { exe }.Concat(exeArgs).ToArray();
@@ -112,6 +110,7 @@ class Program
 
         // 1. Create Kernel Scheduler
         var scheduler = new KernelScheduler();
+        scheduler.LoggerFactory = Logging.LoggerFactory;
         
         // 2. Spawn Process
         try
@@ -137,20 +136,4 @@ class Program
         }
     }
 
-    private static unsafe void RegisterNativeLogger()
-    {
-        X86Native.SetLogCallback(&LogCallback);
-    }
-
-    [System.Runtime.InteropServices.UnmanagedCallersOnly]
-    private static void LogCallback(int level, IntPtr messagePtr)
-    {
-        if (Logger == null) return;
-        
-        string? message = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(messagePtr);
-        if (message == null) return;
-
-        LogLevel logLevel = (LogLevel)level;
-        Logger.Log(logLevel, "[Native] {Message}", message);
-    }
 }

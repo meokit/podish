@@ -35,7 +35,11 @@ public enum Seg
 
 public unsafe partial class X86Native
 {
+#if NATIVE_AOT
+    private const string LibName = "__Internal";
+#else
     private const string LibName = "fibercpu";
+#endif
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]
     public static partial IntPtr Create();

@@ -10,9 +10,29 @@
 
   <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild">
     <Message Text="Building libfibercpu with CMake..." Importance="High" />
-    <Exec Command="cmake -S ../libfibercpu -B build_native -DCMAKE_BUILD_TYPE=Release" />
-    <Exec Command="cmake --build build_native --config Release" />
+    <PropertyGroup>
+      <CMakeArgs Condition="'$(PublishAot)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON</CMakeArgs>
+      <CMakeArgs Condition="'$(PublishAot)' != 'true'">-DCMAKE_BUILD_TYPE=Release</CMakeArgs>
+    </PropertyGroup>
+    <Exec Command="cmake -S ../libfibercpu -B build_native $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)" />
+    <Exec Command="cmake --build build_native --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)" />
   </Target>
+
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <DefineConstants>$(DefineConstants);NATIVE_AOT</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PublishAot)' == 'true' And $([MSBuild]::IsOsPlatform('OSX'))">
+    <NativeLibrary Include="build_native/libfibercpu.a" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PublishAot)' == 'true' And $([MSBuild]::IsOsPlatform('Linux'))">
+    <NativeLibrary Include="build_native/libfibercpu.a" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PublishAot)' == 'true' And $([MSBuild]::IsOsPlatform('Windows'))">
+    <NativeLibrary Include="build_native/Release/fibercpu.lib" />
+  </ItemGroup>
 
   <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX'))">
     <Content Include="build_native/libfibercpu.dylib">

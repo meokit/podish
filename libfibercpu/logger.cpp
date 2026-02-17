@@ -33,14 +33,14 @@ void LogMsgState(EmuState* state, int level, const char* fmt, ...) {
         state->log_callback(level, buffer, state->log_userdata);
         return;
     }
-    // Fallback to global if instance callback not set?
-    // Or just check global?
-    if (g_LogCallback) {
+    if (state && state->log_callback) {
         char buffer[2048];
         va_list args;
         va_start(args, fmt);
         vsnprintf(buffer, sizeof(buffer), fmt, args);
         va_end(args);
-        g_LogCallback(level, buffer, g_LogUserdata);
+        state->log_callback(level, buffer, state->log_userdata);
+        return;
     }
+    // No fallback to global logger for per-task logging isolation
 }

@@ -639,10 +639,6 @@ void X86_SetLogCallback(EmuState* state, X86LogCallback callback, void* userdata
     if (state) {
         state->log_callback = callback;
         state->log_userdata = userdata;
-    } else {
-        // Fallback to global if state is null, just for convenience or backward compat?
-        // But X86LogCallback type is compatible with LogCallback.
-        SetGlobalLogCallback(callback, userdata);
     }
 }
 

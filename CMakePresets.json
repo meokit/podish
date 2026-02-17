@@ -92,6 +92,14 @@
         {
             "name": "sanitize-address",
             "configurePreset": "sanitize-address"
+        },
+        {
+            "name": "cli-aot",
+            "displayName": "Fiberish CLI (AOT)",
+            "configurePreset": "release",
+            "targets": [
+                "FiberishCli"
+            ]
         }
     ]
 }
