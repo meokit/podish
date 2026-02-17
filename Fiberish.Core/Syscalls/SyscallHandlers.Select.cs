@@ -278,6 +278,7 @@ public partial class SyscallManager
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
             var kernel = KernelScheduler.Current;
+            if (kernel == null) throw new InvalidOperationException("KernelScheduler.Current is null in Select OnCompleted");
 
             // 1. Register Timeout
             Timer? timer = null;

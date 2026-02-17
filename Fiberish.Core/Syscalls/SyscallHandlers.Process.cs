@@ -18,57 +18,30 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         var exitCode = (int)a1;
-        if (sm.Engine.Owner is FiberTask fiberTask)
+        if (sm.Engine.Owner is FiberTask task)
         {
-            fiberTask.Exited = true;
-            fiberTask.ExitStatus = exitCode;
+            task.Exited = true;
+            task.ExitStatus = exitCode;
 
             // Notify Parent
-            var ppid = fiberTask.Process.PPID;
+            var ppid = task.Process.PPID;
             if (ppid > 0)
             {
-                // We still need KernelScheduler to find OTHER tasks (parent).
-                // KernelScheduler SHOULD be available via FiberTask reference?
-                // Yes, FiberTask.CommonKernel property.
-                var parentTask = fiberTask.CommonKernel.GetTask(ppid);
-                // Signaling child exit usually means handling SIGCHLD.
+                var parentTask = task.CommonKernel.GetTask(ppid);
                 parentTask?.HandleSignal(17); // SIGCHLD = 17
             }
 
-            return 0;
-        }
-
-        var task = sm.Engine.Owner as FiberTask;
-        if (task != null)
-        {
-            // Remove from /proc
-            // Only if leader? Threads exit individually.
-            // Linux removes /proc/pid only when all threads are gone (ThreadGroup empty).
-            // Simplified: If TID == TGID (main thread) and we are exiting properly? 
-            // Actually SysExit terminates the thread. SysExitGroup terminates the process.
-            // If SysExit is called by main thread, the process becomes zombie but /proc/pid remains until Waitpid?
-            // "ps" should show Zombies.
-            // So we should NOT remove /proc/pid here immediately if we want to see Zombies.
-            // But we don't support full Zombie state inspection in /proc yet.
-            // If we remove it, "ps" won't show it.
-            // Let's remove it for cleanup for now, or on Waitpid reaping.
-
-            // Current simple impl: Remove on exit.
+            // If main thread exits, entire process group becomes zombie
             if (task.TID == task.Process.TGID)
+            {
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-
-            task.ExitStatus = (int)a1;
-            task.Exited = true;
-
-            task.Process.State = ProcessState.Zombie;
-            task.Process.ExitStatus = (int)a1;
-
-            // Signal zombie event for waitpid
-            task.Process.ZombieEvent.Set();
+                task.Process.State = ProcessState.Zombie;
+                task.Process.ExitStatus = exitCode;
+                task.Process.ZombieEvent.Set();
+            }
         }
 
-        var code = (int)a1;
-        sm.ExitHandler?.Invoke(sm.Engine, code, false);
+        sm.ExitHandler?.Invoke(sm.Engine, exitCode, false);
         sm.Engine.Stop();
         return 0;
     }
@@ -78,11 +51,27 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var task = sm.Engine.Owner as FiberTask;
-        if (task != null) ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+        var exitCode = (int)a1;
+        if (sm.Engine.Owner is FiberTask task)
+        {
+            task.Exited = true;
+            task.ExitStatus = exitCode;
 
-        var code = (int)a1;
-        sm.ExitHandler?.Invoke(sm.Engine, code, true);
+            // Notify Parent
+            var ppid = task.Process.PPID;
+            if (ppid > 0)
+            {
+                var parentTask = task.CommonKernel.GetTask(ppid);
+                parentTask?.HandleSignal(17); // SIGCHLD = 17
+            }
+
+            ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+            task.Process.State = ProcessState.Zombie;
+            task.Process.ExitStatus = exitCode;
+            task.Process.ZombieEvent.Set();
+        }
+
+        sm.ExitHandler?.Invoke(sm.Engine, exitCode, true);
         sm.Engine.Stop();
         return 0;
     }
