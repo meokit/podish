@@ -1,24 +1,23 @@
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
 using System.Buffers.Binary;
-using System.Text;
-using System.Linq;
-using Bifrost.Core;
-using Bifrost.Native;
-using Bifrost.Memory;
-using Bifrost.VFS;
+using Fiberish.Core;
+using Fiberish.Loader;
+using Fiberish.Native;
+using Fiberish.VFS;
+using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using File = System.IO.File;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+#pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysExit(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int exitCode = (int)a1;
+        var exitCode = (int)a1;
         if (sm.Engine.Owner is FiberTask fiberTask)
         {
             fiberTask.Exited = true;
@@ -35,10 +34,11 @@ public partial class SyscallManager
                 // Signaling child exit usually means handling SIGCHLD.
                 parentTask?.HandleSignal(17); // SIGCHLD = 17
             }
+
             return 0;
         }
 
-        var task = (sm.Engine.Owner as FiberTask);
+        var task = sm.Engine.Owner as FiberTask;
         if (task != null)
         {
             // Remove from /proc
@@ -67,27 +67,26 @@ public partial class SyscallManager
             task.Process.ZombieEvent.Set();
         }
 
-        int code = (int)a1;
+        var code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, false);
         sm.Engine.Stop();
         return 0;
     }
+
     private static async ValueTask<int> SysExitGroup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var task = (sm.Engine.Owner as FiberTask);
-        if (task != null)
-        {
-            ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-        }
+        var task = sm.Engine.Owner as FiberTask;
+        if (task != null) ProcFsManager.OnProcessExit(sm, task.Process.TGID);
 
-        int code = (int)a1;
+        var code = (int)a1;
         sm.ExitHandler?.Invoke(sm.Engine, code, true);
         sm.Engine.Stop();
         return 0;
     }
+
     private static async ValueTask<int> SysClone(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -95,11 +94,11 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask current) return -(int)Errno.EPERM;
 
-        uint flags = a1;
-        uint stackPtr = a2;
-        uint ptidPtr = a3;
-        uint tlsPtr = a4;
-        uint ctidPtr = a5;
+        var flags = a1;
+        var stackPtr = a2;
+        var ptidPtr = a3;
+        var tlsPtr = a4;
+        var ctidPtr = a5;
 
         // Clone
         var child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
@@ -109,35 +108,39 @@ public partial class SyscallManager
 
         return child.TID;
     }
+
     private static async ValueTask<int> SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // fork = clone(0, 0, NULL, NULL, NULL) - no flags, copy everything
         return await SysClone(state, 0, 0, 0, 0, 0, 0);
     }
+
     private static async ValueTask<int> SysVfork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // vfork = clone(CLONE_VM | CLONE_VFORK, 0, NULL, NULL, NULL)
         return await SysClone(state, LinuxConstants.CLONE_VM | LinuxConstants.CLONE_VFORK, 0, 0, 0, 0, 0);
     }
-    private static async ValueTask<int> SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr, uint a5, uint a6)
+
+    private static async ValueTask<int> SysWait4(IntPtr state, uint pid, uint statusPtr, uint options, uint rusagePtr,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int pidVal = (int)pid;
-        int optVal = (int)options;
-        bool hang = (optVal & 1) != 0; // WNOHANG
+        var pidVal = (int)pid;
+        var optVal = (int)options;
+        var hang = (optVal & 1) != 0; // WNOHANG
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.ECHILD;
 
         var currentProc = fiberTask.Process;
-        var kernel = KernelScheduler.Current;
+        var kernel = KernelScheduler.Current!;
 
         // Loop for retrying wait
         while (true)
         {
             // Scan children
-            bool hasChildren = false;
+            var hasChildren = false;
 
             List<Process> candidates = [];
 
@@ -150,7 +153,7 @@ public partial class SyscallManager
                 var childProc = kernel.GetProcess(childPid);
                 if (childProc == null) continue;
 
-                bool match = false;
+                var match = false;
                 if (pidVal == -1) match = true;
                 else if (pidVal > 0) match = childPid == pidVal;
                 else if (pidVal == 0) match = childProc.PGID == currentProc.PGID;
@@ -164,7 +167,7 @@ public partial class SyscallManager
                         // Found REAPABLE child
                         if (statusPtr != 0)
                         {
-                            byte[] stBuf = new byte[4];
+                            var stBuf = new byte[4];
                             BinaryPrimitives.WriteInt32LittleEndian(stBuf, childProc.ExitStatus);
                             if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
@@ -177,6 +180,7 @@ public partial class SyscallManager
 
                         return childPid;
                     }
+
                     candidates.Add(childProc);
                 }
             }
@@ -189,12 +193,12 @@ public partial class SyscallManager
             // Use TaskCompletionSource and register on all candidates
             var tcs = new TaskCompletionSource<bool>();
 
-            void continuation() => tcs.TrySetResult(true);
-
-            foreach (var c in candidates)
+            void continuation()
             {
-                c.ZombieEvent.Register(continuation);
+                tcs.TrySetResult(true);
             }
+
+            foreach (var c in candidates) c.ZombieEvent.Register(continuation);
 
             fiberTask.RegisterBlockingSyscall(() =>
             {
@@ -203,7 +207,7 @@ public partial class SyscallManager
 
             try
             {
-                bool success = await tcs.Task;
+                var success = await tcs.Task;
                 if (!success) return -(int)Errno.EINTR;
             }
             finally
@@ -212,12 +216,16 @@ public partial class SyscallManager
             }
         }
     }
-    private static async ValueTask<int> SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysWaitPid(IntPtr state, uint pid, uint statusPtr, uint options, uint a4,
+        uint a5, uint a6)
     {
         // waitpid(pid, status, options) = wait4(pid, status, options, NULL)
         return await SysWait4(state, pid, statusPtr, options, 0, 0, 0);
     }
-    private static async ValueTask<int> SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options, uint rusagePtr, uint a6)
+
+    private static async ValueTask<int> SysWaitId(IntPtr state, uint idtype, uint id, uint infop, uint options,
+        uint rusagePtr, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -226,27 +234,27 @@ public partial class SyscallManager
 
         // Logic similar to SysWait4 but with idtype
         var currentProc = fiberTask.Process;
-        var kernel = KernelScheduler.Current;
+        var kernel = KernelScheduler.Current!;
 
-        bool wnohang = ((int)options & 1) != 0;
-        bool wexited = ((int)options & 4) != 0;
+        var wnohang = ((int)options & 1) != 0;
+        var wexited = ((int)options & 4) != 0;
         // Other flags ignored for now
         if (options == 0) wexited = true; // Default?
 
         while (true)
         {
             List<Process> candidates = [];
-            bool hasChildren = false;
+            var hasChildren = false;
 
             foreach (var childPid in currentProc.Children)
             {
                 var childProc = kernel.GetProcess(childPid);
                 if (childProc == null) continue;
 
-                bool match = false;
-                if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_ALL) match = true;
-                else if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_PID && childPid == (int)id) match = true;
-                else if ((Bifrost.Core.IdType)idtype == Bifrost.Core.IdType.P_PGID && childProc.PGID == (int)id) match = true;
+                var match = false;
+                if ((IdType)idtype == IdType.P_ALL) match = true;
+                else if ((IdType)idtype == IdType.P_PID && childPid == (int)id) match = true;
+                else if ((IdType)idtype == IdType.P_PGID && childProc.PGID == (int)id) match = true;
 
                 if (match)
                 {
@@ -269,14 +277,16 @@ public partial class SyscallManager
 
                         // Waitid keeps child unless WNOWAIT? 
                         // "waitid()... If WNOWAIT is set... leave the child in a waitable state"
-                        bool wnowait = ((int)options & 0x01000000) != 0;
+                        var wnowait = ((int)options & 0x01000000) != 0;
                         if (!wnowait)
-                        {
-                            lock (currentProc.Children) currentProc.Children.Remove(childPid);
-                        }
+                            lock (currentProc.Children)
+                            {
+                                currentProc.Children.Remove(childPid);
+                            }
 
                         return 0; // Success
                     }
+
                     candidates.Add(childProc);
                 }
             }
@@ -286,21 +296,19 @@ public partial class SyscallManager
 
             // Block
             var tcs = new TaskCompletionSource<bool>();
-            void continuation() => tcs.TrySetResult(true);
 
-            foreach (var c in candidates)
+            void continuation()
             {
-                c.ZombieEvent.Register(continuation);
+                tcs.TrySetResult(true);
             }
 
-            fiberTask.RegisterBlockingSyscall(() =>
-            {
-                tcs.TrySetResult(false);
-            });
+            foreach (var c in candidates) c.ZombieEvent.Register(continuation);
+
+            fiberTask.RegisterBlockingSyscall(() => { tcs.TrySetResult(false); });
 
             try
             {
-                bool success = await tcs.Task;
+                var success = await tcs.Task;
                 if (!success) return -(int)Errno.EINTR;
             }
             finally
@@ -309,6 +317,7 @@ public partial class SyscallManager
             }
         }
     }
+
     private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
     {
         var buf = new byte[128];
@@ -320,29 +329,28 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.si_status);
         return sm.Engine.CopyToUser(addr, buf);
     }
+
     private static async ValueTask<int> SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        var task = (sm.Engine.Owner as FiberTask);
-        if (sm == null || task == null) return -(int)Errno.EPERM;
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
 
-        Logger.LogDebug("[SysExecve] sm.Engine==task.CPU? {Same}, sm.Engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}",
-            object.ReferenceEquals(sm.Engine, task.CPU), sm.Engine.State, task.CPU.State);
+        Logger.LogDebug(
+            "[SysExecve] sm.Engine==task.CPU? {Same}, sm.Engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}",
+            ReferenceEquals(sm.Engine, task.CPU), sm.Engine.State, task.CPU.State);
 
-        string filename = sm.ReadString(a1);
+        var filename = sm.ReadString(a1);
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
         // Resolve path via VFS
         var dentry = sm.PathWalk(filename);
         string? hostPath = null;
 
         if (dentry?.Inode is HostInode hi)
-        {
             hostPath = hi.HostPath;
-        }
         else if (dentry?.Inode is OverlayInode oi && oi.UpperInode == null && oi.LowerInode is HostInode lhi)
-        {
             hostPath = lhi.HostPath;
-        }
 
         if (hostPath == null)
         {
@@ -350,25 +358,26 @@ public partial class SyscallManager
             return -(int)Errno.ENOENT;
         }
 
-        if (!System.IO.File.Exists(hostPath))
+        if (!File.Exists(hostPath))
         {
-            Logger.LogWarning("[SysExecve] VFS resolved '{Filename}' to '{HostPath}', but file does not exist on host", filename, hostPath);
+            Logger.LogWarning("[SysExecve] VFS resolved '{Filename}' to '{HostPath}', but file does not exist on host",
+                filename, hostPath);
             return -(int)Errno.ENOENT;
         }
 
         // We use the host path for loading
-        string absPath = hostPath;
+        var absPath = hostPath;
 
         // Read Args (must be done BEFORE clearing memory)
         List<string> args = [];
         if (a2 != 0)
         {
-            uint curr = a2;
-            byte[] ptrBuf = new byte[4];
+            var curr = a2;
+            var ptrBuf = new byte[4];
             while (true)
             {
                 if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
-                uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
                 if (strPtr == 0) break;
                 args.Add(sm.ReadString(strPtr));
                 curr += 4;
@@ -379,12 +388,12 @@ public partial class SyscallManager
         List<string> envs = [];
         if (a3 != 0)
         {
-            uint curr = a3;
-            byte[] ptrBuf = new byte[4];
+            var curr = a3;
+            var ptrBuf = new byte[4];
             while (true)
             {
                 if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
-                uint strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
                 if (strPtr == 0) break;
                 envs.Add(sm.ReadString(strPtr));
                 curr += 4;
@@ -410,13 +419,14 @@ public partial class SyscallManager
         task.AltStackFlags = 0;
 
         // Load new ELF
-        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs", absPath, args.Count, envs.Count);
+        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs", absPath, args.Count,
+            envs.Count);
         foreach (var arg in args) Logger.LogDebug("  arg: {Arg}", arg);
         try
         {
             // Note: ElfLoader.Load usually expects us to map the file.
             // In the current codebase usage (e.g. Program.cs), `ElfLoader.Load` takes a real file path?
-            var res = Bifrost.Loader.ElfLoader.Load(absPath, sm, [.. args], [.. envs]);
+            var res = ElfLoader.Load(absPath, sm, [.. args], [.. envs]);
 
             // Set CPU State
             sm.Engine.Eip = res.Entry;
@@ -438,8 +448,9 @@ public partial class SyscallManager
 
             // Initial stack content must be written to memory
             // Use CopyToUser instead of MemWrite to avoid recursive fault handler
-            bool stackWritten = sm.Engine.CopyToUser(res.SP, res.InitialStack);
-            Logger.LogDebug("[SysExecve] Stack write to 0x{SP:x} len={Len} success={Success}", res.SP, res.InitialStack.Length, stackWritten);
+            var stackWritten = sm.Engine.CopyToUser(res.SP, res.InitialStack);
+            Logger.LogDebug("[SysExecve] Stack write to 0x{SP:x} len={Len} success={Success}", res.SP,
+                res.InitialStack.Length, stackWritten);
             if (!stackWritten)
             {
                 Logger.LogError("[SysExecve] Failed to write initial stack!");

@@ -1,49 +1,22 @@
-using Bifrost.Core;
-using Bifrost.Memory;
-using Bifrost.Native;
-using Bifrost.VFS;
+using Fiberish.Core;
+using Fiberish.Diagnostics;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.VFS;
+using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
-using Bifrost.Diagnostics;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
+
+    private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly Dictionary<IntPtr, SyscallManager> _registry = [];
     private static readonly object _registryLock = new();
-
-    // The current engine executing a syscall (protected by GIL)
-    public Engine Engine { get; set; } = null!;
-
-    public VMAManager Mem { get; set; }
-
-    public Dentry Root { get; set; } = null!;
-    public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
-
-    // For chroot tracking, we keep a Dentry pointer to the process root
-    public Dentry ProcessRoot { get; set; } = null!;
-
-    // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, Bifrost.VFS.File> FDs { get; private set; } = [];
-
-    public FutexManager Futex { get; private set; }
-
-    public uint BrkAddr { get; set; }
-    public bool Strace { get; set; }
-
-    public class MountInfo
-    {
-        public string Source { get; set; } = "none";
-        public string Target { get; set; } = "/";
-        public string FsType { get; set; } = "unknown";
-        public string Options { get; set; } = "";
-    }
-    public List<MountInfo> MountList { get; } = [];
-
-    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
-    private const int MaxSyscalls = 512;
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot)
     {
@@ -79,7 +52,11 @@ public partial class SyscallManager
         var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", options);
 
         Root = overlaySb.Root;
-        MountList.Add(new MountInfo { Source = "overlay", Target = "/", FsType = "overlay", Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work" });
+        MountList.Add(new MountInfo
+        {
+            Source = "overlay", Target = "/", FsType = "overlay",
+            Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
+        });
 
         ProcessRoot = Root;
         CurrentWorkingDirectory = Root;
@@ -110,6 +87,45 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
+    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk, bool strace,
+        Dentry root, Dentry cwd, Dentry procRoot)
+    {
+        Mem = mem;
+        FDs = fds;
+        Futex = futex;
+        BrkAddr = brk;
+        Strace = strace;
+        Root = root; // Global root (shared)
+        CurrentWorkingDirectory = cwd;
+        ProcessRoot = procRoot;
+
+        Root.Inode!.Get();
+        CurrentWorkingDirectory.Inode!.Get();
+        ProcessRoot.Inode!.Get();
+
+        RegisterHandlers();
+    }
+
+    // The current engine executing a syscall (protected by GIL)
+    public Engine Engine { get; set; } = null!;
+
+    public VMAManager Mem { get; set; }
+
+    public Dentry Root { get; set; } = null!;
+    public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
+
+    // For chroot tracking, we keep a Dentry pointer to the process root
+    public Dentry ProcessRoot { get; set; } = null!;
+
+    // File Descriptors (Shared if CLONE_FILES)
+    public Dictionary<int, VFS.LinuxFile> FDs { get; } = [];
+
+    public FutexManager Futex { get; }
+
+    public uint BrkAddr { get; set; }
+    public bool Strace { get; set; }
+    public List<MountInfo> MountList { get; } = [];
+
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
 
@@ -117,7 +133,8 @@ public partial class SyscallManager
     {
         // Map vDSO page (RX) at a fixed high address to avoid overlap
         uint vdsoAddr = 0x7FFF0000;
-        Mem.Mmap(vdsoAddr, 4096, Protection.Read | Protection.Exec, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
+        Mem.Mmap(vdsoAddr, 4096, Protection.Read | Protection.Exec,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
 
         // Directly allocate the page in the engine with RW permissions for initial setup
         if (Engine.AllocatePage(vdsoAddr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
@@ -131,13 +148,15 @@ public partial class SyscallManager
 
         // __kernel_rt_sigreturn: mov eax, 173; int 0x80
         byte[] rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
-        if (!Engine.CopyToUser(vdsoAddr + 16, rtsigret)) Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
+        if (!Engine.CopyToUser(vdsoAddr + 16, rtsigret))
+            Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
         RtSigReturnAddr = vdsoAddr + 16;
 
         // Set final RX permissions in the engine
         Engine.MemMap(vdsoAddr, 4096, (byte)(Protection.Read | Protection.Exec));
 
-        Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr, SigReturnAddr, RtSigReturnAddr);
+        Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr,
+            SigReturnAddr, RtSigReturnAddr);
     }
 
     private static void EnsureDirectory(Dentry parent, string name)
@@ -164,7 +183,7 @@ public partial class SyscallManager
         sb.Root.MountedAt = dentry;
 
         // Track mount
-        string targetPath = "/" + name; // Simplified for root mounts
+        var targetPath = "/" + name; // Simplified for root mounts
         MountList.Add(new MountInfo { Source = source, Target = targetPath, FsType = fstype, Options = options });
     }
 
@@ -175,37 +194,19 @@ public partial class SyscallManager
         // For simple Stdio, we just create virtual inodes or reuse what we had.
 
         var nullNode = new ConsoleInode(devSb, true); // reusing ConsoleInode logic for now
-                                                      // Ideally we create nodes in devSb using mknod if we had it, or manual instantiation.
+        // Ideally we create nodes in devSb using mknod if we had it, or manual instantiation.
 
         // We need Dentry for these to support Fstat correctly if they are fully virtual.
         // Or we use the manually created ones.
 
         var stdinInode = new ConsoleInode(devSb, true);
         var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb); // Parent should be /dev root really
-        FDs[0] = new Bifrost.VFS.File(stdinDentry, FileFlags.O_RDONLY);
+        FDs[0] = new VFS.LinuxFile(stdinDentry, FileFlags.O_RDONLY);
 
         var stdoutInode = new ConsoleInode(devSb, false);
         var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
-        FDs[1] = new Bifrost.VFS.File(stdoutDentry, FileFlags.O_WRONLY);
-        FDs[2] = new Bifrost.VFS.File(stdoutDentry, FileFlags.O_WRONLY);
-    }
-
-    private SyscallManager(VMAManager mem, Dictionary<int, Bifrost.VFS.File> fds, FutexManager futex, uint brk, bool strace, Dentry root, Dentry cwd, Dentry procRoot)
-    {
-        Mem = mem;
-        FDs = fds;
-        Futex = futex;
-        BrkAddr = brk;
-        Strace = strace;
-        Root = root; // Global root (shared)
-        CurrentWorkingDirectory = cwd;
-        ProcessRoot = procRoot;
-
-        Root.Inode!.Get();
-        CurrentWorkingDirectory.Inode!.Get();
-        ProcessRoot.Inode!.Get();
-
-        RegisterHandlers();
+        FDs[1] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
+        FDs[2] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
     }
 
     public void RegisterEngine(Engine engine)
@@ -218,7 +219,7 @@ public partial class SyscallManager
 
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
     {
-        Dictionary<int, Bifrost.VFS.File> newFds;
+        Dictionary<int, VFS.LinuxFile> newFds;
         if (shareFiles)
         {
             newFds = FDs;
@@ -227,13 +228,13 @@ public partial class SyscallManager
         {
             newFds = [];
             foreach (var kv in FDs)
-            {
                 // We need to manually clone because File's constructor/Close manage refcounts
-                newFds[kv.Key] = new Bifrost.VFS.File(kv.Value.Dentry, kv.Value.Flags) { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
-            }
+                newFds[kv.Key] = new VFS.LinuxFile(kv.Value.Dentry, kv.Value.Flags)
+                    { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
         }
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot)
+        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory,
+            ProcessRoot)
         {
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,
@@ -253,10 +254,7 @@ public partial class SyscallManager
 
     private void Register(uint nr, SyscallHandler handler)
     {
-        if (nr < MaxSyscalls)
-        {
-            _syscallHandlers[nr] = handler;
-        }
+        if (nr < MaxSyscalls) _syscallHandlers[nr] = handler;
     }
 
     public bool Handle(Engine engine, uint vector)
@@ -264,10 +262,7 @@ public partial class SyscallManager
         // Handle Breakpoint (INT 3)
         if (vector == 3)
         {
-            if (engine.Owner is FiberTask t)
-            {
-                t.PendingSignals |= (1UL << (5 - 1)); // SIGTRAP = 5
-            }
+            if (engine.Owner is FiberTask t) t.PendingSignals |= 1UL << (5 - 1); // SIGTRAP = 5
             return true;
         }
 
@@ -279,49 +274,36 @@ public partial class SyscallManager
         // Get current FiberTask (New Model Only) via Engine.Owner
         var fiberTask = engine.Owner as FiberTask;
 
-        uint eax = engine.RegRead(Reg.EAX);
-        uint ebx = engine.RegRead(Reg.EBX);
-        uint ecx = engine.RegRead(Reg.ECX);
-        uint edx = engine.RegRead(Reg.EDX);
-        uint esi = engine.RegRead(Reg.ESI);
-        uint edi = engine.RegRead(Reg.EDI);
-        uint ebp = engine.RegRead(Reg.EBP);
+        var eax = engine.RegRead(Reg.EAX);
+        var ebx = engine.RegRead(Reg.EBX);
+        var ecx = engine.RegRead(Reg.ECX);
+        var edx = engine.RegRead(Reg.EDX);
+        var esi = engine.RegRead(Reg.ESI);
+        var edi = engine.RegRead(Reg.EDI);
+        var ebp = engine.RegRead(Reg.EBP);
 
         if (Strace)
-        {
             Logger.LogTrace("[Syscall] {eax} ({ebx:X}, {ecx:X}, {edx:X}, {esi:X}, {edi:X}, {ebp:X})",
                 eax, ebx, ecx, edx, esi, edi, ebp);
-        }
 
         ValueTask<int> retTask = new(-38); // ENOSYS
 
         if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
-        {
             retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
-        }
-        else if (!Strace)
-        {
-            Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
-        }
+        else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
 
         // --- Handling Async Syscalls ---
         if (retTask.IsCompleted)
         {
-            int ret = retTask.Result;
+            var ret = retTask.Result;
 
             // Special handling for context-restoring syscalls
-            bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
+            var isSigReturn = eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn;
 
 
-            if (!isSigReturn)
-            {
-                engine.RegWrite(Reg.EAX, (uint)ret);
-            }
+            if (!isSigReturn) engine.RegWrite(Reg.EAX, (uint)ret);
 
-            if (Strace)
-            {
-                Logger.LogTrace(" = {Ret}", ret);
-            }
+            if (Strace) Logger.LogTrace(" = {Ret}", ret);
         }
         else
         {
@@ -339,16 +321,14 @@ public partial class SyscallManager
                 engine.Yield();
                 return true;
             }
-            else
-            {
-                // Should not happen in new model
-                Logger.LogError("Async syscall initiated but no FiberTask attached!");
-                engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
-            }
+
+            // Should not happen in new model
+            Logger.LogError("Async syscall initiated but no FiberTask attached!");
+            engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
         }
 
         // Determine if we should yield
-        bool shouldYield = false;
+        var shouldYield = false;
 
         if (fiberTask != null)
         {
@@ -380,10 +360,7 @@ public partial class SyscallManager
             }
         }
 
-        if (shouldYield)
-        {
-            engine.Yield();
-        }
+        if (shouldYield) engine.Yield();
 
         return true;
     }
@@ -401,11 +378,17 @@ public partial class SyscallManager
         ProcessRoot?.Inode?.Put();
 
         foreach (var fd in FDs.Values)
-        {
             // Note: If shareFiles is true, this might be dangerous if multiple tasks close the same FDs
             // But usually SyscallManager.Close is called when the task/process actually dies.
             fd.Close();
-        }
         FDs.Clear();
+    }
+
+    public class MountInfo
+    {
+        public string Source { get; set; } = "none";
+        public string Target { get; set; } = "/";
+        public string FsType { get; set; } = "unknown";
+        public string Options { get; set; } = "";
     }
 }

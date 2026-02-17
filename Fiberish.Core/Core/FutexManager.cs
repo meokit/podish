@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
-
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public class Waiter
 {
@@ -21,6 +19,7 @@ public class FutexManager
                 list = [];
                 _queues[addr] = list;
             }
+
             var w = new Waiter();
             list.Add(w);
             return w;
@@ -34,10 +33,7 @@ public class FutexManager
             if (_queues.TryGetValue(addr, out var list))
             {
                 list.Remove(w);
-                if (list.Count == 0)
-                {
-                    _queues.Remove(addr);
-                }
+                if (list.Count == 0) _queues.Remove(addr);
             }
         }
     }
@@ -46,12 +42,9 @@ public class FutexManager
     {
         lock (_lock)
         {
-            if (!_queues.TryGetValue(addr, out var list) || list.Count == 0)
-            {
-                return 0;
-            }
+            if (!_queues.TryGetValue(addr, out var list) || list.Count == 0) return 0;
 
-            int woken = 0;
+            var woken = 0;
             while (count > 0 && list.Count > 0)
             {
                 var w = list[0];
@@ -61,10 +54,7 @@ public class FutexManager
                 count--;
             }
 
-            if (list.Count == 0)
-            {
-                _queues.Remove(addr);
-            }
+            if (list.Count == 0) _queues.Remove(addr);
 
             return woken;
         }

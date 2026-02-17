@@ -1,29 +1,28 @@
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
 using System.Buffers.Binary;
-using System.Text;
-using System.Linq;
-using Bifrost.Core;
-using Bifrost.Native;
-using Bifrost.Memory;
-using Bifrost.VFS;
+using System.Runtime.InteropServices;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-    internal static async ValueTask<int> SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+#pragma warning disable CS1998 // Async method lacks await operators
+    internal static async ValueTask<int> SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int outFd = (int)a1;
-        int inFd = (int)a2;
-        uint offsetPtr = a3;
-        int count = (int)a4;
+        var outFd = (int)a1;
+        var inFd = (int)a2;
+        var offsetPtr = a3;
+        var count = (int)a4;
 
-        if (!sm.FDs.TryGetValue(inFd, out VFS.File? inFile) || !sm.FDs.TryGetValue(outFd, out VFS.File? outFile)) return -(int)Errno.EBADF;
+        if (!sm.FDs.TryGetValue(inFd, out var inFile) || !sm.FDs.TryGetValue(outFd, out var outFile))
+            return -(int)Errno.EBADF;
         if (inFile == null || outFile == null) return -(int)Errno.EBADF;
 
         // Verify modes
@@ -32,46 +31,39 @@ public partial class SyscallManager
         if (((int)outFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY) return -(int)Errno.EBADF;
 
         // Use a buffer
-        byte[] buffer = new byte[Math.Min(count, 32768)];
-        int totalWritten = 0;
+        var buffer = new byte[Math.Min(count, 32768)];
+        var totalWritten = 0;
 
         try
         {
             long initialOffset = -1;
             if (offsetPtr != 0)
             {
-                byte[] offsetBytes = new byte[8];
+                var offsetBytes = new byte[8];
                 if (!sm.Engine.CopyFromUser(offsetPtr, offsetBytes)) return -(int)Errno.EFAULT;
                 initialOffset = BitConverter.ToInt64(offsetBytes);
             }
 
-            int remaining = count;
+            var remaining = count;
             while (remaining > 0)
             {
-                int toRead = Math.Min(remaining, buffer.Length);
-                int bytesRead = 0;
+                var toRead = Math.Min(remaining, buffer.Length);
+                var bytesRead = 0;
 
                 if (offsetPtr != 0)
-                {
                     // Read from specific offset directly from inode
-                    bytesRead = inFile.Dentry.Inode!.Read(inFile, buffer.AsSpan(0, toRead), initialOffset + totalWritten);
-                }
+                    bytesRead = inFile.Dentry.Inode!.Read(inFile, buffer.AsSpan(0, toRead),
+                        initialOffset + totalWritten);
                 else
-                {
                     // Read from current position via File object
                     bytesRead = inFile.Read(buffer.AsSpan(0, toRead));
-                }
 
                 if (bytesRead <= 0)
-                {
                     if (bytesRead == 0) // EOF
-                    {
                         break;
-                    }
-                }
 
                 // Write to out_fd
-                int bytesWritten = outFile.Write(buffer.AsSpan(0, bytesRead));
+                var bytesWritten = outFile.Write(buffer.AsSpan(0, bytesRead));
 
                 if (bytesWritten < 0)
                 {
@@ -86,10 +78,8 @@ public partial class SyscallManager
             }
 
             if (offsetPtr != 0)
-            {
                 if (!sm.Engine.CopyToUser(offsetPtr, BitConverter.GetBytes(initialOffset + totalWritten)))
                     return -(int)Errno.EFAULT;
-            }
 
             return totalWritten;
         }
@@ -99,12 +89,12 @@ public partial class SyscallManager
             return -(int)Errno.EIO;
         }
     }
+
     private static async ValueTask<int> SysPipe(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        uint fdsAddr = a1;
+        var fdsAddr = a1;
 
         try
         {
@@ -112,19 +102,19 @@ public partial class SyscallManager
 
             // Reader
             var rDentry = new Dentry("pipe:[read]", pipe, sm.Root, sm.Root.SuperBlock);
-            var rFile = new Bifrost.VFS.File(rDentry, FileFlags.O_RDONLY);
-            int rFd = sm.AllocFD(rFile);
+            var rFile = new VFS.LinuxFile(rDentry, FileFlags.O_RDONLY);
+            var rFd = sm.AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
             var wDentry = new Dentry("pipe:[write]", pipe, sm.Root, sm.Root.SuperBlock);
-            var wFile = new Bifrost.VFS.File(wDentry, FileFlags.O_WRONLY);
-            int wFd = sm.AllocFD(wFile);
+            var wFile = new VFS.LinuxFile(wDentry, FileFlags.O_WRONLY);
+            var wFd = sm.AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
             // Write FDs to user memory
             // Write FDs to user memory
-            var fds = new int[] { rFd, wFd };
+            var fds = new[] { rFd, wFd };
             if (!sm.Engine.CopyToUser(fdsAddr, MemoryMarshal.AsBytes(fds.AsSpan())))
                 return -(int)Errno.EFAULT;
 
@@ -136,11 +126,14 @@ public partial class SyscallManager
             return -(int)Errno.ENFILE;
         }
     }
+
     private static async ValueTask<int> SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // creat(path, mode) is open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
-        return await SysOpen(state, a1, (uint)(FileFlags.O_CREAT | FileFlags.O_WRONLY | FileFlags.O_TRUNC), a2, a4, a5, a6);
+        return await SysOpen(state, a1, (uint)(FileFlags.O_CREAT | FileFlags.O_WRONLY | FileFlags.O_TRUNC), a2, a4, a5,
+            a6);
     }
+
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
@@ -149,21 +142,21 @@ public partial class SyscallManager
         {
             if ((flags & (uint)FileFlags.O_CREAT) != 0)
             {
-                int lastSlash = path.LastIndexOf('/');
-                string parentPath = lastSlash == -1 ? "" : (lastSlash == 0 ? "/" : path[..lastSlash]);
-                string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+                var lastSlash = path.LastIndexOf('/');
+                var parentPath = lastSlash == -1 ? "" : lastSlash == 0 ? "/" : path[..lastSlash];
+                var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
                 var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
                 if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-                var t = (sm.Engine.Owner as FiberTask);
-                int uid = t?.Process.EUID ?? 0;
-                int gid = t?.Process.EGID ?? 0;
+                var t = sm.Engine.Owner as FiberTask;
+                var uid = t?.Process.EUID ?? 0;
+                var gid = t?.Process.EGID ?? 0;
 
                 try
                 {
                     dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-                    int finalMode = (int)mode & ~(t?.Process.Umask ?? 0);
+                    var finalMode = (int)mode & ~(t?.Process.Umask ?? 0);
                     parentDentry.Inode.Create(dentry, finalMode, uid, gid);
                 }
                 catch
@@ -180,14 +173,12 @@ public partial class SyscallManager
         {
             // File exists - check for O_EXCL
             if ((flags & (uint)FileFlags.O_CREAT) != 0 && (flags & (uint)FileFlags.O_EXCL) != 0)
-            {
                 return -(int)Errno.EEXIST;
-            }
         }
 
         try
         {
-            var f = new Bifrost.VFS.File(dentry, (FileFlags)flags);
+            var f = new VFS.LinuxFile(dentry, (FileFlags)flags);
             return sm.AllocFD(f);
         }
         catch
@@ -195,27 +186,29 @@ public partial class SyscallManager
             return -1;
         }
     }
+
     private static async ValueTask<int> SysOpen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
 
-        string? path = sm.Engine.ReadStringSafe(a1);
+        var path = sm.Engine.ReadStringSafe(a1);
         if (path == null) return -(int)Errno.EFAULT;
 
         return ImplOpen(sm, path, a2, a3);
     }
+
     private static async ValueTask<int> SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int dirfd = (int)a1;
-        string? path = sm.Engine.ReadStringSafe(a2);
+        var dirfd = (int)a1;
+        var path = sm.Engine.ReadStringSafe(a2);
         if (path == null) return -(int)Errno.EFAULT;
 
-        uint flags = a3;
-        uint mode = a4;
+        var flags = a3;
+        var mode = a4;
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -227,25 +220,26 @@ public partial class SyscallManager
 
         return ImplOpen(sm, path, flags, mode, startAt);
     }
+
     private static async ValueTask<int> SysOpenAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int dirfd = (int)a1;
-        string? path = sm.Engine.ReadStringSafe(a2);
+        var dirfd = (int)a1;
+        var path = sm.Engine.ReadStringSafe(a2);
         if (path == null) return -(int)Errno.EFAULT;
 
-        uint howPtr = a3;
-        uint howSize = a4;
+        var howPtr = a3;
+        var howSize = a4;
 
         if (howSize < 24) return -(int)Errno.EINVAL;
 
-        byte[] howBuf = new byte[24];
+        var howBuf = new byte[24];
         if (!sm.Engine.CopyFromUser(howPtr, howBuf)) return -(int)Errno.EFAULT;
 
-        ulong flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
-        ulong mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
+        var flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
+        var mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -257,24 +251,26 @@ public partial class SyscallManager
 
         return ImplOpen(sm, path, (uint)flags, (uint)mode, startAt);
     }
+
     private static async ValueTask<int> SysDup(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int oldfd = (int)a1;
+        var oldfd = (int)a1;
         var f = sm.GetFD(oldfd);
         if (f == null) return -(int)Errno.EBADF;
 
         return sm.AllocFD(f);
     }
+
     private static async ValueTask<int> SysDup2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int oldfd = (int)a1;
-        int newfd = (int)a2;
+        var oldfd = (int)a1;
+        var newfd = (int)a2;
 
         if (oldfd == newfd)
         {
@@ -290,46 +286,50 @@ public partial class SyscallManager
         f.Dentry.Inode?.Get();
         return newfd;
     }
+
     private static async ValueTask<int> SysDup3(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // For now ignore flags like O_CLOEXEC
         return await SysDup2(state, a1, a2, a3, a4, a5, a6);
     }
+
     private static async ValueTask<int> SysPRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        uint count = a3;
-        long offset = (long)a4 | ((long)a5 << 32);
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = a3;
+        var offset = a4 | ((long)a5 << 32);
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
         try
         {
-            byte[] buf = new byte[count];
-            int n = f.Dentry.Inode!.Read(f, buf.AsSpan(), offset);
+            var buf = new byte[count];
+            var n = f.Dentry.Inode!.Read(f, buf.AsSpan(), offset);
             if (n > 0)
-            {
                 if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
                     return -(int)Errno.EFAULT;
-            }
             return n;
         }
-        catch { return -(int)Errno.EIO; }
+        catch
+        {
+            return -(int)Errno.EIO;
+        }
     }
+
     private static async ValueTask<int> SysPWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        uint count = a3;
-        long offset = (long)a4 | ((long)a5 << 32);
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = a3;
+        var offset = a4 | ((long)a5 << 32);
 
-        byte[] data = new byte[count];
+        var data = new byte[count];
         if (!sm.Engine.CopyFromUser(bufAddr, data)) return -(int)Errno.EFAULT;
 
         var f = sm.GetFD(fd);
@@ -337,137 +337,155 @@ public partial class SyscallManager
 
         try
         {
-            int n = f.Dentry.Inode!.Write(f, data, offset);
+            var n = f.Dentry.Inode!.Write(f, data, offset);
             return n;
         }
-        catch { return -(int)Errno.EIO; }
+        catch
+        {
+            return -(int)Errno.EIO;
+        }
     }
+
     private static async ValueTask<int> SysReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint iovAddr = a2;
-        int iovCnt = (int)a3;
+        var fd = (int)a1;
+        var iovAddr = a2;
+        var iovCnt = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        int totalRead = 0;
-        for (int i = 0; i < iovCnt; i++)
+        var totalRead = 0;
+        for (var i = 0; i < iovCnt; i++)
         {
-            byte[] iovBuf = new byte[8];
+            var iovBuf = new byte[8];
             if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
 
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
+            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                byte[] buf = new byte[len];
-                int n = f.Read(buf);
+                var buf = new byte[len];
+                var n = f.Read(buf);
                 if (n > 0)
                 {
                     if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
                     totalRead += n;
                     if (n < (int)len) break; // EOF or short read
                 }
-                else break;
+                else
+                {
+                    break;
+                }
             }
         }
+
         return totalRead;
     }
+
     private static async ValueTask<int> SysPReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint iovAddr = a2;
-        int iovCnt = (int)a3;
-        long offset = (long)a4 | ((long)a5 << 32); // Modified line
+        var fd = (int)a1;
+        var iovAddr = a2;
+        var iovCnt = (int)a3;
+        var offset = a4 | ((long)a5 << 32); // Modified line
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        int totalRead = 0;
-        for (int i = 0; i < iovCnt; i++)
+        var totalRead = 0;
+        for (var i = 0; i < iovCnt; i++)
         {
-            byte[] iovBuf = new byte[8];
+            var iovBuf = new byte[8];
             if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
+            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                byte[] buf = new byte[len];
-                int n = f.Dentry.Inode!.Read(f, buf, offset + totalRead);
+                var buf = new byte[len];
+                var n = f.Dentry.Inode!.Read(f, buf, offset + totalRead);
                 if (n > 0)
                 {
                     if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
                     totalRead += n;
                     if (n < (int)len) break;
                 }
-                else break;
+                else
+                {
+                    break;
+                }
             }
         }
+
         return totalRead;
     }
+
     private static async ValueTask<int> SysPWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint iovAddr = a2;
-        int iovCnt = (int)a3;
-        long offset = (long)a4 | ((long)a5 << 32); // Modified line
+        var fd = (int)a1;
+        var iovAddr = a2;
+        var iovCnt = (int)a3;
+        var offset = a4 | ((long)a5 << 32); // Modified line
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        int totalWritten = 0;
-        for (int i = 0; i < iovCnt; i++)
+        var totalWritten = 0;
+        for (var i = 0; i < iovCnt; i++)
         {
-            byte[] iovBuf = new byte[8];
+            var iovBuf = new byte[8];
             if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
 
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
+            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                byte[] data = new byte[len];
+                var data = new byte[len];
                 if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
-                int n = f.Dentry.Inode!.Write(f, data, offset + totalWritten);
+                var n = f.Dentry.Inode!.Write(f, data, offset + totalWritten);
                 if (n > 0)
                 {
                     totalWritten += n;
                     if (n < (int)len) break;
                 }
-                else break;
+                else
+                {
+                    break;
+                }
             }
         }
+
         return totalWritten;
     }
+
     internal static async ValueTask<int> SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        int count = (int)a3;
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
         // TODO: Access checks
 
-        byte[] buf = new byte[count];
+        var buf = new byte[count];
 
         while (true)
-        {
             try
             {
-                int n = f.Read(buf.AsSpan(0, count));
+                var n = f.Read(buf.AsSpan(0, count));
 
                 if (n == -(int)Errno.EAGAIN)
                 {
@@ -485,12 +503,9 @@ public partial class SyscallManager
                         var waitTask = f.WaitForRead().AsTask();
                         var interruptTask = tcs.Task;
 
-                        var finishedTask = await System.Threading.Tasks.Task.WhenAny(waitTask, interruptTask);
+                        var finishedTask = await Task.WhenAny(waitTask, interruptTask);
 
-                        if (finishedTask == interruptTask)
-                        {
-                            return -(int)Errno.EINTR;
-                        }
+                        if (finishedTask == interruptTask) return -(int)Errno.EINTR;
 
                         // File is ready, retry read
                         continue;
@@ -504,10 +519,8 @@ public partial class SyscallManager
                 if (n >= 0)
                 {
                     if (n > 0)
-                    {
                         if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
                             return -(int)Errno.EFAULT;
-                    }
                     return n;
                 }
 
@@ -518,15 +531,15 @@ public partial class SyscallManager
                 Console.WriteLine($"SysRead Exception: {ex}");
                 return -(int)Errno.EIO;
             }
-        }
     }
+
     internal static async ValueTask<int> SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        int count = (int)a3;
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
@@ -537,10 +550,9 @@ public partial class SyscallManager
             return -(int)Errno.EFAULT;
 
         while (true)
-        {
             try
             {
-                int n = f.Write(data);
+                var n = f.Write(data);
 
                 if (n == -(int)Errno.EAGAIN)
                 {
@@ -558,12 +570,9 @@ public partial class SyscallManager
                         var waitTask = f.WaitForWrite().AsTask(); // Allocation! Optimize later
                         var interruptTask = tcs.Task;
 
-                        var finishedTask = await System.Threading.Tasks.Task.WhenAny(waitTask, interruptTask);
+                        var finishedTask = await Task.WhenAny(waitTask, interruptTask);
 
-                        if (finishedTask == interruptTask)
-                        {
-                            return -(int)Errno.EINTR;
-                        }
+                        if (finishedTask == interruptTask) return -(int)Errno.EINTR;
 
                         // File is ready, retry write
                         continue;
@@ -576,21 +585,24 @@ public partial class SyscallManager
 
                 return n;
             }
-            catch { return -(int)Errno.EIO; }
-        }
+            catch
+            {
+                return -(int)Errno.EIO;
+            }
     }
+
     private static async ValueTask<int> SysLseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        int fd = (int)a1;
-        long offset = (long)(int)a2;  // signed offset
-        int whence = (int)a3;
+        var fd = (int)a1;
+        var offset = (long)(int)a2; // signed offset
+        var whence = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        long newPos = whence switch
+        var newPos = whence switch
         {
             0 => offset, // SEEK_SET
             1 => f.Position + offset, // SEEK_CUR
@@ -602,19 +614,20 @@ public partial class SyscallManager
         f.Position = newPos;
         return (int)newPos;
     }
+
     private static async ValueTask<int> SysLlseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        int fd = (int)a1;
-        long offset = ((long)a2 << 32) | a3;
-        uint resultPtr = a4;
-        int whence = (int)a5;
+        var fd = (int)a1;
+        var offset = ((long)a2 << 32) | a3;
+        var resultPtr = a4;
+        var whence = (int)a5;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        long newPos = whence switch
+        var newPos = whence switch
         {
             0 => offset, // SEEK_SET
             1 => f.Position + offset, // SEEK_CUR
@@ -630,6 +643,7 @@ public partial class SyscallManager
 
         return 0;
     }
+
     private static async ValueTask<int> SysClose(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -637,33 +651,35 @@ public partial class SyscallManager
         sm.FreeFD((int)a1);
         return 0;
     }
+
     private static async ValueTask<int> SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint iovAddr = a2;
-        int iovCnt = (int)a3;
+        var fd = (int)a1;
+        var iovAddr = a2;
+        var iovCnt = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
-        int total = 0;
-        for (int i = 0; i < iovCnt; i++)
+        var total = 0;
+        for (var i = 0; i < iovCnt; i++)
         {
-            byte[] iovBuf = new byte[8];
+            var iovBuf = new byte[8];
             if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-            uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            uint len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
+            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
+            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
 
             if (len > 0)
             {
-                byte[] data = new byte[len];
+                var data = new byte[len];
                 if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
                 f.Write(data);
                 total += (int)len;
             }
         }
+
         return total;
     }
 }

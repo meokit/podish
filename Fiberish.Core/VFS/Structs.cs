@@ -1,9 +1,6 @@
-using System;
-using System.Collections.Generic;
+namespace Fiberish.VFS;
 
-namespace Bifrost.VFS;
-
-public enum InodeType : int
+public enum InodeType
 {
     Unknown = 0,
     File = 0x8000,
@@ -16,7 +13,7 @@ public enum InodeType : int
 }
 
 [Flags]
-public enum FileFlags : int
+public enum FileFlags
 {
     O_RDONLY = 0,
     O_WRONLY = 1,
@@ -45,6 +42,7 @@ public class FileSystemType
 
 public abstract class SuperBlock
 {
+    protected HashSet<Inode> AllInodes = [];
     public FileSystemType Type { get; set; } = null!;
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
@@ -52,17 +50,16 @@ public abstract class SuperBlock
     public object Lock { get; } = new();
 
     // Reference counting for lifecycle management
-    public int RefCount { get; set; } = 0;
-    protected HashSet<Inode> AllInodes = [];
+    public int RefCount { get; set; }
 
-    public void Get() => RefCount++;
+    public void Get()
+    {
+        RefCount++;
+    }
 
     public void Put()
     {
-        if (--RefCount <= 0)
-        {
-            Shutdown();
-        }
+        if (--RefCount <= 0) Shutdown();
     }
 
     public bool HasActiveInodes()
@@ -77,8 +74,14 @@ public abstract class SuperBlock
         Inodes.Clear();
     }
 
-    public virtual Inode AllocInode() => throw new NotSupportedException();
-    public virtual void WriteInode(Inode inode) { }
+    public virtual Inode AllocInode()
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual void WriteInode(Inode inode)
+    {
+    }
 }
 
 public abstract class Inode
@@ -100,17 +103,17 @@ public abstract class Inode
     public object Lock { get; } = new();
 
     // Reference counting for lifecycle management
-    public int RefCount { get; set; } = 0;
+    public int RefCount { get; set; }
 
     // Reference counting methods
-    public void Get() => RefCount++;
+    public void Get()
+    {
+        RefCount++;
+    }
 
     public void Put()
     {
-        if (--RefCount <= 0)
-        {
-            Release();
-        }
+        if (--RefCount <= 0) Release();
     }
 
     protected virtual void Release()
@@ -119,35 +122,96 @@ public abstract class Inode
     }
 
     // Operations
-    public virtual Dentry? Lookup(string name) => null;
-    public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid) => throw new NotSupportedException();
-    public virtual Dentry Mkdir(Dentry dentry, int mode, int uid, int gid) => throw new NotSupportedException();
-    public virtual void Unlink(string name) => throw new NotSupportedException();
-    public virtual void Rmdir(string name) => throw new NotSupportedException();
-    public virtual Dentry Link(Dentry dentry, Inode oldInode) => throw new NotSupportedException();
-    public virtual void Rename(string oldName, Inode newParent, string newName) => throw new NotSupportedException();
-    public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new NotSupportedException();
-    public virtual string Readlink() => throw new NotSupportedException();
+    public virtual Dentry? Lookup(string name)
+    {
+        return null;
+    }
 
-    public virtual int Read(File file, Span<byte> buffer, long offset) => 0;
-    public virtual int Write(File file, ReadOnlySpan<byte> buffer, long offset) => 0;
+    public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual void Unlink(string name)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual void Rmdir(string name)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual void Rename(string oldName, Inode newParent, string newName)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual string Readlink()
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        return 0;
+    }
+
+    public virtual int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return 0;
+    }
 
     // Async blocking support
-    public virtual ValueTask WaitForRead(File file) => ValueTask.CompletedTask;
-    public virtual ValueTask WaitForWrite(File file) => ValueTask.CompletedTask;
+    public virtual ValueTask WaitForRead(LinuxFile linuxFile)
+    {
+        return ValueTask.CompletedTask;
+    }
 
-    public virtual void Truncate(long size) => throw new NotSupportedException();
+    public virtual ValueTask WaitForWrite(LinuxFile linuxFile)
+    {
+        return ValueTask.CompletedTask;
+    }
+
+    public virtual void Truncate(long size)
+    {
+        throw new NotSupportedException();
+    }
 
     // File operations hooks
-    public virtual void Open(File file) { }
-    public virtual void Release(File file) { }
+    public virtual void Open(LinuxFile linuxFile)
+    {
+    }
 
-    public virtual void Sync(File file) { }
+    public virtual void Release(LinuxFile linuxFile)
+    {
+    }
+
+    public virtual void Sync(LinuxFile linuxFile)
+    {
+    }
 
     // For directories, we need iteration. 
-    public virtual List<DirectoryEntry> GetEntries() => new();
+    public virtual List<DirectoryEntry> GetEntries()
+    {
+        return new List<DirectoryEntry>();
+    }
 }
-
 
 public struct DirectoryEntry
 {
@@ -158,21 +222,7 @@ public struct DirectoryEntry
 
 public class Dentry
 {
-    private static long _nextId = 0;
-    public long Id { get; } = System.Threading.Interlocked.Increment(ref _nextId);
-
-    public string Name { get; set; }
-    public Inode? Inode { get; set; }
-    public Dentry? Parent { get; set; }
-    public SuperBlock SuperBlock { get; set; }
-    public Dictionary<string, Dentry> Children { get; } = [];
-
-    // Mount point support
-    public bool IsMounted { get; set; }
-    public Dentry? MountRoot { get; set; }
-
-    // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
-    public Dentry? MountedAt { get; set; }
+    private static long _nextId;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
@@ -187,6 +237,21 @@ public class Dentry
         }
     }
 
+    public long Id { get; } = Interlocked.Increment(ref _nextId);
+
+    public string Name { get; set; }
+    public Inode? Inode { get; set; }
+    public Dentry? Parent { get; set; }
+    public SuperBlock SuperBlock { get; set; }
+    public Dictionary<string, Dentry> Children { get; } = [];
+
+    // Mount point support
+    public bool IsMounted { get; set; }
+    public Dentry? MountRoot { get; set; }
+
+    // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
+    public Dentry? MountedAt { get; set; }
+
     public void Instantiate(Inode inode)
     {
         if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
@@ -196,21 +261,22 @@ public class Dentry
     }
 }
 
-public class File
+public class LinuxFile
 {
+    private bool _isClosed;
+
+    public LinuxFile(Dentry dentry, FileFlags flags)
+    {
+        Dentry = dentry;
+        Flags = flags;
+        dentry.Inode?.Get(); // Increase reference count
+        dentry.Inode?.Open(this);
+    }
+
     public Dentry Dentry { get; set; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
     public object? PrivateData { get; set; }
-    private bool _isClosed = false;
-
-    public File(Dentry dentry, FileFlags flags)
-    {
-        Dentry = dentry;
-        Flags = flags;
-        dentry.Inode?.Get();  // Increase reference count
-        dentry.Inode?.Open(this);
-    }
 
     public virtual void Close()
     {
@@ -218,25 +284,32 @@ public class File
         _isClosed = true;
 
         Dentry.Inode?.Release(this);
-        Dentry.Inode?.Put();  // Decrease reference count
+        Dentry.Inode?.Put(); // Decrease reference count
     }
 
     public virtual int Read(Span<byte> buffer)
     {
-        int n = Dentry.Inode!.Read(this, buffer, Position);
+        var n = Dentry.Inode!.Read(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
 
     public virtual int Write(ReadOnlySpan<byte> buffer)
     {
-        int n = Dentry.Inode!.Write(this, buffer, Position);
+        var n = Dentry.Inode!.Write(this, buffer, Position);
         if (n > 0) Position += n;
         return n;
     }
 
-    public virtual ValueTask WaitForRead() => Dentry.Inode!.WaitForRead(this);
-    public virtual ValueTask WaitForWrite() => Dentry.Inode!.WaitForWrite(this);
+    public virtual ValueTask WaitForRead()
+    {
+        return Dentry.Inode!.WaitForRead(this);
+    }
+
+    public virtual ValueTask WaitForWrite()
+    {
+        return Dentry.Inode!.WaitForWrite(this);
+    }
 
     public virtual void Sync()
     {
@@ -244,8 +317,8 @@ public class File
     }
 
     /// <summary>
-    /// Check for readiness. Returns a bitmask of POLL* constants.
-    /// Default implementation for regular files: Always readable and writable.
+    ///     Check for readiness. Returns a bitmask of POLL* constants.
+    ///     Default implementation for regular files: Always readable and writable.
     /// </summary>
     public virtual short Poll(short events)
     {
@@ -263,9 +336,20 @@ public struct DCacheKey(long parentId, string name) : IEquatable<DCacheKey>
     public long ParentId = parentId;
     public string Name = name;
 
-    public readonly bool Equals(DCacheKey other) => ParentId == other.ParentId && Name == other.Name;
-    public override bool Equals(object? obj) => obj is DCacheKey other && Equals(other);
-    public override readonly int GetHashCode() => HashCode.Combine(ParentId, Name);
+    public readonly bool Equals(DCacheKey other)
+    {
+        return ParentId == other.ParentId && Name == other.Name;
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is DCacheKey other && Equals(other);
+    }
+
+    public readonly override int GetHashCode()
+    {
+        return HashCode.Combine(ParentId, Name);
+    }
 
     public static bool operator ==(DCacheKey left, DCacheKey right)
     {

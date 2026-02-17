@@ -1,7 +1,6 @@
-using System.IO;
-using Bifrost.VFS;
+using Fiberish.VFS;
 
-namespace Bifrost.Memory;
+namespace Fiberish.Memory;
 
 public enum Protection
 {
@@ -25,7 +24,7 @@ public class VMA
     public uint End { get; set; } // Exclusive
     public Protection Perms { get; set; }
     public MapFlags Flags { get; set; }
-    public Bifrost.VFS.File? File { get; set; }
+    public LinuxFile? File { get; set; }
     public long Offset { get; set; }
     public long FileSz { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;

@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
-using System.Runtime.CompilerServices;
 
-namespace Bifrost.Native;
+namespace Fiberish.X86.Native;
 
 public enum EmuStatus
 {
@@ -20,7 +19,7 @@ public enum Reg
     ESP = 4,
     EBP = 5,
     ESI = 6,
-    EDI = 7,
+    EDI = 7
 }
 
 public enum Seg
@@ -30,7 +29,7 @@ public enum Seg
     SS = 2,
     DS = 3,
     FS = 4,
-    GS = 5,
+    GS = 5
 }
 
 public unsafe partial class X86Native
@@ -132,13 +131,16 @@ public unsafe partial class X86Native
     // public delegate int InterruptHandler(IntPtr state, uint vector, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetFaultCallback")]
-    public static partial void SetFaultCallback(IntPtr state, delegate* unmanaged<IntPtr, uint, int, IntPtr, bool> handler, IntPtr userdata);
+    public static partial void SetFaultCallback(IntPtr state,
+        delegate* unmanaged<IntPtr, uint, int, IntPtr, bool> handler, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetMemHook")]
-    public static partial void SetMemHook(IntPtr state, delegate* unmanaged<IntPtr, uint, uint, int, ulong, IntPtr, void> hook, IntPtr userdata);
+    public static partial void SetMemHook(IntPtr state,
+        delegate* unmanaged<IntPtr, uint, uint, int, ulong, IntPtr, void> hook, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetInterruptHook")]
-    public static partial void SetInterruptHook(IntPtr state, byte vector, delegate* unmanaged<IntPtr, uint, IntPtr, int> hook, IntPtr userdata);
+    public static partial void SetInterruptHook(IntPtr state, byte vector,
+        delegate* unmanaged<IntPtr, uint, IntPtr, int> hook, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_GetFaultVector")]
     [SuppressGCTransition]
@@ -167,7 +169,8 @@ public unsafe partial class X86Native
     public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetLogCallback")]
-    public static partial void SetLogCallback(IntPtr state, delegate* unmanaged<int, IntPtr, IntPtr, void> callback, IntPtr userdata);
+    public static partial void SetLogCallback(IntPtr state, delegate* unmanaged<int, IntPtr, IntPtr, void> callback,
+        IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_DumpStats")]
     public static partial int DumpStats(IntPtr state, byte* buffer, nuint bufferSize);
@@ -205,6 +208,7 @@ public unsafe partial class X86Native
         private byte padding1;
         public byte is_valid;
         public ulong exec_count;
+
         public IntPtr jit_func;
         // Padding to 32 bytes implied before ops
         // DecodedOp ops[1] follows at offset 32

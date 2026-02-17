@@ -1,12 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Text;
 
-namespace Bifrost.VFS;
+namespace Fiberish.VFS;
 
 public class Tmpfs : FileSystem
 {
-    public Tmpfs() { Name = "tmpfs"; }
+    public Tmpfs()
+    {
+        Name = "tmpfs";
+    }
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
@@ -26,13 +27,13 @@ public class TmpfsSuperBlock : SuperBlock
 {
     private ulong _nextIno = 1;
 
-    // The "Hash Table" requested by user: (ParentDentryID, Name) -> ChildDentry
-    public Dictionary<DCacheKey, Dentry> Dentries { get; } = [];
-
     public TmpfsSuperBlock(FileSystemType type)
     {
         Type = type;
     }
+
+    // The "Hash Table" requested by user: (ParentDentryID, Name) -> ChildDentry
+    public Dictionary<DCacheKey, Dentry> Dentries { get; } = [];
 
     public override Inode AllocInode()
     {
@@ -45,7 +46,9 @@ public class TmpfsSuperBlock : SuperBlock
         }
     }
 
-    public override void WriteInode(Inode inode) { }
+    public override void WriteInode(Inode inode)
+    {
+    }
 
     protected override void Shutdown()
     {
@@ -56,8 +59,8 @@ public class TmpfsSuperBlock : SuperBlock
 
 public class TmpfsInode : Inode
 {
-    private byte[]? _data = [];
     private readonly HashSet<string> _childNames = [];
+    private byte[]? _data = [];
 
     public TmpfsInode(ulong ino, SuperBlock sb)
     {
@@ -80,6 +83,7 @@ public class TmpfsInode : Inode
                 if (primaryDentry.Children != null) primaryDentry.Children[name] = dentry;
                 return dentry;
             }
+
             return null;
         }
     }
@@ -106,6 +110,7 @@ public class TmpfsInode : Inode
             {
                 sb.Dentries[key] = dentry;
             }
+
             dentry.Parent.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
@@ -135,12 +140,14 @@ public class TmpfsInode : Inode
             {
                 sb.Dentries[key] = dentry;
             }
+
             dentry.Parent.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
             return dentry;
         }
     }
+
     public override void Unlink(string name)
     {
         lock (Lock)
@@ -155,6 +162,7 @@ public class TmpfsInode : Inode
                 {
                     sb.Dentries.Remove(key);
                 }
+
                 primaryDentry.Children.Remove(name);
                 var unlinkedInode = dentry.Inode;
                 unlinkedInode?.Dentries.Remove(dentry);
@@ -177,21 +185,21 @@ public class TmpfsInode : Inode
         // 1. Determine lock order to prevent deadlocks
         Inode first = this;
         Inode second = targetParent;
-        if (first.Ino > second.Ino) { first = targetParent; second = this; }
+        if (first.Ino > second.Ino)
+        {
+            first = targetParent;
+            second = this;
+        }
 
         lock (first.Lock)
         {
             if (first != second)
-            {
                 lock (second.Lock)
                 {
                     DoRename(oldName, targetParent, newName);
                 }
-            }
             else
-            {
                 DoRename(oldName, targetParent, newName);
-            }
         }
     }
 
@@ -219,7 +227,8 @@ public class TmpfsInode : Inode
                 var curr = newPrimary;
                 while (curr != null)
                 {
-                    if (curr == dentry) throw new InvalidOperationException("Cannot move directory into its own subdirectory");
+                    if (curr == dentry)
+                        throw new InvalidOperationException("Cannot move directory into its own subdirectory");
                     if (curr == curr.Parent) break;
                     curr = curr.Parent;
                 }
@@ -273,6 +282,7 @@ public class TmpfsInode : Inode
             {
                 sb.Dentries[key] = dentry;
             }
+
             dentry.Parent.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
             return dentry;
@@ -294,7 +304,7 @@ public class TmpfsInode : Inode
             inode.Mode = 0x1FF; // 777
             inode.Uid = uid;
             inode.Gid = gid;
-            inode._data = System.Text.Encoding.UTF8.GetBytes(target);
+            inode._data = Encoding.UTF8.GetBytes(target);
             inode.Size = (ulong)inode._data.Length;
 
             dentry.Instantiate(inode);
@@ -303,6 +313,7 @@ public class TmpfsInode : Inode
             {
                 sb.Dentries[key] = dentry;
             }
+
             dentry.Parent.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
@@ -315,34 +326,31 @@ public class TmpfsInode : Inode
         lock (Lock)
         {
             if (Type != InodeType.Symlink || _data == null) throw new InvalidOperationException("Not a symlink");
-            return System.Text.Encoding.UTF8.GetString(_data);
+            return Encoding.UTF8.GetString(_data);
         }
     }
 
-    public override int Read(File file, Span<byte> buffer, long offset)
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         lock (Lock)
         {
             if (Type == InodeType.Directory) return 0;
             if (_data == null || offset >= _data.Length) return 0;
 
-            int count = Math.Min(buffer.Length, _data.Length - (int)offset);
+            var count = Math.Min(buffer.Length, _data.Length - (int)offset);
             _data.AsSpan((int)offset, count).CopyTo(buffer);
             return count;
         }
     }
 
-    public override int Write(File file, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         lock (Lock)
         {
             if (Type == InodeType.Directory) return 0;
 
-            long end = offset + buffer.Length;
-            if (_data == null || end > _data.Length)
-            {
-                Array.Resize(ref _data, (int)end);
-            }
+            var end = offset + buffer.Length;
+            if (_data == null || end > _data.Length) Array.Resize(ref _data, (int)end);
 
             buffer.CopyTo(_data.AsSpan((int)offset));
             Size = (ulong)_data.Length;
@@ -371,12 +379,9 @@ public class TmpfsInode : Inode
 
         var sb = (TmpfsSuperBlock)SuperBlock;
         foreach (var name in _childNames)
-        {
             if (sb.Dentries.TryGetValue(new DCacheKey(primaryDentry.Id, name), out var dentry))
-            {
                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
-            }
-        }
+
         return list;
     }
 

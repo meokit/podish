@@ -1,35 +1,33 @@
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
 using System.Buffers.Binary;
-using System.Text;
-using System.Linq;
-using Bifrost.Core;
-using Bifrost.Native;
-using Bifrost.Memory;
-using Bifrost.VFS;
-using Microsoft.Extensions.Logging;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.X86.Native;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+#pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysSignal(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return 0;
     }
-    private static async ValueTask<int> SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
-        int sig = (int)a1;
-        uint newSaPtr = a2;
-        uint oldSaPtr = a3;
-        uint sigsetsize = a4;
+        var sig = (int)a1;
+        var newSaPtr = a2;
+        var oldSaPtr = a3;
+        var sigsetsize = a4;
 
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
         var sm = Get(state);
-        var task = (sm.Engine.Owner as FiberTask);
-        if (sm == null || task == null) return -(int)Errno.EPERM;
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
 
         if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
 
@@ -38,7 +36,7 @@ public partial class SyscallManager
         {
             if (task.Process.SignalActions.TryGetValue(sig, out var oldSa))
             {
-                byte[] buf = new byte[20];
+                var buf = new byte[20];
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), oldSa.Handler);
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), oldSa.Flags);
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4), oldSa.Restorer);
@@ -55,7 +53,7 @@ public partial class SyscallManager
         {
             if (sig == 9 || sig == 19) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
 
-            byte[] buf = new byte[20];
+            var buf = new byte[20];
             if (!sm.Engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
             var sa = new SigAction
             {
@@ -69,33 +67,35 @@ public partial class SyscallManager
 
         return 0;
     }
-    private static async ValueTask<int> SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         // a1: how, a2: set, a3: oldset, a4: sigsetsize
-        int how = (int)a1;
-        uint setPtr = a2;
-        uint oldSetPtr = a3;
-        uint sigsetsize = a4;
+        var how = (int)a1;
+        var setPtr = a2;
+        var oldSetPtr = a3;
+        var sigsetsize = a4;
 
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
-        var task = (sm.Engine.Owner as FiberTask);
+        var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         if (oldSetPtr != 0)
         {
-            byte[] buf = new byte[8];
+            var buf = new byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(buf, task.SignalMask);
             if (!task.CPU.CopyToUser(oldSetPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         if (setPtr != 0)
         {
-            byte[] setBuf = new byte[8];
+            var setBuf = new byte[8];
             if (!task.CPU.CopyFromUser(setPtr, setBuf)) return -(int)Errno.EFAULT;
-            ulong set = BinaryPrimitives.ReadUInt64LittleEndian(setBuf);
+            var set = BinaryPrimitives.ReadUInt64LittleEndian(setBuf);
 
             // SIGKILL and SIGSTOP cannot be blocked
             set &= ~(1UL << 8); // SIGKILL (9) - 1 bit shift
@@ -119,15 +119,16 @@ public partial class SyscallManager
 
         return 0;
     }
+
     private static async ValueTask<int> SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var task = (sm.Engine.Owner as FiberTask);
+        var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int pid = (int)a1;
-        int sig = (int)a2;
+        var pid = (int)a1;
+        var sig = (int)a2;
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
@@ -156,31 +157,30 @@ public partial class SyscallManager
 
         if (targets.Count == 0) return -(int)Errno.ESRCH;
 
-        foreach (var t in targets)
-        {
-            t.HandleSignal(sig);
-        }
+        foreach (var t in targets) t.HandleSignal(sig);
 
         return 0;
     }
+
     private static async ValueTask<int> SysTkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
-        int tid = (int)a1;
-        int sig = (int)a2;
+        var tid = (int)a1;
+        var sig = (int)a2;
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var target = KernelScheduler.Current.GetTask(tid);
+        var target = KernelScheduler.Current!.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
 
         if (sig != 0) target.HandleSignal(sig);
 
         return 0;
     }
+
     private static async ValueTask<int> SysTgkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -189,24 +189,25 @@ public partial class SyscallManager
         // int tid = (int)a2;
         // int sig = (int)a3;
 
-        int tgid = (int)a1;
-        int tid = (int)a2;
-        int sig = (int)a3;
+        var tgid = (int)a1;
+        var tid = (int)a2;
+        var sig = (int)a3;
 
-        var target = KernelScheduler.Current.GetTask(tid);
+        var target = KernelScheduler.Current!.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid && tgid != -1) return -(int)Errno.ESRCH;
 
         if (sig != 0) target.HandleSignal(sig);
         return 0;
     }
+
     private static async ValueTask<int> SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        var task = (sm?.Engine.Owner as FiberTask);
+        var task = sm?.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        uint sp = task.CPU.RegRead(Reg.ESP);
+        var sp = task.CPU.RegRead(Reg.ESP);
 
         // On i386 sigreturn, ESP points to the saved sigcontext
         // (after popl %eax which was done in __restore)
@@ -214,46 +215,39 @@ public partial class SyscallManager
 
         return (int)task.CPU.RegRead(Reg.EAX);
     }
-    private static async ValueTask<int> SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
-        var task = (sm?.Engine.Owner as FiberTask);
+        var task = sm?.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        uint sp = task.CPU.RegRead(Reg.ESP);
+        var sp = task.CPU.RegRead(Reg.ESP);
 
         // Heuristic to detect if Arg1 (sig) was popped by handler (e.g. legacy handler doing 'pop' or ret 4?)
         // Layout 1 (Standard): [ESP]=Sig, [ESP+4]=SigInfo*, [ESP+8]=UContext*
         // Layout 2 (Shifted):  [ESP]=SigInfo*, [ESP+4]=UContext*
 
-        byte[] spBuf = new byte[4];
-        if (!task.CPU.CopyFromUser(sp, spBuf))
-        {
-            return -(int)Errno.EFAULT;
-        }
-        uint val0 = BinaryPrimitives.ReadUInt32LittleEndian(spBuf);
+        var spBuf = new byte[4];
+        if (!task.CPU.CopyFromUser(sp, spBuf)) return -(int)Errno.EFAULT;
+        var val0 = BinaryPrimitives.ReadUInt32LittleEndian(spBuf);
         uint ucontextAddr;
 
         if (val0 > 0x1000) // Likely a pointer (SigInfo*) -> Shifted stack
         {
             // ESP points to Arg2
             // Arg3 (UContext*) is at ESP+4
-            byte[] ptrBuf = new byte[4];
-            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf))
-            {
-                return -(int)Errno.EFAULT;
-            }
+            var ptrBuf = new byte[4];
+            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) return -(int)Errno.EFAULT;
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
         else // Likely a small int (Sig) -> Standard stack
         {
             // ESP points to Arg1
             // Arg3 (UContext*) is at ESP+8
-            byte[] ptrBuf = new byte[4];
-            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf))
-            {
-                return -(int)Errno.EFAULT;
-            }
+            var ptrBuf = new byte[4];
+            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
 

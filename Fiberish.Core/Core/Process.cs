@@ -1,35 +1,36 @@
-using System.Collections.Concurrent;
-using Bifrost.Memory;
-using Bifrost.Syscalls;
-using Bifrost.Native;
+using Fiberish.Loader;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.X86.Native;
 
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public enum IdType
 {
-    P_ALL = 0,    // Wait for any child
-    P_PID = 1,    // Wait for specific PID
-    P_PGID = 2    // Wait for process group (not implemented)
+    P_ALL = 0, // Wait for any child
+    P_PID = 1, // Wait for specific PID
+    P_PGID = 2 // Wait for process group (not implemented)
 }
 
 public enum ProcessState
 {
     Running,
     Sleeping,
-    Stopped,     // Suspended by signal
-    Continued,   // Resumed from stopped state
-    Zombie,      // Exited but not reaped by parent
-    Dead         // Reaped by parent
+    Stopped, // Suspended by signal
+    Continued, // Resumed from stopped state
+    Zombie, // Exited but not reaped by parent
+    Dead // Reaped by parent
 }
 
 public class SigInfo
 {
-    public int si_signo;
-    public int si_errno;
     public int si_code;
+    public int si_errno;
     public int si_pid;
-    public int si_uid;
+    public int si_signo;
     public int si_status;
+    public int si_uid;
 }
 
 public class UTSNamespace
@@ -41,7 +42,10 @@ public class UTSNamespace
     public string Machine { get; set; } = "i686";
     public string DomainName { get; set; } = "(none)";
 
-    public UTSNamespace Clone() => (UTSNamespace)MemberwiseClone();
+    public UTSNamespace Clone()
+    {
+        return (UTSNamespace)MemberwiseClone();
+    }
 }
 
 public struct SigAction
@@ -54,6 +58,24 @@ public struct SigAction
 
 public class Process
 {
+    // Interrupt handling for blocking syscalls
+    // When a signal arrives, if a task is blocked in a syscall (Sleeping/Waiting),
+    // we need to interrupt it.
+    private Action? _interruptHandler;
+
+    public bool traceInstruction;
+
+    public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
+    {
+        TGID = tgid;
+        Mem = mem;
+        Syscalls = syscalls;
+        UTS = uts ?? new UTSNamespace();
+
+        // Default to root
+        UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
+    }
+
     public int TGID { get; set; }
     public VMAManager Mem { get; set; }
     public SyscallManager Syscalls { get; set; }
@@ -79,8 +101,8 @@ public class Process
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
 
     // Parent-child relationship
-    public int PPID { get; set; } = 0;  // Parent Process ID
-    public List<int> Children { get; } = [];  // Child Process IDs
+    public int PPID { get; set; } = 0; // Parent Process ID
+    public List<int> Children { get; } = []; // Child Process IDs
     public ProcessState State { get; set; } = ProcessState.Running;
     public int ExitStatus { get; set; } = 0;
 
@@ -89,28 +111,10 @@ public class Process
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 
-    public bool traceInstruction;
-
     // vDSO addresses
     public uint SigReturnAddr { get; set; }
     public uint RtSigReturnAddr { get; set; }
-
-    // Interrupt handling for blocking syscalls
-    // When a signal arrives, if a task is blocked in a syscall (Sleeping/Waiting),
-    // we need to interrupt it.
-    private Action? _interruptHandler;
     public bool WasInterrupted { get; private set; }
-
-    public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
-    {
-        TGID = tgid;
-        Mem = mem;
-        Syscalls = syscalls;
-        UTS = uts ?? new UTSNamespace();
-
-        // Default to root
-        UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
-    }
 
     public void RegisterBlockingSyscall(Action onInterrupt)
     {
@@ -128,6 +132,7 @@ public class Process
             handler(); // Execute cancellation logic (e.g., remove from timer)
             return true;
         }
+
         return false;
     }
 
@@ -139,7 +144,7 @@ public class Process
 
     public void LoadExecutable(string exe, string[] args, string[] envs)
     {
-        var res = Bifrost.Loader.ElfLoader.Load(exe, Syscalls, args, envs);
+        var res = ElfLoader.Load(exe, Syscalls, args, envs);
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
@@ -149,21 +154,20 @@ public class Process
         engine.Eflags = 0x202;
 
         // Setup Stack
-        uint spBase = res.SP;
-        byte[] stackData = res.InitialStack;
-        for (uint addr = spBase & LinuxConstants.PageMask;
-             addr < ((spBase + (uint)stackData.Length + (uint)LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
-             addr += (uint)LinuxConstants.PageSize)
-        {
+        var spBase = res.SP;
+        var stackData = res.InitialStack;
+        for (var addr = spBase & LinuxConstants.PageMask;
+             addr < ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
+             addr += LinuxConstants.PageSize)
             if (engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
                 throw new InvalidOperationException($"Failed to allocate stack page at 0x{addr:x}");
-        }
 
         if (!engine.CopyToUser(spBase, stackData))
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
     }
 
-    public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions, bool strace)
+    public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
+        bool strace)
     {
         // 1. Init System Components
         var engine = new Engine();
@@ -174,7 +178,7 @@ public class Process
         {
             Strace = strace
         };
-        Bifrost.Syscalls.ProcFsManager.Init(sys);
+        ProcFsManager.Init(sys);
 
         // 3. Create Process
         var proc = new Process(FiberTask.NextTID(), mm, sys)
@@ -182,10 +186,10 @@ public class Process
             traceInstruction = traceInstructions
         };
         proc.PGID = proc.TGID; // Set PGID to self for session leader?
-        KernelScheduler.Current.RegisterProcess(proc);
+        KernelScheduler.Current!.RegisterProcess(proc);
 
         // 4. Create Main Task
-        var mainTask = new FiberTask(proc.TGID, proc, engine, KernelScheduler.Current);
+        var mainTask = new FiberTask(proc.TGID, proc, engine, KernelScheduler.Current!);
 
         // 5. Register with Scheduler and ProcFs
         // FiberTask ctor already registers with KernelScheduler

@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-
-namespace Bifrost.VFS;
+namespace Fiberish.VFS;
 
 public static class FileSystemRegistry
 {
@@ -13,9 +10,7 @@ public static class FileSystemRegistry
         lock (_lock)
         {
             if (_registry.ContainsKey(fsType.Name))
-            {
                 throw new ArgumentException($"FileSystem '{fsType.Name}' is already registered.");
-            }
             _registry[fsType.Name] = fsType;
         }
     }
@@ -24,10 +19,7 @@ public static class FileSystemRegistry
     {
         lock (_lock)
         {
-            if (_registry.ContainsKey(fsType.Name))
-            {
-                return false;
-            }
+            if (_registry.ContainsKey(fsType.Name)) return false;
             _registry[fsType.Name] = fsType;
             return true;
         }

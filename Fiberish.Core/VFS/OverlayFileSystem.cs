@@ -1,13 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using Bifrost.Syscalls; // needed for SyscallManager Access if required, but maybe not directly here yet
+// needed for SyscallManager Access if required, but maybe not directly here yet
 
-namespace Bifrost.VFS;
+namespace Fiberish.VFS;
 
 public class OverlayFileSystem : FileSystem
 {
-    public OverlayFileSystem() { Name = "overlay"; }
+    public OverlayFileSystem()
+    {
+        Name = "overlay";
+    }
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
@@ -25,9 +25,7 @@ public class OverlayFileSystem : FileSystem
         // then passes the resolved Dentries to ReadSuper via the `data` object.
 
         if (data is not OverlayMountOptions options)
-        {
             throw new ArgumentException("OverlayFS requires OverlayMountOptions in data");
-        }
 
         var sb = new OverlaySuperBlock(fsType, options.Lower, options.Upper);
         sb.Root = new Dentry("/", new OverlayInode(sb, options.Lower.Root, options.Upper.Root), null, sb);
@@ -45,15 +43,15 @@ public class OverlayMountOptions
 
 public class OverlaySuperBlock : SuperBlock
 {
-    public SuperBlock LowerSB { get; }
-    public SuperBlock UpperSB { get; }
-
     public OverlaySuperBlock(FileSystemType type, SuperBlock lower, SuperBlock upper)
     {
         Type = type;
         LowerSB = lower;
         UpperSB = upper;
     }
+
+    public SuperBlock LowerSB { get; }
+    public SuperBlock UpperSB { get; }
 
     public override Inode AllocInode()
     {
@@ -66,12 +64,6 @@ public class OverlaySuperBlock : SuperBlock
 
 public class OverlayInode : Inode
 {
-    public Dentry? LowerDentry { get; private set; }
-    public Dentry? UpperDentry { get; private set; }
-
-    public Inode? LowerInode => LowerDentry?.Inode;
-    public Inode? UpperInode => UpperDentry?.Inode;
-
     public OverlayInode(SuperBlock sb, Dentry? lower, Dentry? upper)
     {
         SuperBlock = sb;
@@ -94,21 +86,30 @@ public class OverlayInode : Inode
         }
     }
 
-    public void CopyUp(File file)
+    public Dentry? LowerDentry { get; }
+    public Dentry? UpperDentry { get; private set; }
+
+    public Inode? LowerInode => LowerDentry?.Inode;
+    public Inode? UpperInode => UpperDentry?.Inode;
+
+    public void CopyUp(LinuxFile linuxFile)
     {
         if (UpperDentry != null) return;
 
         // Copy Up File!
-        var parentOverlayDentry = file.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
-        var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode ?? throw new InvalidOperationException("Parent is not overlay inode");
+        var parentOverlayDentry = linuxFile.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
+        var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode ??
+                                 throw new InvalidOperationException("Parent is not overlay inode");
         if (parentOverlayInode.UpperDentry == null)
-            throw new InvalidOperationException("Parent directory is lower-only. Recursive directory copy-up not implemented yet.");
+            throw new InvalidOperationException(
+                "Parent directory is lower-only. Recursive directory copy-up not implemented yet.");
 
         // 2. Create the file in Upper Parent
         var upperParentDentry = parentOverlayInode.UpperDentry;
 
         // We need a unique Dentry for the upper creation attached to the Upper Parent
-        var upperDentry = new Dentry(file.Dentry.Name, null, upperParentDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
+        var upperDentry =
+            new Dentry(linuxFile.Dentry.Name, null, upperParentDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
 
         // Replicate mode/uid/gid from Lower
         parentOverlayInode.UpperInode!.Create(upperDentry, Mode, Uid, Gid);
@@ -123,30 +124,30 @@ public class OverlayInode : Inode
             long pos = 0;
             while (true)
             {
-                int n = LowerInode.Read(file, buf, pos);
+                var n = LowerInode.Read(linuxFile, buf, pos);
                 if (n <= 0) break;
-                upperDentry.Inode!.Write(file, buf.AsSpan(0, n), pos);
+                upperDentry.Inode!.Write(linuxFile, buf.AsSpan(0, n), pos);
                 pos += n;
             }
 
             // IMPORTANT: Close Lower resource now that we are done with it.
             // We are switching "file" to be backed by Upper.
-            LowerInode.Release(file);
+            LowerInode.Release(linuxFile);
         }
 
-        this.UpperDentry = upperDentry;
+        UpperDentry = upperDentry;
 
         // Open Upper (to set up PrivateData if needed by Upper FS)
-        UpperInode!.Open(file);
+        UpperInode!.Open(linuxFile);
     }
 
     public override Dentry? Lookup(string name)
     {
         // 1. Lookup in Upper
-        Dentry? upperDentry = UpperInode?.Lookup(name);
+        var upperDentry = UpperInode?.Lookup(name);
 
         // 2. Lookup in Lower
-        Dentry? lowerDentry = LowerInode?.Lookup(name);
+        var lowerDentry = LowerInode?.Lookup(name);
 
         if (upperDentry == null && lowerDentry == null) return null;
 
@@ -160,10 +161,9 @@ public class OverlayInode : Inode
     {
         // Create in Upper.
         if (UpperDentry == null)
-        {
             // If this directory doesn't exist in Upper (only in Lower), we must "Copy Up" the directory structure first.
-            throw new InvalidOperationException("Cannot create in a read-only lower directory. (Directory Copy-Up not fully implemented yet)");
-        }
+            throw new InvalidOperationException(
+                "Cannot create in a read-only lower directory. (Directory Copy-Up not fully implemented yet)");
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
@@ -191,13 +191,10 @@ public class OverlayInode : Inode
 
     public override void Unlink(string name)
     {
-        bool inUpper = UpperInode?.Lookup(name) != null;
-        bool inLower = LowerInode?.Lookup(name) != null;
+        var inUpper = UpperInode?.Lookup(name) != null;
+        var inLower = LowerInode?.Lookup(name) != null;
 
-        if (inUpper)
-        {
-            UpperInode!.Unlink(name);
-        }
+        if (inUpper) UpperInode!.Unlink(name);
 
         if (inLower)
         {
@@ -211,35 +208,32 @@ public class OverlayInode : Inode
         // Lower? Whiteout for dir?
     }
 
-    public override int Read(File file, Span<byte> buffer, long offset)
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // Read from Upper if exists, else Lower.
-        if (UpperInode != null) return UpperInode.Read(file, buffer, offset);
-        if (LowerInode != null) return LowerInode.Read(file, buffer, offset);
+        if (UpperInode != null) return UpperInode.Read(linuxFile, buffer, offset);
+        if (LowerInode != null) return LowerInode.Read(linuxFile, buffer, offset);
         return 0;
     }
 
-    public override int Write(File file, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         // Write to Upper.
-        if (UpperInode == null)
-        {
-            CopyUp(file);
-        }
+        if (UpperInode == null) CopyUp(linuxFile);
 
-        return UpperInode!.Write(file, buffer, offset);
+        return UpperInode!.Write(linuxFile, buffer, offset);
     }
 
-    public override void Open(File file)
+    public override void Open(LinuxFile linuxFile)
     {
-        if (UpperInode != null) UpperInode.Open(file);
-        else LowerInode?.Open(file);
+        if (UpperInode != null) UpperInode.Open(linuxFile);
+        else LowerInode?.Open(linuxFile);
     }
 
-    public override void Release(File file)
+    public override void Release(LinuxFile linuxFile)
     {
-        if (UpperInode != null) UpperInode.Release(file);
-        else LowerInode?.Release(file);
+        if (UpperInode != null) UpperInode.Release(linuxFile);
+        else LowerInode?.Release(linuxFile);
     }
 
     public override void Truncate(long size)
@@ -257,18 +251,12 @@ public class OverlayInode : Inode
         var entries = new Dictionary<string, DirectoryEntry>();
 
         if (LowerInode != null)
-        {
             foreach (var e in LowerInode.GetEntries())
                 entries[e.Name] = e;
-        }
 
         if (UpperInode != null)
-        {
             foreach (var e in UpperInode.GetEntries())
-            {
                 entries[e.Name] = e;
-            }
-        }
 
         return [.. entries.Values];
     }

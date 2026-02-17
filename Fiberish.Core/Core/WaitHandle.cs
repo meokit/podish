@@ -1,10 +1,9 @@
-using System;
-using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 /// <summary>
-/// A lightweight, single-threaded promise for waiting on events (Process exit, etc.)
+///     A lightweight, single-threaded promise for waiting on events (Process exit, etc.)
 /// </summary>
 public class WaitHandle
 {
@@ -15,10 +14,7 @@ public class WaitHandle
     {
         if (IsSet) return;
         IsSet = true;
-        foreach (var continuation in _continuations)
-        {
-            continuation();
-        }
+        foreach (var continuation in _continuations) continuation();
         _continuations.Clear();
     }
 
@@ -31,23 +27,29 @@ public class WaitHandle
     public void Register(Action continuation)
     {
         if (IsSet)
-        {
             continuation();
-        }
         else
-        {
             _continuations.Add(continuation);
-        }
     }
 
-    public WaitHandleAwaiter GetAwaiter() => new(this);
+    public WaitHandleAwaiter GetAwaiter()
+    {
+        return new WaitHandleAwaiter(this);
+    }
 }
 
-public readonly struct WaitHandleAwaiter(WaitHandle handle) : System.Runtime.CompilerServices.INotifyCompletion
+public readonly struct WaitHandleAwaiter(WaitHandle handle) : INotifyCompletion
 {
     private readonly WaitHandle _handle = handle;
 
     public bool IsCompleted => _handle.IsSet;
-    public void OnCompleted(Action continuation) => _handle.Register(continuation);
-    public void GetResult() { }
+
+    public void OnCompleted(Action continuation)
+    {
+        _handle.Register(continuation);
+    }
+
+    public void GetResult()
+    {
+    }
 }

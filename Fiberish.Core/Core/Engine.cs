@@ -1,30 +1,21 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using Bifrost.Native;
+using Fiberish.Native;
+using Fiberish.X86.Native;
+using X86Native = Fiberish.X86.Native.X86Native;
 
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public class Engine : IDisposable
 {
-    public IntPtr State { get; private set; }
-    private GCHandle _gcHandle;
     private bool _disposed;
-
-    // Callbacks
-    public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
-    public Func<Engine, uint, bool>? InterruptHandler { get; set; }
-    public Action<Engine, int, string>? LogHandler { get; set; }
-    // New resolver for synchronous fault handling during safe access
-    public Func<uint, bool, bool>? PageFaultResolver { get; set; }
-
-    // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
-    public object? Owner { get; set; }
+    private GCHandle _gcHandle;
 
     public unsafe Engine()
     {
         State = X86Native.Create();
         if (State == IntPtr.Zero)
-            throw new InvalidOperationException("Failed to create Bifrost state");
+            throw new InvalidOperationException("Failed to create Fiberish state");
 
         // Create GCHandle to this object so it can be retrieved in callbacks
         _gcHandle = GCHandle.Alloc(this);
@@ -39,13 +30,9 @@ public class Engine : IDisposable
     protected Engine(bool mock)
     {
         if (mock)
-        {
             State = IntPtr.Zero;
-        }
         else
-        {
             throw new ArgumentException("Use parameterless constructor for real engine", nameof(mock));
-        }
     }
 
     internal unsafe Engine(IntPtr state)
@@ -58,6 +45,44 @@ public class Engine : IDisposable
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
     }
 
+    public IntPtr State { get; private set; }
+
+    // Callbacks
+    public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
+    public Func<Engine, uint, bool>? InterruptHandler { get; set; }
+
+    public Action<Engine, int, string>? LogHandler { get; set; }
+
+    // New resolver for synchronous fault handling during safe access
+    public Func<uint, bool, bool>? PageFaultResolver { get; set; }
+
+    // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
+    public object? Owner { get; set; }
+
+    public virtual uint Eip
+    {
+        get => X86Native.GetEIP(State);
+        set => X86Native.SetEIP(State, value);
+    }
+
+    public virtual uint Eflags
+    {
+        get => X86Native.GetEFLAGS(State);
+        set => X86Native.SetEFLAGS(State, value);
+    }
+
+    public virtual EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
+
+    public virtual int FaultVector => X86Native.GetFaultVector(State);
+
+    public void Dispose()
+    {
+        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
+        Dispose(true);
+        Console.WriteLine("[Engine] Disposed.");
+        GC.SuppressFinalize(this);
+    }
+
     [UnmanagedCallersOnly]
     private static void OnNativeLog(int level, IntPtr msgPtr, IntPtr userdata)
     {
@@ -67,11 +92,8 @@ public class Engine : IDisposable
             var handle = GCHandle.FromIntPtr(userdata);
             if (handle.Target is Engine engine && engine.LogHandler != null)
             {
-                string? msg = Marshal.PtrToStringUTF8(msgPtr);
-                if (msg != null)
-                {
-                    engine.LogHandler(engine, level, msg);
-                }
+                var msg = Marshal.PtrToStringUTF8(msgPtr);
+                if (msg != null) engine.LogHandler(engine, level, msg);
             }
         }
         catch (Exception ex)
@@ -87,15 +109,13 @@ public class Engine : IDisposable
         {
             if (userdata == IntPtr.Zero) return false;
             var handle = GCHandle.FromIntPtr(userdata);
-            if (handle.Target is Engine engine)
-            {
-                return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
-            }
+            if (handle.Target is Engine engine) return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[Engine] Exception in OnNativeFault: {ex}");
         }
+
         return false;
     }
 
@@ -107,17 +127,14 @@ public class Engine : IDisposable
             if (userdata == IntPtr.Zero) return 0;
             var handle = GCHandle.FromIntPtr(userdata);
             if (handle.Target is Engine engine)
-            {
                 if (engine.InterruptHandler != null)
-                {
                     return engine.InterruptHandler(engine, vector) ? 1 : 0;
-                }
-            }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[Engine] Exception in OnNativeInterrupt: {ex}");
         }
+
         return 0;
     }
 
@@ -129,18 +146,24 @@ public class Engine : IDisposable
             FaultHandler = FaultHandler,
             InterruptHandler = InterruptHandler,
             PageFaultResolver = PageFaultResolver,
-            LogHandler = LogHandler, // Copy the handler delegate
+            LogHandler = LogHandler // Copy the handler delegate
         };
         return newEngine;
     }
 
-    public void MemMap(uint addr, uint size, byte perms) => X86Native.MemMap(State, addr, size, perms);
+    public void MemMap(uint addr, uint size, byte perms)
+    {
+        X86Native.MemMap(State, addr, size, perms);
+    }
 
-    public void MemUnmap(uint addr, uint size) => X86Native.MemUnmap(State, addr, size);
+    public void MemUnmap(uint addr, uint size)
+    {
+        X86Native.MemUnmap(State, addr, size);
+    }
 
     /// <summary>
-    /// Allocate a single page with given permissions and return host pointer.
-    /// Unlike MemMap, this also allocates the actual page memory.
+    ///     Allocate a single page with given permissions and return host pointer.
+    ///     Unlike MemMap, this also allocates the actual page memory.
     /// </summary>
     public unsafe IntPtr AllocatePage(uint addr, byte perms)
     {
@@ -148,8 +171,8 @@ public class Engine : IDisposable
     }
 
     /// <summary>
-    /// Map external memory to guest address. Caller owns the memory.
-    /// Useful for mmap passthrough, shared memory, etc.
+    ///     Map external memory to guest address. Caller owns the memory.
+    ///     Useful for mmap passthrough, shared memory, etc.
     /// </summary>
     public unsafe bool MapExternalPage(uint addr, IntPtr externalPage, byte perms)
     {
@@ -157,7 +180,7 @@ public class Engine : IDisposable
     }
 
     /// <summary>
-    /// DEPRECATED: Use CopyToUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
+    ///     DEPRECATED: Use CopyToUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
     /// </summary>
     [Obsolete("Use CopyToUser instead. MemWrite is slow and risks recursive faults.")]
     public unsafe void MemWrite(uint addr, ReadOnlySpan<byte> data)
@@ -169,7 +192,7 @@ public class Engine : IDisposable
     }
 
     /// <summary>
-    /// DEPRECATED: Use CopyFromUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
+    ///     DEPRECATED: Use CopyFromUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
     /// </summary>
     [Obsolete("Use CopyFromUser instead. MemRead is slow and risks recursive faults.")]
     public unsafe byte[] MemRead(uint addr, uint size)
@@ -179,6 +202,7 @@ public class Engine : IDisposable
         {
             X86Native.MemRead(State, addr, p, size);
         }
+
         return buf;
     }
 
@@ -194,61 +218,57 @@ public class Engine : IDisposable
 
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
     {
-        int len = data.Length;
-        int written = 0;
+        var len = data.Length;
+        var written = 0;
 
         fixed (byte* pData = data)
         {
             while (written < len)
             {
-                uint currAddr = vaddr + (uint)written;
-                void* ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
+                var currAddr = vaddr + (uint)written;
+                var ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
                 if (ptr == null)
-                {
                     if (PageFaultResolver != null && PageFaultResolver(currAddr, true))
-                    {
                         ptr = X86Native.ResolvePtr(State, currAddr, 1);
-                    }
-                }
+
                 if (ptr == null) return false;
 
-                uint pageOffset = currAddr & 0xFFF;
-                int chunk = Math.Min(len - written, 4096 - (int)pageOffset);
+                var pageOffset = currAddr & 0xFFF;
+                var chunk = Math.Min(len - written, 4096 - (int)pageOffset);
 
                 Buffer.MemoryCopy(pData + written, (byte*)ptr, chunk, chunk);
                 written += chunk;
             }
         }
+
         return true;
     }
 
     public unsafe bool CopyFromUser(uint vaddr, Span<byte> data)
     {
-        int len = data.Length;
-        int read = 0;
+        var len = data.Length;
+        var read = 0;
 
         fixed (byte* pData = data)
         {
             while (read < len)
             {
-                uint currAddr = vaddr + (uint)read;
-                void* ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
+                var currAddr = vaddr + (uint)read;
+                var ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
                 if (ptr == null)
-                {
                     if (PageFaultResolver != null && PageFaultResolver(currAddr, false))
-                    {
                         ptr = X86Native.ResolvePtr(State, currAddr, 0);
-                    }
-                }
+
                 if (ptr == null) return false;
 
-                uint pageOffset = currAddr & 0xFFF;
-                int chunk = Math.Min(len - read, 4096 - (int)pageOffset);
+                var pageOffset = currAddr & 0xFFF;
+                var chunk = Math.Min(len - read, 4096 - (int)pageOffset);
 
                 Buffer.MemoryCopy(ptr, pData + read, chunk, chunk);
                 read += chunk;
             }
         }
+
         return true;
     }
 
@@ -257,29 +277,26 @@ public class Engine : IDisposable
         if (addr == 0) return "";
 
         var sb = new StringBuilder();
-        uint current = addr;
+        var current = addr;
 
         while (sb.Length < limit)
         {
-            void* ptr = X86Native.ResolvePtr(State, current, 0); // Read
+            var ptr = X86Native.ResolvePtr(State, current, 0); // Read
             if (ptr == null)
-            {
                 if (PageFaultResolver != null && PageFaultResolver(current, false))
-                {
                     ptr = X86Native.ResolvePtr(State, current, 0);
-                }
-            }
+
             if (ptr == null) return null; // Fault
 
             // NOTE: X86_ResolvePtr/resolve_safe returns pointer with offset already applied
             // So ptr is the exact byte pointer for 'current' address
-            uint pageOffset = current & 0xFFF;
-            byte* p = (byte*)ptr;  // Already includes offset
-            int remainingInPage = 4096 - (int)pageOffset;
+            var pageOffset = current & 0xFFF;
+            var p = (byte*)ptr; // Already includes offset
+            var remainingInPage = 4096 - (int)pageOffset;
 
-            for (int i = 0; i < remainingInPage; i++)
+            for (var i = 0; i < remainingInPage; i++)
             {
-                byte b = p[i];
+                var b = p[i];
                 if (b == 0) return sb.ToString();
                 sb.Append((char)b);
                 if (sb.Length >= limit) break;
@@ -291,46 +308,74 @@ public class Engine : IDisposable
         return sb.ToString();
     }
 
-    public virtual uint RegRead(Reg reg) => X86Native.RegRead(State, (int)reg);
-    public virtual void RegWrite(Reg reg, uint val) => X86Native.RegWrite(State, (int)reg, val);
-
-    public virtual uint Eip
+    public virtual uint RegRead(Reg reg)
     {
-        get => X86Native.GetEIP(State);
-        set => X86Native.SetEIP(State, value);
+        return X86Native.RegRead(State, (int)reg);
     }
 
-    public virtual uint Eflags
+    public virtual void RegWrite(Reg reg, uint val)
     {
-        get => X86Native.GetEFLAGS(State);
-        set => X86Native.SetEFLAGS(State, value);
+        X86Native.RegWrite(State, (int)reg, val);
     }
 
-    public void SetSegBase(Seg seg, uint baseAddr) => X86Native.SegBaseWrite(State, (int)seg, baseAddr);
-    public uint GetSegBase(Seg seg) => X86Native.SegBaseRead(State, (int)seg);
+    public void SetSegBase(Seg seg, uint baseAddr)
+    {
+        X86Native.SegBaseWrite(State, (int)seg, baseAddr);
+    }
 
-    public virtual void Run(uint endEip = 0, ulong maxInsts = 0) => X86Native.Run(State, endEip, maxInsts);
-    public virtual void Stop() => X86Native.EmuStop(State);
-    public virtual void SetStatusFault() => X86Native.EmuFault(State);
-    public virtual void Yield() => X86Native.EmuYield(State);
-    public virtual int Step() => X86Native.Step(State);
-    public virtual EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
+    public uint GetSegBase(Seg seg)
+    {
+        return X86Native.SegBaseRead(State, (int)seg);
+    }
 
-    public virtual int FaultVector => X86Native.GetFaultVector(State);
+    public virtual void Run(uint endEip = 0, ulong maxInsts = 0)
+    {
+        X86Native.Run(State, endEip, maxInsts);
+    }
 
-    public virtual bool IsDirty(uint addr) => X86Native.IsDirty(State, addr) != 0;
+    public virtual void Stop()
+    {
+        X86Native.EmuStop(State);
+    }
 
-    public void InvalidateRange(uint addr, uint size) => X86Native.InvalidateRange(State, addr, size);
-    public void FlushCache() => X86Native.FlushCache(State);
+    public virtual void SetStatusFault()
+    {
+        X86Native.EmuFault(State);
+    }
+
+    public virtual void Yield()
+    {
+        X86Native.EmuYield(State);
+    }
+
+    public virtual int Step()
+    {
+        return X86Native.Step(State);
+    }
+
+    public virtual bool IsDirty(uint addr)
+    {
+        return X86Native.IsDirty(State, addr) != 0;
+    }
+
+    public void InvalidateRange(uint addr, uint size)
+    {
+        X86Native.InvalidateRange(State, addr, size);
+    }
+
+    public void FlushCache()
+    {
+        X86Native.FlushCache(State);
+    }
 
     public unsafe string? DumpStats()
     {
-        byte[] buf = new byte[1024];
+        var buf = new byte[1024];
         fixed (byte* p = buf)
         {
-            int n = X86Native.DumpStats(State, p, 1024);
+            var n = X86Native.DumpStats(State, p, 1024);
             if (n < 0) return null;
-            return System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            return Encoding.UTF8.GetString(buf, 0, n);
         }
     }
 
@@ -343,26 +388,20 @@ public class Engine : IDisposable
                 X86Native.Destroy(State);
                 State = IntPtr.Zero;
             }
-            if (_gcHandle.IsAllocated)
-            {
-                _gcHandle.Free();
-            }
+
+            if (_gcHandle.IsAllocated) _gcHandle.Free();
             _disposed = true;
         }
     }
 
-    public void Dispose()
-    {
-        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
-        Dispose(true);
-        Console.WriteLine($"[Engine] Disposed.");
-        GC.SuppressFinalize(this);
-    }
-
     public override string ToString()
     {
-        return $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8} EFLAGS: 0x{Eflags:x8}";
+        return
+            $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8} EFLAGS: 0x{Eflags:x8}";
     }
 
-    ~Engine() => Dispose(false);
+    ~Engine()
+    {
+        Dispose(false);
+    }
 }

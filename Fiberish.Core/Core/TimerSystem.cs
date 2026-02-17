@@ -1,6 +1,4 @@
-using System.Collections.Generic;
-
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public class Timer(long point, Action callback)
 {
@@ -19,6 +17,8 @@ public class TimerSystem
     private readonly PriorityQueue<Timer, long> _queue = new();
 
     public long CurrentTick { get; private set; }
+
+    public long? NextExpiration => _queue.Count > 0 ? _queue.Peek().ExpirationTick : null;
 
     // Constants: 1 Tick = 1 microsecond? Or 1ms? 
     // Let's assume 1 Tick = 1 microsecond for high precision simulation.
@@ -44,8 +44,6 @@ public class TimerSystem
         return timer;
     }
 
-    public long? NextExpiration => _queue.Count > 0 ? _queue.Peek().ExpirationTick : null;
-
     private void ProcessExpired()
     {
         while (_queue.Count > 0)
@@ -54,10 +52,7 @@ public class TimerSystem
                 break;
 
             var timer = _queue.Dequeue();
-            if (!timer.Canceled)
-            {
-                timer.Callback?.Invoke();
-            }
+            if (!timer.Canceled) timer.Callback?.Invoke();
         }
     }
 }

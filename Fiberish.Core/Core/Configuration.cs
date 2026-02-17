@@ -1,4 +1,4 @@
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public static class Configuration
 {

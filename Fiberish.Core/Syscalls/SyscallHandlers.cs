@@ -1,19 +1,9 @@
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
-using System.Buffers.Binary;
-using System.Text;
-using System.Linq;
-using Bifrost.Core;
-using Bifrost.Native;
-using Bifrost.Memory;
-using Bifrost.VFS;
-using Microsoft.Extensions.Logging;
+using Fiberish.Native;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-
     private void RegisterHandlers()
     {
         Register(X86SyscallNumbers.exit, SysExit);

@@ -1,34 +1,31 @@
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
 using System.Buffers.Binary;
 using System.Text;
-using System.Linq;
-using Bifrost.Core;
-using Bifrost.Native;
-using Bifrost.Memory;
-using Bifrost.VFS;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+#pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysLink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string oldPath = sm.ReadString(a1);
-        string newPath = sm.ReadString(a2);
+        var oldPath = sm.ReadString(a1);
+        var newPath = sm.ReadString(a2);
 
         var oldDentry = sm.PathWalk(oldPath);
         if (oldDentry == null || oldDentry.Inode == null) return -(int)Errno.ENOENT;
         if (oldDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
-        int lastSlash = newPath.LastIndexOf('/');
-        string dirPath = lastSlash == -1 ? "." : newPath[..lastSlash];
+        var lastSlash = newPath.LastIndexOf('/');
+        var dirPath = lastSlash == -1 ? "." : newPath[..lastSlash];
         if (dirPath == "") dirPath = "/";
-        string name = lastSlash == -1 ? newPath : newPath[(lastSlash + 1)..];
+        var name = lastSlash == -1 ? newPath : newPath[(lastSlash + 1)..];
 
         var dirDentry = sm.PathWalk(dirPath);
         if (dirDentry == null || dirDentry.Inode == null) return -(int)Errno.ENOENT;
@@ -45,12 +42,13 @@ public partial class SyscallManager
             return -(int)Errno.EIO;
         }
     }
+
     private static async ValueTask<int> SysChdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
         if (dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
@@ -61,23 +59,24 @@ public partial class SyscallManager
         oldCwd?.Inode?.Put();
         return 0;
     }
+
     private static async ValueTask<int> SysMkdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
-        uint mode = a2;
+        var path = sm.ReadString(a1);
+        var mode = a2;
 
-        int lastSlash = path.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path[..lastSlash]);
-        string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = path.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
+        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = (sm.Engine.Owner as FiberTask);
-        int uid = t?.Process.EUID ?? 0;
-        int gid = t?.Process.EGID ?? 0;
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
 
         try
         {
@@ -85,17 +84,21 @@ public partial class SyscallManager
             parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
 
-        int lastSlash = path.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path[..lastSlash]);
-        string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = path.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
+        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
@@ -107,7 +110,7 @@ public partial class SyscallManager
 
         // Check if empty (only . and .. entries)
         var entries = targetDentry.Inode.GetEntries();
-        if (entries.Count > 2) return -(int)Errno.ENOTEMPTY;  // Has more than . and ..
+        if (entries.Count > 2) return -(int)Errno.ENOTEMPTY; // Has more than . and ..
 
         try
         {
@@ -115,15 +118,19 @@ public partial class SyscallManager
             parentDentry.Children.Remove(name);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysMkdirAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
-        uint mode = a3;
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var mode = a3;
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -133,16 +140,16 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        int lastSlash = path.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "" : path[..lastSlash];
-        string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = path.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "" : path[..lastSlash];
+        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = (sm.Engine.Owner as FiberTask);
-        int uid = t?.Process.EUID ?? 0;
-        int gid = t?.Process.EGID ?? 0;
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
 
         try
         {
@@ -150,15 +157,19 @@ public partial class SyscallManager
             parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysUnlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
-        uint flags = a3;
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var flags = a3;
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -168,41 +179,44 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        int lastSlash = path.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "" : path[..lastSlash];
-        string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = path.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "" : path[..lastSlash];
+        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
         if ((flags & 0x200) != 0) // AT_REMOVEDIR
-        {
             try
             {
                 parentDentry.Inode.Rmdir(name);
                 parentDentry.Children.Remove(name);
                 return 0;
             }
-            catch { return -(int)Errno.EACCES; }
-        }
-        else
-        {
-            try
+            catch
             {
-                parentDentry.Inode.Unlink(name);
-                parentDentry.Children.Remove(name);
-                return 0;
+                return -(int)Errno.EACCES;
             }
-            catch { return -(int)Errno.ENOENT; }
+
+        try
+        {
+            parentDentry.Inode.Unlink(name);
+            parentDentry.Children.Remove(name);
+            return 0;
+        }
+        catch
+        {
+            return -(int)Errno.ENOENT;
         }
     }
+
     private static async ValueTask<int> SysGetdents(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        int count = (int)a3;
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
@@ -211,23 +225,23 @@ public partial class SyscallManager
         try
         {
             var entries = f.Dentry.Inode.GetEntries();
-            int startIdx = (int)f.Position;
+            var startIdx = (int)f.Position;
             if (startIdx >= entries.Count) return 0;
 
-            int writeOffset = 0;
-            for (int i = startIdx; i < entries.Count; i++)
+            var writeOffset = 0;
+            for (var i = startIdx; i < entries.Count; i++)
             {
                 var entry = entries[i];
-                byte[] nameBytes = Encoding.UTF8.GetBytes(entry.Name);
-                int nameLen = nameBytes.Length + 1;
+                var nameBytes = Encoding.UTF8.GetBytes(entry.Name);
+                var nameLen = nameBytes.Length + 1;
                 // reclen: ino(4) + off(4) + reclen(2) + name + pad + type(1)
                 // We align to 4 bytes for 32-bit
-                int reclen = (4 + 4 + 2 + nameLen + 1 + 3) & ~3;
+                var reclen = (4 + 4 + 2 + nameLen + 1 + 3) & ~3;
 
                 if (writeOffset + reclen > count) break;
 
-                uint baseAddr = bufAddr + (uint)writeOffset;
-                byte[] buf = new byte[reclen];
+                var baseAddr = bufAddr + (uint)writeOffset;
+                var buf = new byte[reclen];
 
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0), (uint)entry.Ino);
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)(i + 1)); // d_off
@@ -236,7 +250,7 @@ public partial class SyscallManager
                 Array.Copy(nameBytes, 0, buf, 10, nameBytes.Length);
                 buf[10 + nameBytes.Length] = 0; // null terminator
 
-                byte dType = entry.Type switch
+                var dType = entry.Type switch
                 {
                     InodeType.Directory => (byte)4,
                     InodeType.File => (byte)8,
@@ -254,23 +268,27 @@ public partial class SyscallManager
                 writeOffset += reclen;
                 f.Position = i + 1;
             }
+
             return writeOffset;
         }
-        catch { return -(int)Errno.EIO; }
+        catch
+        {
+            return -(int)Errno.EIO;
+        }
     }
-    private static async ValueTask<int> SysNewFstatAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysNewFstatAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
-        uint statAddr = a3;
-        uint flags = a4;
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var statAddr = a3;
+        var flags = a4;
 
         if (path == "" && (flags & 0x1000) != 0) // AT_EMPTY_PATH
-        {
             return await SysFstat64(state, a1, a3, 0, 0, 0, 0);
-        }
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -286,32 +304,30 @@ public partial class SyscallManager
         WriteStat64(sm, statAddr, dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysUtimensAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a2);
-        uint timesAddr = a3;
+        var path = sm.ReadString(a2);
+        var timesAddr = a3;
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         if (timesAddr == 0)
-        {
             dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
-        }
         else
-        {
             // TODO: Read timespec from memory
             dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
-        }
         return 0;
     }
+
     private static async ValueTask<int> SysFchownAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
@@ -326,12 +342,13 @@ public partial class SyscallManager
         // Redirect to SysChown logic or similar
         return await SysChown(state, a2, a3, a4, 0, 0, 0); // Simplified: should use dentry directly
     }
+
     private static async ValueTask<int> SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
@@ -345,12 +362,13 @@ public partial class SyscallManager
 
         return await SysChmod(state, a2, a3, 0, 0, 0, 0);
     }
+
     private static async ValueTask<int> SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
@@ -364,28 +382,33 @@ public partial class SyscallManager
 
         return await SysAccess(state, a2, a3, 0, 0, 0, 0);
     }
+
     private static async ValueTask<int> SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string oldPath = sm.ReadString(a1);
-        string newPath = sm.ReadString(a2);
+        var oldPath = sm.ReadString(a1);
+        var newPath = sm.ReadString(a2);
 
         return ImplRename(sm, -100, oldPath, -100, newPath, 0);
     }
+
     private static async ValueTask<int> SysRenameAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), 0);
     }
+
     private static async ValueTask<int> SysRenameAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), a5);
     }
-    private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath, uint flags)
+
+    private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath,
+        uint flags)
     {
         Dentry? oldStart = null;
         if (oldDirFd != -100 && !oldPath.StartsWith("/"))
@@ -403,13 +426,13 @@ public partial class SyscallManager
             newStart = f.Dentry;
         }
 
-        int lastSlashOld = oldPath.LastIndexOf('/');
-        string oldParentPath = lastSlashOld == -1 ? "" : oldPath[..lastSlashOld];
-        string oldName = lastSlashOld == -1 ? oldPath : oldPath[(lastSlashOld + 1)..];
+        var lastSlashOld = oldPath.LastIndexOf('/');
+        var oldParentPath = lastSlashOld == -1 ? "" : oldPath[..lastSlashOld];
+        var oldName = lastSlashOld == -1 ? oldPath : oldPath[(lastSlashOld + 1)..];
 
-        int lastSlashNew = newPath.LastIndexOf('/');
-        string newParentPath = lastSlashNew == -1 ? "" : newPath[..lastSlashNew];
-        string newName = lastSlashNew == -1 ? newPath : newPath[(lastSlashNew + 1)..];
+        var lastSlashNew = newPath.LastIndexOf('/');
+        var newParentPath = lastSlashNew == -1 ? "" : newPath[..lastSlashNew];
+        var newName = lastSlashNew == -1 ? newPath : newPath[(lastSlashNew + 1)..];
 
         var oldParentDentry = sm.PathWalk(oldParentPath == "" ? "." : oldParentPath, oldStart);
         var newParentDentry = sm.PathWalk(newParentPath == "" ? "." : newParentPath, newStart);
@@ -421,51 +444,58 @@ public partial class SyscallManager
             oldParentDentry.Inode!.Rename(oldName, newParentDentry.Inode!, newName);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysStat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         WriteStat(sm, a2, dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysLstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path, followLink: false);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         WriteStat(sm, a2, dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysFstat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
+        var fd = (int)a1;
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
 
         WriteStat(sm, a2, f.Dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysStatx(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
-        uint flags = a3;
-        uint mask = a4;
-        uint statxAddr = a5;
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var flags = a3;
+        var mask = a4;
+        var statxAddr = a5;
 
         if (path == "" && (flags & LinuxConstants.AT_EMPTY_PATH) != 0)
         {
@@ -483,26 +513,27 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        bool followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
+        var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
         var dentry = sm.PathWalk(path, startAt, followLink);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         WriteStatx(sm, statxAddr, dentry.Inode, mask);
         return 0;
     }
+
     private static async ValueTask<int> SysChmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string path = sm.ReadString(a1);
-        uint mode = a2;
+        var path = sm.ReadString(a1);
+        var mode = a2;
 
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
         // Permission check: only owner or root can chmod
-        var t = (sm.Engine.Owner as FiberTask);
+        var t = sm.Engine.Owner as FiberTask;
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
             return -(int)Errno.EPERM;
 
@@ -511,19 +542,20 @@ public partial class SyscallManager
         dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
+
     private static async ValueTask<int> SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint mode = a2;
+        var fd = (int)a1;
+        var mode = a2;
 
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
         // Permission check
-        var t = (sm.Engine.Owner as FiberTask);
+        var t = sm.Engine.Owner as FiberTask;
         if (t != null && t.Process.EUID != 0 && t.Process.EUID != f.Dentry.Inode.Uid)
             return -(int)Errno.EPERM;
 
@@ -531,20 +563,21 @@ public partial class SyscallManager
         f.Dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
+
     private static async ValueTask<int> SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string path = sm.ReadString(a1);
-        int uid = (int)a2;
-        int gid = (int)a3;
+        var path = sm.ReadString(a1);
+        var uid = (int)a2;
+        var gid = (int)a3;
 
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
         // Permission check: only root can chown
-        var t = (sm.Engine.Owner as FiberTask);
+        var t = sm.Engine.Owner as FiberTask;
         if (t != null && t.Process.EUID != 0)
             return -1; // EPERM
 
@@ -554,20 +587,21 @@ public partial class SyscallManager
         dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
+
     private static async ValueTask<int> SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        int uid = (int)a2;
-        int gid = (int)a3;
+        var fd = (int)a1;
+        var uid = (int)a2;
+        var gid = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
         // Permission check: only root can chown
-        var t = (sm.Engine.Owner as FiberTask);
+        var t = sm.Engine.Owner as FiberTask;
         if (t != null && t.Process.EUID != 0)
             return -1; // EPERM
 
@@ -576,17 +610,19 @@ public partial class SyscallManager
         f.Dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
+
     private static async ValueTask<int> SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // Since we don't have symlinks yet, behave like chown
         return await SysChown(state, a1, a2, a3, a4, a5, a6);
     }
+
     private static async ValueTask<int> SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        uint bufAddr = a1;
-        uint size = a2;
+        var bufAddr = a1;
+        var size = a2;
 
         var parts = new List<string>();
         var current = sm.CurrentWorkingDirectory;
@@ -594,30 +630,26 @@ public partial class SyscallManager
         {
             parts.Insert(0, current.Name);
             var next = current.Parent;
-            if (current == current.SuperBlock.Root && current.MountedAt != null)
-            {
-                next = current.MountedAt.Parent;
-            }
+            if (current == current.SuperBlock.Root && current.MountedAt != null) next = current.MountedAt.Parent;
             if (next == null || next == current) break;
             current = next;
         }
 
-        string cwd = "/" + string.Join("/", parts);
+        var cwd = "/" + string.Join("/", parts);
         if (cwd.Length + 1 > size) return -(int)Errno.ERANGE;
 
-        if (!sm.Engine.CopyToUser(bufAddr, System.Text.Encoding.ASCII.GetBytes(cwd + "\0"))) return -(int)Errno.EFAULT;
+        if (!sm.Engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes(cwd + "\0"))) return -(int)Errno.EFAULT;
         return cwd.Length + 1;
     }
+
     private static async ValueTask<int> SysSync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        foreach (var file in sm.FDs.Values)
-        {
-            file?.Sync();
-        }
+        foreach (var file in sm.FDs.Values) file?.Sync();
         return 0;
     }
+
     private static async ValueTask<int> SysFsync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -627,19 +659,21 @@ public partial class SyscallManager
         file.Sync();
         return 0;
     }
+
     private static async ValueTask<int> SysFdatasync(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return await SysFsync(state, a1, a2, a3, a4, a5, a6);
     }
+
     private static async ValueTask<int> SysUnlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
 
-        int lastSlash = path.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "." : (lastSlash == 0 ? "/" : path[..lastSlash]);
-        string name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = path.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
+        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath);
         if (parentDentry == null) return -(int)Errno.ENOENT;
@@ -650,24 +684,30 @@ public partial class SyscallManager
             parentDentry.Children.Remove(name);
             return 0;
         }
-        catch { return -(int)Errno.ENOENT; }
+        catch
+        {
+            return -(int)Errno.ENOENT;
+        }
     }
+
     private static async ValueTask<int> SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
         if (dentry != null && dentry.Inode != null) return 0;
         return -(int)Errno.ENOENT;
     }
-    private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
-        uint bufAddr = a2;
-        int count = (int)a3;
+        var fd = (int)a1;
+        var bufAddr = a2;
+        var count = (int)a3;
 
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
@@ -677,24 +717,24 @@ public partial class SyscallManager
             var entries = f.Dentry.Inode.GetEntries();
 
             // Simplified logic: uses f.Position as index in entries list
-            int startIdx = (int)f.Position;
+            var startIdx = (int)f.Position;
             if (startIdx >= entries.Count) return 0;
 
-            int writeOffset = 0;
-            for (int i = startIdx; i < entries.Count; i++)
+            var writeOffset = 0;
+            for (var i = startIdx; i < entries.Count; i++)
             {
                 var entry = entries[i];
-                byte[] nameBytes = Encoding.UTF8.GetBytes(entry.Name);
-                int nameLen = nameBytes.Length + 1;
-                int recLen = (8 + 8 + 2 + 1 + nameLen + 7) & ~7;
+                var nameBytes = Encoding.UTF8.GetBytes(entry.Name);
+                var nameLen = nameBytes.Length + 1;
+                var recLen = (8 + 8 + 2 + 1 + nameLen + 7) & ~7;
 
                 if (writeOffset + recLen > count) break;
 
-                uint baseAddr = bufAddr + (uint)writeOffset;
+                var baseAddr = bufAddr + (uint)writeOffset;
 
-                byte[] buf = new byte[recLen];
+                var buf = new byte[recLen];
                 BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), entry.Ino);
-                BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8), (long)(writeOffset + recLen));
+                BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8), writeOffset + recLen);
                 BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), (ushort)recLen);
 
                 byte dType = 8; // DT_REG
@@ -711,16 +751,20 @@ public partial class SyscallManager
 
             return writeOffset;
         }
-        catch { return -(int)Errno.EPERM; }
+        catch
+        {
+            return -(int)Errno.EPERM;
+        }
     }
+
     private static void WriteStat64(SyscallManager sm, uint addr, Inode inode)
     {
-        byte[] buf = new byte[96];
+        var buf = new byte[96];
 
-        uint mode = (uint)inode.Mode | (uint)inode.Type;
-        long size = (long)inode.Size;
-        uint uid = (uint)inode.Uid;
-        uint gid = (uint)inode.Gid;
+        var mode = (uint)inode.Mode | (uint)inode.Type;
+        var size = (long)inode.Size;
+        var uid = (uint)inode.Uid;
+        var gid = (uint)inode.Gid;
 
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), 0x800);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)inode.Ino); // __st_ino
@@ -734,21 +778,25 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(52), 4096);
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(56), (ulong)((size + 511) / 512));
 
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(64), (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(72), (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(80), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(64),
+            (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(72),
+            (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(80),
+            (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(88), inode.Ino);
 
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
+
     private static void WriteStat(SyscallManager sm, uint addr, Inode inode)
     {
-        byte[] buf = new byte[64];
+        var buf = new byte[64];
 
-        uint mode = (uint)inode.Mode | (uint)inode.Type;
-        long size = (long)inode.Size;
-        uint uid = (uint)inode.Uid;
-        uint gid = (uint)inode.Gid;
+        var mode = (uint)inode.Mode | (uint)inode.Type;
+        var size = (long)inode.Size;
+        var uid = (uint)inode.Uid;
+        var gid = (uint)inode.Gid;
 
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), 0x800); // st_dev
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)inode.Ino);
@@ -761,17 +809,21 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), 4096); // blksize
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), (uint)((size + 511) / 512));
 
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(32), (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(40), (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(48), (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(32),
+            (uint)new DateTimeOffset(inode.ATime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(40),
+            (uint)new DateTimeOffset(inode.MTime).ToUnixTimeSeconds());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(48),
+            (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
 
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
+
     private static void WriteStatx(SyscallManager sm, uint addr, Inode inode, uint mask)
     {
-        byte[] buf = new byte[256];
+        var buf = new byte[256];
 
-        uint actualMask = mask & LinuxConstants.STATX_BASIC_STATS;
+        var actualMask = mask & LinuxConstants.STATX_BASIC_STATS;
 
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x00), actualMask);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x04), 4096); // blksize
@@ -806,19 +858,22 @@ public partial class SyscallManager
 
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
+
     private static async ValueTask<int> SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ImplStat64(state, a1, a2);
     }
+
     private static async ValueTask<int> SysLstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ImplStat64(state, a1, a2);
     }
+
     private static int ImplStat64(IntPtr state, uint ptrPath, uint ptrStat)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string? path = sm.Engine.ReadStringSafe(ptrPath);
+        var path = sm.Engine.ReadStringSafe(ptrPath);
         if (path == null) return -(int)Errno.EFAULT;
 
         Logger.LogInformation($"[Stat64] Path='{path}'");
@@ -832,34 +887,36 @@ public partial class SyscallManager
         WriteStat64(sm, ptrStat, dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysFstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int fd = (int)a1;
+        var fd = (int)a1;
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
 
         WriteStat64(sm, a2, f.Dentry.Inode);
         return 0;
     }
+
     private static async ValueTask<int> SysSymlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string target = sm.ReadString(a1);
-        string linkpath = sm.ReadString(a2);
+        var target = sm.ReadString(a1);
+        var linkpath = sm.ReadString(a2);
 
-        int lastSlash = linkpath.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
-        string name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
+        var lastSlash = linkpath.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
+        var name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = (sm.Engine.Owner as FiberTask);
-        int uid = t?.Process.EUID ?? 0;
-        int gid = t?.Process.EGID ?? 0;
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
 
         try
         {
@@ -867,34 +924,40 @@ public partial class SyscallManager
             parentDentry.Inode.Symlink(dentry, target, uid, gid);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysReadlink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string path = sm.ReadString(a1);
-        uint bufAddr = a2;
-        int bufSize = (int)a3;
+        var path = sm.ReadString(a1);
+        var bufAddr = a2;
+        var bufSize = (int)a3;
 
         var dentry = sm.PathWalk(path, followLink: false);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
         if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        string target = dentry.Inode.Readlink();
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
-        int len = Math.Min(bytes.Length, bufSize);
+        var target = dentry.Inode.Readlink();
+        var bytes = Encoding.UTF8.GetBytes(target);
+        var len = Math.Min(bytes.Length, bufSize);
         if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
         return len;
     }
-    private static async ValueTask<int> SysReadlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysReadlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        int dirfd = (int)a1;
-        string path = sm.ReadString(a2);
-        uint bufAddr = a3;
-        int bufSize = (int)a4;
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var bufAddr = a3;
+        var bufSize = (int)a4;
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -904,23 +967,24 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        var dentry = sm.PathWalk(path, startAt, followLink: false);
+        var dentry = sm.PathWalk(path, startAt, false);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
         if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        string target = dentry.Inode.Readlink();
-        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(target);
-        int len = Math.Min(bytes.Length, bufSize);
+        var target = dentry.Inode.Readlink();
+        var bytes = Encoding.UTF8.GetBytes(target);
+        var len = Math.Min(bytes.Length, bufSize);
         if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
         return len;
     }
+
     private static async ValueTask<int> SysSymlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        string target = sm.ReadString(a1);
-        int dirfd = (int)a2;
-        string linkpath = sm.ReadString(a3);
+        var target = sm.ReadString(a1);
+        var dirfd = (int)a2;
+        var linkpath = sm.ReadString(a3);
 
         Dentry? startAt = null;
         if (dirfd != -100 && !linkpath.StartsWith("/"))
@@ -930,16 +994,16 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        int lastSlash = linkpath.LastIndexOf('/');
-        string parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
-        string name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
+        var lastSlash = linkpath.LastIndexOf('/');
+        var parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
+        var name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
 
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        var t = (sm.Engine.Owner as FiberTask);
-        int uid = t?.Process.EUID ?? 0;
-        int gid = t?.Process.EGID ?? 0;
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
 
         try
         {
@@ -947,29 +1011,30 @@ public partial class SyscallManager
             parentDentry.Inode.Symlink(dentry, target, uid, gid);
             return 0;
         }
-        catch { return -(int)Errno.EACCES; }
+        catch
+        {
+            return -(int)Errno.EACCES;
+        }
     }
+
     private static async ValueTask<int> SysMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string source = a1 == 0 ? "" : sm.ReadString(a1);
-        string target = sm.ReadString(a2);
-        string fstype = a3 == 0 ? "" : sm.ReadString(a3);
-        uint flags = a4;
-        uint dataAddr = a5;
+        var source = a1 == 0 ? "" : sm.ReadString(a1);
+        var target = sm.ReadString(a2);
+        var fstype = a3 == 0 ? "" : sm.ReadString(a3);
+        var flags = a4;
+        var dataAddr = a5;
 
         var targetDentry = sm.PathWalk(target);
-        if (targetDentry == null)
-        {
-            return -(int)Errno.ENOENT;
-        }
+        if (targetDentry == null) return -(int)Errno.ENOENT;
 
         SuperBlock? newSb = null;
 
         // Handle MS_BIND (Bind Mount)
-        if ((flags & (uint)LinuxConstants.MS_BIND) != 0)
+        if ((flags & LinuxConstants.MS_BIND) != 0)
         {
             var srcDentry = sm.PathWalk(source);
 
@@ -983,12 +1048,16 @@ public partial class SyscallManager
 
             if (srcDentry != null && srcDentry.Inode is HostInode hi)
             {
-                string hostRoot = hi.HostPath;
+                var hostRoot = hi.HostPath;
                 var fsType = FileSystemRegistry.Get("hostfs");
                 if (fsType != null)
-                {
-                    try { newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null); } catch { }
-                }
+                    try
+                    {
+                        newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null);
+                    }
+                    catch
+                    {
+                    }
             }
             // For internal bind mounts (Tmpfs -> Tmpfs), we might need a different approach (BindDentry?), 
             // strictly following VFS struct, MountRoot points to a SB Root. 
@@ -1037,12 +1106,13 @@ public partial class SyscallManager
 
         return -22; // EINVAL
     }
+
     private static async ValueTask<int> SysUmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string target = sm.ReadString(a1);
+        var target = sm.ReadString(a1);
         var targetDentry = sm.PathWalk(target);
 
         // PathWalk follows mounts, so we need to check MountedAt to find the actual mount point
@@ -1055,10 +1125,7 @@ public partial class SyscallManager
             if (mountRoot == null) return -(int)Errno.EINVAL;
 
             // Check if filesystem is busy (has active inodes)
-            if (mountRoot.SuperBlock.HasActiveInodes())
-            {
-                return -16; // EBUSY
-            }
+            if (mountRoot.SuperBlock.HasActiveInodes()) return -16; // EBUSY
 
             // Detach mount
             mountPoint.IsMounted = false;
@@ -1069,15 +1136,13 @@ public partial class SyscallManager
             mountRoot.SuperBlock.Put();
             return 0;
         }
-        else if (targetDentry != null && targetDentry.IsMounted)
+
+        if (targetDentry != null && targetDentry.IsMounted)
         {
             // This is the mount point itself
             var mountRoot = targetDentry.MountRoot;
 
-            if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes())
-            {
-                return -16; // EBUSY
-            }
+            if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes()) return -16; // EBUSY
 
             targetDentry.IsMounted = false;
             if (targetDentry.MountRoot != null)
@@ -1085,17 +1150,21 @@ public partial class SyscallManager
                 targetDentry.MountRoot.MountedAt = null;
                 targetDentry.MountRoot.SuperBlock.Put();
             }
+
             targetDentry.MountRoot = null;
             return 0;
         }
+
         return -22; // EINVAL
     }
-    private static async ValueTask<int> SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5, uint a6)
+
+    private static async ValueTask<int> SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string target = sm.ReadString(a1);
+        var target = sm.ReadString(a1);
         var targetDentry = sm.PathWalk(target);
 
         const uint MNT_FORCE = 1;
@@ -1131,10 +1200,7 @@ public partial class SyscallManager
         }
 
         // Normal umount with optional force
-        if (mountRoot.SuperBlock.HasActiveInodes() && (flags & MNT_FORCE) == 0)
-        {
-            return -16; // EBUSY
-        }
+        if (mountRoot.SuperBlock.HasActiveInodes() && (flags & MNT_FORCE) == 0) return -16; // EBUSY
 
         // Force unmount or no active inodes
         mountPoint.IsMounted = false;
@@ -1145,12 +1211,13 @@ public partial class SyscallManager
 
         return 0;
     }
+
     private static async ValueTask<int> SysChroot(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        string path = sm.ReadString(a1);
+        var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
 
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;

@@ -1,27 +1,27 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <ProjectReference Include="../Fiberish.Core/Fiberish.Core.csproj" />
-    <ProjectReference Include="../Fiberish.X86/Fiberish.X86.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="../Fiberish.Core/Fiberish.Core.csproj"/>
+        <ProjectReference Include="../Fiberish.X86/Fiberish.X86.csproj"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
-    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0"/>
+        <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1"/>
+    </ItemGroup>
 
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
-    <PublishAot>true</PublishAot>
-    <StripSymbols>false</StripSymbols>
-    <DebugType>pdbonly</DebugType>
-    <OptimizationPreference>Speed</OptimizationPreference>
-  </PropertyGroup>
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <PublishAot>true</PublishAot>
+        <StripSymbols>false</StripSymbols>
+        <DebugType>pdbonly</DebugType>
+        <OptimizationPreference>Speed</OptimizationPreference>
+    </PropertyGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-namespace Bifrost.Native;
+namespace Fiberish.Native;
 
 public static class X86SyscallNumbers
 {

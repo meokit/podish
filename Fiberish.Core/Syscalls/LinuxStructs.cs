@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Bifrost.Syscalls;
+namespace Fiberish.Syscalls;
 
 [StructLayout(LayoutKind.Sequential)]
 public struct Pollfd
@@ -38,8 +38,10 @@ public struct Timeval
 public struct SysInfo
 {
     public int Uptime;
+
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = 3)]
     public int[] Loads;
+
     public int TotalRam;
     public int FreeRam;
     public int SharedRam;
@@ -51,6 +53,7 @@ public struct SysInfo
     public int TotalHigh;
     public int FreeHigh;
     public int MemUnit;
+
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] // Padding to match Linux 32-bit layout
     public byte[] Padding;
 }

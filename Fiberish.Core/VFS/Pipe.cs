@@ -1,30 +1,27 @@
-using System;
-using System.Collections.Concurrent;
-using System.Threading;
-using Bifrost.Syscalls;
-using Bifrost.Core;
-using Bifrost.Native; // For Errno
+using Fiberish.Native;
+using WaitHandle = Fiberish.Core.WaitHandle;
+
+// For Errno
 
 
-namespace Bifrost.VFS;
+namespace Fiberish.VFS;
 
 public class PipeInode : Inode
 {
-    private readonly object _lock = new();
+    private const int BufferSize = 65536; // 64KB pipe buffer
     private readonly byte[] _buffer;
-    private int _head; // Write position
-    private int _tail; // Read position
-    private int _count;
-    private bool _writersClosed;
-    private bool _readersClosed;
-    private int _readerCount;
-    private int _writerCount;
+    private readonly object _lock = new();
 
     // Notification handles
-    private readonly Bifrost.Core.WaitHandle _readHandle = new();
-    private readonly Bifrost.Core.WaitHandle _writeHandle = new();
-
-    private const int BufferSize = 65536; // 64KB pipe buffer
+    private readonly WaitHandle _readHandle = new();
+    private readonly WaitHandle _writeHandle = new();
+    private int _count;
+    private int _head; // Write position
+    private int _readerCount;
+    private bool _readersClosed;
+    private int _tail; // Read position
+    private int _writerCount;
+    private bool _writersClosed;
 
     public PipeInode()
     {
@@ -80,28 +77,24 @@ public class PipeInode : Inode
         }
     }
 
-    public override void Open(File file)
+    public override void Open(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
-        if (((int)file.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
-        {
+        if (((int)linuxFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
             AddReader();
-        }
         else
-        {
             AddWriter();
-        }
     }
 
-    public override int Read(File file, Span<byte> buffer, long offset)
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         lock (_lock)
         {
             if (_count > 0)
             {
                 // Read data
-                int available = Math.Min(buffer.Length, _count);
-                int firstChunk = Math.Min(available, BufferSize - _tail);
+                var available = Math.Min(buffer.Length, _count);
+                var firstChunk = Math.Min(available, BufferSize - _tail);
 
                 if (firstChunk > 0)
                 {
@@ -111,7 +104,7 @@ public class PipeInode : Inode
 
                 if (available > firstChunk)
                 {
-                    int secondChunk = available - firstChunk;
+                    var secondChunk = available - firstChunk;
                     new ReadOnlySpan<byte>(_buffer, _tail, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
                     _tail = (_tail + secondChunk) % BufferSize;
                 }
@@ -125,31 +118,26 @@ public class PipeInode : Inode
                 return available;
             }
 
-            if (_writersClosed)
-            {
-                return 0; // EOF
-            }
+            if (_writersClosed) return 0; // EOF
 
             return -(int)Errno.EAGAIN;
         }
     }
 
-    public override int Write(File file, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         lock (_lock)
         {
             if (_readersClosed)
-            {
                 // Broken pipe
                 // Send SIGPIPE to current task?
                 return -(int)Errno.EPIPE;
-            }
 
-            int space = BufferSize - _count;
+            var space = BufferSize - _count;
             if (space > 0)
             {
-                int toWrite = Math.Min(buffer.Length, space);
-                int firstChunk = Math.Min(toWrite, BufferSize - _head);
+                var toWrite = Math.Min(buffer.Length, space);
+                var firstChunk = Math.Min(toWrite, BufferSize - _head);
 
                 if (firstChunk > 0)
                 {
@@ -159,7 +147,7 @@ public class PipeInode : Inode
 
                 if (toWrite > firstChunk)
                 {
-                    int secondChunk = toWrite - firstChunk;
+                    var secondChunk = toWrite - firstChunk;
                     buffer.Slice(firstChunk, secondChunk).CopyTo(new Span<byte>(_buffer, _head, secondChunk));
                     _head = (_head + secondChunk) % BufferSize;
                 }
@@ -177,28 +165,24 @@ public class PipeInode : Inode
         }
     }
 
-    public override async ValueTask WaitForRead(File file)
+    public override async ValueTask WaitForRead(LinuxFile linuxFile)
     {
         // Must await the handle
         // TODO: Handle cancellation/interruption?
         await _readHandle;
     }
 
-    public override async ValueTask WaitForWrite(File file)
+    public override async ValueTask WaitForWrite(LinuxFile linuxFile)
     {
         await _writeHandle;
     }
 
-    public override void Release(File file)
+    public override void Release(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
-        if (((int)file.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
-        {
+        if (((int)linuxFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
             RemoveReader();
-        }
         else
-        {
             RemoveWriter();
-        }
     }
 }

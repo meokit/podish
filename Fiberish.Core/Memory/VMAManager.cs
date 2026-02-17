@@ -1,13 +1,10 @@
-using System;
-using System.Collections.Generic;
-using Bifrost.Core;
-using Bifrost.VFS;
-using Bifrost.Native;
-using Bifrost.Loader;
-using Bifrost.Diagnostics;
+using Fiberish.Core;
+using Fiberish.Diagnostics;
+using Fiberish.Native;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
-namespace Bifrost.Memory;
+namespace Fiberish.Memory;
 
 public class VMAManager
 {
@@ -17,10 +14,8 @@ public class VMAManager
     public VMA? FindVMA(uint addr)
     {
         foreach (var vma in _vmas)
-        {
             if (addr >= vma.Start && addr < vma.End)
                 return vma;
-        }
         return null;
     }
 
@@ -28,21 +23,20 @@ public class VMAManager
     {
         var result = new List<VMA>();
         foreach (var vma in _vmas)
-        {
             if (vma.Start < end && vma.End > start)
                 result.Add(vma);
-        }
         return result;
     }
 
-    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, Bifrost.VFS.File? file, long offset, long filesz, string name, Engine engine)
+    public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset, long filesz,
+        string name, Engine engine)
     {
         // Align to 4k
         if ((addr & LinuxConstants.PageOffsetMask) != 0)
             throw new ArgumentException("Address not aligned");
 
         // Round up len to 4k
-        len = (len + (uint)LinuxConstants.PageOffsetMask) & (uint)LinuxConstants.PageMask;
+        len = (len + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
 
         if (addr == 0)
         {
@@ -51,17 +45,13 @@ public class VMAManager
                 throw new OutOfMemoryException("Execution out of memory");
         }
 
-        uint end = addr + len;
+        var end = addr + len;
         if (CheckOverlap(addr, end))
         {
             if ((flags & MapFlags.Fixed) != 0)
-            {
                 Munmap(addr, len, engine);
-            }
             else
-            {
                 throw new InvalidOperationException("Overlap detected");
-            }
         }
 
         var vma = new VMA
@@ -77,20 +67,16 @@ public class VMAManager
         };
 
         // Insert sorted
-        bool inserted = false;
-        for (int i = 0; i < _vmas.Count; i++)
-        {
+        var inserted = false;
+        for (var i = 0; i < _vmas.Count; i++)
             if (vma.End <= _vmas[i].Start)
             {
                 _vmas.Insert(i, vma);
                 inserted = true;
                 break;
             }
-        }
-        if (!inserted)
-        {
-            _vmas.Add(vma);
-        }
+
+        if (!inserted) _vmas.Add(vma);
 
         return addr;
     }
@@ -98,17 +84,14 @@ public class VMAManager
     public VMAManager Clone()
     {
         var newMM = new VMAManager();
-        foreach (var vma in _vmas)
-        {
-            newMM._vmas.Add(vma.Clone());
-        }
+        foreach (var vma in _vmas) newMM._vmas.Add(vma.Clone());
         return newMM;
     }
 
     public void Munmap(uint addr, uint length, Engine engine)
     {
-        uint end = addr + length;
-        for (int i = 0; i < _vmas.Count; i++)
+        var end = addr + length;
+        for (var i = 0; i < _vmas.Count; i++)
         {
             var vma = _vmas[i];
 
@@ -127,8 +110,8 @@ public class VMAManager
             // Split (Middle removal)
             if (addr > vma.Start && end < vma.End)
             {
-                uint tailStart = end;
-                uint tailEnd = vma.End;
+                var tailStart = end;
+                var tailEnd = vma.End;
                 long tailOffset = 0;
                 long tailFileSz = 0;
 
@@ -162,13 +145,14 @@ public class VMAManager
                     if (vma.FileSz > newLen)
                         vma.FileSz = newLen;
                 }
+
                 continue;
             }
 
             // Head removal
             if (addr <= vma.Start && end < vma.End)
             {
-                uint diff = end - vma.Start;
+                var diff = end - vma.Start;
                 vma.Start = end;
                 if (vma.File != null)
                 {
@@ -178,6 +162,7 @@ public class VMAManager
                     else
                         vma.FileSz = 0;
                 }
+
                 continue;
             }
 
@@ -191,7 +176,6 @@ public class VMAManager
                     if (vma.FileSz > newLen)
                         vma.FileSz = newLen;
                 }
-                continue;
             }
         }
     }
@@ -204,38 +188,34 @@ public class VMAManager
             // Clear native memory pages and JIT cache (done in C++ side)
             engine.MemUnmap(vma.Start, vma.End - vma.Start);
         }
+
         _vmas.Clear();
     }
 
     private bool CheckOverlap(uint start, uint end)
     {
         foreach (var vma in _vmas)
-        {
             if (start < vma.End && end > vma.Start)
                 return true;
-        }
         return false;
     }
 
     public void EagerMap(uint addr, uint len, Engine engine)
     {
-        uint startPage = addr & LinuxConstants.PageMask;
-        uint endAddr = addr + len;
-        for (uint p = startPage; p < endAddr; p += (uint)LinuxConstants.PageSize)
-        {
-            HandleFault(p, true, engine);
-        }
+        var startPage = addr & LinuxConstants.PageMask;
+        var endAddr = addr + len;
+        for (var p = startPage; p < endAddr; p += LinuxConstants.PageSize) HandleFault(p, true, engine);
     }
 
     private uint FindFreeRegion(uint size)
     {
-        uint baseAddr = LinuxConstants.MinMmapAddr;
+        var baseAddr = LinuxConstants.MinMmapAddr;
         while (true)
         {
-            uint end = baseAddr + size;
+            var end = baseAddr + size;
             if (!CheckOverlap(baseAddr, end))
                 return baseAddr;
-            baseAddr += (uint)LinuxConstants.PageSize;
+            baseAddr += LinuxConstants.PageSize;
             if (baseAddr >= LinuxConstants.TaskSize32)
                 return 0;
         }
@@ -256,11 +236,11 @@ public class VMAManager
             return false;
         }
 
-        uint pageStart = addr & LinuxConstants.PageMask;
-        Protection tempPerms = vma.Perms | Protection.Write;
+        var pageStart = addr & LinuxConstants.PageMask;
+        var tempPerms = vma.Perms | Protection.Write;
 
         // Allocate page and get host pointer in one call
-        IntPtr hostPtr = engine.AllocatePage(pageStart, (byte)tempPerms);
+        var hostPtr = engine.AllocatePage(pageStart, (byte)tempPerms);
         if (hostPtr == IntPtr.Zero)
         {
             Logger.LogError("HandleFault: AllocatePage failed for 0x{PageStart:x}", pageStart);
@@ -272,12 +252,12 @@ public class VMAManager
         if (vma.File != null)
         {
             long vmaOffset = pageStart - vma.Start;
-            long off = vma.Offset + vmaOffset;
+            var off = vma.Offset + vmaOffset;
 
-            int readLen = LinuxConstants.PageSize;
+            var readLen = LinuxConstants.PageSize;
             if (vma.FileSz > 0)
             {
-                long remainingFile = vma.FileSz - vmaOffset;
+                var remainingFile = vma.FileSz - vmaOffset;
                 if (remainingFile <= 0)
                     readLen = 0;
                 else if (remainingFile < LinuxConstants.PageSize)
@@ -285,22 +265,17 @@ public class VMAManager
             }
 
             if (readLen > 0)
-            {
                 // Read directly into allocated page memory (no MemWrite call needed)
                 unsafe
                 {
                     Span<byte> buf = new((void*)hostPtr, LinuxConstants.PageSize);
-                    int n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
+                    var n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
                     Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
                 }
-            }
         }
 
         // Set final permissions
-        if (tempPerms != vma.Perms)
-        {
-            engine.MemMap(pageStart, (uint)LinuxConstants.PageSize, (byte)vma.Perms);
-        }
+        if (tempPerms != vma.Perms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
 
         return true;
     }
@@ -310,41 +285,35 @@ public class VMAManager
         if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
             return;
 
-        for (uint page = vma.Start; page < vma.End; page += (uint)LinuxConstants.PageSize)
-        {
+        for (var page = vma.Start; page < vma.End; page += LinuxConstants.PageSize)
             if (engine.IsDirty(page))
             {
                 // Write back dirty page
-                byte[] data = new byte[LinuxConstants.PageSize];
+                var data = new byte[LinuxConstants.PageSize];
                 if (!engine.CopyFromUser(page, data)) continue; // Skip if fault? Or handle error?
 
                 long vmaOffset = page - vma.Start;
-                long off = vma.Offset + vmaOffset;
+                var off = vma.Offset + vmaOffset;
 
-                int writeLen = LinuxConstants.PageSize;
+                var writeLen = LinuxConstants.PageSize;
                 if (vma.FileSz > 0)
                 {
-                    long remainingFile = vma.FileSz - vmaOffset;
+                    var remainingFile = vma.FileSz - vmaOffset;
                     if (remainingFile <= 0)
                         writeLen = 0;
                     else if (remainingFile < LinuxConstants.PageSize)
                         writeLen = (int)remainingFile;
                 }
 
-                if (writeLen > 0)
-                {
-                    vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), off);
-                }
+                if (writeLen > 0) vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), off);
             }
-        }
     }
 
     public void LogVMAs()
     {
         Logger.LogInformation("Memory Map:");
         foreach (var vma in _vmas)
-        {
-            Logger.LogInformation("0x{Start:x8}-0x{End:x8} {Perms} {Flags} {Name}", vma.Start, vma.End, vma.Perms, vma.Flags, vma.Name);
-        }
+            Logger.LogInformation("0x{Start:x8}-0x{End:x8} {Perms} {Flags} {Name}", vma.Start, vma.End, vma.Perms,
+                vma.Flags, vma.Name);
     }
 }

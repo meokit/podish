@@ -1,12 +1,15 @@
 using System.Runtime.CompilerServices;
 
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public readonly struct SleepAwaitable(long tickDuration)
 {
     private readonly long _tickDuration = tickDuration;
 
-    public SleepAwaiter GetAwaiter() => new(_tickDuration);
+    public SleepAwaiter GetAwaiter()
+    {
+        return new SleepAwaiter(_tickDuration);
+    }
 
     public readonly struct SleepAwaiter(long tickDuration) : INotifyCompletion
     {
@@ -14,11 +17,14 @@ public readonly struct SleepAwaitable(long tickDuration)
 
         public bool IsCompleted => false;
 
-        public int GetResult() => 0;
+        public int GetResult()
+        {
+            return 0;
+        }
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current;
+            var scheduler = KernelScheduler.Current ?? throw new InvalidOperationException("No active KernelScheduler");
             var task = scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
 
             // Register timer callback

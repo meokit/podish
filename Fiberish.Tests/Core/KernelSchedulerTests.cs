@@ -1,28 +1,13 @@
-using Xunit;
-using Bifrost.Core;
-using Bifrost.Memory;
-using Bifrost.Syscalls;
 using System.Text;
-using Bifrost.Native;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.X86.Native;
+using Xunit;
 
 namespace Fiberish.Tests.Core;
 
 public class KernelSchedulerTests
 {
-    private class MockEngine : Engine
-    {
-        public MockEngine() : base(true) { } // Mock handle
-        
-        protected override void Dispose(bool disposing) {}
-
-        public override void Run(uint endEip = 0, ulong maxInsts = 0) { }
-        public override EmuStatus Status => EmuStatus.Running;
-        public override uint RegRead(Reg reg) => 0;
-        public override void RegWrite(Reg reg, uint val) { }
-        public override uint Eip { get; set; }
-        public override uint Eflags { get; set; }
-    }
-
     // Mock Process using nulls where acceptable for tests
     private Process CreateMockProcess(int pid)
     {
@@ -31,20 +16,20 @@ public class KernelSchedulerTests
         // FiberTask checks Process.Mem for faults.
         return new Process(pid, null!, null!);
     }
-    
+
     [Fact]
     public void PingPong_Scheduling_Works()
     {
         var kernel = new KernelScheduler();
         var sb = new StringBuilder();
-        
+
         // We need a way to run async logic on FiberTask without real CPU execution
         // Since FiberTask logic is determined by the Continuation (Action), 
         // we can manually set the Initial Continuation to our async method state machine.
-        
+
         // However, C# compiler generates the state machine.
         // We will simulate "Entry Point" by just registering a task and an action.
-        
+
         var t1 = new FiberTask(101, CreateMockProcess(100), new MockEngine(), kernel);
         var t2 = new FiberTask(102, CreateMockProcess(100), new MockEngine(), kernel);
 
@@ -69,27 +54,55 @@ public class KernelSchedulerTests
             t2.Exited = true;
             t2.Status = FiberTaskStatus.Terminated;
         }
-        
+
         // Register tasks
         // When we call the async method (RunTask1), it runs synchronously until the first await.
         // The first await (YieldAwaitable) will capture the continuation and register it with the Kernel.
         // BUT, YieldAwaitable.UnsafeOnCompleted needs KernelScheduler.Current to be set!
-        
+
         // So we must invoke the initial calls INSIDE the kernel run loop or with Current set.
-        
+
         // Register tasks with initial entry points
         // The first execution will happen when Kernel picks them up.
         // Since RunTask1 is async void, passing it as Action works.
         t1.Continuation = RunTask1;
         kernel.RegisterTask(t1);
-        
+
         t2.Continuation = RunTask2;
         kernel.RegisterTask(t2);
-        
+
         // Run (AsyncLocal sets context)
         kernel.Run(100);
-        
-        string result = sb.ToString();
+
+        var result = sb.ToString();
         Assert.Equal("T1-Start;T2-Start;T1-Mid;T2-Mid;T1-End;T2-End;", result);
+    }
+
+    private class MockEngine : Engine
+    {
+        public MockEngine() : base(true)
+        {
+        } // Mock handle
+
+        public override EmuStatus Status => EmuStatus.Running;
+        public override uint Eip { get; set; }
+        public override uint Eflags { get; set; }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+
+        public override void Run(uint endEip = 0, ulong maxInsts = 0)
+        {
+        }
+
+        public override uint RegRead(Reg reg)
+        {
+            return 0;
+        }
+
+        public override void RegWrite(Reg reg, uint val)
+        {
+        }
     }
 }

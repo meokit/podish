@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-
-namespace Bifrost.VFS;
+namespace Fiberish.VFS;
 
 public class ConsoleInode : Inode
 {
@@ -16,12 +13,27 @@ public class ConsoleInode : Inode
         Ino = 1; // Dummy
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot create in /dev");
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid) => throw new InvalidOperationException("Cannot mkdir in /dev");
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid) => throw new InvalidOperationException("Cannot symlink in /dev");
-    public override Dentry Link(Dentry dentry, Inode oldInode) => throw new InvalidOperationException("Cannot link in /dev");
+    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot create in /dev");
+    }
 
-    public override int Read(File file, Span<byte> buffer, long offset)
+    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot mkdir in /dev");
+    }
+
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot symlink in /dev");
+    }
+
+    public override Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        throw new InvalidOperationException("Cannot link in /dev");
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
         // Using OpenStandardInput for binary compatibility
@@ -29,7 +41,7 @@ public class ConsoleInode : Inode
         return stream.Read(buffer);
     }
 
-    public override int Write(File file, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
         using var stream = Console.OpenStandardOutput();
@@ -37,5 +49,7 @@ public class ConsoleInode : Inode
         return buffer.Length;
     }
 
-    public override void Truncate(long size) { }
+    public override void Truncate(long size)
+    {
+    }
 }

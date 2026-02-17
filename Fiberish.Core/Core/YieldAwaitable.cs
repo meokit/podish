@@ -1,16 +1,21 @@
 using System.Runtime.CompilerServices;
 
-namespace Bifrost.Core;
+namespace Fiberish.Core;
 
 public struct YieldAwaitable
 {
-    public readonly YieldAwaiter GetAwaiter() => new();
+    public readonly YieldAwaiter GetAwaiter()
+    {
+        return new YieldAwaiter();
+    }
 
     public readonly struct YieldAwaiter : ICriticalNotifyCompletion
     {
         public bool IsCompleted => false; // Always force async continuation
 
-        public void GetResult() { }
+        public void GetResult()
+        {
+        }
 
         public void OnCompleted(Action continuation)
         {
@@ -19,8 +24,10 @@ public struct YieldAwaitable
 
         public void UnsafeOnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current;
-            var task = scheduler.CurrentTask ?? throw new InvalidOperationException("YieldAwaitable: No active FiberTask.");
+            var scheduler = KernelScheduler.Current ??
+                            throw new InvalidOperationException("YieldAwaitable: No active KernelScheduler.");
+            var task = scheduler.CurrentTask ??
+                       throw new InvalidOperationException("YieldAwaitable: No active FiberTask.");
 
             // Update task state
             task.Continuation = continuation;
