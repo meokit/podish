@@ -41,6 +41,13 @@
         </Content>
     </ItemGroup>
 
+    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX'))">
+        <Content Include="build_native/libfibercpu.dylib">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>libfibercpu.dylib</Link>
+        </Content>
+    </ItemGroup>
+
     <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
         <Content Include="build_native/Release/fibercpu.dll">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

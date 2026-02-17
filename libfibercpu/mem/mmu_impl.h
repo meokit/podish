@@ -29,7 +29,7 @@ inline EmuState* Mmu::get_state() {
     // 2. Call User Handler (if any)
     bool handled = false;
     if (fault_handler) {
-        handled = fault_handler(fault_opaque, addr, is_write);
+        handled = (bool)fault_handler(fault_opaque, addr, is_write);
     }
 
     if (!handled) {

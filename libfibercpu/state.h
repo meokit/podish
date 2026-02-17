@@ -18,7 +18,7 @@ namespace fiberish {
 struct EmuState;
 
 // Callback signatures for internal storage and C bindings
-using FaultHandler = bool (*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+using FaultHandler = int (*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
 using MemHook = void (*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
 using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
 

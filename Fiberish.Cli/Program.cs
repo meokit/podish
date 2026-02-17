@@ -111,7 +111,7 @@ internal class Program
         // 2. Spawn Process
         try
         {
-            var mainTask = Process.Spawn(exe, fullArgs, envs, rootfs, traceInstruction, trace);
+            var mainTask = Process.Spawn(exe, fullArgs, envs, rootfs, traceInstruction, trace, scheduler);
 
             Logger.LogInformation("Spawned Main Task {TID}", mainTask.TID);
 

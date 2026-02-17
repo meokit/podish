@@ -103,20 +103,20 @@ public class Engine : IDisposable
     }
 
     [UnmanagedCallersOnly]
-    private static bool OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
+    private static int OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
     {
         try
         {
-            if (userdata == IntPtr.Zero) return false;
+            if (userdata == IntPtr.Zero) return 0;
             var handle = GCHandle.FromIntPtr(userdata);
-            if (handle.Target is Engine engine) return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false;
+            if (handle.Target is Engine engine) return (engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false) ? 1 : 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[Engine] Exception in OnNativeFault: {ex}");
         }
 
-        return false;
+        return 0;
     }
 
     [UnmanagedCallersOnly]

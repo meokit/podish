@@ -31,7 +31,7 @@ extern "C" {
 // Internal Bridge Callbacks
 // ----------------------------------------------------------------------------
 
-static bool InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
+static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     auto* state = static_cast<EmuState*>(opaque);
     state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
@@ -40,7 +40,7 @@ static bool InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     } else {
         // Default behavior if no user handler: Trigger Fault
         state->status = EmuStatus::Fault;
-        return false;
+        return 0;
     }
 }
 
@@ -561,7 +561,7 @@ int X86_GetStatus(EmuState* state) { return (int)state->status; }
 // Callbacks
 // ----------------------------------------------------------------------------
 
-void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata) {
+void X86_SetFaultCallback(EmuState* state, fiberish::FaultHandler handler, void* userdata) {
     state->fault_handler = handler;
     state->fault_userdata = userdata;
 }
@@ -577,7 +577,7 @@ void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
     }
 }
 
-void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata) {
+void X86_SetInterruptHook(EmuState* state, uint8_t vector, fiberish::InterruptHandler hook, void* userdata) {
     state->interrupt_handlers[vector] = hook;
     state->interrupt_userdata[vector] = userdata;
 

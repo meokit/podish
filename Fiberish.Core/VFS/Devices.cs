@@ -33,19 +33,20 @@ public class ConsoleInode : Inode
         throw new InvalidOperationException("Cannot link in /dev");
     }
 
+    private static readonly Stream _stdout = Console.OpenStandardOutput();
+    private static readonly Stream _stdin = Console.OpenStandardInput();
+
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
-        // Using OpenStandardInput for binary compatibility
-        using var stream = Console.OpenStandardInput();
-        return stream.Read(buffer);
+        return _stdin.Read(buffer);
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
-        using var stream = Console.OpenStandardOutput();
-        stream.Write(buffer);
+        _stdout.Write(buffer);
+        _stdout.Flush();
         return buffer.Length;
     }
 

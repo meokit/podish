@@ -132,7 +132,7 @@ public unsafe partial class X86Native
 
     [LibraryImport(LibName, EntryPoint = "X86_SetFaultCallback")]
     public static partial void SetFaultCallback(IntPtr state,
-        delegate* unmanaged<IntPtr, uint, int, IntPtr, bool> handler, IntPtr userdata);
+        delegate* unmanaged<IntPtr, uint, int, IntPtr, int> handler, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetMemHook")]
     public static partial void SetMemHook(IntPtr state,

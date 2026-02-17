@@ -78,7 +78,7 @@ int X86_Step(EmuState* state);
 int X86_GetStatus(EmuState* state);
 
 // Callbacks
-typedef bool (*FaultHandler)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+typedef int (*FaultHandler)(EmuState* state, uint32_t addr, int is_write, void* userdata);
 typedef void (*MemHook)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
 typedef int (*InterruptHandler)(EmuState* state, uint32_t vector, void* userdata);
 

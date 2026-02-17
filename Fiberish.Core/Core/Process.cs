@@ -167,7 +167,7 @@ public class Process
     }
 
     public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
-        bool strace)
+        bool strace, KernelScheduler scheduler)
     {
         // 1. Init System Components
         var engine = new Engine();
@@ -186,10 +186,10 @@ public class Process
             traceInstruction = traceInstructions
         };
         proc.PGID = proc.TGID; // Set PGID to self for session leader?
-        KernelScheduler.Current!.RegisterProcess(proc);
+        scheduler.RegisterProcess(proc);
 
         // 4. Create Main Task
-        var mainTask = new FiberTask(proc.TGID, proc, engine, KernelScheduler.Current!);
+        var mainTask = new FiberTask(proc.TGID, proc, engine, scheduler);
 
         // 5. Register with Scheduler and ProcFs
         // FiberTask ctor already registers with KernelScheduler
