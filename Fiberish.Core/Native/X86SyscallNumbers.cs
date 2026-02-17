@@ -174,8 +174,8 @@ public static class X86SyscallNumbers
     public const int sync = 36;
     public const int madvise = 219;
     public const int msync = 144;
-    
+
     public const int select = 82;
     public const int _newselect = 142;
-    public const int poll = 168; 
+    public const int poll = 168;
 }

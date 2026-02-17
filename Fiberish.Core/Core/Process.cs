@@ -59,7 +59,7 @@ public class Process
     public SyscallManager Syscalls { get; set; }
 
     // Thread Management
-    public List<FiberTask> Threads { get; } = new();
+    public List<FiberTask> Threads { get; } = [];
 
     // Credentials
     public int PGID { get; set; }
@@ -80,14 +80,14 @@ public class Process
 
     // Parent-child relationship
     public int PPID { get; set; } = 0;  // Parent Process ID
-    public List<int> Children { get; } = new List<int>();  // Child Process IDs
+    public List<int> Children { get; } = [];  // Child Process IDs
     public ProcessState State { get; set; } = ProcessState.Running;
     public int ExitStatus { get; set; } = 0;
-   
+
     // Use our new single-threaded compatible synchronization primitive
     public WaitHandle ZombieEvent { get; } = new();
 
-    public Dictionary<int, SigAction> SignalActions { get; } = new();
+    public Dictionary<int, SigAction> SignalActions { get; } = [];
 
     public bool traceInstruction;
 
@@ -130,7 +130,7 @@ public class Process
         }
         return false;
     }
-    
+
     public void ClearInterrupt()
     {
         _interruptHandler = null;
@@ -151,8 +151,8 @@ public class Process
         // Setup Stack
         uint spBase = res.SP;
         byte[] stackData = res.InitialStack;
-        for (uint addr = spBase & LinuxConstants.PageMask; 
-             addr < ((spBase + (uint)stackData.Length + (uint)LinuxConstants.PageSize - 1) & LinuxConstants.PageMask); 
+        for (uint addr = spBase & LinuxConstants.PageMask;
+             addr < ((spBase + (uint)stackData.Length + (uint)LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
              addr += (uint)LinuxConstants.PageSize)
         {
             if (engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
@@ -168,31 +168,35 @@ public class Process
         // 1. Init System Components
         var engine = new Engine();
         var mm = new VMAManager();
-        
+
         // 2. Init Syscalls
-        var sys = new SyscallManager(engine, mm, 0, rootRes);
-        sys.Strace = strace;
+        var sys = new SyscallManager(engine, mm, 0, rootRes)
+        {
+            Strace = strace
+        };
         Bifrost.Syscalls.ProcFsManager.Init(sys);
 
         // 3. Create Process
-        var proc = new Process(FiberTask.NextTID(), mm, sys);
-        proc.traceInstruction = traceInstructions;
+        var proc = new Process(FiberTask.NextTID(), mm, sys)
+        {
+            traceInstruction = traceInstructions
+        };
         proc.PGID = proc.TGID; // Set PGID to self for session leader?
-        KernelScheduler.Instance.RegisterProcess(proc);
+        KernelScheduler.Current.RegisterProcess(proc);
 
         // 4. Create Main Task
-        var mainTask = new FiberTask(proc.TGID, proc, engine, KernelScheduler.Instance); 
+        var mainTask = new FiberTask(proc.TGID, proc, engine, KernelScheduler.Current);
 
         // 5. Register with Scheduler and ProcFs
         // FiberTask ctor already registers with KernelScheduler
         // ProcFsManager.OnProcessStart(sys, proc.TGID);
-        
+
         // 6. Connect Engine Context
         engine.Owner = mainTask;
 
         // 7. Load Executable
         proc.LoadExecutable(exePath, args, envs);
-        
+
         return mainTask;
     }
 }

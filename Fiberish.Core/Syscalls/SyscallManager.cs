@@ -10,7 +10,7 @@ namespace Bifrost.Syscalls;
 public partial class SyscallManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
-    private static readonly Dictionary<IntPtr, SyscallManager> _registry = new();
+    private static readonly Dictionary<IntPtr, SyscallManager> _registry = [];
     private static readonly object _registryLock = new();
 
     // The current engine executing a syscall (protected by GIL)
@@ -25,7 +25,7 @@ public partial class SyscallManager
     public Dentry ProcessRoot { get; set; } = null!;
 
     // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, Bifrost.VFS.File> FDs { get; private set; } = new();
+    public Dictionary<int, Bifrost.VFS.File> FDs { get; private set; } = [];
 
     public FutexManager Futex { get; private set; }
 
@@ -39,10 +39,10 @@ public partial class SyscallManager
         public string FsType { get; set; } = "unknown";
         public string Options { get; set; } = "";
     }
-    public List<MountInfo> MountList { get; } = new();
+    public List<MountInfo> MountList { get; } = [];
 
     public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
-    private SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
+    private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private const int MaxSyscalls = 512;
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot)
@@ -61,7 +61,7 @@ public partial class SyscallManager
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() }); 
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() });
 
         // 2. Setup Rootfs (OverlayFS: Lower=Hostfs, Upper=Tmpfs)
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
@@ -70,7 +70,7 @@ public partial class SyscallManager
 
         // Lower: Hostfs (Read-Only access to hostRoot)
         var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
-        
+
         // Upper: Tmpfs (Read-Write layer)
         var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "overlay_upper", null);
 
@@ -103,7 +103,7 @@ public partial class SyscallManager
         var procFsType = FileSystemRegistry.Get("proc")!;
         var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
         Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime");
-        
+
         // Add console FDs
         InitStdio(devSb);
 
@@ -118,36 +118,36 @@ public partial class SyscallManager
         // Map vDSO page (RX) at a fixed high address to avoid overlap
         uint vdsoAddr = 0x7FFF0000;
         Mem.Mmap(vdsoAddr, 4096, Protection.Read | Protection.Exec, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
-        
+
         // Directly allocate the page in the engine with RW permissions for initial setup
         if (Engine.AllocatePage(vdsoAddr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
             throw new Exception("Failed to allocate vDSO page");
 
         // Write trampolines
         // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80
-        byte[] sigret = { 0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80 };
+        byte[] sigret = [0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80];
         if (!Engine.CopyToUser(vdsoAddr, sigret)) Logger.LogError("Failed to write sigreturn trampoline to vDSO");
         SigReturnAddr = vdsoAddr;
 
         // __kernel_rt_sigreturn: mov eax, 173; int 0x80
-        byte[] rtsigret = { 0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80 };
+        byte[] rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
         if (!Engine.CopyToUser(vdsoAddr + 16, rtsigret)) Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
         RtSigReturnAddr = vdsoAddr + 16;
 
         // Set final RX permissions in the engine
         Engine.MemMap(vdsoAddr, 4096, (byte)(Protection.Read | Protection.Exec));
-        
+
         Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr, SigReturnAddr, RtSigReturnAddr);
     }
 
-    private void EnsureDirectory(Dentry parent, string name)
+    private static void EnsureDirectory(Dentry parent, string name)
     {
         var dentry = parent.Inode!.Lookup(name);
         if (dentry == null)
         {
             dentry = new Dentry(name, null, parent, parent.SuperBlock);
             parent.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
-        } 
+        }
         else if (dentry.Inode?.Type != InodeType.Directory)
         {
             throw new Exception($"Path /{name} exists but is not a directory");
@@ -156,9 +156,8 @@ public partial class SyscallManager
 
     private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options)
     {
-        var dentry = parent.Inode!.Lookup(name);
-        if (dentry == null) throw new Exception($"Mount point {name} not found");
-        
+        var dentry = parent.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
+
         // Mount it
         dentry.IsMounted = true;
         dentry.MountRoot = sb.Root;
@@ -174,13 +173,13 @@ public partial class SyscallManager
         // 0: Stdin, 1: Stdout, 2: Stderr
         // In devtmpfs, we should create /dev/console, /dev/null, /dev/tty etc.
         // For simple Stdio, we just create virtual inodes or reuse what we had.
-        
+
         var nullNode = new ConsoleInode(devSb, true); // reusing ConsoleInode logic for now
-        // Ideally we create nodes in devSb using mknod if we had it, or manual instantiation.
-        
+                                                      // Ideally we create nodes in devSb using mknod if we had it, or manual instantiation.
+
         // We need Dentry for these to support Fstat correctly if they are fully virtual.
         // Or we use the manually created ones.
-        
+
         var stdinInode = new ConsoleInode(devSb, true);
         var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb); // Parent should be /dev root really
         FDs[0] = new Bifrost.VFS.File(stdinDentry, FileFlags.O_RDONLY);
@@ -226,7 +225,7 @@ public partial class SyscallManager
         }
         else
         {
-            newFds = new Dictionary<int, Bifrost.VFS.File>();
+            newFds = [];
             foreach (var kv in FDs)
             {
                 // We need to manually clone because File's constructor/Close manage refcounts
@@ -234,11 +233,13 @@ public partial class SyscallManager
             }
         }
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot);
-        newSys.CloneHandler = CloneHandler;
-        newSys.ExitHandler = ExitHandler;
-        newSys.GetTID = GetTID;
-        newSys.GetTGID = GetTGID;
+        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory, ProcessRoot)
+        {
+            CloneHandler = CloneHandler,
+            ExitHandler = ExitHandler,
+            GetTID = GetTID,
+            GetTGID = GetTGID
+        };
         return newSys;
     }
 
@@ -263,8 +264,7 @@ public partial class SyscallManager
         // Handle Breakpoint (INT 3)
         if (vector == 3)
         {
-            var t = engine.Owner as FiberTask;
-            if (t != null)
+            if (engine.Owner is FiberTask t)
             {
                 t.PendingSignals |= (1UL << (5 - 1)); // SIGTRAP = 5
             }
@@ -278,7 +278,7 @@ public partial class SyscallManager
 
         // Get current FiberTask (New Model Only) via Engine.Owner
         var fiberTask = engine.Owner as FiberTask;
-        
+
         uint eax = engine.RegRead(Reg.EAX);
         uint ebx = engine.RegRead(Reg.EBX);
         uint ecx = engine.RegRead(Reg.ECX);
@@ -293,7 +293,7 @@ public partial class SyscallManager
                 eax, ebx, ecx, edx, esi, edi, ebp);
         }
 
-        ValueTask<int> retTask = new ValueTask<int>(-38); // ENOSYS
+        ValueTask<int> retTask = new(-38); // ENOSYS
 
         if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
         {
@@ -307,21 +307,21 @@ public partial class SyscallManager
         // --- Handling Async Syscalls ---
         if (retTask.IsCompleted)
         {
-             int ret = retTask.Result;
-             
-             // Special handling for context-restoring syscalls
-             bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
-             
-             
-             if (!isSigReturn)
-             {
-                 engine.RegWrite(Reg.EAX, (uint)ret);
-             }
+            int ret = retTask.Result;
 
-             if (Strace)
-             {
-                 Logger.LogTrace(" = {Ret}", ret);
-             }
+            // Special handling for context-restoring syscalls
+            bool isSigReturn = (eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn);
+
+
+            if (!isSigReturn)
+            {
+                engine.RegWrite(Reg.EAX, (uint)ret);
+            }
+
+            if (Strace)
+            {
+                Logger.LogTrace(" = {Ret}", ret);
+            }
         }
         else
         {
@@ -330,11 +330,11 @@ public partial class SyscallManager
             {
                 // Suspend the task
                 fiberTask.PendingSyscall = () => retTask;
-                fiberTask.Status = FiberTaskStatus.Waiting; 
-                
+                fiberTask.Status = FiberTaskStatus.Waiting;
+
                 // Tracing
                 if (Strace) Logger.LogTrace(" [Suspended]");
-                
+
                 // Force yield
                 engine.Yield();
                 return true;
@@ -349,13 +349,13 @@ public partial class SyscallManager
 
         // Determine if we should yield
         bool shouldYield = false;
-        
+
         if (fiberTask != null)
         {
             if (fiberTask.PendingSyscall != null) shouldYield = true;
             if (fiberTask.Exited) shouldYield = true;
             if ((fiberTask.PendingSignals & ~fiberTask.SignalMask) != 0) shouldYield = true;
-            
+
             // Force Yield if specific syscalls
             switch ((int)eax)
             {
@@ -369,8 +369,8 @@ public partial class SyscallManager
                 case X86SyscallNumbers.exit:
                 case X86SyscallNumbers.exit_group:
                 case X86SyscallNumbers.execve:
-                case X86SyscallNumbers.kill: 
-                case X86SyscallNumbers.tkill: 
+                case X86SyscallNumbers.kill:
+                case X86SyscallNumbers.tkill:
                 case X86SyscallNumbers.tgkill:
                 case X86SyscallNumbers.wait4:
                 case X86SyscallNumbers.waitpid:

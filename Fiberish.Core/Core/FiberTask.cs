@@ -25,22 +25,22 @@ public class FiberTask
     public Engine CPU { get; }
     public KernelScheduler CommonKernel { get; }
     public Action? Continuation { get; set; }
-    
+
     public FiberTaskStatus Status { get; set; } = FiberTaskStatus.Ready;
 
     public Process Process { get; }
-    
+
     // Signal System
     public ulong SignalMask { get; set; }
     public ulong PendingSignals { get; set; } // Bitmask
     public uint AltStackSp { get; set; }
     public uint AltStackSize { get; set; }
     public int AltStackFlags { get; set; }
-    
+
     public bool Exited { get; set; }
 
     public int ExitStatus { get; set; }
-    
+
     public uint ChildClearTidPtr { get; set; }
 
     // Interrupt handling for blocking syscalls
@@ -53,19 +53,19 @@ public class FiberTask
         PID = process.TGID;
         Process = process;
         lock (Process.Threads) Process.Threads.Add(this);
-        
+
         CPU = cpu;
         CPU.Owner = this;
         CommonKernel = kernel;
-        
+
         kernel.RegisterTask(this);
-        
+
         CPU.PageFaultResolver = HandlePageFault;
 
         CPU.InterruptHandler = HandleInterrupt;
         CPU.FaultHandler = HandleCpuFault;
     }
-    
+
     private bool HandlePageFault(uint addr, bool isWrite)
     {
         return Process.Mem.HandleFault(addr, isWrite, CPU);
@@ -80,7 +80,7 @@ public class FiberTask
         }
         return false;
     }
-    
+
     private bool HandleCpuFault(Engine engine, uint addr, bool isWrite)
     {
         // This is usually for unhandled page faults or other CPU exceptions
@@ -106,7 +106,7 @@ public class FiberTask
         }
         return false;
     }
-    
+
     public void ClearInterrupt()
     {
         _interruptHandler = null;
@@ -128,9 +128,9 @@ public class FiberTask
                 // Default actions (simplified)
                 if (sig == 9 || sig == 15 || sig == 2 || sig == 3 || sig == 6 || sig == 11) // KILL, TERM, INT, QUIT, ABRT, SEGV
                 {
-                     Exited = true;
-                     ExitStatus = 128 + sig;
-                     return;
+                    Exited = true;
+                    ExitStatus = 128 + sig;
+                    return;
                 }
                 // Ignore others for now
                 return;
@@ -143,82 +143,80 @@ public class FiberTask
             // Check altstack
             if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
             {
-                 sp = AltStackSp + AltStackSize;
+                sp = AltStackSp + AltStackSize;
             }
 
             // Return address (restorer or some trampoline)
             uint retAddr = Process.Syscalls.RtSigReturnAddr;
             uint frameEsp = sp; // Initialize frameEsp here
-            
+
             // Setup Stack with SA_SIGINFO support
             SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
             CPU.RegWrite(Reg.ESP, frameEsp);
             CPU.Eip = action.Handler;
-            
+
             // SA_RESTART Logic
             int eax = (int)CPU.RegRead(Reg.EAX);
             if (eax == -512) // -ERESTARTSYS
             {
-                 if ((action.Flags & LinuxConstants.SA_RESTART) != 0)
-                 {
-                     // Restart: rewind EIP to re-execute 'int 0x80' (CD 80)
-                     CPU.Eip -= 2; 
-                     // TODO: Need original syscall number to fully restart?
-                     // For now fallback to EINTR if we can't fully restore
-                     CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
-                 }
-                 else
-                 {
-                     // Interrupted: return -EINTR
-                     CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
-                 }
+                if ((action.Flags & LinuxConstants.SA_RESTART) != 0)
+                {
+                    // Restart: rewind EIP to re-execute 'int 0x80' (CD 80)
+                    CPU.Eip -= 2;
+                    // TODO: Need original syscall number to fully restart?
+                    // For now fallback to EINTR if we can't fully restore
+                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                }
+                else
+                {
+                    // Interrupted: return -EINTR
+                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                }
             }
         }
     }
 
     private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr)
     {
-         // We always setup UContext and SigInfo because sys_rt_sigreturn expects them.
-         
-         uint ucontextAddr = 0;
-         uint siginfoAddr = 0;
 
-         // Push UContext (approx 400 bytes inc fpstate)
-         // Align to 16 bytes
-         esp = (esp - 512u) & ~0xFu; 
-         ucontextAddr = esp;
-         
-         // Populate UContext
-         // uc_flags, uc_link, uc_stack, uc_mcontext, uc_sigmask
-         uint mcontextOffset = 4 + 4 + 12;
-         
-         // Save registers to mcontext
-         WriteSigContext(esp + mcontextOffset);
-         
-         // Push SigInfo (128 bytes)
-         esp = (esp - 128u) & ~0xFu;
-         siginfoAddr = esp;
-         
-         // Populate SigInfo
-         // si_signo, si_errno, si_code
-         byte[] siBuf = new byte[12];
-         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), sig);
-         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
-         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
-         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
+        // Push UContext (approx 400 bytes inc fpstate)
+        // Align to 16 bytes
+        esp = (esp - 512u) & ~0xFu;
+        // We always setup UContext and SigInfo because sys_rt_sigreturn expects them.
 
-         // Align stack for arguments
-         esp = (esp - 4u) & ~0xFu;
-         
-         // Push 3 args: sig, siginfo_ptr, ucontext_ptr
-         if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(ucontextAddr))) return;
-         if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
-         if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(sig))) return;
-         esp -= 12u;
-         
-         // Push Return Address
-         esp -= 4u;
-         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+        uint ucontextAddr = esp;
+
+        // Populate UContext
+        // uc_flags, uc_link, uc_stack, uc_mcontext, uc_sigmask
+        uint mcontextOffset = 4 + 4 + 12;
+
+        // Save registers to mcontext
+        WriteSigContext(esp + mcontextOffset);
+
+        // Push SigInfo (128 bytes)
+        esp = (esp - 128u) & ~0xFu;
+        uint siginfoAddr = esp;
+
+        // Populate SigInfo
+        // si_signo, si_errno, si_code
+        byte[] siBuf = new byte[12];
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), sig);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
+        if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
+
+        // Align stack for arguments
+        esp = (esp - 4u) & ~0xFu;
+
+        // Push 3 args: sig, siginfo_ptr, ucontext_ptr
+        if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(ucontextAddr))) return;
+        if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
+        if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(sig))) return;
+        esp -= 12u;
+
+        // Push Return Address
+        esp -= 4u;
+        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
     }
 
     public void RestoreSigContext(uint addr)
@@ -228,31 +226,31 @@ public class FiberTask
             byte[] buf = new byte[80];
             if (!CPU.CopyFromUser(addr, buf)) return;
             var s = new ReadOnlySpan<byte>(buf);
-            
+
             // Restore segments (optional, but good for threads/TLS)
             // GS, FS, ES, DS
             // CPU.SetSeg(Seg.GS, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(0)));
             // CPU.SetSeg(Seg.FS, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(4)));
             // ...
-            
+
             // General Registers
-            CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(16)));
-            CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(20)));
-            CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(24)));
-            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(28))); // This is "OS ESP" inside sigcontext? 
-            // Actually, sigcontext has "old esp" at offset 68 (UESP).
-            // But offset 28 is also ESP (from pusha?). 
-            // Linux sigreturn restores from UESP (offset 68) usually.
-            
-            CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(32)));
-            CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(36)));
-            CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(40)));
-            CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(44)));
-            
+            CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s[16..]));
+            CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s[20..]));
+            CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s[24..]));
+            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[28..])); // This is "OS ESP" inside sigcontext? 
+                                                                                         // Actually, sigcontext has "old esp" at offset 68 (UESP).
+                                                                                         // But offset 28 is also ESP (from pusha?). 
+                                                                                         // Linux sigreturn restores from UESP (offset 68) usually.
+
+            CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s[32..]));
+            CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s[36..]));
+            CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s[40..]));
+            CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s[44..]));
+
             // IP, Flags, SP
-            CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(56));
-            CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(64));
-            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(68))); // UESP
+            CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
+            CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
+            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
         }
         catch { }
     }
@@ -267,28 +265,28 @@ public class FiberTask
         {
             byte[] buf = new byte[80];
             var s = buf.AsSpan();
-            
+
             // Segments (dummy for now)
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(0), 0); // GS
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(4), 0); // FS
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(8), 0); // ES
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(12), 0x2B); // DS (user data)
-            
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(16), CPU.RegRead(Reg.EDI));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(20), CPU.RegRead(Reg.ESI));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(24), CPU.RegRead(Reg.EBP));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(28), CPU.RegRead(Reg.ESP));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(32), CPU.RegRead(Reg.EBX));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(36), CPU.RegRead(Reg.EDX));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(40), CPU.RegRead(Reg.ECX));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(44), CPU.RegRead(Reg.EAX));
-            
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(56), CPU.Eip);
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(60), 0x23); // CS (user code)
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(64), CPU.Eflags);
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(68), CPU.RegRead(Reg.ESP));
-            BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(72), 0x2B); // SS
-            
+            BinaryPrimitives.WriteUInt32LittleEndian(s[..], 0); // GS
+            BinaryPrimitives.WriteUInt32LittleEndian(s[4..], 0); // FS
+            BinaryPrimitives.WriteUInt32LittleEndian(s[8..], 0); // ES
+            BinaryPrimitives.WriteUInt32LittleEndian(s[12..], 0x2B); // DS (user data)
+
+            BinaryPrimitives.WriteUInt32LittleEndian(s[16..], CPU.RegRead(Reg.EDI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[20..], CPU.RegRead(Reg.ESI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[24..], CPU.RegRead(Reg.EBP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[28..], CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[32..], CPU.RegRead(Reg.EBX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[36..], CPU.RegRead(Reg.EDX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[40..], CPU.RegRead(Reg.ECX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[44..], CPU.RegRead(Reg.EAX));
+
+            BinaryPrimitives.WriteUInt32LittleEndian(s[56..], CPU.Eip);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[60..], 0x23); // CS (user code)
+            BinaryPrimitives.WriteUInt32LittleEndian(s[64..], CPU.Eflags);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
+
             if (!CPU.CopyToUser(addr, buf)) { }
         }
         catch { }
@@ -303,6 +301,18 @@ public class FiberTask
         CommonKernel.CurrentTask = this;
         try
         {
+            // 0. Check for Continuation (Kernel Mode Resume)
+            // This is used for Sleep/Yield awaitables and tests
+            if (Continuation != null)
+            {
+                var c = Continuation;
+                Continuation = null;
+                c();
+                // If the continuation suspended again (await), it will have re-scheduled itself
+                // or set a timer. We return to scheduler loop.
+                return;
+            }
+
             // 1. Run CPU execution
             CPU.Run(maxInsts: (ulong)instructionLimit);
 
@@ -320,7 +330,7 @@ public class FiberTask
                 {
                     // We are blocked on an async syscall
                     Status = FiberTaskStatus.Waiting;
-                    HandleAsyncSyscall(); 
+                    HandleAsyncSyscall();
                     // We return here. The Scheduler will NOT reschedule us immediately 
                     // because Status is Waiting. HandleAsyncSyscall ensures we are 
                     // rescheduled when done.
@@ -391,15 +401,17 @@ public class FiberTask
             var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
             var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
             // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
-            newProc = new Process(FiberTask.NextTID(), newMem, newSys, Process.UTS);
-            newProc.PPID = Process.TGID;
-            newProc.PGID = Process.PGID;
-            KernelScheduler.Instance.RegisterProcess(newProc);
+            newProc = new Process(FiberTask.NextTID(), newMem, newSys, Process.UTS)
+            {
+                PPID = Process.TGID,
+                PGID = Process.PGID
+            };
+            KernelScheduler.Current.RegisterProcess(newProc);
         }
 
         int newTid = cloneThread ? FiberTask.NextTID() : newProc.TGID;
-        var child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
-        
+        var child = new FiberTask(newTid, newProc, newCpu, KernelScheduler.Current);
+
         // Register engine with SyscallManager
         if (!cloneThread)
         {
@@ -423,7 +435,7 @@ public class FiberTask
         if (cloneSetTls && tlsPtr != 0)
         {
             byte[] tlsBuf = new byte[4];
-            if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf)) 
+            if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf))
                 throw new InvalidOperationException("Failed to read TLS base from child address space");
             uint baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
             child.CPU.SetSegBase(Seg.GS, baseAddr);
@@ -457,10 +469,10 @@ public class FiberTask
         // Or we just don't schedule Parent until Child signals?
         if (cloneVfork)
         {
-             // TODO: Implement VFORK blocking.
-             // Parent should yield and not be scheduled until child execs or exits.
-             // Implementation: Set parent status to Waiting, register callback on Child.
-             // But simpler for now: Just schedule child.
+            // TODO: Implement VFORK blocking.
+            // Parent should yield and not be scheduled until child execs or exits.
+            // Implementation: Set parent status to Waiting, register callback on Child.
+            // But simpler for now: Just schedule child.
         }
 
         CommonKernel.Schedule(child);
@@ -470,21 +482,21 @@ public class FiberTask
     private async void HandleAsyncSyscall()
     {
         if (PendingSyscall == null) return;
-        
+
         try
         {
             var task = PendingSyscall();
             PendingSyscall = null; // Clear immediately
-            
+
             // Allow the async operation to complete (suspend this method)
             int result = await task;
-            
+
             // Resume: write result to EAX
             CPU.RegWrite(Reg.EAX, (uint)result);
-            
+
             // If the result was EINTR, we might need to handle signal dispatching loop here?
             // Usually the sycall implementation handles the EINTR return value.
-            
+
             // Reschedule the task
             CommonKernel.Schedule(this);
         }

@@ -12,7 +12,7 @@ namespace Bifrost.Memory;
 public class VMAManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
-    private readonly List<VMA> _vmas = new();
+    private readonly List<VMA> _vmas = [];
 
     public VMA? FindVMA(uint addr)
     {
@@ -289,8 +289,8 @@ public class VMAManager
                 // Read directly into allocated page memory (no MemWrite call needed)
                 unsafe
                 {
-                    Span<byte> buf = new Span<byte>((void*)hostPtr, LinuxConstants.PageSize);
-                    int n = vma.File.Dentry.Inode!.Read(vma.File, buf.Slice(0, readLen), off);
+                    Span<byte> buf = new((void*)hostPtr, LinuxConstants.PageSize);
+                    int n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
                     Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
                 }
             }
@@ -305,7 +305,7 @@ public class VMAManager
         return true;
     }
 
-    public void SyncVMA(VMA vma, Engine engine)
+    public static void SyncVMA(VMA vma, Engine engine)
     {
         if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
             return;

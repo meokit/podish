@@ -4,7 +4,7 @@ namespace Bifrost.Core;
 
 public struct YieldAwaitable
 {
-    public YieldAwaiter GetAwaiter() => new YieldAwaiter();
+    public readonly YieldAwaiter GetAwaiter() => new();
 
     public readonly struct YieldAwaiter : ICriticalNotifyCompletion
     {
@@ -19,16 +19,12 @@ public struct YieldAwaitable
 
         public void UnsafeOnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Instance;
-            var task = scheduler.CurrentTask;
-            if (task == null)
-            {
-                throw new InvalidOperationException("YieldAwaitable: No active FiberTask.");
-            }
+            var scheduler = KernelScheduler.Current;
+            var task = scheduler.CurrentTask ?? throw new InvalidOperationException("YieldAwaitable: No active FiberTask.");
 
             // Update task state
             task.Continuation = continuation;
-            
+
             // Re-schedule immediately for next tick
             scheduler.Schedule(task);
         }

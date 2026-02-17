@@ -11,7 +11,7 @@ namespace Bifrost.VFS;
 public class PipeInode : Inode
 {
     private readonly object _lock = new();
-    private byte[] _buffer;
+    private readonly byte[] _buffer;
     private int _head; // Write position
     private int _tail; // Read position
     private int _count;
@@ -19,7 +19,7 @@ public class PipeInode : Inode
     private bool _readersClosed;
     private int _readerCount;
     private int _writerCount;
-    
+
     // Notification handles
     private readonly Bifrost.Core.WaitHandle _readHandle = new();
     private readonly Bifrost.Core.WaitHandle _writeHandle = new();
@@ -32,7 +32,7 @@ public class PipeInode : Inode
         Mode = 0x1000 | 0x1FF; // FIFO + 777
         _buffer = new byte[BufferSize];
         // Initially writable (empty)
-        _writeHandle.Set(); 
+        _writeHandle.Set();
     }
 
     public void AddReader()
@@ -102,10 +102,10 @@ public class PipeInode : Inode
                 // Read data
                 int available = Math.Min(buffer.Length, _count);
                 int firstChunk = Math.Min(available, BufferSize - _tail);
-                
+
                 if (firstChunk > 0)
                 {
-                    new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer.Slice(0, firstChunk));
+                    new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
                     _tail = (_tail + firstChunk) % BufferSize;
                 }
 
@@ -115,21 +115,21 @@ public class PipeInode : Inode
                     new ReadOnlySpan<byte>(_buffer, _tail, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
                     _tail = (_tail + secondChunk) % BufferSize;
                 }
-                
+
                 _count -= available;
-                
+
                 // Update handles
                 if (_count == 0) _readHandle.Reset();
                 _writeHandle.Set(); // Space available
 
                 return available;
             }
-            
+
             if (_writersClosed)
             {
                 return 0; // EOF
             }
-            
+
             return -(int)Errno.EAGAIN;
         }
     }
@@ -141,7 +141,7 @@ public class PipeInode : Inode
             if (_readersClosed)
             {
                 // Broken pipe
-                 // Send SIGPIPE to current task?
+                // Send SIGPIPE to current task?
                 return -(int)Errno.EPIPE;
             }
 
@@ -153,7 +153,7 @@ public class PipeInode : Inode
 
                 if (firstChunk > 0)
                 {
-                    buffer.Slice(0, firstChunk).CopyTo(new Span<byte>(_buffer, _head, firstChunk));
+                    buffer[..firstChunk].CopyTo(new Span<byte>(_buffer, _head, firstChunk));
                     _head = (_head + firstChunk) % BufferSize;
                 }
 
@@ -165,7 +165,7 @@ public class PipeInode : Inode
                 }
 
                 _count += toWrite;
-                
+
                 // Update handles
                 if (_count == BufferSize) _writeHandle.Reset();
                 _readHandle.Set(); // Data available
@@ -186,7 +186,7 @@ public class PipeInode : Inode
 
     public override async ValueTask WaitForWrite(File file)
     {
-         await _writeHandle;
+        await _writeHandle;
     }
 
     public override void Release(File file)

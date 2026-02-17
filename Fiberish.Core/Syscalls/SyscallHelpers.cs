@@ -78,7 +78,7 @@ public unsafe partial class SyscallManager
                 current = current.MountRoot;
             }
 
-            Dentry? nextDentry = null;
+            Dentry? nextDentry;
             if (current.Children.TryGetValue(part, out var cached))
             {
                 nextDentry = cached;

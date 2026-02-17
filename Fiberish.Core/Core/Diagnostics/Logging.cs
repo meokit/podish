@@ -25,12 +25,12 @@ public static class Logging
     /// <summary>
     /// Creates a logger for a Task with PID and TID scope embedded in the category name.
     /// </summary>
-    public static ILogger CreateTaskLogger(int pid, int tid) => 
+    public static ILogger CreateTaskLogger(int pid, int tid) =>
         LoggerFactory.CreateLogger($"Task[{pid}:{tid}]");
-    
+
     /// <summary>
     /// Creates a logger for a Task with PID and TID scope embedded in the category name.
     /// </summary>
-    public static ILogger CreateTaskLogger<T>(int pid, int tid) => 
+    public static ILogger CreateTaskLogger<T>(int pid, int tid) =>
         LoggerFactory.CreateLogger($"{typeof(T).Name}[{pid}:{tid}]");
 }

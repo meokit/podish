@@ -13,10 +13,10 @@ public abstract class LinuxFile : IDisposable
     public abstract void Dispose();
 }
 
-public class LinuxFileStream : LinuxFile
+public class LinuxFileStream(FileStream fs) : LinuxFile
 {
-    private readonly FileStream _fs;
-    public LinuxFileStream(FileStream fs) => _fs = fs;
+    private readonly FileStream _fs = fs;
+
     public FileStream Stream => _fs;
     public override string Name => _fs.Name;
     public override long Position { get => _fs.Position; set => _fs.Position = value; }
@@ -30,22 +30,22 @@ public class LinuxFileStream : LinuxFile
     public override void Dispose() => _fs.Dispose();
 }
 
-public class LinuxDirectory : LinuxFile
+public class LinuxDirectory(string path) : LinuxFile
 {
-    public override string Name { get; }
+    public override string Name { get; } = path;
     public override long Position { get; set; } = 0;
-    public LinuxDirectory(string path) => Name = path;
+
     public override int Read(Span<byte> buffer) => 0;
     public override int Write(ReadOnlySpan<byte> buffer) => 0;
     public override void Flush() { }
     public override void Dispose() { }
 }
 
-public class LinuxStandardStream : LinuxFile
+public class LinuxStandardStream(Stream s, string name) : LinuxFile
 {
-    private readonly Stream _s;
-    private readonly string _name;
-    public LinuxStandardStream(Stream s, string name) { _s = s; _name = name; }
+    private readonly Stream _s = s;
+    private readonly string _name = name;
+
     public override string Name => _name;
     public override long Position { get => 0; set { } }
     public override int Read(Span<byte> buffer) => _s.Read(buffer);

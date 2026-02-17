@@ -27,7 +27,7 @@ public class TmpfsSuperBlock : SuperBlock
     private ulong _nextIno = 1;
 
     // The "Hash Table" requested by user: (ParentDentryID, Name) -> ChildDentry
-    public Dictionary<DCacheKey, Dentry> Dentries { get; } = new();
+    public Dictionary<DCacheKey, Dentry> Dentries { get; } = [];
 
     public TmpfsSuperBlock(FileSystemType type)
     {
@@ -56,8 +56,8 @@ public class TmpfsSuperBlock : SuperBlock
 
 public class TmpfsInode : Inode
 {
-    private byte[]? _data = Array.Empty<byte>();
-    private HashSet<string> _childNames = new();
+    private byte[]? _data = [];
+    private readonly HashSet<string> _childNames = [];
 
     public TmpfsInode(ulong ino, SuperBlock sb)
     {

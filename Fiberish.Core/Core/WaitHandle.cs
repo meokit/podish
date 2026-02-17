@@ -8,7 +8,7 @@ namespace Bifrost.Core;
 /// </summary>
 public class WaitHandle
 {
-    private readonly List<Action> _continuations = new();
+    private readonly List<Action> _continuations = [];
     public bool IsSet { get; private set; }
 
     public void Set()
@@ -39,14 +39,14 @@ public class WaitHandle
             _continuations.Add(continuation);
         }
     }
-    
+
     public WaitHandleAwaiter GetAwaiter() => new(this);
 }
 
-public struct WaitHandleAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+public readonly struct WaitHandleAwaiter(WaitHandle handle) : System.Runtime.CompilerServices.INotifyCompletion
 {
-    private readonly WaitHandle _handle;
-    public WaitHandleAwaiter(WaitHandle handle) => _handle = handle;
+    private readonly WaitHandle _handle = handle;
+
     public bool IsCompleted => _handle.IsSet;
     public void OnCompleted(Action continuation) => _handle.Register(continuation);
     public void GetResult() { }

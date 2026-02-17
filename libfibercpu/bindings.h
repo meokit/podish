@@ -100,8 +100,8 @@ void X86_SetTscOffset(EmuState* state, uint64_t offset);
 
 // Logging
 // Matches Microsoft.Extensions.Logging.LogLevel
-typedef void (*X86LogCallback)(int level, const char* message);
-void X86_SetLogCallback(X86LogCallback callback);
+typedef void (*X86LogCallback)(int level, const char* message, void* userdata);
+void X86_SetLogCallback(EmuState* state, X86LogCallback callback, void* userdata);
 
 // TLB Statistics
 typedef struct {

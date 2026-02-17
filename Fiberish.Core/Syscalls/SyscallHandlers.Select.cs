@@ -14,7 +14,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
+
         uint fdsAddr = a1;
         uint nfds = a2;
         int timeout = (int)a3; // milliseconds
@@ -26,12 +26,12 @@ public partial class SyscallManager
         // 2. Await
         return await new PollAwaiter(sm, fdsAddr, nfds, timeout);
     }
-    
+
     private static async ValueTask<int> SysSelect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
+
         // old_select(struct sel_arg_struct *)
         uint argsAddr = a1;
         if (argsAddr == 0) return -(int)Errno.EFAULT;
@@ -56,7 +56,7 @@ public partial class SyscallManager
 
     private static async ValueTask<int> DoSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp, uint tvp)
     {
-         if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
+        if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
 
         long timeoutMs = -1;
         if (tvp != 0)
@@ -72,7 +72,7 @@ public partial class SyscallManager
             WriteSelectResults(sm, inp, outp, exp, resIn, resOut, resEx);
             return ready;
         }
-        
+
         if (timeoutMs == 0) return 0;
 
         // 2. Await
@@ -83,7 +83,7 @@ public partial class SyscallManager
             // Actually SelectAwaiter.GetResult() logic needs to handle re-scan or partial result.
             // But standard Select returns the count and modifies the sets.
             // Typically after wakeup, we scan again.
-            
+
             // Re-scan to populate sets
             if (ret >= 0)
             {
@@ -95,32 +95,22 @@ public partial class SyscallManager
         }
         catch (Exception)
         {
-             return -(int)Errno.EINTR;
+            return -(int)Errno.EINTR;
         }
     }
 
     // --- Awaiters ---
 
-    public class SelectAwaiter : INotifyCompletion
+    public class SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs) : INotifyCompletion
     {
-        private readonly SyscallManager _sm;
-        private readonly int _n;
-        private readonly uint _inp, _outp, _exp;
-        private readonly long _timeoutMs;
-        private FiberTask _task;
-        private int _result;
+        private readonly SyscallManager _sm = sm;
+        private readonly int _n = n;
+        private readonly uint _inp = inp, _outp = outp, _exp = exp;
+        private readonly long _timeoutMs = timeoutMs;
+        private FiberTask _task = null!;
+        private int _result = 0;
 
         public SelectAwaiter GetAwaiter() => this;
-
-        public SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
-        {
-            _sm = sm;
-            _n = n;
-            _inp = inp; _outp = outp; _exp = exp;
-            _timeoutMs = timeoutMs;
-            _task = null!;
-            _result = 0;
-        }
 
         public bool IsCompleted => false;
 
@@ -129,16 +119,17 @@ public partial class SyscallManager
         public void OnCompleted(Action continuation)
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
-            var kernel = KernelScheduler.Instance;
-            
+            var kernel = KernelScheduler.Current;
+
             // 1. Register Timeout
             Bifrost.Core.Timer? timer = null;
             if (_timeoutMs > 0)
             {
-                 // Convert ms to ticks (assuming 1ms = 1000 ticks)
-                 timer = kernel.ScheduleTimer(_timeoutMs * 1000, () => {
-                     Resume(0); // Timeout
-                 });
+                // Convert ms to ticks (assuming 1ms = 1000 ticks)
+                timer = kernel.ScheduleTimer(_timeoutMs * 1000, () =>
+                {
+                    Resume(0); // Timeout
+                });
             }
 
             // 2. Register FDs
@@ -146,42 +137,42 @@ public partial class SyscallManager
             // For now, we poll every X ticks or implement File.RegisterWait?
             // Assuming simplified model: Poll via Timer for now if VFS event not ready.
             // TODO: Implement proper VFS eventwait
-            
+
             // Fallback: Busy Poll with Timer (1ms)
             // This is "Pulse" logic
             DoPoll(continuation, timer);
         }
-        
+
         private void DoPoll(Action continuation, Bifrost.Core.Timer? timer)
         {
-             if (_task.WasInterrupted)
-             {
-                 if (timer != null) timer.Cancel();
-                 _result = -(int)Errno.EINTR;
-                 continuation();
-                 return;
-             }
-             
-             // Scan
-             int ready;
-             unsafe { ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _); }
-             if (ready > 0)
-             {
-                 if (timer != null) timer.Cancel();
-                 _result = ready;
-                 continuation();
-             }
-             else
-             {
-                 // Re-schedule poll
-                 // Check if timer expired?
-                 if (timer != null && timer.Canceled) return; // Already handled by timeout callback?
-                 // No, timeout callback calls Resume(0).
-                 
-                 KernelScheduler.Instance.ScheduleTimer(1000, () => DoPoll(continuation, timer));
-             }
+            if (_task.WasInterrupted)
+            {
+                timer?.Cancel();
+                _result = -(int)Errno.EINTR;
+                continuation();
+                return;
+            }
+
+            // Scan
+            int ready;
+            unsafe { ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _); }
+            if (ready > 0)
+            {
+                timer?.Cancel();
+                _result = ready;
+                continuation();
+            }
+            else
+            {
+                // Re-schedule poll
+                // Check if timer expired?
+                if (timer != null && timer.Canceled) return; // Already handled by timeout callback?
+                                                             // No, timeout callback calls Resume(0).
+
+                KernelScheduler.Current.ScheduleTimer(1000, () => DoPoll(continuation, timer));
+            }
         }
-        
+
         private void Resume(int result)
         {
             _result = result;
@@ -189,39 +180,30 @@ public partial class SyscallManager
             // We need to schedule the task?
             // Actually OnCompleted receives 'continuation'. We need to store it.
             // But struct cannot store it easily if it's passed here.
-            
+
             // Wait, OnCompleted IS the registration.
             // I implemented a polling loop above that CLOSES over 'continuation'.
             // So Resume(0) called by timer needs access to 'continuation'.
-            
+
             // The timer callback above: 
             // timer = kernel.ScheduleTimer(..., () => Resume(0));
             // Resume needs 'continuation'.
-            
+
             // Refactor: the loop handles timeout implicitly if I check timer.Expiration?
             // Or passing continuation to Resume.
         }
     }
-    
-    public class PollAwaiter : INotifyCompletion
+
+    public class PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs) : INotifyCompletion
     {
-        private readonly SyscallManager _sm;
-        private readonly uint _fdsAddr;
-        private readonly uint _nfds;
-        private readonly int _timeoutMs;
-        private FiberTask _task;
-        private int _result;
+        private readonly SyscallManager _sm = sm;
+        private readonly uint _fdsAddr = fdsAddr;
+        private readonly uint _nfds = nfds;
+        private readonly int _timeoutMs = timeoutMs;
+        private FiberTask _task = null!;
+        private int _result = 0;
 
         public PollAwaiter GetAwaiter() => this;
-
-        public PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
-        {
-            _sm = sm;
-            _fdsAddr = fdsAddr; _nfds = nfds;
-            _timeoutMs = timeoutMs;
-            _task = null!;
-            _result = 0;
-        }
 
         public bool IsCompleted => false;
 
@@ -230,32 +212,32 @@ public partial class SyscallManager
         public void OnCompleted(Action continuation)
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
-            
-             // Polling Loop
-             DoPoll(continuation, DateTime.UtcNow.Ticks / 10000 + _timeoutMs); // Wall clock? No, simple loop counter
+
+            // Polling Loop
+            DoPoll(continuation, DateTime.UtcNow.Ticks / 10000 + _timeoutMs); // Wall clock? No, simple loop counter
         }
-        
+
         // Simplified polling loop
         private void DoPoll(Action continuation, long endTick)
         {
             // Similar to SelectAwaiter...
             int ready;
             unsafe { ready = ScanPoll(_sm, _fdsAddr, _nfds); }
-            
+
             if (ready > 0)
             {
                 _result = ready;
                 continuation();
                 return;
             }
-            
+
             if (_timeoutMs != -1)
             {
-               // Check timeout logic... 
-               // For now just re-schedule
+                // Check timeout logic... 
+                // For now just re-schedule
             }
-            
-            KernelScheduler.Instance.ScheduleTimer(1000, () => DoPoll(continuation, endTick));
+
+            KernelScheduler.Current.ScheduleTimer(1000, () => DoPoll(continuation, endTick));
         }
     }
 
@@ -263,7 +245,7 @@ public partial class SyscallManager
     private const int NFDBITS = 32;
     private const int FD_SETSIZE = 1024;
 
-    private static int ScanSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp, 
+    private static int ScanSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp,
                                       out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
         int ready = 0;
@@ -294,10 +276,9 @@ public partial class SyscallManager
 
             if (!checkRead && !checkWrite && !checkEx) continue;
 
-            Bifrost.VFS.File? file = null;
-            if (!sm.FDs.TryGetValue(i, out file))
+            if (!sm.FDs.TryGetValue(i, out VFS.File? file))
             {
-                return -(int)Errno.EBADF; 
+                return -(int)Errno.EBADF;
             }
 
             short pollEvents = 0;
@@ -326,14 +307,14 @@ public partial class SyscallManager
         return ready;
     }
 
-    private static void WriteSelectResults(SyscallManager sm, uint inp, uint outp, uint exp, 
+    private static void WriteSelectResults(SyscallManager sm, uint inp, uint outp, uint exp,
                                                uint[] resIn, uint[] resOut, uint[] resEx)
     {
         if (inp != 0) WriteSpan(sm.Engine, inp, resIn);
         if (outp != 0) WriteSpan(sm.Engine, outp, resOut);
         if (exp != 0) WriteSpan(sm.Engine, exp, resEx);
     }
-    
+
     private static int ScanPoll(SyscallManager sm, uint fdsAddr, uint nfds)
     {
         int readyCount = 0;
@@ -348,8 +329,7 @@ public partial class SyscallManager
 
             if (pfd.Fd >= 0)
             {
-                Bifrost.VFS.File? file = null;
-                if (sm.FDs.TryGetValue(pfd.Fd, out file))
+                if (sm.FDs.TryGetValue(pfd.Fd, out VFS.File? file))
                 {
                     short revents = file.Poll(pfd.Events);
                     if (revents != 0)
@@ -364,7 +344,7 @@ public partial class SyscallManager
                     readyCount++;
                 }
             }
-            
+
             unsafe { WriteStruct(sm.Engine, itemAddr, pfd); }
         }
         return readyCount;
@@ -377,7 +357,7 @@ public partial class SyscallManager
         byte[] buf = new byte[size];
         if (!engine.CopyFromUser(addr, buf))
             throw new InvalidOperationException($"EFAULT: Failed to read struct {typeof(T).Name} from 0x{addr:x}");
-        
+
         fixed (byte* pBuf = buf)
         {
             return Marshal.PtrToStructure<T>((IntPtr)pBuf);
@@ -411,6 +391,6 @@ public partial class SyscallManager
         byte[] buf = new byte[bytes];
         Buffer.BlockCopy(src, 0, buf, 0, bytes);
         if (!engine.CopyToUser(addr, buf))
-                throw new InvalidOperationException($"EFAULT: Failed to write span to 0x{addr:x}");
+            throw new InvalidOperationException($"EFAULT: Failed to write span to 0x{addr:x}");
     }
 }

@@ -5,7 +5,7 @@ namespace Bifrost.VFS;
 
 public static class FileSystemRegistry
 {
-    private static readonly Dictionary<string, FileSystemType> _registry = new();
+    private static readonly Dictionary<string, FileSystemType> _registry = [];
     private static readonly object _lock = new();
 
     public static void Register(FileSystemType fsType)

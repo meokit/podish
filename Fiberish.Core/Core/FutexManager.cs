@@ -10,7 +10,7 @@ public class Waiter
 public class FutexManager
 {
     private readonly object _lock = new();
-    private readonly Dictionary<uint, List<Waiter>> _queues = new();
+    private readonly Dictionary<uint, List<Waiter>> _queues = [];
 
     public Waiter PrepareWait(uint addr)
     {
@@ -18,7 +18,7 @@ public class FutexManager
         {
             if (!_queues.TryGetValue(addr, out var list))
             {
-                list = new List<Waiter>();
+                list = [];
                 _queues[addr] = list;
             }
             var w = new Waiter();

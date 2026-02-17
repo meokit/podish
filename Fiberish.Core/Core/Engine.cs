@@ -13,9 +13,10 @@ public class Engine : IDisposable
     // Callbacks
     public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
+    public Action<Engine, int, string>? LogHandler { get; set; }
     // New resolver for synchronous fault handling during safe access
     public Func<uint, bool, bool>? PageFaultResolver { get; set; }
-    
+
     // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
     public object? Owner { get; set; }
 
@@ -32,6 +33,19 @@ public class Engine : IDisposable
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
+    }
+
+    protected Engine(bool mock)
+    {
+        if (mock)
+        {
+            State = IntPtr.Zero;
+        }
+        else
+        {
+            throw new ArgumentException("Use parameterless constructor for real engine", nameof(mock));
+        }
     }
 
     internal unsafe Engine(IntPtr state)
@@ -41,6 +55,29 @@ public class Engine : IDisposable
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnNativeLog(int level, IntPtr msgPtr, IntPtr userdata)
+    {
+        try
+        {
+            if (userdata == IntPtr.Zero) return;
+            var handle = GCHandle.FromIntPtr(userdata);
+            if (handle.Target is Engine engine && engine.LogHandler != null)
+            {
+                string? msg = Marshal.PtrToStringUTF8(msgPtr);
+                if (msg != null)
+                {
+                    engine.LogHandler(engine, level, msg);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Engine] Exception in OnNativeLog: {ex}");
+        }
     }
 
     [UnmanagedCallersOnly]
@@ -92,6 +129,7 @@ public class Engine : IDisposable
             FaultHandler = FaultHandler,
             InterruptHandler = InterruptHandler,
             PageFaultResolver = PageFaultResolver,
+            LogHandler = LogHandler, // Copy the handler delegate
         };
         return newEngine;
     }
@@ -148,7 +186,7 @@ public class Engine : IDisposable
     {
         return (IntPtr)X86Native.ResolvePtr(State, vaddr, isWrite ? 1 : 0);
     }
-    
+
     public IntPtr GetPhysicalAddress(uint vaddr)
     {
         return GetPhysicalAddressSafe(vaddr, false);
@@ -158,14 +196,14 @@ public class Engine : IDisposable
     {
         int len = data.Length;
         int written = 0;
-        
+
         fixed (byte* pData = data)
         {
             while (written < len)
             {
                 uint currAddr = vaddr + (uint)written;
                 void* ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
-                if (ptr == null) 
+                if (ptr == null)
                 {
                     if (PageFaultResolver != null && PageFaultResolver(currAddr, true))
                     {
@@ -195,7 +233,7 @@ public class Engine : IDisposable
             {
                 uint currAddr = vaddr + (uint)read;
                 void* ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
-                if (ptr == null) 
+                if (ptr == null)
                 {
                     if (PageFaultResolver != null && PageFaultResolver(currAddr, false))
                     {
@@ -216,15 +254,15 @@ public class Engine : IDisposable
 
     public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
     {
-        if (addr == 0) return ""; 
+        if (addr == 0) return "";
 
         var sb = new StringBuilder();
         uint current = addr;
-        
+
         while (sb.Length < limit)
         {
             void* ptr = X86Native.ResolvePtr(State, current, 0); // Read
-            if (ptr == null) 
+            if (ptr == null)
             {
                 if (PageFaultResolver != null && PageFaultResolver(current, false))
                 {
@@ -238,7 +276,7 @@ public class Engine : IDisposable
             uint pageOffset = current & 0xFFF;
             byte* p = (byte*)ptr;  // Already includes offset
             int remainingInPage = 4096 - (int)pageOffset;
-            
+
             for (int i = 0; i < remainingInPage; i++)
             {
                 byte b = p[i];
@@ -246,23 +284,23 @@ public class Engine : IDisposable
                 sb.Append((char)b);
                 if (sb.Length >= limit) break;
             }
-            
+
             current += (uint)remainingInPage;
         }
-        
+
         return sb.ToString();
     }
 
-    public uint RegRead(Reg reg) => X86Native.RegRead(State, (int)reg);
-    public void RegWrite(Reg reg, uint val) => X86Native.RegWrite(State, (int)reg, val);
+    public virtual uint RegRead(Reg reg) => X86Native.RegRead(State, (int)reg);
+    public virtual void RegWrite(Reg reg, uint val) => X86Native.RegWrite(State, (int)reg, val);
 
-    public uint Eip
+    public virtual uint Eip
     {
         get => X86Native.GetEIP(State);
         set => X86Native.SetEIP(State, value);
     }
 
-    public uint Eflags
+    public virtual uint Eflags
     {
         get => X86Native.GetEFLAGS(State);
         set => X86Native.SetEFLAGS(State, value);
@@ -271,16 +309,16 @@ public class Engine : IDisposable
     public void SetSegBase(Seg seg, uint baseAddr) => X86Native.SegBaseWrite(State, (int)seg, baseAddr);
     public uint GetSegBase(Seg seg) => X86Native.SegBaseRead(State, (int)seg);
 
-    public void Run(uint endEip = 0, ulong maxInsts = 0) => X86Native.Run(State, endEip, maxInsts);
-    public void Stop() => X86Native.EmuStop(State);
-    public void SetStatusFault() => X86Native.EmuFault(State);
-    public void Yield() => X86Native.EmuYield(State);
-    public int Step() => X86Native.Step(State);
-    public EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
+    public virtual void Run(uint endEip = 0, ulong maxInsts = 0) => X86Native.Run(State, endEip, maxInsts);
+    public virtual void Stop() => X86Native.EmuStop(State);
+    public virtual void SetStatusFault() => X86Native.EmuFault(State);
+    public virtual void Yield() => X86Native.EmuYield(State);
+    public virtual int Step() => X86Native.Step(State);
+    public virtual EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
 
-    public int FaultVector => X86Native.GetFaultVector(State);
+    public virtual int FaultVector => X86Native.GetFaultVector(State);
 
-    public bool IsDirty(uint addr) => X86Native.IsDirty(State, addr) != 0;
+    public virtual bool IsDirty(uint addr) => X86Native.IsDirty(State, addr) != 0;
 
     public void InvalidateRange(uint addr, uint size) => X86Native.InvalidateRange(State, addr, size);
     public void FlushCache() => X86Native.FlushCache(State);

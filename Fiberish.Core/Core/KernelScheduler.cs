@@ -7,77 +7,92 @@ namespace Bifrost.Core;
 public class KernelScheduler
 {
     private static readonly ILogger Logger = Logging.CreateLogger<KernelScheduler>();
-    
+
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly TimerSystem _timerSystem = new();
-    
+
     public long CurrentTick => _timerSystem.CurrentTick;
     public bool Running { get; set; } = true;
-    
+
     // Process Management
-    private readonly Dictionary<int, Process> _processes = new();
-    private readonly Dictionary<int, FiberTask> _tasks = new();
-    
+    private readonly Dictionary<int, Process> _processes = [];
+    private readonly Dictionary<int, FiberTask> _tasks = [];
+
     public FiberTask? CurrentTask { get; internal set; }
 
     public void RegisterProcess(Process p)
     {
-        _processes[p.TGID] = p;
+        lock (_processes) _processes[p.TGID] = p;
     }
 
     public void RegisterTask(FiberTask t)
     {
-        _tasks[t.TID] = t;
+        lock (_tasks) _tasks[t.TID] = t;
+        Schedule(t);
     }
-    
+
     public Process? GetProcess(int pid)
     {
-        return _processes.TryGetValue(pid, out var p) ? p : null;
+        lock (_processes) return _processes.TryGetValue(pid, out var p) ? p : null;
     }
 
     public FiberTask? GetTask(int tid)
     {
-        return _tasks.TryGetValue(tid, out var t) ? t : null;
+        lock (_tasks) return _tasks.TryGetValue(tid, out var t) ? t : null;
     }
 
     // Global instance (or dependency injected)
-    public static KernelScheduler Instance { get; private set; } = new();
+    // public static KernelScheduler Instance { get; set; } = new();
+    
+    private static readonly System.Threading.AsyncLocal<KernelScheduler> _current = new();
+    public static KernelScheduler Current
+    {
+        get => _current.Value;
+        set => _current.Value = value;
+    }
 
     public KernelScheduler()
     {
-        Instance = this;
     }
 
     public void Schedule(FiberTask task)
     {
         if (task.Status == FiberTaskStatus.Terminated) return;
-        
+
         task.Status = FiberTaskStatus.Ready;
-        _runQueue.Enqueue(task);
+        lock (_runQueue) { _runQueue.Enqueue(task); }
     }
 
     public Timer ScheduleTimer(long delayTicks, Action callback)
     {
         return _timerSystem.Schedule(delayTicks, callback);
     }
-    
-    public TimerAwaiter Sleep(long ticks) => new TimerAwaiter(ticks);
 
-    public struct TimerAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    public static TimerAwaiter Sleep(long ticks) => new(ticks);
+
+    public readonly struct TimerAwaiter(long ticks) : System.Runtime.CompilerServices.INotifyCompletion
     {
-        private readonly long _ticks;
-        public TimerAwaiter(long ticks) => _ticks = ticks;
+        private readonly long _ticks = ticks;
+
         public bool IsCompleted => _ticks <= 0;
-        public void OnCompleted(Action continuation) => KernelScheduler.Instance.ScheduleTimer(_ticks, continuation);
+        public void OnCompleted(Action continuation) => KernelScheduler.Current.ScheduleTimer(_ticks, continuation);
         public void GetResult() { }
     }
 
-    public void Run()
+    public void Run(long maxTicks = -1)
     {
+        Current = this;
         Logger.LogInformation("KernelScheduler started.");
         
-        while (Running)
+        try
         {
+            while (Running)
+            {
+                if (maxTicks > 0 && CurrentTick >= maxTicks)
+                {
+                    Logger.LogWarning("KernelScheduler reached max ticks limit. Stopping.");
+                    break;
+                }
             // 1. Process Timers
             // If the queue is empty, we MUST advance time to the next timer event
             // to avoid busy loop deadlocks if all tasks are waiting on timers.
@@ -91,12 +106,34 @@ public class KernelScheduler
                     {
                         _timerSystem.Advance(jump);
                     }
+                    else
+                    {
+                        _timerSystem.Advance(0);
+                    }
                 }
                 else
                 {
                     // No tasks and no timers? We are done or deadlocked.
                     if (Running)
                     {
+                        // Check if we have active tasks stuck
+                        int activeCount = 0;
+                        lock (_tasks)
+                        {
+                            foreach (var t in _tasks.Values)
+                            {
+                                if (t.Status != FiberTaskStatus.Terminated && t.Status != FiberTaskStatus.Zombie)
+                                {
+                                    activeCount++;
+                                }
+                            }
+                        }
+
+                        if (activeCount > 0)
+                        {
+                            Panic($"Deadlock detected? RunQueue empty, No Timers, but {activeCount} tasks are still active (Waiting?).");
+                        }
+
                         Logger.LogInformation("No ready tasks and no pending timers. Exiting loop.");
                         Running = false;
                         break;
@@ -108,21 +145,58 @@ public class KernelScheduler
                 // Normal execution: Advance time by small slice?
                 // For determinism, maybe we advance time by X ticks per instruction executed?
                 // For now, let's just process timers at current tick.
-                _timerSystem.Advance(0); 
+                _timerSystem.Advance(0);
             }
 
             // 2. Run Task
-            if (_runQueue.TryDequeue(out var task))
+            if (TryDequeue(out var task))
             {
                 task.Status = FiberTaskStatus.Running;
-                
+
                 // Execute a slice
                 // We advance time based on how much work the task did
-                task.RunSlice(1000); 
-                
+                task.RunSlice(1000);
+
                 // Time accounting (simplified)
-                _timerSystem.Advance(10); 
+                _timerSystem.Advance(1);
             }
         }
+        }
+        finally
+        {
+            Current = null;
+        }
+    }
+
+    public void Panic(string reason)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"KERNEL PANIC: {reason}");
+        sb.AppendLine($"CurrentTick: {CurrentTick}");
+        sb.AppendLine($"RunQueue: {_runQueue.Count}");
+        
+        lock (_tasks)
+        {
+            sb.AppendLine("Tasks:");
+            foreach (var t in _tasks.Values)
+            {
+                sb.AppendLine($"  TID={t.TID} PID={t.PID} Status={t.Status} Exited={t.Exited} ExitStatus={t.ExitStatus}");
+            }
+        }
+        
+        var msg = sb.ToString();
+        Logger.LogCritical(msg);
+        Console.Error.WriteLine(msg); // Ensure we see it in test output
+        throw new KernelPanicException(msg);
+    }
+
+    public class KernelPanicException : Exception
+    {
+        public KernelPanicException(string message) : base(message) { }
+    }
+
+    private bool TryDequeue(out FiberTask task)
+    {
+        lock (_runQueue) return _runQueue.TryDequeue(out task);
     }
 }

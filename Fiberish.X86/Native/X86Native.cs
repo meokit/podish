@@ -163,7 +163,7 @@ public unsafe partial class X86Native
     public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetLogCallback")]
-    public static partial void SetLogCallback(delegate* unmanaged<int, IntPtr, void> callback);
+    public static partial void SetLogCallback(IntPtr state, delegate* unmanaged<int, IntPtr, IntPtr, void> callback, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_DumpStats")]
     public static partial int DumpStats(IntPtr state, byte* buffer, nuint bufferSize);

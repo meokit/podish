@@ -116,12 +116,12 @@ class Program
         // 2. Spawn Process
         try
         {
-            var mainTask = FiberProcess.Spawn(exe, fullArgs, envs, rootfs, traceInstruction, trace);
+            var mainTask = Process.Spawn(exe, fullArgs, envs, rootfs, traceInstruction, trace);
             
             Logger.LogInformation("Spawned Main Task {TID}", mainTask.TID);
 
             // 3. Run Scheduler
-            await scheduler.Run();
+            scheduler.Run();
 
             return mainTask.ExitStatus;
         }
@@ -136,8 +136,6 @@ class Program
             return 1;
         }
     }
-
-
 
     private static unsafe void RegisterNativeLogger()
     {

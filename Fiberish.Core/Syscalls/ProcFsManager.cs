@@ -12,7 +12,7 @@ public static class ProcFsManager
         {
             var procDentry = sm.Root.Inode!.Lookup("proc");
             if (procDentry == null) return;
-            
+
             // Should be a mount point
             if (procDentry.IsMounted && procDentry.MountRoot != null)
                 procDentry = procDentry.MountRoot;
@@ -22,7 +22,7 @@ public static class ProcFsManager
             string pidStr = pid.ToString();
             var pidDentry = new Dentry(pidStr, null, procDentry, procDentry.SuperBlock);
             procDentry.Inode.Mkdir(pidDentry, 0x1ED, 0, 0); // 555
-            
+
             // Create status file
             CreateProcFile(pidDentry, "status", () => GenerateStatus(pid));
             CreateProcFile(pidDentry, "cmdline", () => GenerateCmdline(pid));
@@ -37,7 +37,7 @@ public static class ProcFsManager
         {
             var procDentry = sm.Root.Inode!.Lookup("proc");
             if (procDentry == null) return;
-            
+
             if (procDentry.IsMounted && procDentry.MountRoot != null)
                 procDentry = procDentry.MountRoot;
 
@@ -49,14 +49,14 @@ public static class ProcFsManager
             var pidDentry = procDentry.Inode.Lookup(pidStr);
             if (pidDentry != null && pidDentry.Inode != null)
             {
-                 // Unlink children manually as Tmpfs doesn't support recursive delete
-                 // Or we extend Tmpfs. For now, manual.
-                 foreach(var child in pidDentry.Inode.GetEntries())
-                 {
-                     if (child.Name == "." || child.Name == "..") continue;
-                     pidDentry.Inode.Unlink(child.Name);
-                 }
-                 procDentry.Inode.Rmdir(pidStr);
+                // Unlink children manually as Tmpfs doesn't support recursive delete
+                // Or we extend Tmpfs. For now, manual.
+                foreach (var child in pidDentry.Inode.GetEntries())
+                {
+                    if (child.Name == "." || child.Name == "..") continue;
+                    pidDentry.Inode.Unlink(child.Name);
+                }
+                procDentry.Inode.Rmdir(pidStr);
             }
         }
         catch { }
@@ -66,14 +66,14 @@ public static class ProcFsManager
     {
         var dentry = new Dentry(name, null, parent, parent.SuperBlock);
         parent.Inode!.Create(dentry, 0x124, 0, 0); // 444
-        // Write content?
-        // Since Tmpfs is static, we write it once at start.
-        // For dynamic content, we'd need a specialized ProcInode.
-        // For busybox simple ps, static snapshot at fork might be enough?
-        // "ps" shows running processes. If status changes, it won't reflect.
-        // But pid/ppid/name are mostly static.
-        // Let's write initial content.
-        
+                                                   // Write content?
+                                                   // Since Tmpfs is static, we write it once at start.
+                                                   // For dynamic content, we'd need a specialized ProcInode.
+                                                   // For busybox simple ps, static snapshot at fork might be enough?
+                                                   // "ps" shows running processes. If status changes, it won't reflect.
+                                                   // But pid/ppid/name are mostly static.
+                                                   // Let's write initial content.
+
         string content = contentGen();
         var bytes = System.Text.Encoding.UTF8.GetBytes(content);
         var f = new Bifrost.VFS.File(dentry, FileFlags.O_WRONLY);
@@ -97,7 +97,7 @@ public static class ProcFsManager
     {
         return $"process_{pid}\0";
     }
-    
+
     private static string GenerateStat(int pid)
     {
         // Minimal stat for ps
@@ -109,7 +109,7 @@ public static class ProcFsManager
     {
         var procDentry = sm.Root.Inode!.Lookup("proc");
         if (procDentry == null) return;
-        
+
         if (procDentry.IsMounted && procDentry.MountRoot != null)
             procDentry = procDentry.MountRoot;
 

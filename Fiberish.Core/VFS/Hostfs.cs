@@ -12,9 +12,7 @@ public class Hostfs : FileSystem
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         var sb = new HostSuperBlock(fsType, devName); // devName is the root path on host
-        var rootDentry = sb.GetDentry(devName, "/", null);
-        if (rootDentry == null) throw new FileNotFoundException("Root path not found", devName);
-
+        var rootDentry = sb.GetDentry(devName, "/", null) ?? throw new FileNotFoundException("Root path not found", devName);
         sb.Root = rootDentry;
         sb.Root.Parent = sb.Root;
         return sb;
@@ -25,7 +23,7 @@ public class HostSuperBlock : SuperBlock
 {
     private ulong _nextIno = 1;
     public string HostRoot { get; }
-    private Dictionary<string, Dentry> _dentryCache = new();
+    private readonly Dictionary<string, Dentry> _dentryCache = [];
 
     public HostSuperBlock(FileSystemType type, string hostRoot)
     {
@@ -83,7 +81,7 @@ public class HostSuperBlock : SuperBlock
     }
 }
 
-public class HostInode : Inode
+public partial class HostInode : Inode
 {
     public string HostPath { get; set; }
 
@@ -176,8 +174,7 @@ public class HostInode : Inode
         string newFullPath = Path.Combine(targetParent.HostPath, newName);
 
         var sb = (HostSuperBlock)SuperBlock;
-        var dentry = sb.GetDentry(oldFullPath, oldName, null);
-        if (dentry == null) throw new FileNotFoundException("Source not found", oldName);
+        var dentry = sb.GetDentry(oldFullPath, oldName, null) ?? throw new FileNotFoundException("Source not found", oldName);
 
         // Handle overwrite
         if (System.IO.File.Exists(newFullPath) || Directory.Exists(newFullPath))
@@ -205,13 +202,13 @@ public class HostInode : Inode
         if (targetParent.Dentries.Count > 0) dentry.Parent = targetParent.Dentries[0];
     }
 
-    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
-    private static extern int link(string oldpath, string newpath);
+    [System.Runtime.InteropServices.LibraryImport("libc", SetLastError = true, StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
+    private static partial int link(string oldpath, string newpath);
 
     public override Dentry Link(Dentry dentry, Inode oldInode)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        if (!(oldInode is HostInode hi)) throw new InvalidOperationException("Not a host inode");
+        if (oldInode is not HostInode hi) throw new InvalidOperationException("Not a host inode");
 
         string newPath = Path.Combine(HostPath, dentry.Name);
         if (link(hi.HostPath, newPath) != 0)

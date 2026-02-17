@@ -196,6 +196,10 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
         state->ctx.seg_base[i] = parent->ctx.seg_base[i];
     }
 
+    // Copy Log Callback
+    state->log_callback = parent->log_callback;
+    state->log_userdata = parent->log_userdata;
+
     // Initialize Dummy Invalid Block (same as X86_Create)
     // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
     void* mem = state->block_pool.allocate(sizeof(BasicBlock));
@@ -631,7 +635,16 @@ void X86_SetTscOffset(EmuState* state, uint64_t offset) {
     if (state) state->tsc_offset = offset;
 }
 
-void X86_SetLogCallback(X86LogCallback callback) { SetGlobalLogCallback(callback); }
+void X86_SetLogCallback(EmuState* state, X86LogCallback callback, void* userdata) {
+    if (state) {
+        state->log_callback = callback;
+        state->log_userdata = userdata;
+    } else {
+        // Fallback to global if state is null, just for convenience or backward compat?
+        // But X86LogCallback type is compatible with LogCallback.
+        SetGlobalLogCallback(callback, userdata);
+    }
+}
 
 void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats) {
 #ifdef ENABLE_TLB_STATS

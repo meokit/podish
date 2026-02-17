@@ -16,7 +16,7 @@ public class LoaderResult
 {
     public uint Entry { get; set; }
     public uint SP { get; set; }
-    public byte[] InitialStack { get; set; } = Array.Empty<byte>();
+    public byte[] InitialStack { get; set; } = [];
     public uint BrkAddr { get; set; }
 }
 
@@ -39,7 +39,7 @@ public class ElfLoader
         string? hostRoot = null;
         HostSuperBlock? hsb = null;
 
-        if (sys.Root.SuperBlock is HostSuperBlock h) 
+        if (sys.Root.SuperBlock is HostSuperBlock h)
         {
             hsb = h;
             hostRoot = h.HostRoot;
@@ -57,7 +57,7 @@ public class ElfLoader
 
             if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
             {
-                vfsLookupPath = absFilename.Substring(hostRoot.Length);
+                vfsLookupPath = absFilename[hostRoot.Length..];
                 if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
                 else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/') vfsLookupPath = "/" + vfsLookupPath;
                 vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
@@ -82,7 +82,7 @@ public class ElfLoader
 
         // Resolve the host path for reading the ELF file
         string hostPath = filename;
-        
+
         // If we found a dentry with a HostInode, use its HostPath directly
         if (dentry?.Inode is HostInode hi)
         {
@@ -104,7 +104,7 @@ public class ElfLoader
             // If it's a guest path (starts with /) but not already pointing into hostRoot
             hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
         }
-        
+
         // Still use Host IO for ElfFile reader as it needs a Stream
         using var stream = System.IO.File.OpenRead(hostPath);
         var elf = ElfFile.Read(stream);

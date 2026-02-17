@@ -11,20 +11,25 @@ public class KernelSchedulerTests
 {
     private class MockEngine : Engine
     {
-        public MockEngine() : base() // Real handle
-        {
-        }
+        public MockEngine() : base(true) { } // Mock handle
         
         protected override void Dispose(bool disposing) {}
+
+        public override void Run(uint endEip = 0, ulong maxInsts = 0) { }
+        public override EmuStatus Status => EmuStatus.Running;
+        public override uint RegRead(Reg reg) => 0;
+        public override void RegWrite(Reg reg, uint val) { }
+        public override uint Eip { get; set; }
+        public override uint Eflags { get; set; }
     }
 
     // Mock Process using nulls where acceptable for tests
-    private FiberProcess CreateMockProcess(int pid)
+    private Process CreateMockProcess(int pid)
     {
         // We can't easily mock VMAManager/SyscallManager without real Engine, unless we mock them too.
         // For Scheduler tests, we might get away with nulls if we don't access them.
         // FiberTask checks Process.Mem for faults.
-        return new FiberProcess(pid, null!, null!);
+        return new Process(pid, null!, null!);
     }
     
     [Fact]
@@ -50,6 +55,8 @@ public class KernelSchedulerTests
             sb.Append("T1-Mid;");
             await new YieldAwaitable();
             sb.Append("T1-End;");
+            t1.Exited = true; // Mark as exited
+            t1.Status = FiberTaskStatus.Terminated;
         }
 
         async void RunTask2()
@@ -59,6 +66,8 @@ public class KernelSchedulerTests
             sb.Append("T2-Mid;");
             await new YieldAwaitable();
             sb.Append("T2-End;");
+            t2.Exited = true;
+            t2.Status = FiberTaskStatus.Terminated;
         }
         
         // Register tasks
@@ -72,37 +81,13 @@ public class KernelSchedulerTests
         // The first execution will happen when Kernel picks them up.
         // Since RunTask1 is async void, passing it as Action works.
         t1.Continuation = RunTask1;
-        kernel.Register(t1);
+        kernel.RegisterTask(t1);
         
         t2.Continuation = RunTask2;
-        kernel.Register(t2);
+        kernel.RegisterTask(t2);
         
-        // Run the kernel
-        kernel.Run();
-        // Expected order:
-        // Init -> RunTask1 (runs to yield) -> Yield (schedules T1 continuation)
-        //      -> RunTask2 (runs to yield) -> Yield (schedules T2 continuation)
-        // Loop 1: T1 (T1-Mid) -> Yield
-        // Loop 2: T2 (T2-Mid) -> Yield
-        // Loop 3: T1 (T1-End) -> Done
-        // Loop 4: T2 (T2-End) -> Done
-        
-        // Actually, RunTask1 is "async void".
-        // When called, it executes:
-        // "T1-Start;"
-        // await new YieldAwaitable(); -> calls OnCompleted -> Registers T1 continuation -> Returns.
-        
-        // Then Register(t2).
-        // Then RunTask2();
-        // "T2-Start;"
-        // await new YieldAwaitable(); -> Registers T2 continuation -> Returns.
-        
-        // Then requestInit finishes.
-        
-        // Kernel Loop:
-        // Queue: [T1, T2]
-        
-        kernel.Run();
+        // Run (AsyncLocal sets context)
+        kernel.Run(100);
         
         string result = sb.ToString();
         Assert.Equal("T1-Start;T2-Start;T1-Mid;T2-Mid;T1-End;T2-End;", result);

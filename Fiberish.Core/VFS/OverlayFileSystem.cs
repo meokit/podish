@@ -20,13 +20,13 @@ public class OverlayFileSystem : FileSystem
         // Here we might need to cheat and assume 'data' contains resolved dentries or we parse strings using a global context?
         // Actually, SyscallHandlers.SysMount resolves the dentries. But standard mount(2) passes string options.
         // Let's assume for now we receive a special configuration object or string.
-        
+
         // BETTER APPROACH: SyscallHandlers.SysMount parses the options and looks up the paths using the current process context,
         // then passes the resolved Dentries to ReadSuper via the `data` object.
-        
+
         if (data is not OverlayMountOptions options)
         {
-             throw new ArgumentException("OverlayFS requires OverlayMountOptions in data");
+            throw new ArgumentException("OverlayFS requires OverlayMountOptions in data");
         }
 
         var sb = new OverlaySuperBlock(fsType, options.Lower, options.Upper);
@@ -60,7 +60,7 @@ public class OverlaySuperBlock : SuperBlock
         // Only called if we need a pure virtual inode? 
         // Overlay inodes are always bonded to underlying inodes.
         // But we might need to allocate a new OverlayInode wrapper.
-        return new OverlayInode(this, null, null); 
+        return new OverlayInode(this, null, null);
     }
 }
 
@@ -82,7 +82,7 @@ public class OverlayInode : Inode
         var source = UpperInode ?? LowerInode;
         if (source != null)
         {
-            Ino = source.Ino; 
+            Ino = source.Ino;
             Type = source.Type;
             Mode = source.Mode;
             Uid = source.Uid;
@@ -97,32 +97,28 @@ public class OverlayInode : Inode
     public void CopyUp(File file)
     {
         if (UpperDentry != null) return;
-        
-         // Copy Up File!
-        var parentOverlayDentry = file.Dentry.Parent;
-        if (parentOverlayDentry == null) throw new InvalidOperationException("Cannot copy-up root?");
-        
-        var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode;
-        if (parentOverlayInode == null) throw new InvalidOperationException("Parent is not overlay inode");
-        
-        if (parentOverlayInode.UpperDentry == null) 
-             throw new InvalidOperationException("Parent directory is lower-only. Recursive directory copy-up not implemented yet.");
+
+        // Copy Up File!
+        var parentOverlayDentry = file.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
+        var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode ?? throw new InvalidOperationException("Parent is not overlay inode");
+        if (parentOverlayInode.UpperDentry == null)
+            throw new InvalidOperationException("Parent directory is lower-only. Recursive directory copy-up not implemented yet.");
 
         // 2. Create the file in Upper Parent
         var upperParentDentry = parentOverlayInode.UpperDentry;
-        
+
         // We need a unique Dentry for the upper creation attached to the Upper Parent
         var upperDentry = new Dentry(file.Dentry.Name, null, upperParentDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
-        
+
         // Replicate mode/uid/gid from Lower
-        parentOverlayInode.UpperInode!.Create(upperDentry, Mode, Uid, Gid); 
-        
+        parentOverlayInode.UpperInode!.Create(upperDentry, Mode, Uid, Gid);
+
         // 3. Copy data
         if (LowerInode != null)
         {
             // We are reading from Lower, which uses file.PrivateData (FileStream) if Hostfs.
             // We are writing to Upper (Tmpfs), which ignores file.PrivateData.
-            
+
             var buf = new byte[4096];
             long pos = 0;
             while (true)
@@ -132,14 +128,14 @@ public class OverlayInode : Inode
                 upperDentry.Inode!.Write(file, buf.AsSpan(0, n), pos);
                 pos += n;
             }
-            
+
             // IMPORTANT: Close Lower resource now that we are done with it.
             // We are switching "file" to be backed by Upper.
             LowerInode.Release(file);
         }
-        
+
         this.UpperDentry = upperDentry;
-        
+
         // Open Upper (to set up PrivateData if needed by Upper FS)
         UpperInode!.Open(file);
     }
@@ -148,7 +144,7 @@ public class OverlayInode : Inode
     {
         // 1. Lookup in Upper
         Dentry? upperDentry = UpperInode?.Lookup(name);
-        
+
         // 2. Lookup in Lower
         Dentry? lowerDentry = LowerInode?.Lookup(name);
 
@@ -156,7 +152,7 @@ public class OverlayInode : Inode
 
         // Create Overlay Inode
         var inode = new OverlayInode(SuperBlock, lowerDentry, upperDentry);
-        
+
         return new Dentry(name, inode, null, SuperBlock);
     }
 
@@ -165,18 +161,18 @@ public class OverlayInode : Inode
         // Create in Upper.
         if (UpperDentry == null)
         {
-             // If this directory doesn't exist in Upper (only in Lower), we must "Copy Up" the directory structure first.
-             throw new InvalidOperationException("Cannot create in a read-only lower directory. (Directory Copy-Up not fully implemented yet)");
+            // If this directory doesn't exist in Upper (only in Lower), we must "Copy Up" the directory structure first.
+            throw new InvalidOperationException("Cannot create in a read-only lower directory. (Directory Copy-Up not fully implemented yet)");
         }
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Create(upperDentry, mode, uid, gid);
-        
+
         // Now update the overlay dentry's inode
         var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry); // Created only in upper
         dentry.Instantiate(newOverlayInode);
-        
+
         return dentry;
     }
 
@@ -189,7 +185,7 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
         dentry.Instantiate(newOverlayInode);
-        
+
         return dentry;
     }
 
@@ -202,7 +198,7 @@ public class OverlayInode : Inode
         {
             UpperInode!.Unlink(name);
         }
-        
+
         if (inLower)
         {
             // Create whiteout in Upper.
@@ -211,8 +207,8 @@ public class OverlayInode : Inode
 
     public override void Rmdir(string name)
     {
-         if (UpperInode != null) UpperInode.Rmdir(name);
-         // Lower? Whiteout for dir?
+        UpperInode?.Rmdir(name);
+        // Lower? Whiteout for dir?
     }
 
     public override int Read(File file, Span<byte> buffer, long offset)
@@ -230,45 +226,42 @@ public class OverlayInode : Inode
         {
             CopyUp(file);
         }
-        
+
         return UpperInode!.Write(file, buffer, offset);
     }
 
     public override void Open(File file)
     {
         if (UpperInode != null) UpperInode.Open(file);
-        else if (LowerInode != null) LowerInode.Open(file);
+        else LowerInode?.Open(file);
     }
 
     public override void Release(File file)
     {
         if (UpperInode != null) UpperInode.Release(file);
-        else if (LowerInode != null) LowerInode.Release(file);
+        else LowerInode?.Release(file);
     }
 
     public override void Truncate(long size)
     {
-         if (UpperInode != null) 
-         {
-             UpperInode.Truncate(size);
-         }
-         // If lower, we might need copy-up? But Truncate usually follows Open?
-         // If we allow truncate without write, we need copy up.
-         // Assuming if we desire to modify, we should have triggered copy-up or will trigger it.
-         // But Truncate changes file. 
-         // If Lower only, fail or copy-up.
+        UpperInode?.Truncate(size);
+        // If lower, we might need copy-up? But Truncate usually follows Open?
+        // If we allow truncate without write, we need copy up.
+        // Assuming if we desire to modify, we should have triggered copy-up or will trigger it.
+        // But Truncate changes file. 
+        // If Lower only, fail or copy-up.
     }
-    
+
     public override List<DirectoryEntry> GetEntries()
     {
         var entries = new Dictionary<string, DirectoryEntry>();
-        
+
         if (LowerInode != null)
         {
             foreach (var e in LowerInode.GetEntries())
                 entries[e.Name] = e;
         }
-        
+
         if (UpperInode != null)
         {
             foreach (var e in UpperInode.GetEntries())
@@ -276,7 +269,7 @@ public class OverlayInode : Inode
                 entries[e.Name] = e;
             }
         }
-        
-        return entries.Values.ToList();
+
+        return [.. entries.Values];
     }
 }

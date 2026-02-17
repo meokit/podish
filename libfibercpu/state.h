@@ -10,6 +10,7 @@
 #include "common.h"
 #include "decoder.h"  // For BasicBlock definition
 #include "hooks.h"
+#include "logger.h"
 #include "mem/mmu.h"
 
 namespace fiberish {
@@ -75,6 +76,9 @@ struct EmuState {
 
     InterruptHandler interrupt_handlers[256] = {nullptr};
     void* interrupt_userdata[256] = {nullptr};
+
+    LogCallback log_callback = nullptr;
+    void* log_userdata = nullptr;
 
     bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
 

@@ -48,12 +48,12 @@ public abstract class SuperBlock
     public FileSystemType Type { get; set; } = null!;
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
-    public List<Inode> Inodes { get; set; } = new();
+    public List<Inode> Inodes { get; set; } = [];
     public object Lock { get; } = new();
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; } = 0;
-    protected HashSet<Inode> AllInodes = new();
+    protected HashSet<Inode> AllInodes = [];
 
     public void Get() => RefCount++;
 
@@ -96,7 +96,7 @@ public abstract class Inode
     public SuperBlock SuperBlock { get; set; } = null!;
 
     // All dentries pointing to this inode (hard links)
-    public List<Dentry> Dentries { get; } = new();
+    public List<Dentry> Dentries { get; } = [];
     public object Lock { get; } = new();
 
     // Reference counting for lifecycle management
@@ -131,7 +131,7 @@ public abstract class Inode
 
     public virtual int Read(File file, Span<byte> buffer, long offset) => 0;
     public virtual int Write(File file, ReadOnlySpan<byte> buffer, long offset) => 0;
-    
+
     // Async blocking support
     public virtual ValueTask WaitForRead(File file) => ValueTask.CompletedTask;
     public virtual ValueTask WaitForWrite(File file) => ValueTask.CompletedTask;
@@ -141,7 +141,7 @@ public abstract class Inode
     // File operations hooks
     public virtual void Open(File file) { }
     public virtual void Release(File file) { }
-    
+
     public virtual void Sync(File file) { }
 
     // For directories, we need iteration. 
@@ -165,7 +165,7 @@ public class Dentry
     public Inode? Inode { get; set; }
     public Dentry? Parent { get; set; }
     public SuperBlock SuperBlock { get; set; }
-    public Dictionary<string, Dentry> Children { get; } = new();
+    public Dictionary<string, Dentry> Children { get; } = [];
 
     // Mount point support
     public bool IsMounted { get; set; }
@@ -258,18 +258,22 @@ public class File
     }
 }
 
-public struct DCacheKey : IEquatable<DCacheKey>
+public struct DCacheKey(long parentId, string name) : IEquatable<DCacheKey>
 {
-    public long ParentId;
-    public string Name;
+    public long ParentId = parentId;
+    public string Name = name;
 
-    public DCacheKey(long parentId, string name)
+    public readonly bool Equals(DCacheKey other) => ParentId == other.ParentId && Name == other.Name;
+    public override bool Equals(object? obj) => obj is DCacheKey other && Equals(other);
+    public override readonly int GetHashCode() => HashCode.Combine(ParentId, Name);
+
+    public static bool operator ==(DCacheKey left, DCacheKey right)
     {
-        ParentId = parentId;
-        Name = name;
+        return left.Equals(right);
     }
 
-    public bool Equals(DCacheKey other) => ParentId == other.ParentId && Name == other.Name;
-    public override bool Equals(object? obj) => obj is DCacheKey other && Equals(other);
-    public override int GetHashCode() => HashCode.Combine(ParentId, Name);
+    public static bool operator !=(DCacheKey left, DCacheKey right)
+    {
+        return !(left == right);
+    }
 }

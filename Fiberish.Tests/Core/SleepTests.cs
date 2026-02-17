@@ -11,65 +11,55 @@ public class SleepTests
 {
     private class MockEngine : Engine
     {
-        public MockEngine() : base() {}
+        public MockEngine() : base(true) {}
         protected override void Dispose(bool disposing) {}
+
+        public override void Run(uint endEip = 0, ulong maxInsts = 0) { }
+        public override EmuStatus Status => EmuStatus.Running;
+        public override uint RegRead(Reg reg) => 0;
+        public override void RegWrite(Reg reg, uint val) { }
+        public override uint Eip { get; set; }
+        public override uint Eflags { get; set; }
     }
 
-    private FiberProcess CreateMockProcess(int pid)
+    private Process CreateMockProcess(int pid)
     {
-        return new FiberProcess(pid, null!, null!);
+        return new Process(pid, null!, null!);
     }
     
-    [Fact]
+    [Fact(Timeout = 5000)]
     public void Sleep_PausesTask_And_Resumes()
     {
         var kernel = new KernelScheduler();
-        var sb = new StringBuilder();
-        
-        var tSleep = new FiberTask(101, CreateMockProcess(100), new MockEngine(), kernel);
-        var tIdle = new FiberTask(999, CreateMockProcess(999), new MockEngine(), kernel);
+        var engine = new MockEngine();
+        var sb = new System.Text.StringBuilder();
+
+        var p = CreateMockProcess(100);
+        kernel.RegisterProcess(p);
+
+        // Task 1: Sleeps
+        var tSleep = new FiberTask(101, p, engine, kernel);
 
         async void RunSleepTask()
         {
-            sb.Append($"SleepStart@{kernel.Ticks};");
+            sb.Append($"SleepStart@{kernel.CurrentTick};");
             await new SleepAwaitable(5); 
-            sb.Append($"SleepEnd@{kernel.Ticks};");
-        }
-
-        async void RunIdleTask()
-        {
-            // Run for at most 20 ticks then exit
-            while (kernel.Ticks < 20)
-            {
-                await new YieldAwaitable();
-            }
-            sb.Append("IdleDone;");
+            sb.Append($"SleepEnd@{kernel.CurrentTick};");
+            tSleep.Exited = true;
+            tSleep.Status = FiberTaskStatus.Terminated;
         }
 
         tSleep.Continuation = RunSleepTask;
-        tIdle.Continuation = RunIdleTask;
         
-        kernel.Register(tSleep);
-        kernel.Register(tIdle);
+        kernel.RegisterTask(tSleep);
         
-        kernel.Run();
+        // Run(1000) automatically sets KernelScheduler.Current
+        kernel.Run(1000);
         
         string result = sb.ToString();
         // Ticks start at 0.
-        // tSleep runs first (tick 0). Prints SleepStart@0. Sleeps for 5. Wakeup at 5.
-        // tIdle runs (tick 0). Yields.
-        // Tick becomes 1.
-        // tIdle runs (tick 1). Yields.
-        // ...
-        // tIdle runs (tick 4). Yields.
-        // Tick becomes 5. 
-        // tSleep wakes up. Enqueued.
-        // tIdle runs (tick 5). Yields. Enqueued.
-        // tSleep runs (tick 5). Prints SleepEnd@5. Finishes.
-        // tIdle keeps running until tick 20.
         
         Assert.Contains("SleepStart@0;", result);
-        Assert.Contains("SleepEnd@6;", result);
-        Assert.Contains("IdleDone;", result);
+        Assert.Contains("SleepEnd@5;", result); // Start 0 + Sleep 5 = 5.
     }
 }

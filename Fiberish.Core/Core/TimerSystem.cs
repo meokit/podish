@@ -2,17 +2,11 @@ using System.Collections.Generic;
 
 namespace Bifrost.Core;
 
-public class Timer
+public class Timer(long point, Action callback)
 {
-    public long ExpirationTick { get; set; }
-    public Action Callback { get; set; }
+    public long ExpirationTick { get; set; } = point;
+    public Action Callback { get; set; } = callback;
     public bool Canceled { get; set; }
-
-    public Timer(long point, Action callback)
-    {
-        ExpirationTick = point;
-        Callback = callback;
-    }
 
     public void Cancel()
     {
@@ -29,7 +23,7 @@ public class TimerSystem
     // Constants: 1 Tick = 1 microsecond? Or 1ms? 
     // Let's assume 1 Tick = 1 microsecond for high precision simulation.
     // 1ms = 1000 ticks.
-    
+
     public void Advance(long ticks)
     {
         CurrentTick += ticks;
@@ -42,7 +36,7 @@ public class TimerSystem
         _queue.Enqueue(timer, timer.ExpirationTick);
         return timer;
     }
-    
+
     public Timer ScheduleAbsolute(long targetTick, Action callback)
     {
         var timer = new Timer(targetTick, callback);
