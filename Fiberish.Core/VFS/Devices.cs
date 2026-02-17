@@ -1,10 +1,11 @@
 using Fiberish.Core.VFS.TTY;
-using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
 public class ConsoleInode : Inode
 {
+    private static readonly Stream _stdout = Console.OpenStandardOutput();
+    private static readonly Stream _stdin = Console.OpenStandardInput();
     private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
 
@@ -38,37 +39,28 @@ public class ConsoleInode : Inode
         throw new InvalidOperationException("Cannot link in /dev");
     }
 
-    private static readonly Stream _stdout = Console.OpenStandardOutput();
-    private static readonly Stream _stdin = Console.OpenStandardInput();
-
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
-        
-        if (_discipline != null)
-        {
-            return _discipline.Read(buffer, linuxFile.Flags);
-        }
-        
+
+        if (_discipline != null) return _discipline.Read(buffer, linuxFile.Flags);
+
         return _stdin.Read(buffer);
     }
-    
+
     public override async ValueTask WaitForRead(LinuxFile linuxFile)
     {
         if (!_isInput || _discipline == null) return;
-        
+
         await _discipline.DataAvailable;
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
-        
-        if (_discipline != null)
-        {
-            return _discipline.Write(buffer);
-        }
-        
+
+        if (_discipline != null) return _discipline.Write(buffer);
+
         _stdout.Write(buffer);
         _stdout.Flush();
         return buffer.Length;

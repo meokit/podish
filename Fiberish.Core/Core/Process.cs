@@ -1,8 +1,8 @@
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
-using Fiberish.Core.VFS.TTY;
 using Fiberish.X86.Native;
 
 namespace Fiberish.Core;
@@ -108,7 +108,7 @@ public class Process
     public int ExitStatus { get; set; } = 0;
 
     // Use our new single-threaded compatible synchronization primitive
-    public WaitHandle ZombieEvent { get; } = new();
+    public AsyncWaitQueue ZombieEvent { get; } = new();
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 

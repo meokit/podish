@@ -1,6 +1,5 @@
 using System.Text;
 using Fiberish.Core;
-using Fiberish.Native;
 using Fiberish.X86.Native;
 using Xunit;
 

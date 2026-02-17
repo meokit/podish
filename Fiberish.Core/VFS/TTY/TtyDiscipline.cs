@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Generic;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Native;
-using Fiberish.Core;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
@@ -9,30 +9,6 @@ namespace Fiberish.Core.VFS.TTY;
 
 public class TtyDiscipline
 {
-    private readonly ITtyDriver _driver;
-    private readonly ISignalBroadcaster _broadcaster;
-    private readonly ILogger _logger;
-    private readonly TtyInputQueue _inq = new();
-
-    // Linux Termios fields
-    private uint _iflag = 0x500; // ICRNL | IXON
-    private uint _oflag = 0x5;   // OPOST | ONLCR
-    private uint _cflag = 0xbf;  // CS8 | CREAD | ...
-    private uint _lflag = 0x8a3b | IEXTEN;// ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
-    private readonly byte[] _cc = new byte[32];
-
-    // Canonical mode buffer
-    private readonly List<byte> _canonBuffer = new();
-
-    // Flow control state
-    private bool _outputStopped;
-
-    // LNEXT state - next character should be treated literally
-    private bool _lnextPending;
-
-    // Foreground process group
-    public int ForegroundPgrp { get; set; }
-
     // Termios Special Characters Indices (Linux)
     private const int VINTR = 0;
     private const int VQUIT = 1;
@@ -53,88 +29,142 @@ public class TtyDiscipline
     private const int VEOL2 = 16;
 
     // Input flags (iflag)
-    private const uint IGNBRK = 0x01;   // Ignore break condition
-    private const uint BRKINT = 0x02;   // Signal interrupt on break
-    private const uint IGNPAR = 0x04;   // Ignore characters with parity errors
-    private const uint PARMRK = 0x08;   // Mark parity errors
-    private const uint INPCK = 0x10;    // Enable input parity check
-    private const uint ISTRIP = 0x20;   // Strip 8th bit off characters
-    private const uint INLCR = 0x40;    // Map NL to CR on input
-    private const uint IGNCR = 0x80;    // Ignore CR
-    private const uint ICRNL = 0x100;   // Map CR to NL on input
-    private const uint IUCLC = 0x200;   // Map uppercase to lowercase
-    private const uint IXON = 0x400;    // Enable start/stop output control
-    private const uint IXANY = 0x800;   // Enable any character to restart output
-    private const uint IXOFF = 0x1000;  // Enable start/stop input control
-    private const uint IMAXBEL = 0x2000;// Ring bell when input queue is full
-    private const uint IUTF8 = 0x4000;  // Input is UTF8
+    private const uint IGNBRK = 0x01; // Ignore break condition
+    private const uint BRKINT = 0x02; // Signal interrupt on break
+    private const uint IGNPAR = 0x04; // Ignore characters with parity errors
+    private const uint PARMRK = 0x08; // Mark parity errors
+    private const uint INPCK = 0x10; // Enable input parity check
+    private const uint ISTRIP = 0x20; // Strip 8th bit off characters
+    private const uint INLCR = 0x40; // Map NL to CR on input
+    private const uint IGNCR = 0x80; // Ignore CR
+    private const uint ICRNL = 0x100; // Map CR to NL on input
+    private const uint IUCLC = 0x200; // Map uppercase to lowercase
+    private const uint IXON = 0x400; // Enable start/stop output control
+    private const uint IXANY = 0x800; // Enable any character to restart output
+    private const uint IXOFF = 0x1000; // Enable start/stop input control
+    private const uint IMAXBEL = 0x2000; // Ring bell when input queue is full
+    private const uint IUTF8 = 0x4000; // Input is UTF8
 
     // Output flags (oflag)
-    private const uint OPOST = 1;       // Enable output processing
-    private const uint OLCUC = 2;       // Map lowercase to uppercase
-    private const uint ONLCR = 4;       // Map NL to CR-NL
-    private const uint OCRNL = 8;       // Map CR to NL
-    private const uint ONOCR = 16;      // No CR output at column 0
-    private const uint ONLRET = 32;     // NL performs CR function
-    private const uint OFILL = 64;      // Use fill characters for delay
-    private const uint OFDEL = 128;     // Fill is DEL instead of NUL
-    private const uint NLDLY = 0x100;   // NL delay mask
-    private const uint CRDLY = 0x600;   // CR delay mask
+    private const uint OPOST = 1; // Enable output processing
+    private const uint OLCUC = 2; // Map lowercase to uppercase
+    private const uint ONLCR = 4; // Map NL to CR-NL
+    private const uint OCRNL = 8; // Map CR to NL
+    private const uint ONOCR = 16; // No CR output at column 0
+    private const uint ONLRET = 32; // NL performs CR function
+    private const uint OFILL = 64; // Use fill characters for delay
+    private const uint OFDEL = 128; // Fill is DEL instead of NUL
+    private const uint NLDLY = 0x100; // NL delay mask
+    private const uint CRDLY = 0x600; // CR delay mask
     private const uint TABDLY = 0x1800; // Tab delay mask
-    private const uint BSDLY = 0x2000;  // BS delay mask
-    private const uint VTDLY = 0x4000;  // VT delay mask
-    private const uint FFDLY = 0x8000;  // FF delay mask
+    private const uint BSDLY = 0x2000; // BS delay mask
+    private const uint VTDLY = 0x4000; // VT delay mask
+    private const uint FFDLY = 0x8000; // FF delay mask
 
     // Local flags (lflag)
-    private const uint ISIG = 1;        // Enable signals
-    private const uint ICANON = 2;      // Canonical mode
-    private const uint XCASE = 4;       // Enable case mapping
-    private const uint ECHO = 8;        // Enable echo
-    private const uint ECHOE = 16;      // Echo erase character
-    private const uint ECHOK = 32;      // Echo kill character
-    private const uint ECHONL = 64;     // Echo NL even if ECHO is off
-    private const uint NOFLSH = 128;    // Disable flush after signal
-    private const uint TOSTOP = 256;    // Send SIGTTOU for background output
-    private const uint ECHOCTL = 512;   // Echo control characters as ^X
-    private const uint ECHOPRT = 1024;  // Echo erase character as character is erased
-    private const uint ECHOKE = 2048;   // Echo kill character by erasing line
-    private const uint FLUSHO = 4096;   // Output being flushed
-    private const uint PENDIN = 8192;   // Retype pending input
-    private const uint IEXTEN = 16384;  // Enable extended input character processing
+    private const uint ISIG = 1; // Enable signals
+    private const uint ICANON = 2; // Canonical mode
+    private const uint XCASE = 4; // Enable case mapping
+    private const uint ECHO = 8; // Enable echo
+    private const uint ECHOE = 16; // Echo erase character
+    private const uint ECHOK = 32; // Echo kill character
+    private const uint ECHONL = 64; // Echo NL even if ECHO is off
+    private const uint NOFLSH = 128; // Disable flush after signal
+    private const uint TOSTOP = 256; // Send SIGTTOU for background output
+    private const uint ECHOCTL = 512; // Echo control characters as ^X
+    private const uint ECHOPRT = 1024; // Echo erase character as character is erased
+    private const uint ECHOKE = 2048; // Echo kill character by erasing line
+    private const uint FLUSHO = 4096; // Output being flushed
+    private const uint PENDIN = 8192; // Retype pending input
+    private const uint IEXTEN = 16384; // Enable extended input character processing
 
     private const byte POSIX_VDISABLE = 0; // Or 255? Usually 0 in Linux for 'disabled' if not set
+    private readonly ISignalBroadcaster _broadcaster;
+
+    // Canonical mode buffer
+    private readonly List<byte> _canonBuffer = new();
+    private readonly byte[] _cc = new byte[32];
+    private readonly ITtyDriver _driver;
+    private readonly TtyInputQueue _inq = new();
+    private readonly ILogger _logger;
+    private uint _cflag = 0xbf; // CS8 | CREAD | ...
+
+    // Linux Termios fields
+    private uint _iflag = 0x500; // ICRNL | IXON
+    private uint _lflag = 0x8a3b | IEXTEN; // ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
+
+    // LNEXT state - next character should be treated literally
+    private bool _lnextPending;
+    private uint _oflag = 0x5; // OPOST | ONLCR
+
+    // Flow control state
+    private bool _outputStopped;
 
     public TtyDiscipline(ITtyDriver driver, ISignalBroadcaster broadcaster, ILogger logger)
     {
         _driver = driver;
         _broadcaster = broadcaster;
         _logger = logger;
+        Device = new TtyDevice();
         InitializeDefaults();
     }
+
+    // TTY hardware device for thread-safe input from background thread
+    // InputLoop writes to this device, Read() processes it on scheduler thread
+    public TtyDevice Device { get; }
+
+    // Foreground process group
+    public int ForegroundPgrp { get; set; }
+
+    /// <summary>
+    ///     Check if there is pending input in the device that hasn't been processed yet.
+    ///     Used by scheduler to determine if it should wait for input.
+    /// </summary>
+    public bool HasPendingInput => Device.HasInterrupt;
+
+    public AsyncWaitQueue DataAvailable => _inq.DataAvailable;
 
     private void InitializeDefaults()
     {
         // Defaults for Linux (like a standard terminal)
-        _cc[VINTR] = 3;     // ^C
-        _cc[VQUIT] = 28;    // ^\
-        _cc[VERASE] = 127;  // DEL
-        _cc[VKILL] = 21;    // ^U
-        _cc[VEOF] = 4;      // ^D
-        _cc[VSTART] = 17;   // ^Q
-        _cc[VSTOP] = 19;    // ^S
-        _cc[VSUSP] = 26;    // ^Z
+        _cc[VINTR] = 3; // ^C
+        _cc[VQUIT] = 28; // ^\
+        _cc[VERASE] = 127; // DEL
+        _cc[VKILL] = 21; // ^U
+        _cc[VEOF] = 4; // ^D
+        _cc[VSTART] = 17; // ^Q
+        _cc[VSTOP] = 19; // ^S
+        _cc[VSUSP] = 26; // ^Z
         _cc[VREPRINT] = 18; // ^R
-        _cc[VWERASE] = 23;  // ^W
-        _cc[VLNEXT] = 22;   // ^V
+        _cc[VWERASE] = 23; // ^W
+        _cc[VLNEXT] = 22; // ^V
         _cc[VMIN] = 1;
         _cc[VTIME] = 0;
-        _cc[VEOL] = 0;      // Disabled by default
-        _cc[VEOL2] = 0;     // Disabled by default
+        _cc[VEOL] = 0; // Disabled by default
+        _cc[VEOL2] = 0; // Disabled by default
     }
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
-        return _inq.Read(buffer, flags);
+        // Process all pending input from the device first
+        // This ensures all TTY processing happens on the scheduler thread
+        var inputs = Device.ConsumeAll();
+        if (inputs != null)
+        {
+            foreach (var inputData in inputs)
+            {
+                _logger.LogDebug("[TTY] Read() processing {Count} bytes from device", inputData.Length);
+                foreach (var b in inputData) InputByte(b);
+            }
+
+            _logger.LogDebug("[TTY] Read() processed {Chunks} chunks from device, _inq.Count={InqCount}", inputs.Count,
+                _inq.Count);
+        }
+
+        var result = _inq.Read(buffer, flags);
+        _logger.LogDebug("[TTY] Read() returning {Result}, buffer len={BufferLen}, flags={Flags}", result,
+            buffer.Length, flags);
+        return result;
     }
 
     public int Write(ReadOnlySpan<byte> buffer)
@@ -146,10 +176,10 @@ public class TtyDiscipline
     {
         if (termiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
         var span = termiosData.AsSpan();
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), _iflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), _oflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), _cflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), _lflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), _iflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), _oflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), _cflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), _lflag);
         span[16] = 0; // c_line
 
         // cc
@@ -158,6 +188,7 @@ public class TtyDiscipline
         {
             span[17 + i] = _cc[i];
         }
+
         return 0;
     }
 
@@ -167,7 +198,7 @@ public class TtyDiscipline
         // In interactive mode, this would call host IOCTL.
 
         // We can try to use MacOSTermios (host) if we are on macOS
-        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
             byte[] hostSize;
             if (MacOSTermios.GetWindowSize(0, out hostSize) == 0)
@@ -179,8 +210,8 @@ public class TtyDiscipline
 
         // Default: 80x24
         var span = winSizeBytes.AsSpan();
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), 24); // rows
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), 80); // cols
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), 24); // rows
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), 80); // cols
         return 0;
     }
 
@@ -188,10 +219,10 @@ public class TtyDiscipline
     {
         if (termiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
         var span = termiosData.AsSpan();
-        _iflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
-        _oflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
-        _cflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
-        _lflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
+        _iflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
+        _oflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
+        _cflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
+        _lflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
 
         for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
         {
@@ -210,9 +241,29 @@ public class TtyDiscipline
         return 0;
     }
 
+    /// <summary>
+    ///     Called from background InputLoop thread to queue input data.
+    ///     The data will be processed on the scheduler thread during Read().
+    ///     This is thread-safe - uses a lock-free ConcurrentQueue via TtyDevice.
+    /// </summary>
     public void Input(byte[] input)
     {
-        foreach (var b in input) InputByte(b);
+        Device.EnqueueInput(input);
+    }
+
+    /// <summary>
+    ///     Process pending input from the device. Called from scheduler thread.
+    /// </summary>
+    public void ProcessPendingInput()
+    {
+        var inputs = Device.ConsumeAll();
+        if (inputs != null)
+        {
+            foreach (var inputData in inputs)
+            {
+                foreach (var b in inputData) InputByte(b);
+            }
+        }
     }
 
     private void InputByte(byte b)
@@ -241,6 +292,7 @@ public class TtyDiscipline
                     Echo(new byte[] { b });
                 }
             }
+
             return;
         }
 
@@ -275,8 +327,9 @@ public class TtyDiscipline
         }
 
         // Input processing (iflag)
-        b = ProcessInputFlags(b);
-        if (b == 0) return; // Character was consumed (e.g., IGNCR) - 0 is used as sentinel
+        var processed = ProcessInputFlags(b);
+        if (!processed.HasValue) return; // Character was consumed (e.g., IGNCR)
+        b = processed.Value;
 
         // ISIG checks - signal generating characters
         if ((_lflag & ISIG) != 0)
@@ -286,11 +339,13 @@ public class TtyDiscipline
                 HandleSignalChar(2, "^C", b); // SIGINT
                 return;
             }
+
             if (MatchCc(VQUIT, b)) // Ctrl-\
             {
                 HandleSignalChar(3, "^\\", b); // SIGQUIT
                 return;
             }
+
             if (MatchCc(VSUSP, b)) // Ctrl-Z
             {
                 HandleSignalChar(20, "^Z", b); // SIGTSTP
@@ -320,7 +375,7 @@ public class TtyDiscipline
         ProcessRegularChar(b);
     }
 
-    private byte ProcessInputFlags(byte b)
+    private byte? ProcessInputFlags(byte b)
     {
         // Handle break condition (simplified - we don't have actual break detection)
         // In a real terminal, break is a special condition, not a regular byte
@@ -334,7 +389,7 @@ public class TtyDiscipline
         // IGNCR - ignore CR (must be checked before ICRNL)
         if ((_iflag & IGNCR) != 0 && b == 13)
         {
-            return 0; // Return 0 to signal character was consumed (0 is NUL and safe as sentinel)
+            return null; // Return null to signal character was consumed
         }
 
         // ICRNL - map CR to NL
@@ -358,7 +413,7 @@ public class TtyDiscipline
         {
             if ((_lflag & ECHOCTL) != 0)
             {
-                Echo(System.Text.Encoding.ASCII.GetBytes(echoStr + "\n"));
+                Echo(Encoding.ASCII.GetBytes(echoStr + "\n"));
             }
             else
             {
@@ -385,6 +440,7 @@ public class TtyDiscipline
             {
                 Echo(new byte[] { (byte)'^', (byte)'R' });
             }
+
             Echo(new byte[] { (byte)'\n' });
 
             // Reprint the current line
@@ -408,6 +464,7 @@ public class TtyDiscipline
                 {
                     EchoByte(TtyEndpointKind.Stdout, b);
                 }
+
                 FlushCanonical(false);
             }
             else if (MatchCc(VEOF, b)) // EOF
@@ -473,7 +530,7 @@ public class TtyDiscipline
         // it just terminates the read. If we have data, we push data.
         // If we have NO data and EOF, we push empty write to signal 0-read.
 
-        _inq.Write(_canonBuffer.ToArray(), canonicalReady: true);
+        _inq.Write(_canonBuffer.ToArray(), true);
         _canonBuffer.Clear();
 
         if (eof)
@@ -606,6 +663,7 @@ public class TtyDiscipline
             {
                 OutputProcess(kind, new[] { b });
             }
+
             return;
         }
 
@@ -722,19 +780,25 @@ public class TtyDiscipline
         // Wake up read
         _inq.Signal();
     }
-
-    public WaitHandle DataAvailable => _inq.DataAvailable;
 }
 
 internal sealed class TtyInputQueue
 {
+    private readonly AsyncWaitQueue _dataEvent = new(); // Custom AsyncWaitQueue
     private readonly object _lock = new();
     private readonly Queue<byte> _queue = new();
-    private readonly WaitHandle _dataEvent = new(); // Custom WaitHandle
     private bool _hasCanonicalLine;
     private bool _isEof;
 
-    public int Count { get { lock (_lock) return _queue.Count; } }
+    public int Count
+    {
+        get
+        {
+            lock (_lock) return _queue.Count;
+        }
+    }
+
+    public AsyncWaitQueue DataAvailable => _dataEvent;
 
     public void Clear()
     {
@@ -752,6 +816,7 @@ internal sealed class TtyInputQueue
             _queue.Enqueue(b);
             if (b == 10) _hasCanonicalLine = true;
         }
+
         _dataEvent.Set();
     }
 
@@ -764,8 +829,10 @@ internal sealed class TtyInputQueue
                 _queue.Enqueue(b);
                 if (b == 10) _hasCanonicalLine = true;
             }
+
             if (canonicalReady) _hasCanonicalLine = true;
         }
+
         _dataEvent.Set();
     }
 
@@ -801,11 +868,12 @@ internal sealed class TtyInputQueue
                     {
                         buffer[count++] = _queue.Dequeue();
                     }
+
                     if (_queue.Count == 0) _hasCanonicalLine = false;
 
                     // Reset event if empty?
-                    // WaitHandle generic Set() logic: usually auto-reset or manual?
-                    // Our custom WaitHandle is manual reset (Set() -> IsSet=true).
+                    // AsyncWaitQueue generic Set() logic: usually auto-reset or manual?
+                    // Our custom AsyncWaitQueue is manual reset (Set() -> IsSet=true).
                     // We should probably Reset() if empty.
                     if (_queue.Count == 0) _dataEvent.Reset();
 
@@ -833,14 +901,15 @@ internal sealed class TtyInputQueue
             if (task != null)
             {
                 // Register wait
-                _dataEvent.Register(() => {
+                _dataEvent.Register(() =>
+                {
                     // Wake up task logic handled by scheduler usually?
                     // Scheduler.WakeTask(task)?
-                    // WaitHandle implementation:
+                    // AsyncWaitQueue implementation:
                     // Register(Action) calls action when Set.
                     // The task.BlockOn(waitHandle) is the pattern?
                     // Current pattern: task.BlockingSyscall = ...
-                    // But _dataEvent is our custom WaitHandle.
+                    // But _dataEvent is our custom AsyncWaitQueue.
                     // It has GetAwaiter().
                 });
 
@@ -856,11 +925,11 @@ internal sealed class TtyInputQueue
 
                 // The caller (TtyInode) should handle the await.
                 // Let's change TtyDiscipline.Read to return 0 if blocked?
-                // Or better: TtyDiscipline should expose the WaitHandle so TtyInode can await it.
+                // Or better: TtyDiscipline should expose the AsyncWaitQueue so TtyInode can await it.
             }
 
             // For now, implementing "Blocking via Loop" using Thread.Sleep? No, async!
-            // We need to change TtyDiscipline.Read to be async or return a WaitHandle.
+            // We need to change TtyDiscipline.Read to be async or return a AsyncWaitQueue.
             // But to fit the existing synchronous-looking signature in the snippet...
             // Let's look at TtyInputQueue.Read in the snippet:
             /*
@@ -883,6 +952,4 @@ internal sealed class TtyInputQueue
             return -(int)Errno.EAGAIN;
         }
     }
-
-    public WaitHandle DataAvailable => _dataEvent;
 }

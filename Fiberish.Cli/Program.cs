@@ -1,10 +1,10 @@
 ﻿using System.CommandLine;
+using System.Runtime.InteropServices;
 using Fiberish.Core;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
-
-using System.Runtime.InteropServices;
-using Fiberish.Core.VFS.TTY;
+using Microsoft.Win32.SafeHandles;
 
 namespace Fiberish.Cli;
 
@@ -87,12 +87,17 @@ internal class Program
     private static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction,
         bool stats, string dumpBlocksDir, string exe, string[] exeArgs)
     {
-        // Initialize Logging
+        // Initialize Logging - output to file instead of stderr
+        var logFile = "fiberish.log";
+        var fileLoggerProvider = new FileLoggerProvider(logFile);
+
         Logging.LoggerFactory = LoggerFactory.Create(builder =>
         {
+            builder.AddProvider(fileLoggerProvider);
+            // Only log to console if verbose or trace
             if (verbose || trace)
                 builder.AddConsole(options => { options.LogToStandardErrorThreshold = LogLevel.Trace; });
-            builder.SetMinimumLevel(trace ? LogLevel.Trace : verbose ? LogLevel.Information : LogLevel.Warning);
+            builder.SetMinimumLevel(trace ? LogLevel.Trace : verbose ? LogLevel.Information : LogLevel.Debug);
         });
         Logger = Logging.CreateLogger<Program>();
 
@@ -112,28 +117,38 @@ internal class Program
         scheduler.LoggerFactory = Logging.LoggerFactory;
 
         // 2. Setup TTY
-        // Only enable raw mode if input is not redirected
-        bool isInteractive = !Console.IsInputRedirected;
+        // Only enable raw mode if input is not redirected;
+        var isInteractive = !Console.IsInputRedirected;
         TtyDiscipline? tty = null;
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
+        FileStream? stdinStream = null;
 
         if (isInteractive)
         {
-            // Enable Raw Mode
-            // TODO: Detect OS and use appropriate Termios (Only MacOS for now)
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                MacOSTermios.EnableRawMode(0); // Stdin FD
-            }
-
             var driver = new ConsoleTtyDriver();
             var broadcaster = new SchedulerSignalBroadcaster(scheduler);
             tty = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
 
+            // Set TTY on scheduler so it can check for pending input
+            scheduler.Tty = tty;
+
+            // Open stdin stream BEFORE enabling raw mode, in case opening it resets terminal attributes
+            // Bypass Console.OpenStandardInput() to avoid potential TTY state reset
+            // OwnsHandle=true to ensure closing the stream closes the FD, unblocking ReadAsync
+            stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
+
+            // Enable Raw Mode
+            // TODO: Detect OS and use appropriate Termios (Only MacOS for now)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                var res = MacOSTermios.EnableRawMode(0); // Stdin FD
+                if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
+            }
+
             // Start Input Loop
             inputCts = new CancellationTokenSource();
-            inputTask = Task.Run(() => InputLoop(tty, inputCts.Token));
+            inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
         }
 
         try
@@ -160,36 +175,48 @@ internal class Program
         }
         finally
         {
+            // Close stdin to unblock InputLoop (ReadAsync should throw or return 0)
+            stdinStream?.Dispose();
+
             if (inputCts != null)
             {
                 inputCts.Cancel();
-                try { await inputTask!; } catch { }
+                // Wait briefly for the task to finish, but don't block forever if read is stuck
+                if (inputTask != null)
+                    try
+                    {
+                        await Task.WhenAny(inputTask, Task.Delay(100));
+                    }
+                    catch
+                    {
+                    }
             }
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                MacOSTermios.DisableRawMode(0);
-            }
+                // Use stdout (fd 1) to restore terminal settings because fd 0 is closed
+                MacOSTermios.DisableRawMode(1);
         }
     }
 
-    private static async Task InputLoop(TtyDiscipline tty, CancellationToken token)
+    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token)
     {
         var buffer = new byte[256];
-        var stdin = Console.OpenStandardInput();
+        // Stream passed from main thread
         try
         {
             while (!token.IsCancellationRequested)
             {
                 // We use ReadAsync but Console Stream on some platforms might block even with cancellation?
                 // On .NET 8 it should be better.
-                int read = await stdin.ReadAsync(buffer, token);
+                var read = await stdin.ReadAsync(buffer, token);
                 if (read == 0) break; // EOF
-                
+
                 tty.Input(buffer.AsSpan(0, read).ToArray());
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception ex)
         {
             // Logger might be disposed if we are shutting down?
@@ -200,8 +227,8 @@ internal class Program
 
     private class ConsoleTtyDriver : ITtyDriver
     {
-        private readonly Stream _stdout = Console.OpenStandardOutput();
         private readonly Stream _stderr = Console.OpenStandardError();
+        private readonly Stream _stdout = Console.OpenStandardOutput();
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {
@@ -234,21 +261,102 @@ internal class Program
 
         public void SignalForegroundTask(int signal)
         {
-             // If we don't track foreground task here, 
-             // we assume TtyDiscipline calls SignalProcessGroup with its ForegroundPgrp.
-             // But TtyLogic: "if (ForegroundPgrp > 0) broadcaster.SignalProcessGroup..."
-             // "else broadcaster.SignalForegroundTask(sig)" -> Logic fallback?
-             
-             // In single-process emulator, maybe signal current task?
-             // But TtyDiscipline runs in InputLoop (thread pool or async task).
-             // KernelScheduler.Current might not be set or not relevant.
-             
-             // Let's assume SignalProcessGroup is the primary mechanism used by TTY.
-             // SignalForegroundTask might be used if no pgrp set?
-             
-             // For now, log warning or ignore.
-             // Or maybe we can expose "MainTask" from program?
-             // But TTY shouldn't know about Program static state.
+            // If we don't track foreground task here, 
+            // we assume TtyDiscipline calls SignalProcessGroup with its ForegroundPgrp.
+            // But TtyLogic: "if (ForegroundPgrp > 0) broadcaster.SignalProcessGroup..."
+            // "else broadcaster.SignalForegroundTask(sig)" -> Logic fallback?
+
+            // In single-process emulator, maybe signal current task?
+            // But TtyDiscipline runs in InputLoop (thread pool or async task).
+            // KernelScheduler.Current might not be set or not relevant.
+
+            // Let's assume SignalProcessGroup is the primary mechanism used by TTY.
+            // SignalForegroundTask might be used if no pgrp set?
+
+            // For now, log warning or ignore.
+            // Or maybe we can expose "MainTask" from program?
+            // But TTY shouldn't know about Program static state.
         }
+    }
+}
+
+/// <summary>
+///     Simple file logger provider that writes logs to a file.
+/// </summary>
+file class FileLoggerProvider : ILoggerProvider
+{
+    private readonly string _filePath;
+    private readonly object _lock = new();
+    private StreamWriter? _writer;
+
+    public FileLoggerProvider(string filePath)
+    {
+        _filePath = filePath;
+        // Delete old log file
+        if (File.Exists(filePath)) File.Delete(filePath);
+        _writer = new StreamWriter(File.Open(filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+        {
+            AutoFlush = true
+        };
+    }
+
+    public ILogger CreateLogger(string categoryName)
+    {
+        return new FileLogger(categoryName, this);
+    }
+
+    public void Dispose()
+    {
+        _writer?.Dispose();
+        _writer = null;
+    }
+
+    public void WriteLog(string message)
+    {
+        lock (_lock)
+        {
+            _writer?.WriteLine(message);
+        }
+    }
+}
+
+file class FileLogger : ILogger
+{
+    private readonly string _categoryName;
+    private readonly FileLoggerProvider _provider;
+
+    public FileLogger(string categoryName, FileLoggerProvider provider)
+    {
+        _categoryName = categoryName;
+        _provider = provider;
+    }
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+    {
+        return null;
+    }
+
+    public bool IsEnabled(LogLevel logLevel)
+    {
+        return true;
+    }
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        var timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        var level = logLevel switch
+        {
+            LogLevel.Trace => "TRCE",
+            LogLevel.Debug => "DBUG",
+            LogLevel.Information => "INFO",
+            LogLevel.Warning => "WARN",
+            LogLevel.Error => "FAIL",
+            LogLevel.Critical => "CRIT",
+            _ => logLevel.ToString().ToUpper()[..4]
+        };
+        var message = $"[{timestamp}] [{level}] {_categoryName}: {formatter(state, exception)}";
+        if (exception != null) message += $"\n{exception}";
+        _provider.WriteLog(message);
     }
 }

@@ -8,6 +8,7 @@ using Fiberish.VFS;
 using LibObjectFile.Elf;
 using Microsoft.Extensions.Logging;
 using File = System.IO.File;
+using LinuxFile = Fiberish.VFS.LinuxFile;
 
 namespace Fiberish.Loader;
 
@@ -131,7 +132,7 @@ public class ElfLoader
                         throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {filename}");
 
                     var fileSzLimit = diff + (long)segment.Size;
-                    var vfsFile = new VFS.LinuxFile(dentry, FileFlags.O_RDONLY);
+                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
                     mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
                         fileSzLimit, "ELF_LOAD", engine);
                 }

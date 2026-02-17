@@ -39,7 +39,7 @@ public class HostSuperBlock : SuperBlock
 
         // Check existence
         var isDir = Directory.Exists(hostPath);
-        var isFile = System.IO.File.Exists(hostPath);
+        var isFile = File.Exists(hostPath);
         if (!isDir && !isFile) return null;
 
         var newInode = new HostInode(_nextIno++, this, hostPath, isDir);
@@ -118,9 +118,9 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var subPath = Path.Combine(HostPath, dentry.Name);
-        if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
 
-        using (System.IO.File.Create(subPath))
+        using (File.Create(subPath))
         {
         } // Create empty file
 
@@ -133,7 +133,7 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var subPath = Path.Combine(HostPath, dentry.Name);
-        if (System.IO.File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
 
         Directory.CreateDirectory(subPath);
 
@@ -145,11 +145,11 @@ public partial class HostInode : Inode
     public override void Unlink(string name)
     {
         var subPath = Path.Combine(HostPath, name);
-        if (System.IO.File.Exists(subPath))
+        if (File.Exists(subPath))
         {
             var sb = (HostSuperBlock)SuperBlock;
             var dentry = sb.GetDentry(subPath, name, null);
-            System.IO.File.Delete(subPath);
+            File.Delete(subPath);
             dentry?.Inode?.Put();
             sb.RemoveDentry(subPath);
         }
@@ -182,11 +182,11 @@ public partial class HostInode : Inode
                      throw new FileNotFoundException("Source not found", oldName);
 
         // Handle overwrite
-        if (System.IO.File.Exists(newFullPath) || Directory.Exists(newFullPath))
+        if (File.Exists(newFullPath) || Directory.Exists(newFullPath))
         {
             var targetDentry = sb.GetDentry(newFullPath, newName, null);
             if (Directory.Exists(newFullPath)) Directory.Delete(newFullPath, true);
-            else System.IO.File.Delete(newFullPath);
+            else File.Delete(newFullPath);
             targetDentry?.Inode?.Put();
             sb.RemoveDentry(newFullPath);
         }
@@ -194,7 +194,7 @@ public partial class HostInode : Inode
         if (dentry.Inode!.Type == InodeType.Directory)
             Directory.Move(oldFullPath, newFullPath);
         else
-            System.IO.File.Move(oldFullPath, newFullPath);
+            File.Move(oldFullPath, newFullPath);
 
         // Update cache and internal path
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
@@ -231,7 +231,7 @@ public partial class HostInode : Inode
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var newPath = Path.Combine(HostPath, dentry.Name);
 
-        System.IO.File.CreateSymbolicLink(newPath, target);
+        File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
         sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
         return dentry;

@@ -97,7 +97,8 @@ public class OverlayInode : Inode
         if (UpperDentry != null) return;
 
         // Copy Up File!
-        var parentOverlayDentry = linuxFile.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
+        var parentOverlayDentry =
+            linuxFile.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
         var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode ??
                                  throw new InvalidOperationException("Parent is not overlay inode");
         if (parentOverlayInode.UpperDentry == null)

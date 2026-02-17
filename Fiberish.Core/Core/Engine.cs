@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using Fiberish.Native;
 using Fiberish.X86.Native;
 using X86Native = Fiberish.X86.Native.X86Native;
 
@@ -109,7 +108,8 @@ public class Engine : IDisposable
         {
             if (userdata == IntPtr.Zero) return 0;
             var handle = GCHandle.FromIntPtr(userdata);
-            if (handle.Target is Engine engine) return (engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false) ? 1 : 0;
+            if (handle.Target is Engine engine)
+                return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false ? 1 : 0;
         }
         catch (Exception ex)
         {

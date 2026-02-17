@@ -1,5 +1,6 @@
 using System.Text;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -8,8 +9,8 @@ namespace Fiberish.Tests.VFS;
 
 public class TtyDisciplineTests
 {
-    private readonly MockTtyDriver _driver;
     private readonly MockSignalBroadcaster _broadcaster;
+    private readonly MockTtyDriver _driver;
     private readonly TtyDiscipline _tty;
 
     public TtyDisciplineTests()
@@ -18,6 +19,94 @@ public class TtyDisciplineTests
         _broadcaster = new MockSignalBroadcaster();
         _tty = new TtyDiscipline(_driver, _broadcaster, NullLogger.Instance);
     }
+
+    #region VREPRINT Tests
+
+    [Fact]
+    public void VREPRINT_echoes_current_line()
+    {
+        _driver.Output.Clear();
+
+        // Type some characters
+        _tty.Input(Encoding.ASCII.GetBytes("abc"));
+        _tty.ProcessPendingInput();
+
+        // Send VREPRINT (Ctrl-R = 18)
+        _tty.Input(new byte[] { 18 });
+        _tty.ProcessPendingInput();
+
+        // Output should contain ^R, newline, and "abc"
+        var output = Encoding.ASCII.GetString(_driver.Output.ToArray());
+        Assert.Contains("abc", output);
+    }
+
+    #endregion
+
+    #region ECHONL Tests
+
+    [Fact]
+    public void ECHONL_echoes_newline_when_ECHO_is_off()
+    {
+        _driver.Output.Clear();
+
+        // Disable ECHO, enable ECHONL
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~8u; // ECHO off
+        lflag |= 64u; // ECHONL on
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        // Input a newline
+        _tty.Input(Encoding.ASCII.GetBytes("\n"));
+        _tty.ProcessPendingInput();
+
+        // Should still echo the newline due to ECHONL
+        Assert.Contains((byte)10, _driver.Output);
+    }
+
+    #endregion
+
+    #region ECHOCTL Tests
+
+    [Fact]
+    public void ECHOCTL_echoes_control_chars_as_caret()
+    {
+        _driver.Output.Clear();
+
+        // ECHOCTL should be on by default
+        // Input a control character in canonical mode (not a signal char)
+        _tty.Input(new byte[] { 1 }); // Ctrl-A
+        _tty.ProcessPendingInput();
+
+        // Should echo as ^A
+        Assert.Contains((byte)'^', _driver.Output);
+        Assert.Contains((byte)'A', _driver.Output);
+    }
+
+    #endregion
+
+    #region UTF-8 Erase Tests
+
+    [Fact]
+    public void CanonErase_handles_multibyte_utf8()
+    {
+        var buffer = new byte[100];
+
+        // Input a 2-byte UTF-8 character followed by backspace
+        // "é" in UTF-8 is 0xC3 0xA9
+        _tty.Input(new byte[] { 0xC3, 0xA9 });
+        _tty.Input(new byte[] { 127 }); // Backspace
+        _tty.Input(Encoding.ASCII.GetBytes("\n"));
+
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        // Buffer should be empty (just newline) since we erased the UTF-8 char
+        Assert.Equal(1, read);
+        Assert.Equal("\n", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    #endregion
 
     #region Basic Canonical Mode Tests
 
@@ -29,8 +118,8 @@ public class TtyDisciplineTests
         // Input "abc" (no newline)
         _tty.Input(Encoding.ASCII.GetBytes("abc"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
-        Assert.Equal(-(int)Fiberish.Native.Errno.EAGAIN, read);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
 
         // Input newline
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
@@ -54,7 +143,7 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 127 }); // Backspace
         _tty.Input(Encoding.ASCII.GetBytes("d\n"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(4, read);
         Assert.Equal("abd\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -77,7 +166,7 @@ public class TtyDisciplineTests
         _tty.Input(Encoding.ASCII.GetBytes("abc"));
 
         // Read "abc" immediately
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(3, read);
         Assert.Equal("abc", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -92,7 +181,7 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 4 });
 
         // Read "abc"
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(3, read);
 
         // Send another Ctrl-D on empty buffer to signal completion
@@ -111,7 +200,7 @@ public class TtyDisciplineTests
         _tty.Input(Encoding.ASCII.GetBytes("abc\n"));
 
         // Read 2 bytes ("ab")
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(2, read);
 
         // Read next 2 bytes ("c\n")
@@ -124,8 +213,8 @@ public class TtyDisciplineTests
     public void NonBlockingRead_returns_EAGAIN_when_empty()
     {
         var buffer = new byte[100];
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
-        Assert.Equal(-(int)Fiberish.Native.Errno.EAGAIN, read);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
     }
 
     #endregion
@@ -137,6 +226,7 @@ public class TtyDisciplineTests
     {
         // Ctrl-C is 3 by default
         _tty.Input(new byte[] { 3 });
+        _tty.ProcessPendingInput();
 
         Assert.Equal(2, _broadcaster.LastSignal); // SIGINT = 2
         Assert.True(_broadcaster.SignalSent);
@@ -147,6 +237,7 @@ public class TtyDisciplineTests
     {
         // Ctrl-\ is 28 by default
         _tty.Input(new byte[] { 28 });
+        _tty.ProcessPendingInput();
 
         Assert.Equal(3, _broadcaster.LastSignal); // SIGQUIT = 3
         Assert.True(_broadcaster.SignalSent);
@@ -157,6 +248,7 @@ public class TtyDisciplineTests
     {
         // Ctrl-Z is 26 by default
         _tty.Input(new byte[] { 26 });
+        _tty.ProcessPendingInput(); // Process the queued input
 
         Assert.Equal(20, _broadcaster.LastSignal); // SIGTSTP = 20
         Assert.True(_broadcaster.SignalSent);
@@ -177,16 +269,18 @@ public class TtyDisciplineTests
 
         // Add some data to canonical buffer
         _tty.Input(Encoding.ASCII.GetBytes("test"));
+        _tty.ProcessPendingInput();
 
         // Send SIGINT (Ctrl-C)
         _tty.Input(new byte[] { 3 });
+        _tty.ProcessPendingInput();
 
         Assert.Equal(2, _broadcaster.LastSignal);
 
         // With NOFLSH, the buffer should still contain "test"
         // Add newline to flush
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(5, read);
         Assert.Equal("test\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -199,16 +293,18 @@ public class TtyDisciplineTests
         // NOFLSH is NOT set by default
         // Add some data to canonical buffer
         _tty.Input(Encoding.ASCII.GetBytes("test"));
+        _tty.ProcessPendingInput();
 
         // Send SIGINT (Ctrl-C)
         _tty.Input(new byte[] { 3 });
+        _tty.ProcessPendingInput();
 
         Assert.Equal(2, _broadcaster.LastSignal);
 
         // Without NOFLSH, the buffer should be cleared
         // Add newline to try to flush
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(1, read);
         Assert.Equal("\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -267,8 +363,8 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 17 }); // Ctrl-Q
 
         // These should not appear in input queue
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
-        Assert.Equal(-(int)Fiberish.Native.Errno.EAGAIN, read);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
     }
 
     #endregion
@@ -284,7 +380,7 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 22, 3 });
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(2, read);
         Assert.Equal(3, buffer[0]); // Literal Ctrl-C
         Assert.Equal(10, buffer[1]); // Newline
@@ -297,31 +393,11 @@ public class TtyDisciplineTests
         var driver = new MockTtyDriver();
         var broadcaster = new MockSignalBroadcaster();
         var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
-        
+
         // Ctrl-V (22) followed by Ctrl-C (3) should NOT send signal
         tty.Input(new byte[] { 22, 3 });
 
         Assert.False(broadcaster.SignalSent);
-    }
-
-    #endregion
-
-    #region VREPRINT Tests
-
-    [Fact]
-    public void VREPRINT_echoes_current_line()
-    {
-        _driver.Output.Clear();
-
-        // Type some characters
-        _tty.Input(Encoding.ASCII.GetBytes("abc"));
-
-        // Send VREPRINT (Ctrl-R = 18)
-        _tty.Input(new byte[] { 18 });
-
-        // Output should contain ^R, newline, and "abc"
-        var output = Encoding.ASCII.GetString(_driver.Output.ToArray());
-        Assert.Contains("abc", output);
     }
 
     #endregion
@@ -338,7 +414,7 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 23 }); // VWERASE
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         // "hello " (with trailing space) + "\n" = 7 characters
         Assert.Equal(7, read);
         Assert.Equal("hello \n", Encoding.ASCII.GetString(buffer, 0, read));
@@ -354,7 +430,7 @@ public class TtyDisciplineTests
         _tty.Input(new byte[] { 23 }); // VWERASE
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(1, read);
         Assert.Equal("\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -381,7 +457,7 @@ public class TtyDisciplineTests
         // Input "he\rllo\n" - CR should be ignored
         _tty.Input(Encoding.ASCII.GetBytes("he\rllo\n"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         // "hello\n" = 6 characters (CR is ignored)
         Assert.Equal(6, read);
         Assert.Equal("hello\n", Encoding.ASCII.GetString(buffer, 0, read));
@@ -396,9 +472,9 @@ public class TtyDisciplineTests
         var termios = new byte[60];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
-        iflag |= 0x40u;  // INLCR
+        iflag |= 0x40u; // INLCR
         iflag &= ~0x100u; // ICRNL (off)
-        iflag &= ~0x80u;  // IGNCR (off)
+        iflag &= ~0x80u; // IGNCR (off)
         BitConverter.GetBytes(iflag).CopyTo(termios, 0);
         _tty.SetAttr(0, termios);
 
@@ -411,7 +487,7 @@ public class TtyDisciplineTests
         // Input "a\nb"
         _tty.Input(Encoding.ASCII.GetBytes("a\nb"));
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(3, read);
         Assert.Equal("a\rb", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -436,7 +512,7 @@ public class TtyDisciplineTests
         // Input byte with 8th bit set (0x80 + 0x41 = 0xC1 = 'A' with high bit)
         _tty.Input(new byte[] { 0xC1 });
 
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(1, read);
         // 0xC1 & 0x7F = 0x41 = 'A'
         Assert.Equal((byte)'A', buffer[0]);
@@ -493,75 +569,11 @@ public class TtyDisciplineTests
 
     #endregion
 
-    #region ECHONL Tests
-
-    [Fact]
-    public void ECHONL_echoes_newline_when_ECHO_is_off()
-    {
-        _driver.Output.Clear();
-
-        // Disable ECHO, enable ECHONL
-        var termios = new byte[60];
-        _tty.GetAttr(termios);
-        var lflag = BitConverter.ToUInt32(termios, 12);
-        lflag &= ~8u;   // ECHO off
-        lflag |= 64u;   // ECHONL on
-        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
-        _tty.SetAttr(0, termios);
-
-        // Input a newline
-        _tty.Input(Encoding.ASCII.GetBytes("\n"));
-
-        // Should still echo the newline due to ECHONL
-        Assert.Contains((byte)10, _driver.Output);
-    }
-
-    #endregion
-
-    #region ECHOCTL Tests
-
-    [Fact]
-    public void ECHOCTL_echoes_control_chars_as_caret()
-    {
-        _driver.Output.Clear();
-
-        // ECHOCTL should be on by default
-        // Input a control character in canonical mode (not a signal char)
-        _tty.Input(new byte[] { 1 }); // Ctrl-A
-
-        // Should echo as ^A
-        Assert.Contains((byte)'^', _driver.Output);
-        Assert.Contains((byte)'A', _driver.Output);
-    }
-
-    #endregion
-
-    #region UTF-8 Erase Tests
-
-    [Fact]
-    public void CanonErase_handles_multibyte_utf8()
-    {
-        var buffer = new byte[100];
-
-        // Input a 2-byte UTF-8 character followed by backspace
-        // "é" in UTF-8 is 0xC3 0xA9
-        _tty.Input(new byte[] { 0xC3, 0xA9 });
-        _tty.Input(new byte[] { 127 }); // Backspace
-        _tty.Input(Encoding.ASCII.GetBytes("\n"));
-
-        int read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
-        // Buffer should be empty (just newline) since we erased the UTF-8 char
-        Assert.Equal(1, read);
-        Assert.Equal("\n", Encoding.ASCII.GetString(buffer, 0, read));
-    }
-
-    #endregion
-
     #region Helper Classes
 
     private class MockTtyDriver : ITtyDriver
     {
-        public List<byte> Output = new();
+        public readonly List<byte> Output = new();
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {
@@ -569,7 +581,9 @@ public class TtyDisciplineTests
             return buffer.Length;
         }
 
-        public void Flush() { }
+        public void Flush()
+        {
+        }
     }
 
     private class MockSignalBroadcaster : ISignalBroadcaster

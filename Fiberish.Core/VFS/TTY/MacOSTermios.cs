@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using Fiberish.Native;
 
@@ -54,19 +55,8 @@ public static class MacOSTermios
     private const int LINUX_VMIN = 6;
     private const int LINUX_VTIME = 5;
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MacTermios
-    {
-        public ulong c_iflag; // 0
-        public ulong c_oflag; // 8
-        public ulong c_cflag; // 16
-        public ulong c_lflag; // 24
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = MAC_NCCS)]
-        public byte[] c_cc;   // 32
-        private uint _pad;    // 52 (20 bytes of cc + this pad = 24 bytes, aligning to 8)
-        public ulong c_ispeed; // 56
-        public ulong c_ospeed; // 64
-    }
+    private static MacTermios _originalTermios;
+    private static bool _originalTermiosSaved;
 
     [DllImport("libc", SetLastError = true)]
     private static extern int tcgetattr(int fd, ref MacTermios termios);
@@ -74,18 +64,15 @@ public static class MacOSTermios
     [DllImport("libc", SetLastError = true)]
     private static extern int tcsetattr(int fd, int optional_actions, ref MacTermios termios);
 
-    private static MacTermios _originalTermios;
-    private static bool _originalTermiosSaved;
-
-    public static void EnableRawMode(int fd)
+    public static int EnableRawMode(int fd)
     {
         if (!_originalTermiosSaved)
         {
-            if (tcgetattr(fd, ref _originalTermios) < 0) return;
+            if (tcgetattr(fd, ref _originalTermios) < 0) return -GetErrnoOrDefault();
             _originalTermiosSaved = true;
         }
 
-        MacTermios raw = _originalTermios;
+        var raw = _originalTermios;
         // Input: No break, no CR to NL, no parity check, no strip char
         // raw.c_iflag &= ~(ulong)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
         // We want strict raw, but let's just do what cfmakeraw usually does + tweaks
@@ -93,27 +80,25 @@ public static class MacOSTermios
         raw.c_iflag &= ~(ulong)(MAC_ICRNL | MAC_IXON);
         raw.c_oflag &= ~(ulong)MAC_OPOST;
         raw.c_lflag &= ~(ulong)(MAC_ECHO | MAC_ICANON | MAC_IEXTEN | MAC_ISIG);
-        
+
         // VMIN=1, VTIME=0 -> Blocking read until at least 1 byte
         raw.c_cc[MAC_VMIN] = 1;
         raw.c_cc[MAC_VTIME] = 0;
 
-        tcsetattr(fd, 0 /* TCSANOW */, ref raw);
+        if (tcsetattr(fd, 2 /* TCSAFLUSH */, ref raw) < 0) return -GetErrnoOrDefault();
+        return 0;
     }
 
     public static void DisableRawMode(int fd)
     {
-        if (_originalTermiosSaved)
-        {
-            tcsetattr(fd, 0 /* TCSANOW */, ref _originalTermios);
-        }
+        if (_originalTermiosSaved) tcsetattr(fd, 0 /* TCSANOW */, ref _originalTermios);
     }
 
     public static int GetAttr(int fd, byte[] linuxTermiosData)
     {
         if (linuxTermiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
 
-        MacTermios mac = new MacTermios { c_cc = new byte[MAC_NCCS] };
+        var mac = new MacTermios { c_cc = new byte[MAC_NCCS] };
         if (tcgetattr(fd, ref mac) < 0) return -GetErrnoOrDefault();
 
         // Convert Mac -> Linux
@@ -143,14 +128,14 @@ public static class MacOSTermios
 
         // Write to Linux Buffer
         var span = linuxTermiosData.AsSpan();
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), iflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), oflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), cflag);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), lflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), iflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), oflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), cflag);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), lflag);
         span[16] = 0; // c_line
 
         // c_cc mapping
-        for (int i = 0; i < 5; i++) span[17 + i] = mac.c_cc[i];
+        for (var i = 0; i < 5; i++) span[17 + i] = mac.c_cc[i];
         span[17 + LINUX_VMIN] = mac.c_cc[MAC_VMIN];
         span[17 + LINUX_VTIME] = mac.c_cc[MAC_VTIME];
 
@@ -161,15 +146,15 @@ public static class MacOSTermios
     {
         if (linuxTermiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
 
-        MacTermios mac = new MacTermios { c_cc = new byte[MAC_NCCS] };
+        var mac = new MacTermios { c_cc = new byte[MAC_NCCS] };
         // Read current state first to preserve unmapped flags
         if (tcgetattr(fd, ref mac) < 0) return -GetErrnoOrDefault();
 
         var span = linuxTermiosData.AsSpan();
-        uint iflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
-        uint oflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
-        uint cflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
-        uint lflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
+        var iflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
+        var oflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
+        var cflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
+        var lflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
 
         // Map Linux -> Mac
         // Input
@@ -201,7 +186,7 @@ public static class MacOSTermios
         if ((lflag & LINUX_IEXTEN) != 0) mac.c_lflag |= MAC_IEXTEN;
 
         // c_cc 
-        for (int i = 0; i < 5; i++) mac.c_cc[i] = span[17 + i];
+        for (var i = 0; i < 5; i++) mac.c_cc[i] = span[17 + i];
         mac.c_cc[MAC_VMIN] = span[17 + LINUX_VMIN];
         mac.c_cc[MAC_VTIME] = span[17 + LINUX_VTIME];
 
@@ -216,15 +201,15 @@ public static class MacOSTermios
         try
         {
             // Use .NET Console API which safely handles the ioctl under the hood
-            int cols = Console.WindowWidth;
-            int rows = Console.WindowHeight;
+            var cols = Console.WindowWidth;
+            var rows = Console.WindowHeight;
 
             winSizeBytes = new byte[8];
             var span = winSizeBytes.AsSpan();
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), (ushort)rows);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), (ushort)cols);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(4, 2), 0); // xpixel
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(6, 2), 0); // ypixel
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), (ushort)rows);
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), (ushort)cols);
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(4, 2), 0); // xpixel
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(6, 2), 0); // ypixel
             return 0;
         }
         catch
@@ -237,7 +222,23 @@ public static class MacOSTermios
 
     private static int GetErrnoOrDefault()
     {
-        int err = Marshal.GetLastPInvokeError();
+        var err = Marshal.GetLastPInvokeError();
         return err > 0 ? err : (int)Errno.EINVAL;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MacTermios
+    {
+        public ulong c_iflag; // 0
+        public ulong c_oflag; // 8
+        public ulong c_cflag; // 16
+        public ulong c_lflag; // 24
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = MAC_NCCS)]
+        public byte[] c_cc; // 32
+
+        private uint _pad; // 52 (20 bytes of cc + this pad = 24 bytes, aligning to 8)
+        public ulong c_ispeed; // 56
+        public ulong c_ospeed; // 64
     }
 }

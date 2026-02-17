@@ -1,5 +1,5 @@
 using Fiberish.Native;
-using WaitHandle = Fiberish.Core.WaitHandle;
+using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 // For Errno
 

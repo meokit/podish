@@ -1,9 +1,9 @@
 using Fiberish.Core;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
-using Fiberish.Core.VFS.TTY;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 
@@ -18,8 +18,6 @@ public partial class SyscallManager
     private static readonly Dictionary<IntPtr, SyscallManager> _registry = [];
     private static readonly object _registryLock = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
-
-    public TtyDiscipline? Tty { get; }
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot, TtyDiscipline? tty = null)
     {
@@ -91,7 +89,8 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk, bool strace,
+    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk,
+        bool strace,
         Dentry root, Dentry cwd, Dentry procRoot, TtyDiscipline? tty)
     {
         Mem = mem;
@@ -110,6 +109,8 @@ public partial class SyscallManager
 
         RegisterHandlers();
     }
+
+    public TtyDiscipline? Tty { get; }
 
     // The current engine executing a syscall (protected by GIL)
     public Engine Engine { get; set; } = null!;

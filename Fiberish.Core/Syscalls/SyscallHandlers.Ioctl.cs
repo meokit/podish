@@ -5,7 +5,8 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysIoctl(IntPtr state, uint fd, uint request, uint arg, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysIoctl(IntPtr state, uint fd, uint request, uint arg, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -14,13 +15,12 @@ public partial class SyscallManager
 
         // TTY specific ioctls
         if (sm.Tty != null)
-        {
             switch (request)
             {
                 case LinuxConstants.TCGETS:
                 {
                     var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
-                    int ret = sm.Tty.GetAttr(termios);
+                    var ret = sm.Tty.GetAttr(termios);
                     if (ret != 0) return ret;
                     if (!sm.Engine.CopyToUser(arg, termios)) return -(int)Errno.EFAULT;
                     return 0;
@@ -36,15 +36,13 @@ public partial class SyscallManager
                 case LinuxConstants.TIOCGWINSZ:
                 {
                     var buf = new byte[8];
-                    int ret = sm.Tty.GetWindowSize(buf);
+                    var ret = sm.Tty.GetWindowSize(buf);
                     if (ret == 0)
-                    {
-                        if (!sm.Engine.CopyToUser(arg, buf)) return -(int)Errno.EFAULT;
-                    }
+                        if (!sm.Engine.CopyToUser(arg, buf))
+                            return -(int)Errno.EFAULT;
                     return ret;
                 }
             }
-        }
 
         // Generic ioctls or ignore
         return 0;
