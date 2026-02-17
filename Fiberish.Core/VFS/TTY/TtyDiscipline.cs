@@ -18,11 +18,17 @@ public class TtyDiscipline
     private uint _iflag = 0x500; // ICRNL | IXON
     private uint _oflag = 0x5;   // OPOST | ONLCR
     private uint _cflag = 0xbf;  // CS8 | CREAD | ...
-    private uint _lflag = 0x8a3b;// ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
+    private uint _lflag = 0x8a3b | IEXTEN;// ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
     private readonly byte[] _cc = new byte[32];
 
     // Canonical mode buffer
     private readonly List<byte> _canonBuffer = new();
+
+    // Flow control state
+    private bool _outputStopped;
+
+    // LNEXT state - next character should be treated literally
+    private bool _lnextPending;
 
     // Foreground process group
     public int ForegroundPgrp { get; set; }
@@ -35,22 +41,67 @@ public class TtyDiscipline
     private const int VEOF = 4;
     private const int VTIME = 5;
     private const int VMIN = 6;
+    private const int VSWTC = 7;
     private const int VSTART = 8;
     private const int VSTOP = 9;
     private const int VSUSP = 10;
-    
-    // Flags
-    private const uint ICANON = 2;
-    private const uint ECHO = 8;
-    private const uint ECHOE = 16;
-    private const uint ECHOK = 32;
-    private const uint ISIG = 1;
-    private const uint ICRNL = 0x100;
-    private const uint INLCR = 0x40;
-    private const uint IGNCR = 0x80;
-    private const uint OPOST = 1;
-    private const uint ONLCR = 4;
-    
+    private const int VEOL = 11;
+    private const int VREPRINT = 12;
+    private const int VDISCARD = 13;
+    private const int VWERASE = 14;
+    private const int VLNEXT = 15;
+    private const int VEOL2 = 16;
+
+    // Input flags (iflag)
+    private const uint IGNBRK = 0x01;   // Ignore break condition
+    private const uint BRKINT = 0x02;   // Signal interrupt on break
+    private const uint IGNPAR = 0x04;   // Ignore characters with parity errors
+    private const uint PARMRK = 0x08;   // Mark parity errors
+    private const uint INPCK = 0x10;    // Enable input parity check
+    private const uint ISTRIP = 0x20;   // Strip 8th bit off characters
+    private const uint INLCR = 0x40;    // Map NL to CR on input
+    private const uint IGNCR = 0x80;    // Ignore CR
+    private const uint ICRNL = 0x100;   // Map CR to NL on input
+    private const uint IUCLC = 0x200;   // Map uppercase to lowercase
+    private const uint IXON = 0x400;    // Enable start/stop output control
+    private const uint IXANY = 0x800;   // Enable any character to restart output
+    private const uint IXOFF = 0x1000;  // Enable start/stop input control
+    private const uint IMAXBEL = 0x2000;// Ring bell when input queue is full
+    private const uint IUTF8 = 0x4000;  // Input is UTF8
+
+    // Output flags (oflag)
+    private const uint OPOST = 1;       // Enable output processing
+    private const uint OLCUC = 2;       // Map lowercase to uppercase
+    private const uint ONLCR = 4;       // Map NL to CR-NL
+    private const uint OCRNL = 8;       // Map CR to NL
+    private const uint ONOCR = 16;      // No CR output at column 0
+    private const uint ONLRET = 32;     // NL performs CR function
+    private const uint OFILL = 64;      // Use fill characters for delay
+    private const uint OFDEL = 128;     // Fill is DEL instead of NUL
+    private const uint NLDLY = 0x100;   // NL delay mask
+    private const uint CRDLY = 0x600;   // CR delay mask
+    private const uint TABDLY = 0x1800; // Tab delay mask
+    private const uint BSDLY = 0x2000;  // BS delay mask
+    private const uint VTDLY = 0x4000;  // VT delay mask
+    private const uint FFDLY = 0x8000;  // FF delay mask
+
+    // Local flags (lflag)
+    private const uint ISIG = 1;        // Enable signals
+    private const uint ICANON = 2;      // Canonical mode
+    private const uint XCASE = 4;       // Enable case mapping
+    private const uint ECHO = 8;        // Enable echo
+    private const uint ECHOE = 16;      // Echo erase character
+    private const uint ECHOK = 32;      // Echo kill character
+    private const uint ECHONL = 64;     // Echo NL even if ECHO is off
+    private const uint NOFLSH = 128;    // Disable flush after signal
+    private const uint TOSTOP = 256;    // Send SIGTTOU for background output
+    private const uint ECHOCTL = 512;   // Echo control characters as ^X
+    private const uint ECHOPRT = 1024;  // Echo erase character as character is erased
+    private const uint ECHOKE = 2048;   // Echo kill character by erasing line
+    private const uint FLUSHO = 4096;   // Output being flushed
+    private const uint PENDIN = 8192;   // Retype pending input
+    private const uint IEXTEN = 16384;  // Enable extended input character processing
+
     private const byte POSIX_VDISABLE = 0; // Or 255? Usually 0 in Linux for 'disabled' if not set
 
     public TtyDiscipline(ITtyDriver driver, ISignalBroadcaster broadcaster, ILogger logger)
@@ -60,27 +111,32 @@ public class TtyDiscipline
         _logger = logger;
         InitializeDefaults();
     }
-    
+
     private void InitializeDefaults()
     {
         // Defaults for Linux (like a standard terminal)
-        _cc[VINTR] = 3;  // ^C
-        _cc[VQUIT] = 28; // ^\
-        _cc[VERASE] = 127; // DEL
-        _cc[VKILL] = 21; // ^U
-        _cc[VEOF] = 4;   // ^D
-        _cc[VSTART] = 17; // ^Q
-        _cc[VSTOP] = 19;  // ^S
-        _cc[VSUSP] = 26;  // ^Z
+        _cc[VINTR] = 3;     // ^C
+        _cc[VQUIT] = 28;    // ^\
+        _cc[VERASE] = 127;  // DEL
+        _cc[VKILL] = 21;    // ^U
+        _cc[VEOF] = 4;      // ^D
+        _cc[VSTART] = 17;   // ^Q
+        _cc[VSTOP] = 19;    // ^S
+        _cc[VSUSP] = 26;    // ^Z
+        _cc[VREPRINT] = 18; // ^R
+        _cc[VWERASE] = 23;  // ^W
+        _cc[VLNEXT] = 22;   // ^V
         _cc[VMIN] = 1;
         _cc[VTIME] = 0;
+        _cc[VEOL] = 0;      // Disabled by default
+        _cc[VEOL2] = 0;     // Disabled by default
     }
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
         return _inq.Read(buffer, flags);
     }
-    
+
     public int Write(ReadOnlySpan<byte> buffer)
     {
         return OutputProcess(TtyEndpointKind.Stdout, buffer);
@@ -95,10 +151,10 @@ public class TtyDiscipline
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), _cflag);
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), _lflag);
         span[16] = 0; // c_line
-        
+
         // cc
         // Linux struct typically has cc at offset 17
-        for(int i=0; i<32 && i+17 < termiosData.Length; i++)
+        for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
         {
             span[17 + i] = _cc[i];
         }
@@ -109,7 +165,7 @@ public class TtyDiscipline
     {
         if (winSizeBytes.Length != 8) return -(int)Errno.EINVAL;
         // In interactive mode, this would call host IOCTL.
-        
+
         // We can try to use MacOSTermios (host) if we are on macOS
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
         {
@@ -136,21 +192,21 @@ public class TtyDiscipline
         _oflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
         _cflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
         _lflag = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
-        
-        for(int i=0; i<32 && i+17 < termiosData.Length; i++)
+
+        for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
         {
             _cc[i] = span[17 + i];
         }
-        
+
         // If switching from Canonical to Raw, or vice versa, we might need to flush or adjust buffers.
         // For now, if we switch OFF canonical mode, any pending canon buffer should probably be pushed to read queue?
         if ((_lflag & ICANON) == 0 && _canonBuffer.Count > 0)
         {
-             // Flush canon buffer to read queue immediately
-             _inq.Write(_canonBuffer.ToArray());
-             _canonBuffer.Clear();
+            // Flush canon buffer to read queue immediately
+            _inq.Write(_canonBuffer.ToArray());
+            _canonBuffer.Clear();
         }
-        
+
         return 0;
     }
 
@@ -161,46 +217,195 @@ public class TtyDiscipline
 
     private void InputByte(byte b)
     {
-        // Pre-processing
-        if ((_iflag & ICRNL) != 0 && b == 13)
+        // Handle LNEXT (literal next) - this character should be treated literally
+        if (_lnextPending)
         {
-             // CR -> NL
-             // Note: if IGNCR is set, we'd ignore it. logic omitted for brevity.
-             b = 10;
-        }
-        else if ((_iflag & INLCR) != 0 && b == 10)
-        {
-            // NL -> CR
-            b = 13;
+            _lnextPending = false;
+            ProcessRegularChar(b);
+            return;
         }
 
-        // ISIG checks
+        // Check for LNEXT character (^V) first - only in canonical mode with IEXTEN
+        if ((_lflag & IEXTEN) != 0 && MatchCc(VLNEXT, b))
+        {
+            _lnextPending = true;
+            // Echo ^V as ^V if ECHOCTL is set, otherwise just echo it
+            if ((_lflag & ECHO) != 0)
+            {
+                if ((_lflag & ECHOCTL) != 0)
+                {
+                    Echo(new byte[] { (byte)'^', (byte)'V' });
+                }
+                else
+                {
+                    Echo(new byte[] { b });
+                }
+            }
+            return;
+        }
+
+        // Handle software flow control (IXON/IXOFF)
+        if ((_iflag & IXON) != 0)
+        {
+            // Check for VSTOP (^S) - stop output
+            if (MatchCc(VSTOP, b))
+            {
+                _outputStopped = true;
+                return;
+            }
+
+            // Check for VSTART (^Q) - restart output
+            if (MatchCc(VSTART, b))
+            {
+                _outputStopped = false;
+                return;
+            }
+
+            // If IXANY is set, any character restarts output
+            if ((_iflag & IXANY) != 0 && _outputStopped)
+            {
+                _outputStopped = false;
+                // Continue processing this character
+            }
+            else if (_outputStopped)
+            {
+                // Output is stopped, discard this character
+                return;
+            }
+        }
+
+        // Input processing (iflag)
+        b = ProcessInputFlags(b);
+        if (b == 0) return; // Character was consumed (e.g., IGNCR) - 0 is used as sentinel
+
+        // ISIG checks - signal generating characters
         if ((_lflag & ISIG) != 0)
         {
             if (MatchCc(VINTR, b)) // Ctrl-C
             {
-                if ((_lflag & ECHO) != 0) Echo(new[] { (byte)'^', (byte)'C', (byte)'\n' });
-                SendSignal(2); // SIGINT
+                HandleSignalChar(2, "^C", b); // SIGINT
                 return;
             }
             if (MatchCc(VQUIT, b)) // Ctrl-\
             {
-                 if ((_lflag & ECHO) != 0) Echo(new[] { (byte)'^', (byte)'\\', (byte)'\n' });
-                 SendSignal(3); // SIGQUIT
-                 return;
+                HandleSignalChar(3, "^\\", b); // SIGQUIT
+                return;
             }
-            // Suspend (Ctrl-Z) omitted for now
+            if (MatchCc(VSUSP, b)) // Ctrl-Z
+            {
+                HandleSignalChar(20, "^Z", b); // SIGTSTP
+                return;
+            }
         }
 
+        // Extended input processing (IEXTEN)
+        if ((_lflag & IEXTEN) != 0)
+        {
+            // VREPRINT (^R) - reprint input line
+            if (MatchCc(VREPRINT, b) && (_lflag & ICANON) != 0)
+            {
+                HandleReprint();
+                return;
+            }
+
+            // VWERASE (^W) - word erase
+            if (MatchCc(VWERASE, b) && (_lflag & ICANON) != 0)
+            {
+                CanonWordErase();
+                return;
+            }
+        }
+
+        // Regular character processing
+        ProcessRegularChar(b);
+    }
+
+    private byte ProcessInputFlags(byte b)
+    {
+        // Handle break condition (simplified - we don't have actual break detection)
+        // In a real terminal, break is a special condition, not a regular byte
+
+        // ISTRIP - strip 8th bit
+        if ((_iflag & ISTRIP) != 0)
+        {
+            b = (byte)(b & 0x7F);
+        }
+
+        // IGNCR - ignore CR (must be checked before ICRNL)
+        if ((_iflag & IGNCR) != 0 && b == 13)
+        {
+            return 0; // Return 0 to signal character was consumed (0 is NUL and safe as sentinel)
+        }
+
+        // ICRNL - map CR to NL
+        if ((_iflag & ICRNL) != 0 && b == 13)
+        {
+            b = 10;
+        }
+        // INLCR - map NL to CR (only if not already converted from CR)
+        else if ((_iflag & INLCR) != 0 && b == 10)
+        {
+            b = 13;
+        }
+
+        return b;
+    }
+
+    private void HandleSignalChar(int signal, string echoStr, byte originalChar)
+    {
+        // Echo the signal character if ECHO is enabled
+        if ((_lflag & ECHO) != 0)
+        {
+            if ((_lflag & ECHOCTL) != 0)
+            {
+                Echo(System.Text.Encoding.ASCII.GetBytes(echoStr + "\n"));
+            }
+            else
+            {
+                Echo(new byte[] { originalChar, (byte)'\n' });
+            }
+        }
+
+        // NOFLSH - if NOT set, flush input and output queues on signal
+        if ((_lflag & NOFLSH) == 0)
+        {
+            _canonBuffer.Clear();
+            _inq.Clear();
+        }
+
+        SendSignal(signal);
+    }
+
+    private void HandleReprint()
+    {
+        // Echo ^R followed by newline and the current line content
+        if ((_lflag & ECHO) != 0)
+        {
+            if ((_lflag & ECHOCTL) != 0)
+            {
+                Echo(new byte[] { (byte)'^', (byte)'R' });
+            }
+            Echo(new byte[] { (byte)'\n' });
+
+            // Reprint the current line
+            foreach (var c in _canonBuffer)
+            {
+                Echo(new byte[] { c });
+            }
+        }
+    }
+
+    private void ProcessRegularChar(byte b)
+    {
         // Canonical Mode
         if ((_lflag & ICANON) != 0)
         {
-            if (b == 10) // EOL
+            if (b == 10) // EOL (NL)
             {
                 _canonBuffer.Add(b);
-                if ((_lflag & ECHO) != 0)
+                // Echo NL - ECHO flag OR ECHONL flag
+                if ((_lflag & ECHO) != 0 || (_lflag & ECHONL) != 0)
                 {
-                    // Echo NL as CR NL usually
                     EchoByte(TtyEndpointKind.Stdout, b);
                 }
                 FlushCanonical(false);
@@ -209,6 +414,16 @@ public class TtyDiscipline
             {
                 // EOF character (Ctrl-D)
                 FlushCanonical(true);
+            }
+            else if (MatchCc(VEOL, b) && _cc[VEOL] != POSIX_VDISABLE) // Alternate EOL
+            {
+                _canonBuffer.Add(b);
+                FlushCanonical(false);
+            }
+            else if (MatchCc(VEOL2, b) && _cc[VEOL2] != POSIX_VDISABLE) // Alternate EOL2
+            {
+                _canonBuffer.Add(b);
+                FlushCanonical(false);
             }
             else if (MatchCc(VERASE, b)) // Backspace
             {
@@ -242,7 +457,7 @@ public class TtyDiscipline
     {
         foreach (var b in bytes) EchoByte(TtyEndpointKind.Stdout, b);
     }
-    
+
     private bool MatchCc(int cc, byte b)
     {
         return _cc[cc] != POSIX_VDISABLE && _cc[cc] == b;
@@ -257,65 +472,222 @@ public class TtyDiscipline
         // Note: EOF itself is NOT pushed to queue in Linux canon mode,
         // it just terminates the read. If we have data, we push data.
         // If we have NO data and EOF, we push empty write to signal 0-read.
-        
+
         _inq.Write(_canonBuffer.ToArray(), canonicalReady: true);
         _canonBuffer.Clear();
-        
+
         if (eof)
         {
-             // If this was an EOF, we just flushed whatever was there. 
-             // If _canonBuffer was empty, _inq.Write with canonicalReady=true will ensure Read() returns.
+            // If this was an EOF, we just flushed whatever was there.
+            // If _canonBuffer was empty, _inq.Write with canonicalReady=true will ensure Read() returns.
         }
     }
 
     private void CanonErase()
     {
         if (_canonBuffer.Count == 0) return;
-        _canonBuffer.RemoveAt(_canonBuffer.Count - 1);
+
+        // Handle multi-byte UTF-8 character erase
+        int eraseCount = 1;
+        if ((_lflag & IEXTEN) != 0 && _canonBuffer.Count > 0)
+        {
+            // Check if we're erasing a UTF-8 continuation byte
+            // UTF-8 continuation bytes are 10xxxxxx (0x80-0xBF)
+            // We need to find the start byte
+            int idx = _canonBuffer.Count - 1;
+            while (idx > 0 && (_canonBuffer[idx] & 0xC0) == 0x80)
+            {
+                idx--;
+                eraseCount++;
+            }
+
+            // If we found a multi-byte sequence, erase all of it
+            if (eraseCount > 1)
+            {
+                _canonBuffer.RemoveRange(_canonBuffer.Count - eraseCount, eraseCount);
+            }
+            else
+            {
+                _canonBuffer.RemoveAt(_canonBuffer.Count - 1);
+            }
+        }
+        else
+        {
+            _canonBuffer.RemoveAt(_canonBuffer.Count - 1);
+        }
+
         if ((_lflag & ECHO) != 0 && (_lflag & ECHOE) != 0)
         {
-            // Echo backspace-space-backspace
-            OutputProcess(TtyEndpointKind.Stdout, new byte[] { 8, 32, 8 });
+            // Echo backspace-space-backspace for each erased character
+            for (int i = 0; i < eraseCount; i++)
+            {
+                OutputProcess(TtyEndpointKind.Stdout, new byte[] { 8, 32, 8 });
+            }
         }
+    }
+
+    private void CanonWordErase()
+    {
+        if (_canonBuffer.Count == 0) return;
+
+        int erasedCount = 0;
+
+        // First, skip any trailing whitespace
+        while (_canonBuffer.Count > 0 && IsWhitespace(_canonBuffer[_canonBuffer.Count - 1]))
+        {
+            _canonBuffer.RemoveAt(_canonBuffer.Count - 1);
+            erasedCount++;
+        }
+
+        // Then erase the word (until we hit whitespace or beginning)
+        while (_canonBuffer.Count > 0 && !IsWhitespace(_canonBuffer[_canonBuffer.Count - 1]))
+        {
+            _canonBuffer.RemoveAt(_canonBuffer.Count - 1);
+            erasedCount++;
+        }
+
+        // Echo the erasure
+        if ((_lflag & ECHO) != 0 && erasedCount > 0)
+        {
+            if ((_lflag & ECHOE) != 0)
+            {
+                // Echo backspace-space-backspace for each erased character
+                for (int i = 0; i < erasedCount; i++)
+                {
+                    OutputProcess(TtyEndpointKind.Stdout, new byte[] { 8, 32, 8 });
+                }
+            }
+            else if ((_lflag & ECHOPRT) != 0)
+            {
+                // Echo the erased characters between \ and /
+                Echo(new byte[] { (byte)'\\' });
+                // Note: This would require tracking erased chars, simplified here
+                Echo(new byte[] { (byte)'/' });
+            }
+        }
+    }
+
+    private static bool IsWhitespace(byte b)
+    {
+        return b == ' ' || b == '\t';
     }
 
     private void CanonKill()
     {
         if (_canonBuffer.Count == 0) return;
+
+        int count = _canonBuffer.Count;
         _canonBuffer.Clear();
-        if ((_lflag & ECHO) != 0 && (_lflag & ECHOK) != 0)
+
+        if ((_lflag & ECHO) != 0)
         {
-             OutputProcess(TtyEndpointKind.Stdout, new byte[] { 10 });
+            if ((_lflag & ECHOK) != 0)
+            {
+                // Echo newline
+                OutputProcess(TtyEndpointKind.Stdout, new byte[] { 10 });
+            }
+            else if ((_lflag & ECHOKE) != 0)
+            {
+                // Echo backspace-space-backspace for each character
+                for (int i = 0; i < count; i++)
+                {
+                    OutputProcess(TtyEndpointKind.Stdout, new byte[] { 8, 32, 8 });
+                }
+            }
         }
     }
 
     private void EchoByte(TtyEndpointKind kind, byte b)
     {
-        if ((_lflag & ECHO) == 0) return;
+        if ((_lflag & ECHO) == 0)
+        {
+            // Check ECHONL - echo NL even if ECHO is off
+            if (b == 10 && (_lflag & ECHONL) != 0)
+            {
+                OutputProcess(kind, new[] { b });
+            }
+            return;
+        }
+
+        // ECHOCTL - echo control characters as ^X
+        if ((_lflag & ECHOCTL) != 0 && b < 32 && b != 10 && b != 13 && b != 9)
+        {
+            OutputProcess(kind, new byte[] { (byte)'^', (byte)(b + 64) });
+            return;
+        }
+
         OutputProcess(kind, new[] { b });
     }
 
     private int OutputProcess(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
     {
+        // Check if output is stopped due to flow control
+        if (_outputStopped)
+        {
+            // In a real implementation, we would buffer this for later
+            // For now, just discard (or could block)
+            return buffer.Length;
+        }
+
         if ((_oflag & OPOST) == 0)
         {
             return _driver.Write(kind, buffer);
         }
 
-        if ((_oflag & ONLCR) == 0)
-        {
-            return _driver.Write(kind, buffer);
-        }
+        List<byte> expanded = new(buffer.Length + 16);
 
-        // Expand NL -> CR NL
-        // Simplified expansion
-        List<byte> expanded = new(buffer.Length + 8);
         foreach (byte b in buffer)
         {
-            if (b == 10)
+            if (b == 10) // NL
             {
-                expanded.Add(13);
-                expanded.Add(10);
+                // ONLCR - map NL to CR-NL
+                if ((_oflag & ONLCR) != 0)
+                {
+                    expanded.Add(13);
+                    expanded.Add(10);
+                }
+                // ONLRET - NL performs CR function (don't output CR, but move to col 0)
+                else if ((_oflag & ONLRET) != 0)
+                {
+                    expanded.Add(10);
+                }
+                else
+                {
+                    expanded.Add(b);
+                }
+            }
+            else if (b == 13) // CR
+            {
+                // OCRNL - map CR to NL
+                if ((_oflag & OCRNL) != 0)
+                {
+                    expanded.Add(10);
+                }
+                // ONOCR - no CR at column 0 (we don't track column, so output anyway)
+                else if ((_oflag & ONOCR) != 0)
+                {
+                    // In a full implementation, we'd track column position
+                    // For now, output the CR
+                    expanded.Add(13);
+                }
+                else
+                {
+                    expanded.Add(13);
+                }
+            }
+            else if (b == 9) // TAB
+            {
+                // TABDLY - tab expansion (simplified)
+                if ((_oflag & TABDLY) != 0)
+                {
+                    // In a full implementation, expand to spaces based on column
+                    // For now, just output the tab
+                    expanded.Add(9);
+                }
+                else
+                {
+                    expanded.Add(9);
+                }
             }
             else
             {
@@ -326,12 +698,12 @@ public class TtyDiscipline
         byte[] expandedArray = expanded.ToArray();
         int written = _driver.Write(kind, expandedArray);
         if (written < 0) return written;
-        
-        // If partial write, mapping back is complex. 
+
+        // If partial write, mapping back is complex.
         // Assuming blocking write or full write for now.
         // If driver wrote everything, return original buffer length
         if (written == expandedArray.Length) return buffer.Length;
-        
+
         return written; // Approximate
     }
 
@@ -362,7 +734,16 @@ internal sealed class TtyInputQueue
     private bool _hasCanonicalLine;
     private bool _isEof;
 
-    public int Count { get { lock(_lock) return _queue.Count; } }
+    public int Count { get { lock (_lock) return _queue.Count; } }
+
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _queue.Clear();
+            _hasCanonicalLine = false;
+        }
+    }
 
     public void Write(byte b)
     {
@@ -373,7 +754,7 @@ internal sealed class TtyInputQueue
         }
         _dataEvent.Set();
     }
-    
+
     public void Write(IEnumerable<byte> bytes, bool canonicalReady = false)
     {
         lock (_lock)
@@ -390,8 +771,8 @@ internal sealed class TtyInputQueue
 
     public void Signal()
     {
-         // Wake up waiters to check signals
-         _dataEvent.Set();
+        // Wake up waiters to check signals
+        _dataEvent.Set();
     }
 
     public int Read(Span<byte> buffer, FileFlags flags)
@@ -401,36 +782,36 @@ internal sealed class TtyInputQueue
             // Check signals (conceptually, the caller task should handle signals when waking up)
             // But if we return 0 bytes and no error, caller might assume EOF.
             // If we have no data and no EOF, we should block.
-            
+
             // NOTE: Interruption by signal is handled by the Scheduler/Task logic
             // waking up the blocking task. Here we just check data.
-            
+
             lock (_lock)
             {
                 if (_queue.Count > 0)
                 {
                     // If canonical mode is driven by _hasCanonicalLine?
-                    // The discipline controls what goes in. 
+                    // The discipline controls what goes in.
                     // If logic pushes to queue implies it's ready to be read.
                     // For canonical mode, discipline buffers internally and only pushes lines.
                     // So if it's in queue, we can read it.
-                    
+
                     int count = 0;
                     while (count < buffer.Length && _queue.Count > 0)
                     {
                         buffer[count++] = _queue.Dequeue();
                     }
                     if (_queue.Count == 0) _hasCanonicalLine = false;
-                    
+
                     // Reset event if empty?
                     // WaitHandle generic Set() logic: usually auto-reset or manual?
                     // Our custom WaitHandle is manual reset (Set() -> IsSet=true).
-                    // We should probably Reset() if empty. 
-                    if (_queue.Count == 0) _dataEvent.Reset(); 
-                    
+                    // We should probably Reset() if empty.
+                    if (_queue.Count == 0) _dataEvent.Reset();
+
                     return count;
                 }
-                
+
                 // If we have pushed an empty line (EOF in canon mode), _hasCanonicalLine would be true
                 // but queue empty?
                 // The previous implementation used _hasCanonicalLine to signal "return 0 now".
@@ -438,7 +819,7 @@ internal sealed class TtyInputQueue
                 {
                     _hasCanonicalLine = false;
                     _dataEvent.Reset();
-                    return 0; 
+                    return 0;
                 }
             }
 
@@ -452,32 +833,32 @@ internal sealed class TtyInputQueue
             if (task != null)
             {
                 // Register wait
-                 _dataEvent.Register(() => {
-                     // Wake up task logic handled by scheduler usually?
-                     // Scheduler.WakeTask(task)?
-                     // WaitHandle implementation:
-                     // Register(Action) calls action when Set.
-                     // The task.BlockOn(waitHandle) is the pattern?
-                     // Current pattern: task.BlockingSyscall = ...
-                     // But _dataEvent is our custom WaitHandle.
-                     // It has GetAwaiter(). 
+                _dataEvent.Register(() => {
+                    // Wake up task logic handled by scheduler usually?
+                    // Scheduler.WakeTask(task)?
+                    // WaitHandle implementation:
+                    // Register(Action) calls action when Set.
+                    // The task.BlockOn(waitHandle) is the pattern?
+                    // Current pattern: task.BlockingSyscall = ...
+                    // But _dataEvent is our custom WaitHandle.
+                    // It has GetAwaiter().
                 });
-                
+
                 // We need to await this
-                // But Read returns int, not ValueTask<int>. 
+                // But Read returns int, not ValueTask<int>.
                 // Wait, INode.ReadAsync returns ValueTask<int>.
                 // TtyDiscipline.Read is synchronous-like?
                 // The caller (SysRead) awaits.
-                
+
                 // Implementation Issue: TtyDiscipline.Read signature was `int Read(...)`.
                 // It SHOULD be valid to just return -EAGAIN if we want to rely on caller's loop,
                 // BUT we want to suspend.
-                
-                // The caller (TtyInode) should handle the await. 
+
+                // The caller (TtyInode) should handle the await.
                 // Let's change TtyDiscipline.Read to return 0 if blocked?
                 // Or better: TtyDiscipline should expose the WaitHandle so TtyInode can await it.
             }
-            
+
             // For now, implementing "Blocking via Loop" using Thread.Sleep? No, async!
             // We need to change TtyDiscipline.Read to be async or return a WaitHandle.
             // But to fit the existing synchronous-looking signature in the snippet...
@@ -486,22 +867,22 @@ internal sealed class TtyInputQueue
             var task = Scheduler.GetCurrent();
             if (task != null) {
                 task.BlockingTask = WaitForDataAsync();
-                return 0; 
+                return 0;
             }
             */
-            
+
             // Logic: if no data, register blocking task and return 0.
             // The Syscall handler sees return 0? No, TtyInode logic usually handles this.
-            
+
             // To properly fit the new Async architecture:
             // TtyDiscipline.Read should probably NOT block itself but return 0 or -EAGAIN,
             // and provide a WaitForData() method.
-            
+
             // Let's assume TtyInode will handle the async wait.
             // So here we return -EAGAIN if no data.
             return -(int)Errno.EAGAIN;
         }
     }
-    
+
     public WaitHandle DataAvailable => _dataEvent;
 }
