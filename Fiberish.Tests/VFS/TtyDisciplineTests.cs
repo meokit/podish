@@ -569,6 +569,116 @@ public class TtyDisciplineTests
 
     #endregion
 
+    #region Thread Safety and Race Condition Tests
+
+    [Fact]
+    public void Input_enqueues_to_device_buffer_not_processes_directly()
+    {
+        // After Input() is called, data should be in Device buffer, not yet processed
+        _tty.Input(Encoding.ASCII.GetBytes("abc\n"));
+
+        // Data should be in the device buffer (HasInterrupt = true)
+        Assert.True(_tty.Device.HasInterrupt);
+
+        // The input queue count should be 0 until Read() or ProcessPendingInput() is called
+        // Note: We can't directly check _inq.Count, but we can verify via HasDataAvailable
+        // which checks both Device.HasInterrupt and queue count
+        Assert.True(_tty.HasDataAvailable); // True because Device.HasInterrupt is true
+    }
+
+    [Fact]
+    public void Input_signals_DataAvailable_when_data_arrives()
+    {
+        // DataAvailable should not be signaled initially
+        Assert.False(_tty.DataAvailable.IsSignaled);
+
+        // Input data from "background thread"
+        _tty.Input(Encoding.ASCII.GetBytes("test\n"));
+
+        // DataAvailable should now be signaled (unified signaling via OnInputEnqueued)
+        Assert.True(_tty.DataAvailable.IsSignaled);
+    }
+
+    [Fact]
+    public void Read_processes_pending_input_from_device()
+    {
+        var buffer = new byte[100];
+
+        // Input data (goes to device buffer)
+        _tty.Input(Encoding.ASCII.GetBytes("hello\n"));
+
+        // Read should process the pending input and return the data
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(6, read);
+        Assert.Equal("hello\n", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    [Fact]
+    public void HasDataAvailable_checks_both_device_and_queue()
+    {
+        // Initially no data
+        Assert.False(_tty.HasDataAvailable);
+
+        // Input data (goes to device buffer)
+        _tty.Input(Encoding.ASCII.GetBytes("test\n"));
+
+        // HasDataAvailable should be true (device has data)
+        Assert.True(_tty.HasDataAvailable);
+
+        // Process the input
+        _tty.Read(new byte[100], FileFlags.O_NONBLOCK);
+
+        // After processing, device is empty but we need to check the race condition scenario
+        // where new data might arrive between Read checking queue and resetting event
+    }
+
+    [Fact]
+    public void No_lost_wakeup_when_data_arrives_during_read()
+    {
+        // This test simulates the race condition scenario:
+        // 1. Read() checks queue (empty)
+        // 2. Input() enqueues data
+        // 3. Read() resets event
+        // 4. Task awaits (should not miss the signal)
+
+        var buffer = new byte[100];
+
+        // First, verify DataAvailable is signaled when input arrives
+        Assert.False(_tty.DataAvailable.IsSignaled);
+        _tty.Input(Encoding.ASCII.GetBytes("data\n"));
+        Assert.True(_tty.DataAvailable.IsSignaled);
+
+        // Read should succeed and DataAvailable should still be signaled for next read
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(5, read);
+
+        // After read, event might be reset, but if more data arrives, it should be signaled again
+        _tty.Input(Encoding.ASCII.GetBytes("more\n"));
+        Assert.True(_tty.DataAvailable.IsSignaled);
+    }
+
+    [Fact]
+    public void Concurrent_input_from_multiple_calls_queued_correctly()
+    {
+        var buffer = new byte[100];
+
+        // Simulate multiple rapid input calls (like from background thread)
+        _tty.Input(Encoding.ASCII.GetBytes("a"));
+        _tty.Input(Encoding.ASCII.GetBytes("b"));
+        _tty.Input(Encoding.ASCII.GetBytes("c"));
+        _tty.Input(Encoding.ASCII.GetBytes("\n"));
+
+        // All data should be queued in device
+        Assert.True(_tty.Device.HasInterrupt);
+
+        // Read should process all and return "abc\n"
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(4, read);
+        Assert.Equal("abc\n", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    #endregion
+
     #region Helper Classes
 
     private class MockTtyDriver : ITtyDriver

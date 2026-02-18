@@ -66,6 +66,45 @@ public class ConsoleInode : Inode
         return buffer.Length;
     }
 
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+
+        short revents = 0;
+
+        if (_isInput)
+        {
+            // Check if there's data available in the TTY discipline
+            if ((events & POLLIN) != 0)
+            {
+                if (_discipline != null)
+                {
+                    // Check if there's data in the input queue or pending input from device
+                    if (_discipline.HasDataAvailable)
+                    {
+                        revents |= POLLIN;
+                    }
+                }
+                else
+                {
+                    // Direct stdin - always readable (simplified)
+                    revents |= POLLIN;
+                }
+            }
+        }
+        else
+        {
+            // Output - stdout is always writable
+            if ((events & POLLOUT) != 0)
+            {
+                revents |= POLLOUT;
+            }
+        }
+
+        return revents;
+    }
+
     public override void Truncate(long size)
     {
     }

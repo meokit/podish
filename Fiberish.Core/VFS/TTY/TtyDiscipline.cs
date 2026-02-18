@@ -86,6 +86,7 @@ public class TtyDiscipline
     private readonly byte[] _cc = new byte[32];
     private readonly ITtyDriver _driver;
     private readonly TtyInputQueue _inq = new();
+    private readonly object _lock = new();
     private readonly ILogger _logger;
     private uint _cflag = 0xbf; // CS8 | CREAD | ...
 
@@ -100,12 +101,21 @@ public class TtyDiscipline
     // Flow control state
     private bool _outputStopped;
 
+    // Window Size state
+    private ushort _rows = 24;
+    private ushort _cols = 80;
+
     public TtyDiscipline(ITtyDriver driver, ISignalBroadcaster broadcaster, ILogger logger)
     {
         _driver = driver;
         _broadcaster = broadcaster;
         _logger = logger;
         Device = new TtyDevice();
+        // Unify signaling: when data arrives in the device buffer (from background thread),
+        // signal the input queue's wait handle so waiting readers are woken up.
+        // This prevents the "lost wakeup" race condition where Read() might reset the event
+        // just as new data arrives.
+        Device.OnInputEnqueued += () => _inq.DataAvailable.Signal();
         InitializeDefaults();
     }
 
@@ -121,6 +131,12 @@ public class TtyDiscipline
     ///     Used by scheduler to determine if it should wait for input.
     /// </summary>
     public bool HasPendingInput => Device.HasInterrupt;
+
+    /// <summary>
+    ///     Check if there is data available to read from the TTY.
+    ///     This includes both pending input from the device and data already in the input queue.
+    /// </summary>
+    public bool HasDataAvailable => Device.HasInterrupt || _inq.Count > 0;
 
     public AsyncWaitQueue DataAvailable => _inq.DataAvailable;
 
@@ -146,22 +162,14 @@ public class TtyDiscipline
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
-        // Process all pending input from the device first
-        // This ensures all TTY processing happens on the scheduler thread
-        var inputs = Device.ConsumeAll();
-        if (inputs != null)
-        {
-            foreach (var inputData in inputs)
-            {
-                _logger.LogDebug("[TTY] Read() processing {Count} bytes from device", inputData.Length);
-                foreach (var b in inputData) InputByte(b);
-            }
-
-            _logger.LogDebug("[TTY] Read() processed {Chunks} chunks from device, _inq.Count={InqCount}", inputs.Count,
-                _inq.Count);
-        }
+        ProcessPendingInput();
 
         var result = _inq.Read(buffer, flags);
+        
+        // Race condition check: If new data arrived during processing/reading but after _inq.Read reset the event,
+        // we must ensure the event is signaled again so we don't sleep forever in SysRead.
+        if (Device.HasInterrupt) _inq.DataAvailable.Signal();
+
         _logger.LogDebug("[TTY] Read() returning {Result}, buffer len={BufferLen}, flags={Flags}", result,
             buffer.Length, flags);
         return result;
@@ -175,67 +183,60 @@ public class TtyDiscipline
     public int GetAttr(byte[] termiosData)
     {
         if (termiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
-        var span = termiosData.AsSpan();
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), _iflag);
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), _oflag);
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), _cflag);
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), _lflag);
-        span[16] = 0; // c_line
-
-        // cc
-        // Linux struct typically has cc at offset 17
-        for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
+        lock (_lock)
         {
-            span[17 + i] = _cc[i];
-        }
+            var span = termiosData.AsSpan();
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(0, 4), _iflag);
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4, 4), _oflag);
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8, 4), _cflag);
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(12, 4), _lflag);
+            span[16] = 0; // c_line
 
+            // cc
+            // Linux struct typically has cc at offset 17
+            for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
+            {
+                span[17 + i] = _cc[i];
+            }
+        }
         return 0;
     }
 
     public int GetWindowSize(byte[] winSizeBytes)
     {
         if (winSizeBytes.Length != 8) return -(int)Errno.EINVAL;
-        // In interactive mode, this would call host IOCTL.
-
-        // We can try to use MacOSTermios (host) if we are on macOS
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            byte[] hostSize;
-            if (MacOSTermios.GetWindowSize(0, out hostSize) == 0)
-            {
-                hostSize.CopyTo(winSizeBytes, 0);
-                return 0;
-            }
-        }
-
-        // Default: 80x24
+        
+        // Return stored window size
         var span = winSizeBytes.AsSpan();
-        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), 24); // rows
-        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), 80); // cols
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(0, 2), _rows); // rows
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), _cols); // cols
         return 0;
     }
 
     public int SetAttr(int optional_actions, byte[] termiosData)
     {
         if (termiosData.Length != LinuxConstants.TERMIOS_SIZE_I386) return -(int)Errno.EINVAL;
-        var span = termiosData.AsSpan();
-        _iflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
-        _oflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
-        _cflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
-        _lflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
-
-        for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
+        lock (_lock)
         {
-            _cc[i] = span[17 + i];
-        }
+            var span = termiosData.AsSpan();
+            _iflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(0, 4));
+            _oflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(4, 4));
+            _cflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
+            _lflag = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
 
-        // If switching from Canonical to Raw, or vice versa, we might need to flush or adjust buffers.
-        // For now, if we switch OFF canonical mode, any pending canon buffer should probably be pushed to read queue?
-        if ((_lflag & ICANON) == 0 && _canonBuffer.Count > 0)
-        {
-            // Flush canon buffer to read queue immediately
-            _inq.Write(_canonBuffer.ToArray());
-            _canonBuffer.Clear();
+            for (int i = 0; i < 32 && i + 17 < termiosData.Length; i++)
+            {
+                _cc[i] = span[17 + i];
+            }
+
+            // If switching from Canonical to Raw, or vice versa, we might need to flush or adjust buffers.
+            // For now, if we switch OFF canonical mode, any pending canon buffer should probably be pushed to read queue?
+            if ((_lflag & ICANON) == 0 && _canonBuffer.Count > 0)
+            {
+                // Flush canon buffer to read queue immediately
+                _inq.Write(_canonBuffer.ToArray());
+                _canonBuffer.Clear();
+            }
         }
 
         return 0;
@@ -243,8 +244,10 @@ public class TtyDiscipline
 
     /// <summary>
     ///     Called from background InputLoop thread to queue input data.
-    ///     The data will be processed on the scheduler thread during Read().
-    ///     This is thread-safe - uses a lock-free ConcurrentQueue via TtyDevice.
+    ///     The data is stored in the TtyDevice buffer and will be processed
+    ///     on the scheduler thread during Read() or ProcessPendingInput().
+    ///     This ensures thread safety - complex TTY logic (echo, signals, canonical mode)
+    ///     only runs on the scheduler thread.
     /// </summary>
     public void Input(byte[] input)
     {
@@ -256,18 +259,42 @@ public class TtyDiscipline
     /// </summary>
     public void ProcessPendingInput()
     {
+        // Handle Resize first
+        var resize = Device.ConsumeResize();
+        if (resize.HasValue)
+        {
+            HandleResize((ushort)resize.Value.Rows, (ushort)resize.Value.Cols);
+        }
+
+        // Handle Input Data
         var inputs = Device.ConsumeAll();
         if (inputs != null)
         {
             foreach (var inputData in inputs)
             {
+                _logger.LogDebug("[TTY] Read() processing {Count} bytes from device", inputData.Length);
                 foreach (var b in inputData) InputByte(b);
             }
+
+            _logger.LogDebug("[TTY] Read() processed {Chunks} chunks from device, _inq.Count={InqCount}", inputs.Count,
+                _inq.Count);
+        }
+    }
+
+    private void HandleResize(ushort rows, ushort cols)
+    {
+        if (_rows != rows || _cols != cols)
+        {
+            _rows = rows;
+            _cols = cols;
+            _logger.LogInformation("[TTY] Window resized to {Rows}x{Cols}, sending SIGWINCH", rows, cols);
+            SendSignal((int)Signal.SIGWINCH);
         }
     }
 
     private void InputByte(byte b)
     {
+        _logger.LogDebug("[TTY] InputByte: {Char} (0x{Hex})", (char)b, b.ToString("X2"));
         // Handle LNEXT (literal next) - this character should be treated literally
         if (_lnextPending)
         {
@@ -522,6 +549,7 @@ public class TtyDiscipline
 
     private void FlushCanonical(bool eof)
     {
+        _logger.LogDebug("[TTY] FlushCanonical: count={Count}, eof={Eof}", _canonBuffer.Count, eof);
         // If empty and NOT eof, nothing to flush.
         // But if EOF, we must flush (even empty) to signal the reader (0 bytes read).
         if (_canonBuffer.Count == 0 && !eof) return;
@@ -788,7 +816,6 @@ internal sealed class TtyInputQueue
     private readonly object _lock = new();
     private readonly Queue<byte> _queue = new();
     private bool _hasCanonicalLine;
-    private bool _isEof;
 
     public int Count
     {
@@ -844,112 +871,46 @@ internal sealed class TtyInputQueue
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
-        while (true)
+        lock (_lock)
         {
-            // Check signals (conceptually, the caller task should handle signals when waking up)
-            // But if we return 0 bytes and no error, caller might assume EOF.
-            // If we have no data and no EOF, we should block.
-
-            // NOTE: Interruption by signal is handled by the Scheduler/Task logic
-            // waking up the blocking task. Here we just check data.
-
-            lock (_lock)
+            if (_queue.Count > 0)
             {
-                if (_queue.Count > 0)
+                int count = 0;
+                while (count < buffer.Length && _queue.Count > 0)
                 {
-                    // If canonical mode is driven by _hasCanonicalLine?
-                    // The discipline controls what goes in.
-                    // If logic pushes to queue implies it's ready to be read.
-                    // For canonical mode, discipline buffers internally and only pushes lines.
-                    // So if it's in queue, we can read it.
-
-                    int count = 0;
-                    while (count < buffer.Length && _queue.Count > 0)
-                    {
-                        buffer[count++] = _queue.Dequeue();
-                    }
-
-                    if (_queue.Count == 0) _hasCanonicalLine = false;
-
-                    // Reset event if empty?
-                    // AsyncWaitQueue generic Set() logic: usually auto-reset or manual?
-                    // Our custom AsyncWaitQueue is manual reset (Set() -> IsSet=true).
-                    // We should probably Reset() if empty.
-                    if (_queue.Count == 0) _dataEvent.Reset();
-
-                    return count;
+                    buffer[count++] = _queue.Dequeue();
                 }
 
-                // If we have pushed an empty line (EOF in canon mode), _hasCanonicalLine would be true
-                // but queue empty?
-                // The previous implementation used _hasCanonicalLine to signal "return 0 now".
-                if (_hasCanonicalLine && _queue.Count == 0)
+                if (_queue.Count == 0)
                 {
                     _hasCanonicalLine = false;
                     _dataEvent.Reset();
-                    return 0;
                 }
+
+                return count;
             }
 
-            if ((flags & FileFlags.O_NONBLOCK) != 0)
+            // EOF in canonical mode: _hasCanonicalLine is set by FlushCanonical(true)
+            // to signal that an EOF was received, even if the buffer is empty.
+            if (_hasCanonicalLine && _queue.Count == 0)
             {
-                return -(int)Errno.EAGAIN;
+                _hasCanonicalLine = false;
+                _dataEvent.Reset();
+                return 0; // EOF
             }
+        }
 
-            // Block
-            var task = KernelScheduler.Current?.CurrentTask;
-            if (task != null)
-            {
-                // Register wait
-                _dataEvent.Register(() =>
-                {
-                    // Wake up task logic handled by scheduler usually?
-                    // Scheduler.WakeTask(task)?
-                    // AsyncWaitQueue implementation:
-                    // Register(Action) calls action when Set.
-                    // The task.BlockOn(waitHandle) is the pattern?
-                    // Current pattern: task.BlockingSyscall = ...
-                    // But _dataEvent is our custom AsyncWaitQueue.
-                    // It has GetAwaiter().
-                });
-
-                // We need to await this
-                // But Read returns int, not ValueTask<int>.
-                // Wait, INode.ReadAsync returns ValueTask<int>.
-                // TtyDiscipline.Read is synchronous-like?
-                // The caller (SysRead) awaits.
-
-                // Implementation Issue: TtyDiscipline.Read signature was `int Read(...)`.
-                // It SHOULD be valid to just return -EAGAIN if we want to rely on caller's loop,
-                // BUT we want to suspend.
-
-                // The caller (TtyInode) should handle the await.
-                // Let's change TtyDiscipline.Read to return 0 if blocked?
-                // Or better: TtyDiscipline should expose the AsyncWaitQueue so TtyInode can await it.
-            }
-
-            // For now, implementing "Blocking via Loop" using Thread.Sleep? No, async!
-            // We need to change TtyDiscipline.Read to be async or return a AsyncWaitQueue.
-            // But to fit the existing synchronous-looking signature in the snippet...
-            // Let's look at TtyInputQueue.Read in the snippet:
-            /*
-            var task = Scheduler.GetCurrent();
-            if (task != null) {
-                task.BlockingTask = WaitForDataAsync();
-                return 0;
-            }
-            */
-
-            // Logic: if no data, register blocking task and return 0.
-            // The Syscall handler sees return 0? No, TtyInode logic usually handles this.
-
-            // To properly fit the new Async architecture:
-            // TtyDiscipline.Read should probably NOT block itself but return 0 or -EAGAIN,
-            // and provide a WaitForData() method.
-
-            // Let's assume TtyInode will handle the async wait.
-            // So here we return -EAGAIN if no data.
+        // No data available.
+        // For non-blocking mode, return EAGAIN immediately.
+        // For blocking mode, also return EAGAIN - the caller (SysRead) will handle
+        // the blocking by awaiting WaitForRead() and then retrying.
+        // This design separates the sync read from the async wait, allowing
+        // the syscall handler to manage the blocking semantics properly.
+        if ((flags & FileFlags.O_NONBLOCK) != 0)
+        {
             return -(int)Errno.EAGAIN;
         }
+
+        return -(int)Errno.EAGAIN;
     }
 }

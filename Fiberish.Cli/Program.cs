@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
@@ -87,20 +87,16 @@ internal class Program
     private static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction,
         bool stats, string dumpBlocksDir, string exe, string[] exeArgs)
     {
-        // Initialize Logging - output to file instead of stderr
-        var logFile = "fiberish.log";
-        var fileLoggerProvider = new FileLoggerProvider(logFile);
-
+        // Initialize Logging
         Logging.LoggerFactory = LoggerFactory.Create(builder =>
         {
-            builder.AddProvider(fileLoggerProvider);
-            // Only log to console if verbose or trace
             if (verbose || trace)
-                builder.AddConsole(options => { options.LogToStandardErrorThreshold = LogLevel.Trace; });
-            builder.SetMinimumLevel(trace ? LogLevel.Trace : verbose ? LogLevel.Information : LogLevel.Debug);
+            {
+                builder.AddSimpleFile("emulator.log");
+            }
+            builder.SetMinimumLevel(trace ? LogLevel.Trace : verbose ? LogLevel.Information : LogLevel.Warning);
         });
         Logger = Logging.CreateLogger<Program>();
-
 
         // Combine exe and additional args
         var fullArgs = new[] { exe }.Concat(exeArgs).ToArray();
@@ -123,6 +119,7 @@ internal class Program
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
         FileStream? stdinStream = null;
+        PosixSignalRegistration? sigwinch = null;
 
         if (isInteractive)
         {
@@ -149,6 +146,46 @@ internal class Program
             // Start Input Loop
             inputCts = new CancellationTokenSource();
             inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
+
+            // Register SIGWINCH handler (Unix only)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                try
+                {
+                    // Initial size update
+                    try
+                    {
+                        if (!Console.IsOutputRedirected)
+                        {
+                            tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore
+                    }
+
+                    sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, (context) =>
+                    {
+                        context.Cancel = true;
+                        try
+                        {
+                            if (!Console.IsOutputRedirected)
+                            {
+                                tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                            }
+                        }
+                        catch
+                        {
+                            // Ignore
+                        }
+                    });
+                }
+                catch
+                {
+                    // Ignore platform not supported etc.
+                }
+            }
         }
 
         try
@@ -208,9 +245,10 @@ internal class Program
             {
                 // We use ReadAsync but Console Stream on some platforms might block even with cancellation?
                 // On .NET 8 it should be better.
-                var read = await stdin.ReadAsync(buffer, token);
+                int read = await stdin.ReadAsync(buffer, token);
                 if (read == 0) break; // EOF
-
+                
+                Logger.LogDebug("[InputLoop] Received {Count} bytes: {Bytes}", read, BitConverter.ToString(buffer, 0, read));
                 tty.Input(buffer.AsSpan(0, read).ToArray());
             }
         }

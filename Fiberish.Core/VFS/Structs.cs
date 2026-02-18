@@ -188,6 +188,22 @@ public abstract class Inode
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    ///     Check for readiness. Returns a bitmask of POLL* constants.
+    ///     Default implementation for regular files: Always readable and writable.
+    /// </summary>
+    public virtual short Poll(LinuxFile linuxFile, short events)
+    {
+        // Regular files are always ready for read/write
+        // See Linux: fs/select.c
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        short revents = 0;
+        if ((events & POLLIN) != 0) revents |= POLLIN;
+        if ((events & POLLOUT) != 0) revents |= POLLOUT;
+        return revents;
+    }
+
     public virtual void Truncate(long size)
     {
         throw new NotSupportedException();
@@ -318,16 +334,11 @@ public class LinuxFile
 
     /// <summary>
     ///     Check for readiness. Returns a bitmask of POLL* constants.
-    ///     Default implementation for regular files: Always readable and writable.
+    ///     Delegates to the inode's Poll method.
     /// </summary>
     public virtual short Poll(short events)
     {
-        // Regular files are always ready for read/write
-        // See Linux: fs/select.c
-        short revents = 0;
-        if ((events & 0x0001) != 0) revents |= 0x0001; // POLLIN
-        if ((events & 0x0004) != 0) revents |= 0x0004; // POLLOUT
-        return revents;
+        return Dentry.Inode?.Poll(this, events) ?? 0;
     }
 }
 

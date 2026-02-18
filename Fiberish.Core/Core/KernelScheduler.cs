@@ -96,6 +96,7 @@ public class KernelScheduler
     public void Schedule(FiberTask task)
     {
         if (task.Status == FiberTaskStatus.Terminated) return;
+        Logger.LogDebug("[Scheduler] Schedule task TID={TID} (from {OldStatus})", task.TID, task.Status);
 
         task.Status = FiberTaskStatus.Ready;
         lock (_runQueue)

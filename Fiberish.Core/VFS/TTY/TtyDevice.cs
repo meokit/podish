@@ -20,12 +20,15 @@ public class TtyDevice
     // Volatile flag: indicates if new data is available
     // This avoids calling TryDequeue on every tick
     private volatile bool _interruptFlag;
+    private volatile bool _resizePending;
+    private int _pendingRows;
+    private int _pendingCols;
 
     /// <summary>
     ///     Check if there is pending input without consuming it.
     ///     Used by scheduler to decide whether to wake waiting tasks.
     /// </summary>
-    public bool HasInterrupt => _interruptFlag;
+    public bool HasInterrupt => _interruptFlag || _resizePending;
 
     /// <summary>
     ///     Get the approximate number of items in the buffer.
@@ -48,6 +51,17 @@ public class TtyDevice
     }
 
     /// <summary>
+    ///     Called by signal handler (background thread) to enqueue a resize event.
+    /// </summary>
+    public void EnqueueResize(int rows, int cols)
+    {
+        _pendingRows = rows;
+        _pendingCols = cols;
+        _resizePending = true;
+        OnInputEnqueued?.Invoke();
+    }
+
+    /// <summary>
     ///     Called by KernelScheduler (main thread) to consume all pending input.
     ///     Returns null if no data is available.
     /// </summary>
@@ -62,5 +76,15 @@ public class TtyDevice
         _interruptFlag = false;
 
         return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>
+    ///     Called by KernelScheduler (main thread) to consume pending resize event.
+    /// </summary>
+    public (int Rows, int Cols)? ConsumeResize()
+    {
+        if (!_resizePending) return null;
+        _resizePending = false;
+        return (_pendingRows, _pendingCols);
     }
 }

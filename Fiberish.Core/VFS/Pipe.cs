@@ -177,6 +177,51 @@ public class PipeInode : Inode
         await _writeHandle;
     }
 
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        const short POLLERR = 0x0008;
+        const short POLLHUP = 0x0010;
+
+        short revents = 0;
+
+        lock (_lock)
+        {
+            const int O_ACCMODE = 3;
+            var mode = (int)linuxFile.Flags & O_ACCMODE;
+
+            if ((events & POLLIN) != 0 && (mode == (int)FileFlags.O_RDONLY || mode == (int)FileFlags.O_RDWR))
+            {
+                // Check if there's data to read or EOF
+                if (_count > 0)
+                {
+                    revents |= POLLIN;
+                }
+                else if (_writersClosed)
+                {
+                    // EOF - no writers left, return POLLHUP
+                    revents |= POLLHUP;
+                }
+            }
+
+            if ((events & POLLOUT) != 0 && (mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR))
+            {
+                // Check if there's space to write or broken pipe
+                if (_readersClosed)
+                {
+                    revents |= POLLERR;
+                }
+                else if (_count < BufferSize)
+                {
+                    revents |= POLLOUT;
+                }
+            }
+        }
+
+        return revents;
+    }
+
     public override void Release(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
