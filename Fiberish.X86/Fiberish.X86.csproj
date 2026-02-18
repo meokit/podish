@@ -34,6 +34,13 @@
         <NativeLibrary Include="build_native/Release/fibercpu.lib"/>
     </ItemGroup>
 
+    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX'))">
+        <Content Include="build_native/libfibercpu.dylib">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>libfibercpu.dylib</Link>
+        </Content>
+    </ItemGroup>
+
     <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Linux'))">
         <Content Include="build_native/libfibercpu.so">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
