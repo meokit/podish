@@ -353,7 +353,7 @@ public class KernelScheduler
                     // Typically signal pending on process, handled by any eligible thread.
                     // Simplified: Signal the main thread (TID=TGID).
                     var mainTask = GetTask(p.TGID);
-                    mainTask?.HandleSignal(signal);
+                    mainTask?.PostSignal(signal);
                 }
         }
     }
@@ -361,7 +361,7 @@ public class KernelScheduler
     public void SignalTask(int tid, int signal)
     {
         var task = GetTask(tid);
-        task?.HandleSignal(signal);
+        task?.PostSignal(signal);
     }
 
     public bool IsValidProcessGroup(int pgid, int sid)

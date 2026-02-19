@@ -293,8 +293,7 @@ public partial class SyscallManager
         var ebp = engine.RegRead(Reg.EBP);
 
         if (Strace)
-            Logger.LogTrace("[Syscall] {eax} ({ebx:X}, {ecx:X}, {edx:X}, {esi:X}, {edi:X}, {ebp:X})",
-                eax, ebx, ecx, edx, esi, edi, ebp);
+            SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
 
         ValueTask<int> retTask = new(-38); // ENOSYS
 
@@ -313,13 +312,20 @@ public partial class SyscallManager
 
             if (!isSigReturn) engine.RegWrite(Reg.EAX, (uint)ret);
 
-            if (Strace) Logger.LogTrace(" = {Ret}", ret);
+            if (Strace)
+                SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
         }
         else
         {
             // Async completion (Blocking)
             if (fiberTask != null)
             {
+                // Save context for TraceExit
+                fiberTask.SyscallNr = eax;
+                fiberTask.SyscallArg1 = ebx;
+                fiberTask.SyscallArg2 = ecx;
+                fiberTask.SyscallArg3 = edx;
+
                 // Suspend the task
                 fiberTask.PendingSyscall = () => retTask;
                 fiberTask.Status = FiberTaskStatus.Waiting;

@@ -28,7 +28,7 @@ public partial class SyscallManager
             if (ppid > 0)
             {
                 var parentTask = task.CommonKernel.GetTask(ppid);
-                parentTask?.HandleSignal(17); // SIGCHLD = 17
+                parentTask?.PostSignal(17); // SIGCHLD = 17
             }
 
             // If main thread exits, entire process group becomes zombie
@@ -62,7 +62,7 @@ public partial class SyscallManager
             if (ppid > 0)
             {
                 var parentTask = task.CommonKernel.GetTask(ppid);
-                parentTask?.HandleSignal(17); // SIGCHLD = 17
+                parentTask?.PostSignal(17); // SIGCHLD = 17
             }
 
             ProcFsManager.OnProcessExit(sm, task.Process.TGID);

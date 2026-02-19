@@ -159,7 +159,7 @@ public partial class SyscallManager
 
         if (targets.Count == 0) return -(int)Errno.ESRCH;
 
-        foreach (var t in targets) t.HandleSignal(sig);
+        foreach (var t in targets) t.PostSignal(sig);
 
         return 0;
     }
@@ -178,7 +178,7 @@ public partial class SyscallManager
         var target = KernelScheduler.Current!.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
 
-        if (sig != 0) target.HandleSignal(sig);
+        if (sig != 0) target.PostSignal(sig);
 
         return 0;
     }
@@ -199,7 +199,7 @@ public partial class SyscallManager
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid && tgid != -1) return -(int)Errno.ESRCH;
 
-        if (sig != 0) target.HandleSignal(sig);
+        if (sig != 0) target.PostSignal(sig);
         return 0;
     }
 
@@ -287,15 +287,28 @@ public partial class SyscallManager
         if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
 
         // Pre-set EAX to -EINTR so if signal handler runs (even with SA_RESTART), it saves -EINTR
-        // sigsuspend is defined to return -EINTR and never restart, but the signal action might carry SA_RESTART.
-        // HandleSignal preserves EAX if SA_RESTART is set. By setting it here, we ensure -EINTR is preserved.
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+
+        // Check for pending signals immediately (unblocked by new mask)
+        bool hasPending = false;
+        lock (task)
+        {
+            if ((task.PendingSignals & ~mask) != 0) hasPending = true;
+        }
+
+        if (hasPending)
+        {
+            task.SignalMask = oldMask;
+            return -(int)Errno.EINTR;
+        }
+
+        var token = task.CreateSyscallToken();
 
         try
         {
-            await new SigSuspendAwaiter(task);
+            await Task.Delay(-1, token);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             // Expected interruption by signal
         }
@@ -303,82 +316,9 @@ public partial class SyscallManager
         {
             task.SignalMask = oldMask;
             if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
+            task.DisposeSyscallToken();
         }
 
         return -(int)Errno.EINTR;
-    }
-
-    public class SigSuspendAwaiter : INotifyCompletion
-    {
-        private readonly FiberTask _task;
-        private Action? _continuation;
-        private bool _completed;
-
-        public SigSuspendAwaiter(FiberTask task)
-        {
-            _task = task;
-        }
-
-        public bool IsCompleted => false;
-
-        public void OnCompleted(Action continuation)
-        {
-            _continuation = continuation;
-
-            // Check if we have unblocked pending signals immediately
-            // Note: signal 0 is invalid, loop 1..64
-            for (var i = 1; i <= 64; i++)
-            {
-                var sigBit = 1UL << (i - 1);
-                if ((_task.PendingSignals & sigBit) != 0)
-                {
-                    // Signal is pending
-                    if ((_task.SignalMask & sigBit) == 0)
-                    {
-                        // Signal is NOT blocked
-                        // We must process it. 
-                        // Clear the bit (assuming we consume it)
-                        _task.PendingSignals &= ~sigBit;
-                        
-                        // Handle it
-                        _task.HandleSignal(i);
-                        
-                        // HandleSignal will trigger interruption if registered.
-                        // But we haven't registered yet!
-                        // Actually, if we just run HandleSignal, it modifies stack.
-                        // We need to return immediately to let the handler run?
-                        // But we are in OnCompleted, so we just invoke continuation?
-                        
-                        // If HandleSignal modified stack, when we return from syscall (via continuation),
-                        // the EIP will be at Handler.
-                        
-                        // But we need to ensure the syscall returns -EINTR.
-                        // SysRtSigSuspend returns -EINTR.
-                        
-                        _completed = true;
-                        _continuation?.Invoke();
-                        return;
-                    }
-                }
-            }
-
-            // Register interruption handler
-            _task.RegisterBlockingSyscall(() =>
-            {
-                _completed = true;
-                _continuation?.Invoke();
-            });
-        }
-
-        public void GetResult()
-        {
-            if (!_completed) throw new InvalidOperationException("Not completed");
-            throw new TaskCanceledException(); // Force logic in SysRtSigSuspend to catch
-        }
-
-        public SigSuspendAwaiter GetAwaiter()
-        {
-            return this;
-        }
     }
 }

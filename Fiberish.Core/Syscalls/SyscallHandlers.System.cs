@@ -185,24 +185,18 @@ public partial class SyscallManager
         
         Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
         
-        // pause() should block until a signal is received
-        // When interrupted by a signal, it should return -EINTR
-        var tcs = new TaskCompletionSource<bool>();
-        task.RegisterBlockingSyscall(() => tcs.TrySetResult(false));
+        var token = task.CreateSyscallToken();
         
         try
         {
-            // Wait for signal
-            await tcs.Task;
-            
-            // If we get here, we were interrupted by a signal
-            Logger.LogInformation("[SysPause] Interrupted by signal, returning -ERESTARTSYS");
-            return -(int)Errno.ERESTARTSYS;
+            await Task.Delay(-1, token);
         }
-        finally
+        catch (OperationCanceledException)
         {
-            task.ClearInterrupt();
+            // Pause returns EINTR when interrupted by signal
+            return -(int)Errno.EINTR;
         }
+        return 0; 
     }
 
     private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -311,49 +305,42 @@ public partial class SyscallManager
         if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         var nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
-        // 1 tick = 1 microsecond?
-        var totalTicks = sec * 1000000L + nsec / 1000L;
-        if (totalTicks < 0) return 0;
+        // 1 tick = 1 microsecond? (Assumed based on legacy code)
+        var totalUsec = sec * 1000000L + nsec / 1000L;
+        if (totalUsec < 0) return 0;
 
-        if (sm.Engine.Owner is FiberTask fiberTask)
+        if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
+
+        var token = fiberTask.CreateSyscallToken();
+        var tcs = new TaskCompletionSource<int>();
+        using var reg = token.Register(() => tcs.TrySetCanceled(token));
+
+        var startTime = KernelScheduler.Current!.CurrentTick;
+        var timer = KernelScheduler.Current.ScheduleTimer(startTime + totalUsec, () => tcs.TrySetResult(0));
+
+        try
         {
-            // Register Interruption Logic
-            // If interrupted, return EINTR and remaining time?
-            // For now simpler: Just return EINTR if interrupted, or 0 if success.
-
-            // We can't easily use 'await' if we want to handle cancellation via callback logic in FiberTask.
-            // But WaitHandle/TimerAwaiter supports normal await.
-            // If signal interrupts, FiberTask.TryInterrupt() calls the callback.
-            // The callback should cancel the Timer.
-
-            // My Timer implementation has 'Cancel()'.
-            // TimerAwaiter uses 'ScheduleTimer'. ScheduleTimer returns Timer object.
-            // But TimerAwaiter.OnCompleted doesn't expose Timer object easily to the caller of await.
-            // We need a more manual usage or improved Awaiter.
-
-            // Manual usage for interruptibility:
-            var tcs = new TaskCompletionSource<int>();
-            var timer = KernelScheduler.Current!.ScheduleTimer(totalTicks + KernelScheduler.Current.CurrentTick,
-                () => tcs.TrySetResult(0));
-
-            fiberTask.RegisterBlockingSyscall(() =>
-            {
-                timer.Cancel();
-                tcs.TrySetResult(-(int)Errno.ERESTARTSYS);
-            });
-
-            try
-            {
-                var ret = await tcs.Task;
-                // If success (0), we are done.
-                return ret;
-            }
-            finally
-            {
-                fiberTask.ClearInterrupt();
-            }
+            return await tcs.Task;
         }
+        catch (OperationCanceledException)
+        {
+            timer.Cancel();
+            var now = KernelScheduler.Current.CurrentTick;
+            var elapsed = now - startTime;
+            var rem = totalUsec - elapsed;
+            if (rem < 0) rem = 0;
 
-        return 0;
+            if (a2 != 0)
+            {
+                var remSec = (int)(rem / 1000000);
+                var remNsec = (int)((rem % 1000000) * 1000);
+                var remBuf = new byte[8];
+                BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(0, 4), remSec);
+                BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(4, 4), remNsec);
+                sm.Engine.CopyToUser(a2, remBuf);
+            }
+
+            return -(int)Errno.EINTR;
+        }
     }
 }

@@ -497,32 +497,12 @@ public partial class SyscallManager
 
                     Logger.LogInformation("[SysRead] fd={Fd} blocking, waiting for data or interrupt", fd);
                     
-                    // Wait for read or interrupt
-                    var tcs = new TaskCompletionSource<bool>();
-                    currentTask.RegisterBlockingSyscall(() => tcs.TrySetResult(false)); // False = Interrupted
+                    var token = currentTask.CreateSyscallToken();
+                    await f.WaitForRead().AsTask().WaitAsync(token);
 
-                    try
-                    {
-                        var waitTask = f.WaitForRead().AsTask();
-                        var interruptTask = tcs.Task;
-
-                        var finishedTask = await Task.WhenAny(waitTask, interruptTask);
-
-                        if (finishedTask == interruptTask)
-                        {
-                            // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                            Logger.LogInformation("[SysRead] fd={Fd} interrupted by signal, returning -ERESTARTSYS", fd);
-                            return -(int)Errno.ERESTARTSYS;
-                        }
-
-                        Logger.LogInformation("[SysRead] fd={Fd} data ready, retrying read", fd);
-                        // File is ready, retry read
-                        continue;
-                    }
-                    finally
-                    {
-                        currentTask.ClearInterrupt();
-                    }
+                    Logger.LogInformation("[SysRead] fd={Fd} data ready, retrying read", fd);
+                    // File is ready, retry read
+                    continue;
                 }
 
                 if (n >= 0)
@@ -538,6 +518,10 @@ public partial class SyscallManager
                 }
 
                 return n; // Other error
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -578,31 +562,16 @@ public partial class SyscallManager
                     // Blocking Write
                     if (sm.Engine.Owner is not FiberTask currentTask) return -(int)Errno.EAGAIN;
 
-                    // Wait for write or interrupt
-                    var tcs = new TaskCompletionSource<bool>();
-                    currentTask.RegisterBlockingSyscall(() => tcs.TrySetResult(false));
-
-                    try
-                    {
-                        var waitTask = f.WaitForWrite().AsTask(); // Allocation! Optimize later
-                        var interruptTask = tcs.Task;
-
-                        var finishedTask = await Task.WhenAny(waitTask, interruptTask);
-
-                        if (finishedTask == interruptTask)
-                            // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                            return -(int)Errno.ERESTARTSYS;
-
-                        // File is ready, retry write
-                        continue;
-                    }
-                    finally
-                    {
-                        currentTask.ClearInterrupt();
-                    }
+                    var token = currentTask.CreateSyscallToken();
+                    await f.WaitForWrite().AsTask().WaitAsync(token);
+                    continue;
                 }
 
                 return n;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {
