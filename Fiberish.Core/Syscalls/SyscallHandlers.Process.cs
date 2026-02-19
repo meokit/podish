@@ -157,7 +157,11 @@ public partial class SyscallManager
                         if (statusPtr != 0)
                         {
                             var stBuf = new byte[4];
-                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, childProc.ExitStatus);
+                            // Status word: bits 8-15 = exit status, bits 0-6 = signal (0 if exited)
+                            // If signaled: bits 0-6 = signal, bit 7 = core dump
+                            // We assume normal exit for now (childProc.ExitStatus is the code)
+                            // TODO: If childProc was killed by signal, we need to store that differently
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, (childProc.ExitStatus << 8) & 0xFF00);
                             if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
 
@@ -197,7 +201,9 @@ public partial class SyscallManager
             try
             {
                 var success = await tcs.Task;
-                if (!success) return -(int)Errno.EINTR;
+                if (!success)
+                    // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                    return -(int)Errno.ERESTARTSYS;
             }
             finally
             {
@@ -298,7 +304,9 @@ public partial class SyscallManager
             try
             {
                 var success = await tcs.Task;
-                if (!success) return -(int)Errno.EINTR;
+                if (!success)
+                    // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                    return -(int)Errno.ERESTARTSYS;
             }
             finally
             {
@@ -399,8 +407,14 @@ public partial class SyscallManager
         var toClose = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
         foreach (var fd in toClose) sm.FreeFD(fd);
 
-        // Reset Signals
+        // Reset Signals (execve semantics: caught -> default, ignored -> kept)
+        var ignored = task.Process.SignalActions
+            .Where(kv => kv.Value.Handler == 1) // SIG_IGN = 1
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
         task.Process.SignalActions.Clear();
+        foreach (var kv in ignored) task.Process.SignalActions[kv.Key] = kv.Value;
+
         task.SignalMask = 0;
         task.PendingSignals = 0;
         task.AltStackSp = 0;
@@ -462,5 +476,80 @@ public partial class SyscallManager
 
         // Unreachable
         // return 0; 
+    }
+
+    private static async ValueTask<int> SysSetSid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // setsid()
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var proc = task.Process;
+
+        // If caller is a process group leader, return EPERM
+        if (proc.PGID == proc.TGID) return -(int)Errno.EPERM;
+
+        proc.SID = proc.TGID;
+        proc.PGID = proc.TGID;
+
+        // Detach CTTY implies we are no longer associated with TTY's session?
+        // In our simple model, TtyDiscipline.SessionId holds the active session.
+        // If we were part of it, we are not anymore.
+
+        return proc.SID;
+    }
+
+    private static async ValueTask<int> SysSetPgid(IntPtr state, uint pid, uint pgid, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        // setpgid(pid, pgid)
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var kernel = task.CommonKernel;
+        var targetPid = (int)pid == 0 ? task.Process.TGID : (int)pid;
+        var targetPgid = (int)pgid == 0 ? targetPid : (int)pgid;
+
+        var targetProc = kernel.GetProcess(targetPid);
+        if (targetProc == null) return -(int)Errno.ESRCH;
+
+        // Permission checks
+        // 1. Target must be calling process or child of calling process
+        if (targetProc.TGID != task.Process.TGID && targetProc.PPID != task.Process.TGID)
+            return -(int)Errno.EPERM;
+
+        // 2. Target must be in same session
+        if (targetProc.SID != task.Process.SID) return -(int)Errno.EPERM;
+
+        // 3. Cannot change if session leader
+        if (targetProc.SID == targetProc.TGID) return -(int)Errno.EPERM;
+
+        // TODO: Check if child has already exec'd (should return EACCES)
+
+        targetProc.PGID = targetPgid;
+        return 0;
+    }
+
+    private static async ValueTask<int> SysGetSid(IntPtr state, uint pid, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var kernel = KernelScheduler.Current!;
+
+        var targetPid = (int)pid == 0 ? (sm.Engine.Owner as FiberTask)!.Process.TGID : (int)pid;
+        var targetProc = kernel.GetProcess(targetPid);
+        if (targetProc == null) return -(int)Errno.ESRCH;
+
+        return targetProc.SID;
+    }
+
+    private static async ValueTask<int> SysGetPgrp(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        return task.Process.PGID;
     }
 }

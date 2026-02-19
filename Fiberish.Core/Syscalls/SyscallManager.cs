@@ -280,6 +280,10 @@ public partial class SyscallManager
         // Get current FiberTask (New Model Only) via Engine.Owner
         var fiberTask = engine.Owner as FiberTask;
 
+        // Save EIP for potential SA_RESTART before executing syscall
+        // EIP points after 'int 0x80' (CD 80), so subtract 2 to get the syscall instruction
+        if (fiberTask != null) fiberTask.SyscallEip = engine.Eip - 2;
+
         var eax = engine.RegRead(Reg.EAX);
         var ebx = engine.RegRead(Reg.EBX);
         var ecx = engine.RegRead(Reg.ECX);

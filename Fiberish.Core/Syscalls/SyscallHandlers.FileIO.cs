@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -494,6 +495,8 @@ public partial class SyscallManager
                     // Blocking Read
                     if (sm.Engine.Owner is not FiberTask currentTask) return -(int)Errno.EAGAIN; // Should not happen
 
+                    Logger.LogInformation("[SysRead] fd={Fd} blocking, waiting for data or interrupt", fd);
+                    
                     // Wait for read or interrupt
                     var tcs = new TaskCompletionSource<bool>();
                     currentTask.RegisterBlockingSyscall(() => tcs.TrySetResult(false)); // False = Interrupted
@@ -505,8 +508,14 @@ public partial class SyscallManager
 
                         var finishedTask = await Task.WhenAny(waitTask, interruptTask);
 
-                        if (finishedTask == interruptTask) return -(int)Errno.EINTR;
+                        if (finishedTask == interruptTask)
+                        {
+                            // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                            Logger.LogInformation("[SysRead] fd={Fd} interrupted by signal, returning -ERESTARTSYS", fd);
+                            return -(int)Errno.ERESTARTSYS;
+                        }
 
+                        Logger.LogInformation("[SysRead] fd={Fd} data ready, retrying read", fd);
                         // File is ready, retry read
                         continue;
                     }
@@ -519,8 +528,12 @@ public partial class SyscallManager
                 if (n >= 0)
                 {
                     if (n > 0)
+                    {
+                        var hexData = Convert.ToHexString(buf.AsSpan(0, n));
+                        Logger.LogInformation("[SysRead] fd={Fd} returning {N} bytes: {HexData}", fd, n, hexData);
                         if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
                             return -(int)Errno.EFAULT;
+                    }
                     return n;
                 }
 
@@ -549,6 +562,10 @@ public partial class SyscallManager
         if (!sm.Engine.CopyFromUser(bufAddr, data))
             return -(int)Errno.EFAULT;
 
+        // Log write with hex dump
+        var hexString = Convert.ToHexString(data);
+        Logger.LogInformation($"[Write] fd={fd} count={count} data={hexString}");
+
         while (true)
             try
             {
@@ -572,7 +589,9 @@ public partial class SyscallManager
 
                         var finishedTask = await Task.WhenAny(waitTask, interruptTask);
 
-                        if (finishedTask == interruptTask) return -(int)Errno.EINTR;
+                        if (finishedTask == interruptTask)
+                            // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                            return -(int)Errno.ERESTARTSYS;
 
                         // File is ready, retry write
                         continue;
@@ -663,6 +682,8 @@ public partial class SyscallManager
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
 
+        Logger.LogInformation($"[WriteV] fd={fd} iovCnt={iovCnt}");
+
         var total = 0;
         for (var i = 0; i < iovCnt; i++)
         {
@@ -675,11 +696,14 @@ public partial class SyscallManager
             {
                 var data = new byte[len];
                 if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
+                var hexString = Convert.ToHexString(data);
+                Logger.LogInformation($"[WriteV] iov[{i}] len={len} data={hexString}");
                 f.Write(data);
                 total += (int)len;
             }
         }
 
+        Logger.LogInformation($"[WriteV] total={total}");
         return total;
     }
 }

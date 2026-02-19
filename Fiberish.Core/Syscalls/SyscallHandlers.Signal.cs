@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
@@ -256,5 +258,127 @@ public partial class SyscallManager
         task.RestoreSigContext(ucontextAddr + 20);
 
         return (int)task.CPU.RegRead(Reg.EAX);
+    }
+
+    private static async ValueTask<int> SysRtSigSuspend(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        var task = sm?.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var maskPtr = a1;
+        var sigsetsize = a2;
+
+        if (sigsetsize != 8) return -(int)Errno.EINVAL;
+
+        var maskBuf = new byte[8];
+        if (!task.CPU.CopyFromUser(maskPtr, maskBuf)) return -(int)Errno.EFAULT;
+        var mask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+
+        // SIGKILL and SIGSTOP cannot be blocked
+        mask &= ~(1UL << 8); // SIGKILL (9)
+        mask &= ~(1UL << 18); // SIGSTOP (19)
+
+        var oldMask = task.SignalMask;
+        task.SignalMask = mask;
+
+        // Log
+        if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
+
+        // Pre-set EAX to -EINTR so if signal handler runs (even with SA_RESTART), it saves -EINTR
+        // sigsuspend is defined to return -EINTR and never restart, but the signal action might carry SA_RESTART.
+        // HandleSignal preserves EAX if SA_RESTART is set. By setting it here, we ensure -EINTR is preserved.
+        task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+
+        try
+        {
+            await new SigSuspendAwaiter(task);
+        }
+        catch (TaskCanceledException)
+        {
+            // Expected interruption by signal
+        }
+        finally
+        {
+            task.SignalMask = oldMask;
+            if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
+        }
+
+        return -(int)Errno.EINTR;
+    }
+
+    public class SigSuspendAwaiter : INotifyCompletion
+    {
+        private readonly FiberTask _task;
+        private Action? _continuation;
+        private bool _completed;
+
+        public SigSuspendAwaiter(FiberTask task)
+        {
+            _task = task;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _continuation = continuation;
+
+            // Check if we have unblocked pending signals immediately
+            // Note: signal 0 is invalid, loop 1..64
+            for (var i = 1; i <= 64; i++)
+            {
+                var sigBit = 1UL << (i - 1);
+                if ((_task.PendingSignals & sigBit) != 0)
+                {
+                    // Signal is pending
+                    if ((_task.SignalMask & sigBit) == 0)
+                    {
+                        // Signal is NOT blocked
+                        // We must process it. 
+                        // Clear the bit (assuming we consume it)
+                        _task.PendingSignals &= ~sigBit;
+                        
+                        // Handle it
+                        _task.HandleSignal(i);
+                        
+                        // HandleSignal will trigger interruption if registered.
+                        // But we haven't registered yet!
+                        // Actually, if we just run HandleSignal, it modifies stack.
+                        // We need to return immediately to let the handler run?
+                        // But we are in OnCompleted, so we just invoke continuation?
+                        
+                        // If HandleSignal modified stack, when we return from syscall (via continuation),
+                        // the EIP will be at Handler.
+                        
+                        // But we need to ensure the syscall returns -EINTR.
+                        // SysRtSigSuspend returns -EINTR.
+                        
+                        _completed = true;
+                        _continuation?.Invoke();
+                        return;
+                    }
+                }
+            }
+
+            // Register interruption handler
+            _task.RegisterBlockingSyscall(() =>
+            {
+                _completed = true;
+                _continuation?.Invoke();
+            });
+        }
+
+        public void GetResult()
+        {
+            if (!_completed) throw new InvalidOperationException("Not completed");
+            throw new TaskCanceledException(); // Force logic in SysRtSigSuspend to catch
+        }
+
+        public SigSuspendAwaiter GetAwaiter()
+        {
+            return this;
+        }
     }
 }

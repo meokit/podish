@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 using Process = System.Diagnostics.Process;
 
 namespace Fiberish.Syscalls;
@@ -122,7 +123,7 @@ public partial class SyscallManager
         return task?.TID ?? -1;
     }
 
-    private static async ValueTask<int> SysGetpgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetPgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         var task = sm?.Engine.Owner as FiberTask;
@@ -177,8 +178,31 @@ public partial class SyscallManager
     private static async ValueTask<int> SysPause(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        sm?.Engine.Yield();
-        return 0;
+        if (sm == null) return -(int)Errno.EPERM;
+        
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        
+        Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
+        
+        // pause() should block until a signal is received
+        // When interrupted by a signal, it should return -EINTR
+        var tcs = new TaskCompletionSource<bool>();
+        task.RegisterBlockingSyscall(() => tcs.TrySetResult(false));
+        
+        try
+        {
+            // Wait for signal
+            await tcs.Task;
+            
+            // If we get here, we were interrupted by a signal
+            Logger.LogInformation("[SysPause] Interrupted by signal, returning -ERESTARTSYS");
+            return -(int)Errno.ERESTARTSYS;
+        }
+        finally
+        {
+            task.ClearInterrupt();
+        }
     }
 
     private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -315,7 +339,7 @@ public partial class SyscallManager
             fiberTask.RegisterBlockingSyscall(() =>
             {
                 timer.Cancel();
-                tcs.TrySetResult(-(int)Errno.EINTR);
+                tcs.TrySetResult(-(int)Errno.ERESTARTSYS);
             });
 
             try

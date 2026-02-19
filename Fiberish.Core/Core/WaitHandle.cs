@@ -9,31 +9,32 @@ namespace Fiberish.Core;
 /// </summary>
 public class AsyncWaitQueue
 {
-    // List of continuations to resume when Signaled.
-    // Each entry stores the continuation Action and the FiberTask context it belongs to.
-    private readonly List<(Action Continuation, FiberTask? Context)> _waiters = new();
     private readonly object _lock = new();
+
+    // List of continuations to resume when Signaled.
+    // Each entry stores the continuation Action, FiberTask context, and the KernelScheduler reference.
+    // We capture the scheduler at registration time because Signal() may be called from a
+    // background thread where KernelScheduler.Current is null (AsyncLocal doesn't flow to other threads).
+    private readonly List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)> _waiters = new();
 
     public bool IsSignaled { get; private set; }
 
     public void Signal()
     {
-        List<(Action Continuation, FiberTask? Context)> toWake;
+        List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)> toWake;
         lock (_lock)
         {
             if (IsSignaled) return;
             IsSignaled = true;
             if (_waiters.Count == 0) return;
-            toWake = new List<(Action Continuation, FiberTask? Context)>(_waiters);
+            toWake = new List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)>(_waiters);
             _waiters.Clear();
         }
 
         // Resume all waiters outside the lock
-        foreach (var (continuation, context) in toWake)
-        {
-            // Schedule the continuation on the kernel scheduler
-            KernelScheduler.Current?.Schedule(continuation, context);
-        }
+        // Use the captured scheduler reference (not KernelScheduler.Current) because
+        // Signal() may be called from a background thread where Current is null
+        foreach (var (continuation, context, scheduler) in toWake) scheduler.Schedule(continuation, context);
     }
 
     public void Reset()
@@ -58,22 +59,26 @@ public class AsyncWaitQueue
 
     public void Register(Action continuation)
     {
-        Register(continuation, KernelScheduler.Current?.CurrentTask);
+        var scheduler = KernelScheduler.Current;
+        var context = scheduler?.CurrentTask;
+        Register(continuation, context, scheduler);
     }
 
     public void Register(Action continuation, FiberTask? context)
     {
+        var scheduler = KernelScheduler.Current;
+        Register(continuation, context, scheduler);
+    }
+
+    private void Register(Action continuation, FiberTask? context, KernelScheduler? scheduler)
+    {
         lock (_lock)
         {
             if (IsSignaled)
-            {
                 // If already signaled, schedule immediately
-                KernelScheduler.Current?.Schedule(continuation, context);
-            }
+                scheduler?.Schedule(continuation, context);
             else
-            {
-                _waiters.Add((continuation, context));
-            }
+                _waiters.Add((continuation, context, scheduler!));
         }
     }
 
@@ -128,7 +133,9 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
 
     public void OnCompleted(Action continuation)
     {
-        var currentTask = KernelScheduler.Current?.CurrentTask;
+        // Capture scheduler and task context at registration time
+        var scheduler = KernelScheduler.Current;
+        var currentTask = scheduler?.CurrentTask;
 
         // We use a shared state to ensure only one invocation
         var runOnce = new RunOnceAction(continuation);

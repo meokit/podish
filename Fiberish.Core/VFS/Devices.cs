@@ -52,7 +52,13 @@ public class ConsoleInode : Inode
     {
         if (!_isInput || _discipline == null) return;
 
+        // Await the event. If already signaled, completes immediately.
         await _discipline.DataAvailable;
+        
+        // Reset after waking up. This ensures:
+        // 1. If event was already signaled, we wake immediately and retry Read()
+        // 2. If queue is still empty after retry, next WaitForRead() will block
+        _discipline.DataAvailable.Reset();
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
@@ -81,10 +87,7 @@ public class ConsoleInode : Inode
                 if (_discipline != null)
                 {
                     // Check if there's data in the input queue or pending input from device
-                    if (_discipline.HasDataAvailable)
-                    {
-                        revents |= POLLIN;
-                    }
+                    if (_discipline.HasDataAvailable) revents |= POLLIN;
                 }
                 else
                 {
@@ -96,10 +99,7 @@ public class ConsoleInode : Inode
         else
         {
             // Output - stdout is always writable
-            if ((events & POLLOUT) != 0)
-            {
-                revents |= POLLOUT;
-            }
+            if ((events & POLLOUT) != 0) revents |= POLLOUT;
         }
 
         return revents;

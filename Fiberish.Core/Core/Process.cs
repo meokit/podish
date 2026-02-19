@@ -85,6 +85,7 @@ public class Process
     public List<FiberTask> Threads { get; } = [];
 
     // Credentials
+    public int SID { get; set; } // Session ID
     public int PGID { get; set; }
     public int UID { get; set; }
     public int GID { get; set; }
@@ -186,7 +187,16 @@ public class Process
         {
             traceInstruction = traceInstructions
         };
-        proc.PGID = proc.TGID; // Set PGID to self for session leader?
+        proc.PGID = proc.TGID; // Process Group Leader
+        proc.SID = proc.TGID; // Session Leader
+
+        if (tty != null)
+        {
+            // Initial process is the session leader and has the TTY as controlling terminal
+            tty.SessionId = proc.SID;
+            tty.ForegroundPgrp = proc.PGID;
+        }
+
         scheduler.RegisterProcess(proc);
 
         // 4. Create Main Task

@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Native;
 
 namespace Fiberish.Syscalls;
@@ -13,36 +14,11 @@ public partial class SyscallManager
 
         if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
 
-        // TTY specific ioctls
+        // TTY specific ioctls - delegate to TtyDiscipline
         if (sm.Tty != null)
-            switch (request)
-            {
-                case LinuxConstants.TCGETS:
-                {
-                    var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
-                    var ret = sm.Tty.GetAttr(termios);
-                    if (ret != 0) return ret;
-                    if (!sm.Engine.CopyToUser(arg, termios)) return -(int)Errno.EFAULT;
-                    return 0;
-                }
-                case LinuxConstants.TCSETS:
-                case LinuxConstants.TCSETSW:
-                case LinuxConstants.TCSETSF:
-                {
-                    var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
-                    if (!sm.Engine.CopyFromUser(arg, termios)) return -(int)Errno.EFAULT;
-                    return sm.Tty.SetAttr((int)(request - LinuxConstants.TCGETS), termios);
-                }
-                case LinuxConstants.TIOCGWINSZ:
-                {
-                    var buf = new byte[8];
-                    var ret = sm.Tty.GetWindowSize(buf);
-                    if (ret == 0)
-                        if (!sm.Engine.CopyToUser(arg, buf))
-                            return -(int)Errno.EFAULT;
-                    return ret;
-                }
-            }
+        {
+            return sm.Tty.Ioctl(request, arg, sm.Engine);
+        }
 
         // Generic ioctls or ignore
         return 0;

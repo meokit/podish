@@ -124,9 +124,14 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.nanosleep, SysNanosleep);
 
         Register(X86SyscallNumbers.rt_sigreturn, SysRtSigReturn);
+        Register(X86SyscallNumbers.rt_sigsuspend, SysRtSigSuspend);
 
         Register(X86SyscallNumbers.gettid, SysGettid);
-        Register(X86SyscallNumbers.getpgid, SysGetpgid);
+        Register(X86SyscallNumbers.getpgid, SysGetPgid);
+        Register(X86SyscallNumbers.setpgid, SysSetPgid);
+        Register(X86SyscallNumbers.setsid, SysSetSid);
+        Register(X86SyscallNumbers.getsid, SysGetSid);
+        Register(X86SyscallNumbers.getpgrp, SysGetPgrp);
         Register(X86SyscallNumbers.umask, SysUmask);
         Register(X86SyscallNumbers.sethostname, SysSethostname);
         Register(X86SyscallNumbers.setdomainname, SysSetdomainname);

@@ -70,6 +70,14 @@ public class FiberTask
     public uint ChildClearTidPtr { get; set; }
     public bool WasInterrupted { get; private set; }
 
+    // Signal that interrupted the current blocking syscall (if any)
+    // Used by syscall handlers to determine SA_RESTART behavior
+    public int? InterruptingSignal { get; private set; }
+
+    // Syscall restart support (SA_RESTART)
+    // Stores the EIP of the syscall instruction for potential restart
+    public uint SyscallEip { get; set; }
+
     public ILogger Logger { get; }
 
     // Blocking Syscall Support
@@ -109,6 +117,7 @@ public class FiberTask
     {
         if (_interruptHandler != null)
         {
+            Logger.LogInformation("[TryInterrupt] Interrupting blocking syscall, EIP=0x{Eip:X}", CPU.Eip);
             var handler = _interruptHandler;
             _interruptHandler = null;
             WasInterrupted = true;
@@ -116,6 +125,7 @@ public class FiberTask
             return true;
         }
 
+        Logger.LogInformation("[TryInterrupt] No blocking syscall to interrupt (handler is null)");
         return false;
     }
 
@@ -123,37 +133,72 @@ public class FiberTask
     {
         _interruptHandler = null;
         WasInterrupted = false;
+        InterruptingSignal = null;
     }
 
     // Ported from Task.cs
     public void HandleSignal(int sig)
     {
+        Logger.LogInformation("[HandleSignal] Signal {Sig} received, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip, CPU.RegRead(Reg.ESP));
+        
+        // Store the signal that's being handled (for SA_RESTART checking in syscall handlers)
+        InterruptingSignal = sig;
+
         // 1. Check if ignored
         if (Process.SignalActions.TryGetValue(sig, out var action))
         {
+            Logger.LogInformation("[HandleSignal] Signal {Sig} has handler=0x{Handler:X}, flags=0x{Flags:X}", sig, action.Handler, action.Flags);
+            
             if (action.Handler == 1) // SIG_IGN
+            {
+                // Signal is ignored, but still interrupt blocking syscalls
+                Logger.LogInformation("[HandleSignal] Signal {Sig} is ignored (SIG_IGN), interrupting blocking syscall", sig);
+                TryInterrupt();
                 return;
+            }
+
             if (action.Handler == 0) // SIG_DFL
             {
                 // Default actions (simplified)
-                if (sig == 9 || sig == 15 || sig == 2 || sig == 3 || sig == 6 ||
-                    sig == 11) // KILL, TERM, INT, QUIT, ABRT, SEGV
+                if (IsFatalSignal(sig))
                 {
+                    Logger.LogInformation("[HandleSignal] Signal {Sig} is fatal (SIG_DFL), terminating task", sig);
                     Exited = true;
                     ExitStatus = 128 + sig;
                 }
+                else
+                {
+                    Logger.LogInformation("[HandleSignal] Signal {Sig} has default action, interrupting blocking syscall", sig);
+                }
 
-                // Ignore others for now
+                // Interrupt blocking syscall so task can exit or continue
+                TryInterrupt();
                 return;
             }
 
             // 2. Setup frame for handler
+            Logger.LogInformation("[HandleSignal] Setting up signal frame for signal {Sig}, handler=0x{Handler:X}", sig, action.Handler);
+            
+            // Fix for EINTR on non-restarting syscalls:
+            // If we are interrupting a blocking syscall, and SA_RESTART is NOT set,
+            // we must ensure the saved context has EAX = -EINTR.
+            // Otherwise, after sigreturn, the user code will see EAX = SyscallNum (garbage),
+            // thinking the syscall succeeded.
+            if ((action.Flags & LinuxConstants.SA_RESTART) == 0 && _interruptHandler != null)
+            {
+                Logger.LogInformation("[HandleSignal] !SA_RESTART and blocking: setting EAX = -EINTR in saved context");
+                CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+            }
+
             // Push SigContext/StackFrame
             var sp = CPU.RegRead(Reg.ESP);
 
             // Check altstack
             if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
+            {
+                Logger.LogInformation("[HandleSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}", AltStackSp, AltStackSize);
                 sp = AltStackSp + AltStackSize;
+            }
 
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
@@ -161,28 +206,39 @@ public class FiberTask
 
             // Setup Stack with SA_SIGINFO support
             SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
+            Logger.LogInformation("[HandleSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
+                sp, frameEsp, action.Handler);
             CPU.RegWrite(Reg.ESP, frameEsp);
             CPU.Eip = action.Handler;
 
-            // SA_RESTART Logic
-            var eax = (int)CPU.RegRead(Reg.EAX);
-            if (eax == -512) // -ERESTARTSYS
+            // Note: SA_RESTART is handled in HandleAsyncSyscall() when the syscall
+            // returns -ERESTARTSYS, not here during signal frame setup.
+        }
+        else
+        {
+            // No action registered = SIG_DFL
+            Logger.LogInformation("[HandleSignal] Signal {Sig} has no registered action (SIG_DFL)", sig);
+            if (IsFatalSignal(sig))
             {
-                if ((action.Flags & LinuxConstants.SA_RESTART) != 0)
-                {
-                    // Restart: rewind EIP to re-execute 'int 0x80' (CD 80)
-                    CPU.Eip -= 2;
-                    // TODO: Need original syscall number to fully restart?
-                    // For now fallback to EINTR if we can't fully restore
-                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
-                }
-                else
-                {
-                    // Interrupted: return -EINTR
-                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
-                }
+                Logger.LogInformation("[HandleSignal] Signal {Sig} is fatal (no handler), terminating task", sig);
+                Exited = true;
+                ExitStatus = 128 + sig;
             }
         }
+
+        // CRITICAL: Interrupt any blocking syscall so the task can process the signal
+        TryInterrupt();
+    }
+
+    private static bool IsFatalSignal(int sig)
+    {
+        // Signals that terminate the process by default
+        return sig == (int)Signal.SIGKILL ||
+               sig == (int)Signal.SIGTERM ||
+               sig == (int)Signal.SIGINT ||
+               sig == (int)Signal.SIGQUIT ||
+               sig == (int)Signal.SIGABRT ||
+               sig == (int)Signal.SIGSEGV;
     }
 
     private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr)
@@ -417,7 +473,8 @@ public class FiberTask
             newProc = new Process(NextTID(), newMem, newSys, Process.UTS)
             {
                 PPID = Process.TGID,
-                PGID = Process.PGID
+                PGID = Process.PGID,
+                SID = Process.SID
             };
             KernelScheduler.Current!.RegisterProcess(newProc);
         }
@@ -498,11 +555,46 @@ public class FiberTask
             // Allow the async operation to complete (suspend this method)
             var result = await task;
 
+            // Handle SA_RESTART for interrupted syscalls
+            if (result == -512) // -ERESTARTSYS
+            {
+                var sig = InterruptingSignal;
+                InterruptingSignal = null; // Clear after reading
+
+                Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
+
+                if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
+                {
+                    var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
+                    Logger.LogInformation("[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
+                        sig.Value, action.Flags, hasRestart);
+                    
+                    if (hasRestart)
+                    {
+                        // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
+                        // SyscallEip was saved before syscall execution
+                        Logger.LogInformation("[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
+                            CPU.Eip, SyscallEip);
+                        CPU.Eip = SyscallEip;
+                        // Don't modify EAX - the syscall will be re-executed with original args
+                        // Reschedule and return
+                        CommonKernel.Schedule(this);
+                        return;
+                    }
+                }
+
+                // No SA_RESTART or no handler: return -EINTR
+                Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
+                result = -(int)Errno.EINTR;
+            }
+            else
+            {
+                // Clear interrupting signal if syscall completed normally
+                InterruptingSignal = null;
+            }
+
             // Resume: write result to EAX
             CPU.RegWrite(Reg.EAX, (uint)result);
-
-            // If the result was EINTR, we might need to handle signal dispatching loop here?
-            // Usually the sycall implementation handles the EINTR return value.
 
             // Reschedule the task
             CommonKernel.Schedule(this);

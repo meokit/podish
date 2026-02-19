@@ -35,7 +35,7 @@ public partial class SyscallManager
                 task.RegisterBlockingSyscall(() => waiter.Tcs.TrySetResult(false));
                 try
                 {
-                    if (!await waiter.Tcs.Task) return -(int)Errno.EINTR;
+                    if (!await waiter.Tcs.Task) return -(int)Errno.ERESTARTSYS;
                 }
                 finally
                 {

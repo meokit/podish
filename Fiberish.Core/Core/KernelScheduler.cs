@@ -364,6 +364,18 @@ public class KernelScheduler
         task?.HandleSignal(signal);
     }
 
+    public bool IsValidProcessGroup(int pgid, int sid)
+    {
+        lock (_processes)
+        {
+            foreach (var p in _processes.Values)
+                if (p.PGID == pgid && p.SID == sid)
+                    return true;
+        }
+
+        return false;
+    }
+
     public readonly struct TimerAwaiter(long ticks) : INotifyCompletion
     {
         private readonly long _ticks = ticks;

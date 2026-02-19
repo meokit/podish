@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
@@ -271,11 +272,14 @@ public partial class SyscallManager
         private readonly long _timeoutMs = timeoutMs;
         private int _result;
         private FiberTask _task = null!;
+        private Action? _continuation;
+        private bool _completed;
 
         public bool IsCompleted => false;
 
         public void OnCompleted(Action continuation)
         {
+            _continuation = continuation;
             _task = (_sm.Engine.Owner as FiberTask)!;
             var kernel = KernelScheduler.Current;
             if (kernel == null)
@@ -290,15 +294,8 @@ public partial class SyscallManager
                     Resume(0); // Timeout
                 });
 
-            // 2. Register FDs
-            // Ideally we need to register callbacks on Files. VFS File needs event support.
-            // For now, we poll every X ticks or implement File.RegisterWait?
-            // Assuming simplified model: Poll via Timer for now if VFS event not ready.
-            // TODO: Implement proper VFS eventwait
-
-            // Fallback: Busy Poll with Timer (1ms)
-            // This is "Pulse" logic
-            DoPoll(continuation, timer);
+            // 2. Start Polling
+            DoPoll(timer);
         }
 
         public SelectAwaiter GetAwaiter()
@@ -311,13 +308,17 @@ public partial class SyscallManager
             return _result;
         }
 
-        private void DoPoll(Action continuation, Timer? timer)
+        private void DoPoll(Timer? timer)
         {
+            if (_completed) return;
+
             if (_task.WasInterrupted)
             {
                 timer?.Cancel();
-                _result = -(int)Errno.EINTR;
-                continuation();
+                SyscallManager.Logger.LogInformation("[SelectAwaiter.DoPoll] Task was interrupted, returning -ERESTARTSYS");
+                _result = -(int)Errno.ERESTARTSYS;
+                _completed = true;
+                _continuation?.Invoke();
                 return;
             }
 
@@ -328,37 +329,24 @@ public partial class SyscallManager
             {
                 timer?.Cancel();
                 _result = ready;
-                continuation();
+                _completed = true;
+                _continuation?.Invoke();
             }
             else
             {
-                // Re-schedule poll
-                // Check if timer expired?
-                if (timer != null && timer.Canceled) return; // Already handled by timeout callback?
-                // No, timeout callback calls Resume(0).
+                // If timeout happened while we were scanning?
+                if (_completed) return;
 
-                KernelScheduler.Current!.ScheduleTimer(1000, () => DoPoll(continuation, timer));
+                KernelScheduler.Current!.ScheduleTimer(1000, () => DoPoll(timer));
             }
         }
 
         private void Resume(int result)
         {
+            if (_completed) return;
+            _completed = true;
             _result = result;
-            // How to invoke continuation? We are in KernelScheduler loop.
-            // We need to schedule the task?
-            // Actually OnCompleted receives 'continuation'. We need to store it.
-            // But struct cannot store it easily if it's passed here.
-
-            // Wait, OnCompleted IS the registration.
-            // I implemented a polling loop above that CLOSES over 'continuation'.
-            // So Resume(0) called by timer needs access to 'continuation'.
-
-            // The timer callback above: 
-            // timer = kernel.ScheduleTimer(..., () => Resume(0));
-            // Resume needs 'continuation'.
-
-            // Refactor: the loop handles timeout implicitly if I check timer.Expiration?
-            // Or passing continuation to Resume.
+            _continuation?.Invoke();
         }
     }
 
@@ -394,7 +382,15 @@ public partial class SyscallManager
         // Simplified polling loop
         private void DoPoll(Action continuation, long endTick)
         {
-            // Similar to SelectAwaiter...
+            if (_task.WasInterrupted)
+            {
+                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                SyscallManager.Logger.LogInformation("[PollAwaiter.DoPoll] Task was interrupted, returning -ERESTARTSYS");
+                _result = -(int)Errno.ERESTARTSYS;
+                continuation();
+                return;
+            }
+
             int ready;
             ready = ScanPoll(_sm, _fdsAddr, _nfds);
 
@@ -405,10 +401,16 @@ public partial class SyscallManager
                 return;
             }
 
-            if (_timeoutMs != -1)
+            if (_timeoutMs >= 0)
             {
-                // Check timeout logic... 
-                // For now just re-schedule
+                // Check timeout logic
+                long currentMs = DateTime.UtcNow.Ticks / 10000;
+                if (currentMs >= endTick)
+                {
+                    _result = 0; // Timeout
+                    continuation();
+                    return;
+                }
             }
 
             KernelScheduler.Current!.ScheduleTimer(1000, () => DoPoll(continuation, endTick));

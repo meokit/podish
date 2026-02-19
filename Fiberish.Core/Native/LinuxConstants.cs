@@ -95,6 +95,7 @@ public static class LinuxConstants
     public const uint PageOffsetMask = 0xFFF;
 
     public const int TERMIOS_SIZE_I386 = 60;
+    public const int WINSIZE_SIZE = 8;
 
     public const uint MinMmapAddr = 0x10000;
     public const uint TaskSize32 = 0xC0000000;
@@ -241,4 +242,6 @@ public static class LinuxConstants
     public const uint TIOCSWINSZ = 0x5414;
     public const uint TIOCGPGRP = 0x540F;
     public const uint TIOCSPGRP = 0x5410;
+    public const uint TIOCSCTTY = 0x540E;
+    public const uint FIONREAD = 0x541B;
 }
