@@ -204,6 +204,19 @@ public abstract class Inode
         return revents;
     }
 
+    /// <summary>
+    /// Register a callback to be invoked when the file might be ready for the requested events.
+    /// The callback should be scheduled on the KernelScheduler.
+    /// </summary>
+    public virtual void RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        // Default: Do nothing.
+        // For regular files, Poll() returns ready immediately, so we shouldn't be waiting.
+        // If we are waiting on a regular file, it's weird, but we can just invoke callback immediately?
+        // No, if Poll() returned 0 (not ready) for some reason, we would wait.
+        // But for regular files Poll is always ready.
+    }
+
     public virtual void Truncate(long size)
     {
         throw new NotSupportedException();
@@ -339,6 +352,11 @@ public class LinuxFile
     public virtual short Poll(short events)
     {
         return Dentry.Inode?.Poll(this, events) ?? 0;
+    }
+
+    public virtual void RegisterWait(Action callback, short events)
+    {
+        Dentry.Inode?.RegisterWait(this, callback, events);
     }
 }
 

@@ -284,7 +284,7 @@ public partial class SyscallManager
         task.SignalMask = mask;
 
         // Log
-        if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
+        if (sm is { Strace: true }) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
 
         // Pre-set EAX to -EINTR so if signal handler runs (even with SA_RESTART), it saves -EINTR
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
@@ -315,7 +315,7 @@ public partial class SyscallManager
         finally
         {
             task.SignalMask = oldMask;
-            if (sm.Strace) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
+            if (sm is { Strace: true }) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
             task.DisposeSyscallToken();
         }
 

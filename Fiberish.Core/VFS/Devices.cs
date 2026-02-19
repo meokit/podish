@@ -105,6 +105,18 @@ public class ConsoleInode : Inode
         return revents;
     }
 
+    public override void RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        if (_isInput && _discipline != null)
+        {
+            const short POLLIN = 0x0001;
+            if ((events & POLLIN) != 0)
+            {
+                _discipline.DataAvailable.Register(callback);
+            }
+        }
+    }
+
     public override void Truncate(long size)
     {
     }

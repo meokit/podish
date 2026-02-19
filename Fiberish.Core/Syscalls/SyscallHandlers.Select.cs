@@ -191,6 +191,9 @@ public partial class SyscallManager
                 if (sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
                     var revents = file.Poll(pfd.Events);
+                    // Debug logging
+                    // SyscallManager.Logger.LogInformation("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd, pfd.Events, revents, file.GetType().Name);
+                    
                     if (revents != 0)
                     {
                         pfd.Revents = revents;
@@ -263,17 +266,29 @@ public partial class SyscallManager
 
     // --- Awaiters ---
 
-    public class SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
-        : INotifyCompletion
+    public class SelectAwaiter : INotifyCompletion
     {
-        private readonly uint _inp = inp, _outp = outp, _exp = exp;
-        private readonly int _n = n;
-        private readonly SyscallManager _sm = sm;
-        private readonly long _timeoutMs = timeoutMs;
+        private readonly uint _inp, _outp, _exp;
+        private readonly int _n;
+        private readonly SyscallManager _sm;
+        private readonly long _timeoutMs;
         private int _result;
         private FiberTask _task = null!;
         private Action? _continuation;
         private bool _completed;
+        private int _reschedulePending;
+        private bool _hasTimedOut;
+        private Timer? _timer;
+
+        public SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
+        {
+            _sm = sm;
+            _n = n;
+            _inp = inp;
+            _outp = outp;
+            _exp = exp;
+            _timeoutMs = timeoutMs;
+        }
 
         public bool IsCompleted => false;
 
@@ -281,41 +296,43 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _task = (_sm.Engine.Owner as FiberTask)!;
-            var kernel = KernelScheduler.Current;
-            if (kernel == null)
-                throw new InvalidOperationException("KernelScheduler.Current is null in Select OnCompleted");
-
-            // 1. Register Timeout
-            Timer? timer = null;
+            
             if (_timeoutMs > 0)
-                // Convert ms to ticks (assuming 1ms = 1000 ticks)
-                timer = kernel.ScheduleTimer(_timeoutMs * 1000, () =>
+            {
+                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 1000, () =>
+                 {
+                      _hasTimedOut = true;
+                      ScheduleRePoll();
+                 });
+            }
+
+            DoPoll();
+        }
+
+        public SelectAwaiter GetAwaiter() => this;
+
+        public int GetResult() => _result;
+
+        private void ScheduleRePoll()
+        {
+            if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
+            {
+                KernelScheduler.Current!.Schedule(() =>
                 {
-                    Resume(0); // Timeout
+                    _reschedulePending = 0;
+                    DoPoll();
                 });
-
-            // 2. Start Polling
-            DoPoll(timer);
+            }
         }
 
-        public SelectAwaiter GetAwaiter()
-        {
-            return this;
-        }
-
-        public int GetResult()
-        {
-            return _result;
-        }
-
-        private void DoPoll(Timer? timer)
+        private void DoPoll()
         {
             if (_completed) return;
 
             if (_task.WasInterrupted)
             {
-                timer?.Cancel();
-                SyscallManager.Logger.LogInformation("[SelectAwaiter.DoPoll] Task was interrupted, returning -ERESTARTSYS");
+                _timer?.Cancel();
+                _task.ClearInterrupt();
                 _result = -(int)Errno.ERESTARTSYS;
                 _completed = true;
                 _continuation?.Invoke();
@@ -327,93 +344,174 @@ public partial class SyscallManager
             ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _);
             if (ready > 0)
             {
-                timer?.Cancel();
+                _timer?.Cancel();
                 _result = ready;
                 _completed = true;
                 _continuation?.Invoke();
+                return;
             }
-            else
+            
+            if (_hasTimedOut)
             {
-                // If timeout happened while we were scanning?
-                if (_completed) return;
-
-                KernelScheduler.Current!.ScheduleTimer(1000, () => DoPoll(timer));
+                _result = 0;
+                _completed = true;
+                _continuation?.Invoke();
+                return;
             }
+
+            RegisterWaits();
         }
 
-        private void Resume(int result)
+        private void RegisterWaits()
         {
-            if (_completed) return;
-            _completed = true;
-            _result = result;
-            _continuation?.Invoke();
+            var intCount = (_n + NFDBITS - 1) / NFDBITS;
+            if (intCount > FD_SETSIZE / 32) intCount = FD_SETSIZE / 32;
+
+            var inSets = new uint[intCount];
+            var outSets = new uint[intCount];
+            var exSets = new uint[intCount];
+
+            if (_inp != 0) ReadSpan(_sm.Engine, _inp, inSets);
+            if (_outp != 0) ReadSpan(_sm.Engine, _outp, outSets);
+            if (_exp != 0) ReadSpan(_sm.Engine, _exp, exSets);
+
+            for (var i = 0; i < _n; i++)
+            {
+                var wordIndex = i / NFDBITS;
+                var bitIndex = i % NFDBITS;
+                var mask = 1u << bitIndex;
+
+                var checkRead = (inSets[wordIndex] & mask) != 0;
+                var checkWrite = (outSets[wordIndex] & mask) != 0;
+                var checkEx = (exSets[wordIndex] & mask) != 0;
+
+                if (!checkRead && !checkWrite && !checkEx) continue;
+
+                if (_sm.FDs.TryGetValue(i, out var file))
+                {
+                    short events = 0;
+                    if (checkRead) events |= PollEvents.POLLIN;
+                    if (checkWrite) events |= PollEvents.POLLOUT;
+                    if (checkEx) events |= PollEvents.POLLPRI;
+
+                    if (events != 0)
+                        file.RegisterWait(ScheduleRePoll, events);
+                }
+            }
         }
     }
 
-    public class PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs) : INotifyCompletion
+    public class PollAwaiter : INotifyCompletion
     {
-        private readonly uint _fdsAddr = fdsAddr;
-        private readonly uint _nfds = nfds;
-        private readonly SyscallManager _sm = sm;
-        private readonly int _timeoutMs = timeoutMs;
+        private readonly uint _fdsAddr;
+        private readonly uint _nfds;
+        private readonly SyscallManager _sm;
+        private readonly int _timeoutMs;
         private int _result;
         private FiberTask _task = null!;
+        private bool _completed;
+        private int _reschedulePending; // 0=false, 1=true
+        private bool _hasTimedOut;
+        private Action? _continuation;
+        private Timer? _timer;
+
+        public PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+        {
+            _sm = sm;
+            _fdsAddr = fdsAddr;
+            _nfds = nfds;
+            _timeoutMs = timeoutMs;
+        }
 
         public bool IsCompleted => false;
 
         public void OnCompleted(Action continuation)
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
+            _continuation = continuation;
 
-            // Polling Loop
-            DoPoll(continuation, DateTime.UtcNow.Ticks / 10000 + _timeoutMs); // Wall clock? No, simple loop counter
+            if (_timeoutMs > 0)
+            {
+                 // Schedule timeout
+                 // Note: ScheduleTimer takes ticks. 1ms = 10_000 ticks.
+                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 10_000, () =>
+                 {
+                      _hasTimedOut = true;
+                      ScheduleRePoll();
+                 });
+            }
+
+            // Initial Poll
+            DoPoll();
         }
 
-        public PollAwaiter GetAwaiter()
+        public PollAwaiter GetAwaiter() => this;
+
+        public int GetResult() => _result;
+
+        private void ScheduleRePoll()
         {
-            return this;
+            if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
+            {
+                KernelScheduler.Current!.Schedule(() =>
+                {
+                    _reschedulePending = 0;
+                    DoPoll(); 
+                });
+            }
         }
 
-        public int GetResult()
+        private void DoPoll()
         {
-            return _result;
-        }
+            if (_completed) return;
 
-        // Simplified polling loop
-        private void DoPoll(Action continuation, long endTick)
-        {
             if (_task.WasInterrupted)
             {
-                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                SyscallManager.Logger.LogInformation("[PollAwaiter.DoPoll] Task was interrupted, returning -ERESTARTSYS");
+                _timer?.Cancel();
+                _task.ClearInterrupt();
                 _result = -(int)Errno.ERESTARTSYS;
-                continuation();
+                _completed = true;
+                _continuation?.Invoke();
                 return;
             }
 
-            int ready;
-            ready = ScanPoll(_sm, _fdsAddr, _nfds);
+            int ready = ScanPoll(_sm, _fdsAddr, _nfds);
 
             if (ready > 0)
             {
+                _timer?.Cancel();
                 _result = ready;
-                continuation();
+                _completed = true;
+                _continuation?.Invoke();
                 return;
             }
 
-            if (_timeoutMs >= 0)
+            if (_hasTimedOut)
             {
-                // Check timeout logic
-                long currentMs = DateTime.UtcNow.Ticks / 10000;
-                if (currentMs >= endTick)
-                {
-                    _result = 0; // Timeout
-                    continuation();
-                    return;
-                }
+                _result = 0; // Timeout
+                _completed = true;
+                _continuation?.Invoke();
+                return;
             }
 
-            KernelScheduler.Current!.ScheduleTimer(1000, () => DoPoll(continuation, endTick));
+            // Not ready, not timed out -> Register waits and suspend
+            RegisterWaits();
+        }
+
+        private void RegisterWaits()
+        {
+             // Log spam prevention: don't log here
+             var sizeOfPollfd = Marshal.SizeOf<Pollfd>();
+             
+             for (uint i = 0; i < _nfds; i++)
+             {
+                 var itemAddr = _fdsAddr + i * (uint)sizeOfPollfd;
+                 var pfd = ReadStruct<Pollfd>(_sm.Engine, itemAddr);
+                 if (pfd.Fd >= 0 && _sm.FDs.TryGetValue(pfd.Fd, out var file))
+                 {
+                     file.RegisterWait(ScheduleRePoll, pfd.Events);
+                 }
+             }
         }
     }
 }

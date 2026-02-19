@@ -168,6 +168,19 @@ public class Process
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
     }
 
+    internal void Exec(string exePath, string[] args, string[] envs)
+    {
+        // 1. Clear Memory
+        Syscalls.Mem.Clear(Syscalls.Engine);
+
+        // 2. Re-setup vDSO (Important! execve clears memory map including vDSO)
+        Syscalls.SetupVDSO();
+
+        // 3. Load Executable
+        // LoadExecutable handles ELF loading, stack setup and CPU state reset
+        LoadExecutable(exePath, args, envs);
+    }
+
     public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
         bool strace, KernelScheduler scheduler, TtyDiscipline? tty = null)
     {

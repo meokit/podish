@@ -135,7 +135,7 @@ public partial class SyscallManager
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
 
-    private void SetupVDSO()
+    internal void SetupVDSO()
     {
         // Map vDSO page (RX) at a fixed high address to avoid overlap
         uint vdsoAddr = 0x7FFF0000;

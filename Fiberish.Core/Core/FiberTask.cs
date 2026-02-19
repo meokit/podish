@@ -527,6 +527,7 @@ public class FiberTask
                 if (PendingSyscall != null)
                 {
                     // We are blocked on an async syscall
+                    Logger.LogTrace("[RunSlice] Yielded with PendingSyscall, calling HandleAsyncSyscall");
                     Status = FiberTaskStatus.Waiting;
                     HandleAsyncSyscall();
                     // We return here. The Scheduler will NOT reschedule us immediately 
@@ -548,9 +549,14 @@ public class FiberTask
             else if (CPU.Status == EmuStatus.Fault)
             {
                 // Crash
-                // Logger.LogError(...) // TODO: Access Logger
-                Exited = true;
-                ExitStatus = 139; // SIGSEGV
+                Logger.LogCritical("CPU Fault detected at EIP=0x{EIP:X}. Terminating task with SIGSEGV.", CPU.Eip);
+                Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}", 
+                    CPU.RegRead(Reg.EAX), CPU.RegRead(Reg.EBX), CPU.RegRead(Reg.ECX), CPU.RegRead(Reg.EDX));
+                Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}", 
+                    CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
+                Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
+                
+                TerminateBySignal((int)Signal.SIGSEGV);
                 Status = FiberTaskStatus.Terminated;
             }
             else
@@ -673,84 +679,225 @@ public class FiberTask
         return child;
     }
 
-    private async void HandleAsyncSyscall()
-    {
-        if (PendingSyscall == null) return;
+        private bool _handlingAsyncSyscall;
 
-        int result = 0;
-        try
-        {
-            var task = PendingSyscall();
-            PendingSyscall = null; // Clear immediately
+    
 
-            // Allow the async operation to complete (suspend this method)
-            result = await task;
-        }
-        catch (OperationCanceledException)
-        {
-             Logger.LogInformation("[HandleAsyncSyscall] Syscall Task Cancelled (caught exception)");
-             result = -512; // Treat as ERESTARTSYS
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
-            // Return EFAULT or similar?
-            CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
-            CommonKernel.Schedule(this);
-            return;
-        }
-        finally
-        {
-             DisposeSyscallToken(); // Clean up
-        }
+        private async void HandleAsyncSyscall()
 
-        // Handle SA_RESTART for interrupted syscalls
-        if (result == -512) // -ERESTARTSYS
         {
-            var sig = InterruptingSignal;
-            InterruptingSignal = null; // Clear after reading
 
-            Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
+            if (_handlingAsyncSyscall)
 
-            if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
             {
-                var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
-                Logger.LogInformation("[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
-                    sig.Value, action.Flags, hasRestart);
-                
-                if (hasRestart)
-                {
-                    // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
-                    // SyscallEip was saved before syscall execution
-                    Logger.LogInformation("[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
-                        CPU.Eip, SyscallEip);
-                    CPU.Eip = SyscallEip;
-                    // Don't modify EAX - the syscall will be re-executed with original args
-                    // Reschedule and return
-                    CommonKernel.Schedule(this);
-                    return;
-                }
+
+                Logger.LogWarning("[HandleAsyncSyscall] Re-entry detected! Ignoring.");
+
+                return;
+
             }
 
-            // No SA_RESTART or no handler: return -EINTR
-            Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
-            result = -(int)Errno.EINTR;
-        }
-        else
-        {
-            // Clear interrupting signal if syscall completed normally
-            InterruptingSignal = null;
-        }
+    
 
-        // Resume: write result to EAX
-        CPU.RegWrite(Reg.EAX, (uint)result);
+            _handlingAsyncSyscall = true;
 
-        if (Process.Syscalls.Strace)
-        {
-            SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2, SyscallArg3);
+            try
+
+            {
+
+                if (PendingSyscall == null) return;
+
+    
+
+                int result = 0;
+
+                try
+
+                {
+
+                    var task = PendingSyscall();
+
+                    PendingSyscall = null; // Clear immediately
+
+    
+
+                    // Allow the async operation to complete (suspend this method)
+
+                    result = await task;
+
+                }
+
+                catch (OperationCanceledException)
+
+                {
+
+                    Logger.LogInformation("[HandleAsyncSyscall] Syscall Task Cancelled (caught exception)");
+
+                    result = -512; // Treat as ERESTARTSYS
+
+                }
+
+                catch (Exception ex)
+
+                {
+
+                    Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
+
+                    // Return EFAULT or similar?
+
+                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
+
+                    CommonKernel.Schedule(this);
+
+                    return;
+
+                }
+
+                finally
+
+                {
+
+                    DisposeSyscallToken(); // Clean up
+
+                }
+
+    
+
+                // Handle SA_RESTART for interrupted syscalls
+
+                if (result == -512) // -ERESTARTSYS
+
+                {
+
+                    var sig = InterruptingSignal;
+
+                    InterruptingSignal = null; // Clear after reading
+
+    
+
+                    Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
+
+    
+
+                    if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
+
+                    {
+
+                        var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
+
+                        Logger.LogInformation("[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
+
+                            sig.Value, action.Flags, hasRestart);
+
+    
+
+                        if (hasRestart)
+
+                        {
+
+                            // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
+
+                            // SyscallEip was saved before syscall execution
+
+                            Logger.LogInformation(
+
+                                "[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
+
+                                CPU.Eip, SyscallEip);
+
+    
+
+                            if (SyscallEip == 0)
+
+                            {
+
+                                Logger.LogWarning(
+
+                                    "[HandleAsyncSyscall] SyscallEip is 0! This will cause a crash. Attempting to recover...");
+
+                                // Recovery logic? We can't really recover without knowing where to restart.
+
+                                // But we can try to return -EINTR instead.
+
+                                Logger.LogWarning("[HandleAsyncSyscall] Falling back to -EINTR due to invalid SyscallEip");
+
+                                result = -(int)Errno.EINTR;
+
+                            }
+
+                            else
+
+                            {
+
+                                CPU.Eip = SyscallEip;
+
+                                // Don't modify EAX - the syscall will be re-executed with original args
+
+                                // Reschedule and return
+
+                                CommonKernel.Schedule(this);
+
+                                return;
+
+                            }
+
+                        }
+
+                    }
+
+    
+
+                    // No SA_RESTART or no handler: return -EINTR
+
+                    Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
+
+                    result = -(int)Errno.EINTR;
+
+                }
+
+                else
+
+                {
+
+                    // Clear interrupting signal if syscall completed normally
+
+                    InterruptingSignal = null;
+
+                }
+
+    
+
+                // Resume: write result to EAX
+
+                CPU.RegWrite(Reg.EAX, (uint)result);
+
+    
+
+                if (Process.Syscalls.Strace)
+
+                {
+
+                    SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
+
+                        SyscallArg3);
+
+                }
+
+    
+
+                // Reschedule the task
+
+                CommonKernel.Schedule(this);
+
+            }
+
+            finally
+
+            {
+
+                _handlingAsyncSyscall = false;
+
+            }
+
         }
-
-        // Reschedule the task
-        CommonKernel.Schedule(this);
-    }
 }

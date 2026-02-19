@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Channels;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -15,7 +17,13 @@ public class KernelScheduler
     // public static KernelScheduler Instance { get; set; } = new();
 
     private static readonly AsyncLocal<KernelScheduler?> _current = new();
-    private readonly Queue<(Action, FiberTask?)> _continuations = new();
+    private readonly Channel<(Action, FiberTask?)> _events =
+        Channel.CreateUnbounded<(Action, FiberTask?)>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+    private int _wakePending;
 
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
@@ -23,9 +31,6 @@ public class KernelScheduler
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimerSystem _timerSystem = new();
-
-    // Event to wake up the scheduler loop (replaces busy wait)
-    private readonly AutoResetEvent _waitEvent = new(false);
 
     private TtyDiscipline? _tty;
 
@@ -56,7 +61,7 @@ public class KernelScheduler
 
     public void WakeUp()
     {
-        _waitEvent.Set();
+        EnqueueWake();
     }
 
     public void RegisterProcess(Process p)
@@ -104,17 +109,12 @@ public class KernelScheduler
             _runQueue.Enqueue(task);
         }
 
-        WakeUp();
+        EnqueueWake();
     }
 
     public void Schedule(Action continuation, FiberTask? context = null)
     {
-        lock (_continuations)
-        {
-            _continuations.Enqueue((continuation, context));
-        }
-
-        WakeUp();
+        _events.Writer.TryWrite((continuation, context));
     }
 
     public Timer ScheduleTimer(long delayTicks, Action callback)
@@ -122,7 +122,7 @@ public class KernelScheduler
         var timer = _timerSystem.Schedule(delayTicks, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
         // to re-evaluate our wait time.
-        WakeUp();
+        EnqueueWake();
         return timer;
     }
 
@@ -147,96 +147,46 @@ public class KernelScheduler
                 }
 
                 // 0. Process Continuations (High Priority)
-                while (true)
-                {
-                    (Action, FiberTask?) item;
-                    lock (_continuations)
-                    {
-                        if (!_continuations.TryDequeue(out item)) break;
-                    }
-
-                    var (cont, ctx) = item;
-                    var oldTask = CurrentTask;
-                    CurrentTask = ctx;
-                    try
-                    {
-                        cont();
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError(ex, "Error in async continuation");
-                    }
-                    finally
-                    {
-                        CurrentTask = oldTask;
-                    }
-                }
+                var drainedEvents = DrainEvents();
 
                 // 1. Process Timers
                 // If the queue is empty, we MUST advance time to the next timer event
                 // to avoid busy loop deadlocks if all tasks are waiting on timers.
-                if (_runQueue.Count == 0 && _continuations.Count == 0)
+                if (_runQueue.Count == 0 && !drainedEvents)
                 {
-                    var nextWakeup = _timerSystem.NextExpiration;
-                    if (nextWakeup.HasValue)
+                    if (TryProcessPendingInput())
+                        continue;
+
+                    // Check scheduler state - this will detect actual bugs
+                    ValidateSchedulerState();
+
+                    var (anyAlive, anyWaiting) = GetTaskLiveness();
+                    if (!anyAlive)
                     {
-                        var jump = nextWakeup.Value - CurrentTick;
-                        if (jump > 0)
-                            _timerSystem.Advance(jump);
-                        else
-                            _timerSystem.Advance(0);
+                        Logger.LogInformation("No active tasks. Exiting loop.");
+                        Running = false;
+                        break;
                     }
-                    else
+
+                    if (TryAdvanceToNextTimer())
+                        continue;
+
+                    // No tasks and no timers? Check if we should wait for external input.
+                    if (Running)
                     {
-                        // No tasks and no timers? Check if we should wait for external input.
-                        if (Running)
+                        // If we have a TTY and tasks are waiting for input, wait a bit
+                        // This allows the background InputLoop to provide input
+                        // Optimized: Wait for signal instead of sleeping
+                        if (Tty != null && anyWaiting)
                         {
-                            // Check if TTY has pending input - if so, wake up waiting tasks
-                            if (Tty != null && Tty.HasPendingInput)
-                            {
-                                // Process the input, which will trigger AsyncWaitQueues and schedule continuations
-                                Logger.LogDebug("TTY has pending input, processing...");
-                                Tty.ProcessPendingInput();
-                                continue;
-                            }
-
-                            // Check scheduler state - this will detect actual bugs
-                            ValidateSchedulerState();
-
-                            // Check if any task is actually alive/waiting
-                            var anyWaiting = false;
-                            var anyAlive = false;
-                            lock (_tasks)
-                            {
-                                foreach (var t in _tasks.Values)
-                                    if (t.Status != FiberTaskStatus.Terminated && t.Status != FiberTaskStatus.Zombie)
-                                    {
-                                        anyAlive = true;
-                                        if (t.Status == FiberTaskStatus.Waiting) anyWaiting = true;
-                                    }
-                            }
-
-                            if (!anyAlive)
-                            {
-                                Logger.LogInformation("No active tasks. Exiting loop.");
-                                Running = false;
-                                break;
-                            }
-
-                            // If we have a TTY and tasks are waiting for input, wait a bit
-                            // This allows the background InputLoop to provide input
-                            // Optimized: Wait for signal instead of sleeping
-                            if (Tty != null && anyWaiting)
-                            {
-                                Logger.LogDebug("Waiting for external input (blocking)...");
-                                _waitEvent.WaitOne();
-                                continue;
-                            }
-
-                            Logger.LogInformation("No ready tasks and no pending timers. Exiting loop.");
-                            Running = false;
-                            break;
+                            Logger.LogDebug("Waiting for external input (blocking)...");
+                            WaitForEvent();
+                            continue;
                         }
+
+                        Logger.LogInformation("No ready tasks and no pending timers. Exiting loop.");
+                        Running = false;
+                        break;
                     }
                 }
                 else
@@ -265,6 +215,91 @@ public class KernelScheduler
         {
             Current = null;
         }
+    }
+
+    private void DrainContinuations()
+    {
+        DrainEvents();
+    }
+
+    private bool DrainEvents()
+    {
+        var drained = false;
+        while (_events.Reader.TryRead(out var item))
+        {
+            drained = true;
+            ExecuteEvent(item);
+        }
+
+        return drained;
+    }
+
+    private void WaitForEvent()
+    {
+        var item = _events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        ExecuteEvent(item);
+    }
+
+    private void ExecuteEvent((Action, FiberTask?) item)
+    {
+        var (cont, ctx) = item;
+        var oldTask = CurrentTask;
+        CurrentTask = ctx;
+        try
+        {
+            cont();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error in async continuation");
+        }
+        finally
+        {
+            CurrentTask = oldTask;
+        }
+    }
+
+    private void EnqueueWake()
+    {
+        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
+
+        _events.Writer.TryWrite((() => { _wakePending = 0; }, null));
+    }
+
+    private bool TryAdvanceToNextTimer()
+    {
+        var nextWakeup = _timerSystem.NextExpiration;
+        if (!nextWakeup.HasValue) return false;
+
+        var jump = nextWakeup.Value - CurrentTick;
+        _timerSystem.Advance(jump > 0 ? jump : 0);
+        return true;
+    }
+
+    private bool TryProcessPendingInput()
+    {
+        if (Tty == null || !Tty.HasPendingInput) return false;
+
+        Logger.LogDebug("TTY has pending input, processing...");
+        Tty.ProcessPendingInput();
+        return true;
+    }
+
+    private (bool anyAlive, bool anyWaiting) GetTaskLiveness()
+    {
+        var anyWaiting = false;
+        var anyAlive = false;
+        lock (_tasks)
+        {
+            foreach (var t in _tasks.Values)
+                if (t.Status != FiberTaskStatus.Terminated && t.Status != FiberTaskStatus.Zombie)
+                {
+                    anyAlive = true;
+                    if (t.Status == FiberTaskStatus.Waiting) anyWaiting = true;
+                }
+        }
+
+        return (anyAlive, anyWaiting);
     }
 
     public void Panic(string reason)

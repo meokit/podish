@@ -397,12 +397,6 @@ public partial class SyscallManager
             }
         }
 
-        // Clear Memory
-        sm.Mem.Clear(sm.Engine);
-
-        // We also need to reset BRK
-        sm.BrkAddr = 0; // ElfLoader will set it
-
         // Close O_CLOEXEC files
         var toClose = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
         foreach (var fd in toClose) sm.FreeFD(fd);
@@ -421,48 +415,15 @@ public partial class SyscallManager
         task.AltStackSize = 0;
         task.AltStackFlags = 0;
 
-        // Load new ELF
-        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs", absPath, args.Count,
+        // Load new ELF via Process.Exec (Handles memory clearing + vDSO setup + ELF loading)
+        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs via Process.Exec", absPath, args.Count,
             envs.Count);
         foreach (var arg in args) Logger.LogDebug("  arg: {Arg}", arg);
+        
         try
         {
-            // Note: ElfLoader.Load usually expects us to map the file.
-            // In the current codebase usage (e.g. Program.cs), `ElfLoader.Load` takes a real file path?
-            var res = ElfLoader.Load(absPath, sm, [.. args], [.. envs]);
-
-            // Set CPU State
-            sm.Engine.Eip = res.Entry;
-            sm.Engine.RegWrite(Reg.ESP, res.SP);
-            sm.Engine.Eflags = 0x202; // Reset EFLAGS like Program.cs
-
-            // Reset segment bases (TLS will be re-setup by new process)
-            sm.Engine.SetSegBase(Seg.GS, 0);
-            sm.Engine.SetSegBase(Seg.FS, 0);
-
-            // Reset other registers to clean state
-            sm.Engine.RegWrite(Reg.EAX, 0);
-            sm.Engine.RegWrite(Reg.EBX, 0);
-            sm.Engine.RegWrite(Reg.ECX, 0);
-            sm.Engine.RegWrite(Reg.EDX, 0);
-            sm.Engine.RegWrite(Reg.ESI, 0);
-            sm.Engine.RegWrite(Reg.EDI, 0);
-            sm.Engine.RegWrite(Reg.EBP, 0);
-
-            // Initial stack content must be written to memory
-            // Use CopyToUser instead of MemWrite to avoid recursive fault handler
-            var stackWritten = sm.Engine.CopyToUser(res.SP, res.InitialStack);
-            Logger.LogDebug("[SysExecve] Stack write to 0x{SP:x} len={Len} success={Success}", res.SP,
-                res.InitialStack.Length, stackWritten);
-            if (!stackWritten)
-            {
-                Logger.LogError("[SysExecve] Failed to write initial stack!");
-                return -(int)Errno.EFAULT;
-            }
-
-            sm.BrkAddr = res.BrkAddr; // Set BRK address from ElfLoader result
-
-            return 0; // Success
+            task.Process.Exec(absPath, [.. args], [.. envs]);
+            return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }
         catch (FileNotFoundException)
         {
@@ -472,10 +433,7 @@ public partial class SyscallManager
         {
             Logger.LogWarning("Execve failed: {Message}", ex.Message);
             return -(int)Errno.ENOENT;
-        }
-
-        // Unreachable
-        // return 0; 
+        } 
     }
 
     private static async ValueTask<int> SysSetSid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

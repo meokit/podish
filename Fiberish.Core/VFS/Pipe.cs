@@ -222,6 +222,27 @@ public class PipeInode : Inode
         return revents;
     }
 
+    public override void RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+
+        lock (_lock)
+        {
+            if ((events & POLLIN) != 0)
+            {
+                // Register for read availability
+                _readHandle.Register(callback);
+            }
+
+            if ((events & POLLOUT) != 0)
+            {
+                // Register for write space availability
+                _writeHandle.Register(callback);
+            }
+        }
+    }
+
     public override void Release(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
