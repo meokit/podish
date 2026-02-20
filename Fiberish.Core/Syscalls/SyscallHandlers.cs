@@ -155,5 +155,6 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.poll, SysPoll);
         Register(X86SyscallNumbers.pipe, SysPipe);
         Register(239, SysSendfile64);
+        Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
     }
 }

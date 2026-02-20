@@ -146,6 +146,47 @@ public partial class SyscallManager
             a6);
     }
 
+    private static async ValueTask<int> SysMemfdCreate(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        const uint MFD_CLOEXEC = 0x0001;
+        const uint MFD_ALLOW_SEALING = 0x0002;
+
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var name = sm.Engine.ReadStringSafe(a1);
+        if (name == null) return -(int)Errno.EFAULT;
+
+        var flags = a2;
+        var knownFlags = MFD_CLOEXEC | MFD_ALLOW_SEALING;
+        if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
+
+        try
+        {
+            var inode = sm.MemfdSuperBlock.AllocInode();
+            inode.Type = InodeType.File;
+            inode.Mode = 0x180; // 0600
+
+            var t = sm.Engine.Owner as FiberTask;
+            inode.Uid = t?.Process.EUID ?? 0;
+            inode.Gid = t?.Process.EGID ?? 0;
+
+            var display = string.IsNullOrEmpty(name) ? "memfd:anon" : $"memfd:{name}";
+            var dentry = new Dentry(display, inode, sm.MemfdSuperBlock.Root, sm.MemfdSuperBlock);
+
+            var fdFlags = FileFlags.O_RDWR;
+            if ((flags & MFD_CLOEXEC) != 0) fdFlags |= FileFlags.O_CLOEXEC;
+            var file = new VFS.LinuxFile(dentry, fdFlags);
+            return sm.AllocFD(file);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "SysMemfdCreate failed");
+            return -(int)Errno.ENOMEM;
+        }
+    }
+
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");

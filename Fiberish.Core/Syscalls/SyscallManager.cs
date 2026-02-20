@@ -84,6 +84,15 @@ public partial class SyscallManager
         var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
         Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime");
 
+        // Mount tmpfs to /dev/shm for POSIX shm_open userspace ABI.
+        EnsureDirectory(devSb.Root, "shm");
+        var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
+        Mount(devSb.Root, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev");
+        DevShmRoot = shmSb.Root;
+
+        // Separate tmpfs namespace for memfd_create (unnamed file descriptors).
+        MemfdSuperBlock = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "memfd", null);
+
         // Add console FDs
         InitStdio(devSb, tty);
 
@@ -93,7 +102,7 @@ public partial class SyscallManager
     private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk,
         uint brkBase,
         bool strace,
-        Dentry root, Dentry cwd, Dentry procRoot, TtyDiscipline? tty)
+        Dentry root, Dentry cwd, Dentry procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock, TtyDiscipline? tty)
     {
         Mem = mem;
         FDs = fds;
@@ -104,6 +113,8 @@ public partial class SyscallManager
         Root = root; // Global root (shared)
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
+        DevShmRoot = devShmRoot;
+        MemfdSuperBlock = memfdSuperBlock;
         Tty = tty;
 
         Root.Inode!.Get();
@@ -125,6 +136,8 @@ public partial class SyscallManager
 
     // For chroot tracking, we keep a Dentry pointer to the process root
     public Dentry ProcessRoot { get; set; } = null!;
+    public Dentry DevShmRoot { get; set; } = null!;
+    public SuperBlock MemfdSuperBlock { get; set; } = null!;
 
     // File Descriptors (Shared if CLONE_FILES)
     public Dictionary<int, VFS.LinuxFile> FDs { get; } = [];
@@ -147,7 +160,7 @@ public partial class SyscallManager
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
 
         // Directly allocate the page in the engine with RW permissions for initial setup
-        if (Engine.AllocatePage(vdsoAddr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
+        if (!Mem.MapAnonymousPage(vdsoAddr, Engine, Protection.Read | Protection.Write))
             throw new Exception("Failed to allocate vDSO page");
 
         // Write trampolines
@@ -193,8 +206,22 @@ public partial class SyscallManager
         sb.Root.MountedAt = dentry;
 
         // Track mount
-        var targetPath = "/" + name; // Simplified for root mounts
+        var targetPath = BuildPath(dentry);
         MountList.Add(new MountInfo { Source = source, Target = targetPath, FsType = fstype, Options = options });
+    }
+
+    private static string BuildPath(Dentry dentry)
+    {
+        var parts = new List<string>();
+        var cur = dentry;
+        while (cur.Parent != null && cur.Parent != cur)
+        {
+            if (cur.Name != "/") parts.Add(cur.Name);
+            cur = cur.Parent;
+        }
+
+        parts.Reverse();
+        return "/" + string.Join("/", parts);
     }
 
     private void InitStdio(SuperBlock devSb, TtyDiscipline? tty)
@@ -245,7 +272,7 @@ public partial class SyscallManager
 
         var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
-            ProcessRoot, Tty)
+            ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty)
         {
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,

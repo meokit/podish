@@ -33,11 +33,25 @@ public class VMA
     public long Offset { get; set; }
     public long FileSz { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;
+    public MemoryObject MemoryObject { get; set; } = null!;
+    public uint ViewPageOffset { get; set; }
 
     public uint Length => End - Start;
 
     public VMA Clone()
     {
+        var shared = (Flags & MapFlags.Shared) != 0;
+        MemoryObject obj;
+        if (shared)
+        {
+            MemoryObject.AddRef();
+            obj = MemoryObject;
+        }
+        else
+        {
+            obj = MemoryObject.ForkCloneForPrivate();
+        }
+
         return new VMA
         {
             Start = Start,
@@ -47,7 +61,9 @@ public class VMA
             File = File, // File object is shared (like os.File in Go)
             Offset = Offset,
             FileSz = FileSz,
-            Name = Name
+            Name = Name,
+            MemoryObject = obj,
+            ViewPageOffset = ViewPageOffset
         };
     }
 }

@@ -29,6 +29,10 @@ struct PageTableChunk {
             if (other.pages[i]) {
                 pages[i] = new std::byte[PAGE_SIZE];
                 std::memcpy(pages[i], other.pages[i], PAGE_SIZE);
+                if (has_property(permissions[i], Property::External)) {
+                    // This page is now owned by the new MMU copy.
+                    permissions[i] = permissions[i] & ~Property::External;
+                }
             } else {
                 pages[i] = nullptr;
             }
@@ -36,8 +40,11 @@ struct PageTableChunk {
     }
 
     ~PageTableChunk() {
-        for (auto* ptr : pages) {
-            if (ptr) delete[] ptr;
+        for (size_t i = 0; i < pages.size(); ++i) {
+            auto* ptr = pages[i];
+            if (ptr && !has_property(permissions[i], Property::External)) {
+                delete[] ptr;
+            }
         }
     }
 };
@@ -223,7 +230,7 @@ public:
         auto& chunk = page_dir->l1_directory[l1_idx];
 
         // Free existing page if owned
-        if (chunk->pages[l2_idx]) {
+        if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
             delete[] chunk->pages[l2_idx];
         }
 

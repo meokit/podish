@@ -123,7 +123,7 @@ public class Process
         for (var addr = spBase & LinuxConstants.PageMask;
              addr < ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
              addr += LinuxConstants.PageSize)
-            if (engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write)) == IntPtr.Zero)
+            if (!Syscalls.Mem.MapAnonymousPage(addr, engine, Protection.Read | Protection.Write))
                 throw new InvalidOperationException($"Failed to allocate stack page at 0x{addr:x}");
 
         if (!engine.CopyToUser(spBase, stackData))

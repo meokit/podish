@@ -46,6 +46,12 @@ constexpr Property operator|(Property lhs, Property rhs) {
     return static_cast<Property>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
 }
 
+constexpr Property operator&(Property lhs, Property rhs) {
+    return static_cast<Property>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+}
+
+constexpr Property operator~(Property v) { return static_cast<Property>(~static_cast<uint32_t>(v)); }
+
 constexpr bool has_property(Property target, Property check) {
     return (static_cast<uint32_t>(target) & static_cast<uint32_t>(check)) == static_cast<uint32_t>(check);
 }

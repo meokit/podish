@@ -10,6 +10,7 @@ public class VMAManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
     private readonly List<VMA> _vmas = [];
+    public ExternalPageManager ExternalPages { get; } = new();
 
     public VMA? FindVMA(uint addr)
     {
@@ -63,7 +64,11 @@ public class VMAManager
             File = file,
             Offset = offset,
             FileSz = filesz,
-            Name = name
+            Name = name,
+            MemoryObject = file == null
+                ? MemoryObjectManager.Instance.CreateAnonymous((flags & MapFlags.Shared) != 0)
+                : MemoryObjectManager.Instance.CreateFile(file, offset, filesz, (flags & MapFlags.Shared) != 0),
+            ViewPageOffset = 0
         };
 
         // Insert sorted
@@ -93,6 +98,7 @@ public class VMAManager
         if (length == 0) return;
         engine.InvalidateRange(addr, length);
         engine.MemUnmap(addr, length);
+        ExternalPages.ReleaseRange(addr, length);
 
         var end = addr + length;
         for (var i = 0; i < _vmas.Count; i++)
@@ -107,6 +113,7 @@ public class VMAManager
             if (addr <= vma.Start && end >= vma.End)
             {
                 SyncVMA(vma, engine);
+                vma.MemoryObject.Release();
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -136,8 +143,11 @@ public class VMAManager
                     File = vma.File,
                     Offset = tailOffset,
                     FileSz = tailFileSz,
-                    Name = vma.Name
+                    Name = vma.Name,
+                    MemoryObject = vma.MemoryObject,
+                    ViewPageOffset = vma.ViewPageOffset + ((tailStart - vma.Start) / LinuxConstants.PageSize)
                 };
+                vma.MemoryObject.AddRef();
 
                 _vmas.Insert(i + 1, tailVMA);
 
@@ -158,6 +168,7 @@ public class VMAManager
             {
                 var diff = end - vma.Start;
                 vma.Start = end;
+                vma.ViewPageOffset += diff / LinuxConstants.PageSize;
                 if (vma.File != null)
                 {
                     vma.Offset += diff;
@@ -191,8 +202,10 @@ public class VMAManager
             SyncVMA(vma, engine);
             // Clear native memory pages and JIT cache (done in C++ side)
             engine.MemUnmap(vma.Start, vma.End - vma.Start);
+            vma.MemoryObject.Release();
         }
 
+        ExternalPages.Clear();
         _vmas.Clear();
     }
 
@@ -242,19 +255,13 @@ public class VMAManager
 
         var pageStart = addr & LinuxConstants.PageMask;
         var tempPerms = vma.Perms | Protection.Write;
+        var pageIndex = vma.ViewPageOffset + ((pageStart - vma.Start) / LinuxConstants.PageSize);
 
-        // Allocate page and get host pointer in one call
-        var hostPtr = engine.AllocatePage(pageStart, (byte)tempPerms);
-        if (hostPtr == IntPtr.Zero)
+        IntPtr hostPtr;
+        hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
         {
-            Logger.LogError("HandleFault: AllocatePage failed for 0x{PageStart:x}", pageStart);
-            return false;
-        }
+            if (vma.File == null) return true;
 
-
-        // Load from file if file-backed VMA
-        if (vma.File != null)
-        {
             long vmaOffset = pageStart - vma.Start;
             var off = vma.Offset + vmaOffset;
 
@@ -268,20 +275,58 @@ public class VMAManager
                     readLen = (int)remainingFile;
             }
 
-            if (readLen > 0)
-                // Read directly into allocated page memory (no MemWrite call needed)
-                unsafe
-                {
-                    Span<byte> buf = new((void*)hostPtr, LinuxConstants.PageSize);
-                    var n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
-                    Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
-                }
+            if (readLen <= 0) return true;
+
+            unsafe
+            {
+                Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
+                var n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
+                Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
+            }
+            return true;
+        }, out _);
+        if (hostPtr == IntPtr.Zero)
+        {
+            Logger.LogError("HandleFault: object page allocation failed for 0x{PageStart:x}", pageStart);
+            return false;
+        }
+
+        if (!ExternalPages.AddMapping(pageStart, hostPtr, out var addedRef))
+        {
+            Logger.LogError("HandleFault: page mapping mismatch for 0x{PageStart:x}", pageStart);
+            return false;
+        }
+
+        if (!engine.MapExternalPage(pageStart, hostPtr, (byte)tempPerms))
+        {
+            if (addedRef) ExternalPages.Release(pageStart);
+            Logger.LogError("HandleFault: MapExternalPage failed for 0x{PageStart:x}", pageStart);
+            return false;
         }
 
         // Set final permissions
         if (tempPerms != vma.Perms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
 
         return true;
+    }
+
+    public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
+    {
+        var pageStart = addr & LinuxConstants.PageMask;
+        var hostPtr = ExternalPages.GetOrAllocate(pageStart, out var isNew);
+        if (hostPtr == IntPtr.Zero) return false;
+        if (!engine.MapExternalPage(pageStart, hostPtr, (byte)perms))
+        {
+            if (isNew) ExternalPages.Release(pageStart);
+            return false;
+        }
+
+        return true;
+    }
+
+    public void ShareAnonymousSharedPagesTo(VMAManager dest, Engine destEngine)
+    {
+        // No-op: shared memory is represented by shared MemoryObject and materialized lazily.
     }
 
     public static void SyncVMA(VMA vma, Engine engine)
