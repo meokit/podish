@@ -13,14 +13,36 @@ public partial class SyscallManager
         var newBrk = a1;
         if (newBrk == 0) return (int)sm.BrkAddr;
 
+        if (newBrk < sm.BrkBase)
+            return (int)sm.BrkAddr;
+
         if (newBrk > sm.BrkAddr)
         {
             var start = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
             var end = (newBrk + 0xFFF) & ~0xFFFu;
             if (end > start)
-                // Map anonymous
-                sm.Mem.Mmap(start, end - start, Protection.Read | Protection.Write,
-                    MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "HEAP", sm.Engine);
+            {
+                try
+                {
+                    // Map anonymous
+                    sm.Mem.Mmap(start, end - start, Protection.Read | Protection.Write,
+                        MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "HEAP", sm.Engine);
+                }
+                catch
+                {
+                    return (int)sm.BrkAddr;
+                }
+            }
+            sm.BrkAddr = newBrk;
+            return (int)sm.BrkAddr;
+        }
+
+        if (newBrk < sm.BrkAddr)
+        {
+            var start = (newBrk + 0xFFF) & ~0xFFFu;
+            var end = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
+            if (end > start)
+                sm.Mem.Munmap(start, end - start, sm.Engine);
             sm.BrkAddr = newBrk;
         }
 
@@ -39,15 +61,45 @@ public partial class SyscallManager
         var fd = (int)a5;
         var offset = (long)a6 * 4096;
 
-        prot |= (int)(Protection.Read | Protection.Write);
+        if (len == 0) return -(int)Errno.EINVAL;
+
+        var isNoReplace = (flags & (int)MapFlags.FixedNoReplace) != 0;
+        var isFixed = (flags & (int)MapFlags.Fixed) != 0 || isNoReplace;
+        if (addr != 0 && (addr & LinuxConstants.PageOffsetMask) != 0)
+            return -(int)Errno.EINVAL;
+        if (isFixed && addr == 0)
+            return -(int)Errno.EINVAL;
 
         VFS.LinuxFile? f = null;
         var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
+        var isShared = (flags & (int)MapFlags.Shared) != 0;
+        var isPrivate = (flags & (int)MapFlags.Private) != 0;
 
-        if (!isAnon && fd != -1)
+        if (isShared == isPrivate)
+            return -(int)Errno.EINVAL;
+
+        var mapLen = (len + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+        if (isNoReplace && sm.Mem.FindVMAsInRange(addr, addr + mapLen).Count > 0)
+            return -(int)Errno.EEXIST;
+
+        if (isAnon)
+        {
+            fd = -1;
+            offset = 0;
+        }
+        else if (fd == -1)
+        {
+            return -(int)Errno.EBADF;
+        }
+        else
         {
             f = sm.GetFD(fd);
             if (f == null) return -(int)Errno.EBADF;
+            if (isShared && (prot & (int)Protection.Write) != 0)
+            {
+                var canWrite = (f.Flags & (VFS.FileFlags.O_WRONLY | VFS.FileFlags.O_RDWR)) != 0;
+                if (!canWrite) return -(int)Errno.EACCES;
+            }
         }
 
         try
@@ -65,7 +117,8 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        sm.Engine.InvalidateRange(a1, a2);
+        if (a2 == 0) return -(int)Errno.EINVAL;
+        if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
         sm.Mem.Munmap(a1, a2, sm.Engine);
         return 0;
     }
@@ -79,10 +132,26 @@ public partial class SyscallManager
         var len = a2;
         var prot = (Protection)a3;
 
+        if (len == 0) return 0;
+        if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+
         // Invalidate cache since permissions are changing (e.g. RW -> RX)
         sm.Engine.InvalidateRange(addr, len);
 
-        var vmas = sm.Mem.FindVMAsInRange(addr, addr + len);
+        var end = addr + len;
+        var vmas = sm.Mem.FindVMAsInRange(addr, end);
+        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
+
+        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = addr;
+        foreach (var vma in vmas)
+        {
+            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
+            if (vma.End > cursor) cursor = vma.End;
+            if (cursor >= end) break;
+        }
+        if (cursor < end) return -(int)Errno.ENOMEM;
+
         foreach (var vma in vmas)
         {
             // Update permissions in VMA manager

@@ -393,7 +393,8 @@ FORCE_INLINE LogicFlow OpHlt(LogicFuncParams) {
     // HLT
     LogMsgState(state, 4, "[ABORT] USER ABORT DETECTED: HLT instruction executed at EIP: 0x%08X",
                 op->next_eip - op->len);
-    state->status = EmuStatus::Stopped;
+    state->status = EmuStatus::Fault;
+    state->fault_vector = 13;  // #GP
     return LogicFlow::ExitOnCurrentEIP;
 }
 

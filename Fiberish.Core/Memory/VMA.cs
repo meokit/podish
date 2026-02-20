@@ -2,6 +2,7 @@ using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
+[Flags]
 public enum Protection
 {
     None = 0,
@@ -10,12 +11,16 @@ public enum Protection
     Exec = 4
 }
 
+[Flags]
 public enum MapFlags
 {
     Shared = 0x01,
     Private = 0x02,
     Fixed = 0x10,
-    Anonymous = 0x20
+    Anonymous = 0x20,
+    GrowDown = 0x0100,
+    Stack = 0x20000,
+    FixedNoReplace = 0x100000
 }
 
 public class VMA

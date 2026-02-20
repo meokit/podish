@@ -24,6 +24,7 @@ public partial class SyscallManager
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
+        BrkBase = brk;
         Tty = tty;
         Futex = new FutexManager();
 
@@ -90,6 +91,7 @@ public partial class SyscallManager
     }
 
     private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk,
+        uint brkBase,
         bool strace,
         Dentry root, Dentry cwd, Dentry procRoot, TtyDiscipline? tty)
     {
@@ -97,6 +99,7 @@ public partial class SyscallManager
         FDs = fds;
         Futex = futex;
         BrkAddr = brk;
+        BrkBase = brkBase;
         Strace = strace;
         Root = root; // Global root (shared)
         CurrentWorkingDirectory = cwd;
@@ -129,6 +132,7 @@ public partial class SyscallManager
     public FutexManager Futex { get; }
 
     public uint BrkAddr { get; set; }
+    public uint BrkBase { get; private set; }
     public bool Strace { get; set; }
     public List<MountInfo> MountList { get; } = [];
 
@@ -239,7 +243,8 @@ public partial class SyscallManager
                     { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
         }
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, Strace, Root, CurrentWorkingDirectory,
+        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, BrkBase, Strace, Root,
+            CurrentWorkingDirectory,
             ProcessRoot, Tty)
         {
             CloneHandler = CloneHandler,

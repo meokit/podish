@@ -90,6 +90,10 @@ public class VMAManager
 
     public void Munmap(uint addr, uint length, Engine engine)
     {
+        if (length == 0) return;
+        engine.InvalidateRange(addr, length);
+        engine.MemUnmap(addr, length);
+
         var end = addr + length;
         for (var i = 0; i < _vmas.Count; i++)
         {

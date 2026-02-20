@@ -131,6 +131,7 @@ public class FiberTask
         var mask = 1UL << (sig - 1);
         lock (this)
         {
+            Logger.LogDebug("[PostSignal] Setting PendingSignals to {1} from {2}", PendingSignals | mask, PendingSignals);
             PendingSignals |= mask;
         }
 
@@ -143,38 +144,56 @@ public class FiberTask
         {
             InterruptingSignal = sig;
         }
+        else
+        {
+            Logger.LogDebug("[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.", sig, SignalMask);
+        }
     }
 
     private void ProcessPendingSignals()
     {
         if (PendingSignals == 0) return;
-
-        // Iterate signals 1..32 (standard)
-        // We only deliver one signal per slice to keep stack clean and allow re-scheduling
+        
         for (var i = 1; i <= 32; i++)
         {
             var mask = 1UL << (i - 1);
-            var pending = false;
+            SigAction action = default;
+            bool hasAction = false;
+            ulong oldMask = 0;
 
             lock (this)
             {
-                if ((PendingSignals & mask) != 0) pending = true;
-            }
+                if ((PendingSignals & mask) == 0) continue;
 
-            if (pending)
-            {
                 // Check blocked
-                if ((SignalMask & mask) != 0 && i != 9 && i != 19) continue;
-
-                // Clear pending
-                lock (this)
+                if ((SignalMask & mask) != 0 && i != 9 && i != 19) 
                 {
-                    PendingSignals &= ~mask;
+                    Logger.LogDebug("[CheckPendingSignals] Signal {Sig} is currently blocked by SignalMask (0x{Mask:X})", i, SignalMask);
+                    continue;
                 }
 
-                DeliverSignal(i);
-                break; // Only one per slice
+                // POP SIGNAL
+                PendingSignals &= ~mask;
+                oldMask = SignalMask;
+                hasAction = Process.SignalActions.TryGetValue(i, out action);
+
+                // ATOMIC MASKING: Apply mask before delivering to guest
+                // This prevents reentrancy if another signal arrives during stack setup
+                if (hasAction && action.Handler > 1) // Not SIG_IGN (1) or SIG_DFL (0)
+                {
+                    var handlerMask = action.Mask;
+                    if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
+                    {
+                        handlerMask |= mask;
+                    }
+                    Logger.LogDebug("[ProcessPendingSignals] Setting SignalMask to {Mask} from {SignalMask}", 
+                        SignalMask, SignalMask | handlerMask);
+                    SignalMask |= handlerMask;
+                }
             }
+
+            DeliverSignal(i, action, hasAction, oldMask);
+            break; // Only one per slice
         }
     }
 
@@ -190,13 +209,13 @@ public class FiberTask
     }
 
     // Prepare stack frame for signal handler
-    private void DeliverSignal(int sig)
+    private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask)
     {
         Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip,
             CPU.RegRead(Reg.ESP));
 
         // 1. Check if ignored
-        if (Process.SignalActions.TryGetValue(sig, out var action))
+        if (hasAction)
         {
             if (action.Handler == 1) // SIG_IGN
             {
@@ -242,17 +261,8 @@ public class FiberTask
             }
             var frameEsp = sp;
 
-            var oldMask = SignalMask;
+            // SignalMask already updated in ProcessPendingSignals
             
-            // Apply new mask for the duration of the handler
-            // The signal being delivered is also blocked unless SA_NODEFER is set
-            var handlerMask = action.Mask;
-            if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
-            {
-                handlerMask |= 1UL << (sig - 1);
-            }
-            SignalMask |= handlerMask;
-
             // Setup Stack based on SA_SIGINFO
             if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
             {
@@ -370,6 +380,11 @@ public class FiberTask
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
+        
+        // Populate UContext uc_sigmask (offset 108)
+        var maskBuf = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(maskBuf, oldMask);
+        if (!CPU.CopyToUser(ucontextAddr + 108, maskBuf)) return;
 
         // Align stack for arguments
         esp = (esp - 4u) & ~0xFu;
@@ -387,64 +402,69 @@ public class FiberTask
 
     public void RestoreSigContext(uint addr)
     {
-        try
+        /*
+         * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
+         *
+         * struct sigcontext_32 {
+         *    __u16 gs, __gsh;          // 0
+         *    __u16 fs, __fsh;          // 4
+         *    __u16 es, __esh;          // 8
+         *    __u16 ds, __dsh;          // 12
+         *    __u32 di;                 // 16
+         *    __u32 si;                 // 20
+         *    __u32 bp;                 // 24
+         *    __u32 sp;                 // 28
+         *    __u32 bx;                 // 32
+         *    __u32 dx;                 // 36
+         *    __u32 cx;                 // 40
+         *    __u32 ax;                 // 44
+         *    __u32 trapno;             // 48
+         *    __u32 err;                // 52
+         *    __u32 ip;                 // 56
+         *    __u16 cs, __csh;          // 60
+         *    __u32 flags;              // 64
+         *    __u32 sp_at_signal;       // 68 (UESP)
+         *    __u16 ss, __ssh;          // 72
+         *    __u32 fpstate;            // 76
+         *    __u32 oldmask;            // 80
+         *    __u32 cr2;                // 84
+         * };
+         */
+        var buf = new byte[88];
+        if (!CPU.CopyFromUser(addr, buf)) return;
+        var s = new ReadOnlySpan<byte>(buf);
+
+        // General Registers
+        CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s[16..]));
+        CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s[20..]));
+        CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s[24..]));
+        CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s[32..]));
+        CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s[36..]));
+        CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s[40..]));
+        CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s[44..]));
+
+        // IP, Flags, SP
+        CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
+        CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
+        CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
+        
+        // Restore signal mask
+        if (buf.Length >= 88) 
         {
-            var buf = new byte[80];
-            if (!CPU.CopyFromUser(addr, buf)) return;
-            var s = new ReadOnlySpan<byte>(buf);
-
-            // Restore segments (optional, but good for threads/TLS)
-            // GS, FS, ES, DS
-            // CPU.SetSeg(Seg.GS, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(0)));
-            // CPU.SetSeg(Seg.FS, BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(4)));
-            // ...
-
-            // General Registers
-            CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s[16..]));
-            CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s[20..]));
-            CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s[24..]));
-            CPU.RegWrite(Reg.ESP,
-                BinaryPrimitives.ReadUInt32LittleEndian(s[28..])); // This is "OS ESP" inside sigcontext? 
-            // Actually, sigcontext has "old esp" at offset 68 (UESP).
-            // But offset 28 is also ESP (from pusha?). 
-            // Linux sigreturn restores from UESP (offset 68) usually.
-
-            CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s[32..]));
-            CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s[36..]));
-            CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s[40..]));
-            CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s[44..]));
-
-            // IP, Flags, SP
-            CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
-            CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
-            CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
-            
-            // Restore signal mask
-            if (buf.Length >= 88) 
-            {
-                var lowerMask = BinaryPrimitives.ReadUInt32LittleEndian(s[80..]);
-                // ucontext typically has upper 32 bits next to it or in extramask, but old sigcontext might only have 32?
-                // actually sigcontext offset 80 is `oldmask` (32 bit)
-                // extramask is usually placed after the frame. For now we just restore the lower 32 bit if it's oldframe,
-                // or the rt_sigframe will have it in uc_sigmask. But Linux uses ucontext's uc_sigmask in rt_sigreturn.
-                // For simplicity, we just save/restore the full 64-bit at offset 80 for our own emulator convenience
-                SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
-            }
-        }
-        catch
-        {
+            // Cheat: Restore full 64-bit mask from oldmask + cr2 area (80-87)
+            // This is a convenient hack for our emulator to handle RT signals correctly in sigreturn.
+            var oldSignalMask = SignalMask;
+            SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
+            Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask, oldSignalMask);
         }
     }
 
     private void WriteSigContext(uint addr, ulong oldMask)
     {
-        // offset 0: gs, fs, es, ds
-        // offset 16: edi, esi, ebp, esp, ebx, edx, ecx, eax
-        // offset 48: trapno, err
-        // offset 56: eip, cs, efl, uesp, ss
-        // offset 76: fpstate (null ptr)
-        // offset 80: oldmask
-        // offset 84: cr2
+        /*
+         * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
+         * (See documentation in RestoreSigContext for full layout)
+         */
         try
         {
             var buf = new byte[88];
@@ -465,12 +485,15 @@ public class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[40..], CPU.RegRead(Reg.ECX));
             BinaryPrimitives.WriteUInt32LittleEndian(s[44..], CPU.RegRead(Reg.EAX));
 
+            BinaryPrimitives.WriteUInt32LittleEndian(s[48..], 0); // trapno
+            BinaryPrimitives.WriteUInt32LittleEndian(s[52..], 0); // err
             BinaryPrimitives.WriteUInt32LittleEndian(s[56..], CPU.Eip);
             BinaryPrimitives.WriteUInt32LittleEndian(s[60..], 0x23); // CS (user code)
             BinaryPrimitives.WriteUInt32LittleEndian(s[64..], CPU.Eflags);
-            BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP)); // sp_at_signal (UESP)
             BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
 
+            // Cheat: Store full 64-bit mask in oldmask + cr2 area (8 bytes starting at 80)
             BinaryPrimitives.WriteUInt64LittleEndian(s[80..], oldMask);
 
             if (!CPU.CopyToUser(addr, buf))
@@ -510,9 +533,11 @@ public class FiberTask
             }
 
             // 1. Run CPU execution
-            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             CPU.Run(maxInsts: (ulong)instructionLimit);
+            
+            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             // 2. Check Exit
             if (Exited)

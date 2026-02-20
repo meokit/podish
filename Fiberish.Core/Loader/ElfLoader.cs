@@ -102,6 +102,7 @@ public class ElfLoader
 
         uint loadBase = 0;
         if (elf.FileType == ElfFileType.Dynamic) loadBase = 0x40000000; // PIE base
+        Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", filename, elf.FileType, loadBase);
 
         uint phnum = 0;
         uint phdrAddr = 0;

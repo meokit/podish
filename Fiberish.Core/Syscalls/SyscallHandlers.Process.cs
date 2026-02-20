@@ -396,7 +396,7 @@ public partial class SyscallManager
         task.Process.SignalActions.Clear();
         foreach (var kv in ignored) task.Process.SignalActions[kv.Key] = kv.Value;
 
-        task.SignalMask = 0;
+        // SignalMask is preserved across execve
         task.PendingSignals = 0;
         task.AltStackSp = 0;
         task.AltStackSize = 0;

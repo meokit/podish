@@ -52,7 +52,7 @@ public partial class SyscallManager
 
         if (newSaPtr != 0)
         {
-            if (sig == 9 || sig == 19) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
 
             var buf = new byte[20];
             if (!sm.Engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
