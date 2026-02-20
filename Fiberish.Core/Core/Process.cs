@@ -59,13 +59,6 @@ public struct SigAction
 
 public class Process
 {
-    // Interrupt handling for blocking syscalls
-    // When a signal arrives, if a task is blocked in a syscall (Sleeping/Waiting),
-    // we need to interrupt it.
-    private Action? _interruptHandler;
-
-    public bool traceInstruction;
-
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
         TGID = tgid;
@@ -112,37 +105,6 @@ public class Process
     public AsyncWaitQueue ZombieEvent { get; } = new();
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
-
-    // vDSO addresses
-    public uint SigReturnAddr { get; set; }
-    public uint RtSigReturnAddr { get; set; }
-    public bool WasInterrupted { get; private set; }
-
-    public void RegisterBlockingSyscall(Action onInterrupt)
-    {
-        _interruptHandler = onInterrupt;
-        WasInterrupted = false;
-    }
-
-    public bool TryInterrupt()
-    {
-        if (_interruptHandler != null)
-        {
-            var handler = _interruptHandler;
-            _interruptHandler = null;
-            WasInterrupted = true;
-            handler(); // Execute cancellation logic (e.g., remove from timer)
-            return true;
-        }
-
-        return false;
-    }
-
-    public void ClearInterrupt()
-    {
-        _interruptHandler = null;
-        WasInterrupted = false;
-    }
 
     public void LoadExecutable(string exe, string[] args, string[] envs)
     {
@@ -196,10 +158,8 @@ public class Process
         ProcFsManager.Init(sys);
 
         // 3. Create Process
-        var proc = new Process(FiberTask.NextTID(), mm, sys)
-        {
-            traceInstruction = traceInstructions
-        };
+        var proc = new Process(FiberTask.NextTID(), mm, sys);
+
         proc.PGID = proc.TGID; // Process Group Leader
         proc.SID = proc.TGID; // Session Leader
 

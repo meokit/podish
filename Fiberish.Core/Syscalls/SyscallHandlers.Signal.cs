@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
@@ -290,7 +289,7 @@ public partial class SyscallManager
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
 
         // Check for pending signals immediately (unblocked by new mask)
-        bool hasPending = false;
+        var hasPending = false;
         lock (task)
         {
             if ((task.PendingSignals & ~mask) != 0) hasPending = true;
@@ -302,21 +301,14 @@ public partial class SyscallManager
             return -(int)Errno.EINTR;
         }
 
-        var token = task.CreateSyscallToken();
-
         try
         {
-            await Task.Delay(-1, token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected interruption by signal
+            await SysPause(state, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
         }
         finally
         {
             task.SignalMask = oldMask;
             if (sm is { Strace: true }) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
-            task.DisposeSyscallToken();
         }
 
         return -(int)Errno.EINTR;

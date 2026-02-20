@@ -1,6 +1,7 @@
+using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -32,7 +33,8 @@ public partial class SyscallManager
         if (((int)outFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY) return -(int)Errno.EBADF;
 
         // Use a buffer
-        var buffer = new byte[Math.Min(count, 32768)];
+        var bufLen = Math.Min(count, 32768);
+        var buffer = ArrayPool<byte>.Shared.Rent(bufLen);
         var totalWritten = 0;
 
         try
@@ -48,7 +50,7 @@ public partial class SyscallManager
             var remaining = count;
             while (remaining > 0)
             {
-                var toRead = Math.Min(remaining, buffer.Length);
+                var toRead = Math.Min(remaining, bufLen);
                 var bytesRead = 0;
 
                 if (offsetPtr != 0)
@@ -60,8 +62,13 @@ public partial class SyscallManager
                     bytesRead = inFile.Read(buffer.AsSpan(0, toRead));
 
                 if (bytesRead <= 0)
+                {
                     if (bytesRead == 0) // EOF
                         break;
+                    if (totalWritten > 0)
+                        break;
+                    return bytesRead; // Return error code
+                }
 
                 // Write to out_fd
                 var bytesWritten = outFile.Write(buffer.AsSpan(0, bytesRead));
@@ -88,6 +95,10 @@ public partial class SyscallManager
         {
             Logger.LogError(ex, "SysSendfile64 failed");
             return -(int)Errno.EIO;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -294,30 +305,219 @@ public partial class SyscallManager
         return await SysDup2(state, a1, a2, a3, a4, a5, a6);
     }
 
+
+    private struct Iovec
+    {
+        public uint BaseAddr;
+        public uint Len;
+    }
+
+    private static async ValueTask<int> DoReadV(SyscallManager sm, int fd, Iovec[] iovs, int iovCnt, long offset,
+        int flags)
+    {
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        var updatePosition = offset == -1;
+        var currentOffset = updatePosition ? f.Position : offset;
+        var totalRead = 0;
+
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                while (true)
+                {
+                    var n = f.Dentry.Inode!.Read(f, buf.AsSpan(0, (int)iov.Len), currentOffset);
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+
+                        if (sm.Engine.Owner is not FiberTask fiberTask) return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+
+                        var waitResult = await new IOAwaiter(f, true, fiberTask);
+                        if (waitResult < 0) return totalRead > 0 ? totalRead : waitResult;
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        if (!sm.Engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
+                        totalRead += n;
+                        currentOffset += n;
+                        if (n < iov.Len)
+                        {
+                            if (updatePosition) f.Position = currentOffset;
+                            return totalRead;
+                        }
+
+                        break;
+                    }
+
+                    if (n == 0) // EOF
+                    {
+                        if (updatePosition) f.Position = currentOffset;
+                        return totalRead;
+                    }
+
+                    return totalRead > 0 ? totalRead : n;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
+        }
+
+        if (updatePosition) f.Position = currentOffset;
+
+        return totalRead;
+    }
+
+    private static async ValueTask<int> DoWriteV(SyscallManager sm, int fd, Iovec[] iovs, int iovCnt, long offset,
+        int flags)
+    {
+        var f = sm.GetFD(fd);
+        if (f == null) return -(int)Errno.EBADF;
+
+        var updatePosition = offset == -1;
+        var currentOffset = updatePosition ? f.Position : offset;
+        var totalWritten = 0;
+
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                if (!sm.Engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len))) return -(int)Errno.EFAULT;
+
+                while (true)
+                {
+                    var n = f.Dentry.Inode!.Write(f, data.AsSpan(0, (int)iov.Len), currentOffset);
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
+                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
+
+                        if (sm.Engine.Owner is not FiberTask fiberTask)
+                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
+
+                        var waitResult = await new IOAwaiter(f, false, fiberTask);
+                        if (waitResult < 0) return totalWritten > 0 ? totalWritten : waitResult;
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        totalWritten += n;
+                        currentOffset += n;
+                        if (n < iov.Len)
+                        {
+                            if (updatePosition) f.Position = currentOffset;
+                            return totalWritten;
+                        }
+
+                        break;
+                    }
+
+                    return totalWritten > 0 ? totalWritten : n;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(data);
+            }
+        }
+
+        if (updatePosition) f.Position = currentOffset;
+
+        return totalWritten;
+    }
+
+    private static Iovec[]? ReadIovecs(SyscallManager sm, uint iovAddr, int iovCnt)
+    {
+        if (iovCnt < 0 || iovCnt > 1024) return null;
+        var iovs = ArrayPool<Iovec>.Shared.Rent(iovCnt);
+        var iovecBytes = ArrayPool<byte>.Shared.Rent(iovCnt * 8);
+
+        try
+        {
+            if (!sm.Engine.CopyFromUser(iovAddr, iovecBytes.AsSpan(0, iovCnt * 8))) return null;
+
+            for (var i = 0; i < iovCnt; i++)
+                iovs[i] = new Iovec
+                {
+                    BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8, 4)),
+                    Len = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8 + 4, 4))
+                };
+            return iovs;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(iovecBytes);
+        }
+    }
+
+    internal static async ValueTask<int> SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
+        try
+        {
+            return await DoReadV(sm, (int)a1, iovs, 1, -1, 0);
+        }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
+    }
+
+    internal static async ValueTask<int> SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
+        try
+        {
+            return await DoWriteV(sm, (int)a1, iovs, 1, -1, 0);
+        }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
+    }
+
     private static async ValueTask<int> SysPRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var bufAddr = a2;
-        var count = a3;
         var offset = a4 | ((long)a5 << 32);
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
+        var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            var buf = new byte[count];
-            var n = f.Dentry.Inode!.Read(f, buf.AsSpan(), offset);
-            if (n > 0)
-                if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
-                    return -(int)Errno.EFAULT;
-            return n;
+            return await DoReadV(sm, (int)a1, iovs, 1, offset, 0);
         }
-        catch
+        finally
         {
-            return -(int)Errno.EIO;
+            ArrayPool<Iovec>.Shared.Return(iovs);
         }
     }
 
@@ -325,25 +525,16 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var bufAddr = a2;
-        var count = a3;
         var offset = a4 | ((long)a5 << 32);
-
-        var data = new byte[count];
-        if (!sm.Engine.CopyFromUser(bufAddr, data)) return -(int)Errno.EFAULT;
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
+        var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            var n = f.Dentry.Inode!.Write(f, data, offset);
-            return n;
+            return await DoWriteV(sm, (int)a1, iovs, 1, offset, 0);
         }
-        catch
+        finally
         {
-            return -(int)Errno.EIO;
+            ArrayPool<Iovec>.Shared.Return(iovs);
         }
     }
 
@@ -351,232 +542,102 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var iovAddr = a2;
-        var iovCnt = (int)a3;
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        var totalRead = 0;
-        for (var i = 0; i < iovCnt; i++)
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT; // Simplification, could be EINVAL
+        try
         {
-            var iovBuf = new byte[8];
-            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-
-            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
-
-            if (len > 0)
-            {
-                var buf = new byte[len];
-                var n = f.Read(buf);
-                if (n > 0)
-                {
-                    if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
-                    totalRead += n;
-                    if (n < (int)len) break; // EOF or short read
-                }
-                else
-                {
-                    break;
-                }
-            }
+            return await DoReadV(sm, (int)a1, iovs, (int)a3, -1, 0);
         }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
+    }
 
-        return totalRead;
+    private static async ValueTask<int> SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT;
+        try
+        {
+            return await DoWriteV(sm, (int)a1, iovs, (int)a3, -1, 0);
+        }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
     }
 
     private static async ValueTask<int> SysPReadV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var iovAddr = a2;
-        var iovCnt = (int)a3;
-        var offset = a4 | ((long)a5 << 32); // Modified line
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        var totalRead = 0;
-        for (var i = 0; i < iovCnt; i++)
+        var offset = a4 | ((long)a5 << 32);
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT;
+        try
         {
-            var iovBuf = new byte[8];
-            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
-
-            if (len > 0)
-            {
-                var buf = new byte[len];
-                var n = f.Dentry.Inode!.Read(f, buf, offset + totalRead);
-                if (n > 0)
-                {
-                    if (!sm.Engine.CopyToUser(baseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
-                    totalRead += n;
-                    if (n < (int)len) break;
-                }
-                else
-                {
-                    break;
-                }
-            }
+            return await DoReadV(sm, (int)a1, iovs, (int)a3, offset, 0);
         }
-
-        return totalRead;
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
     }
 
     private static async ValueTask<int> SysPWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var iovAddr = a2;
-        var iovCnt = (int)a3;
-        var offset = a4 | ((long)a5 << 32); // Modified line
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        var totalWritten = 0;
-        for (var i = 0; i < iovCnt; i++)
+        var offset = a4 | ((long)a5 << 32);
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT;
+        try
         {
-            var iovBuf = new byte[8];
-            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-
-            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
-
-            if (len > 0)
-            {
-                var data = new byte[len];
-                if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
-                var n = f.Dentry.Inode!.Write(f, data, offset + totalWritten);
-                if (n > 0)
-                {
-                    totalWritten += n;
-                    if (n < (int)len) break;
-                }
-                else
-                {
-                    break;
-                }
-            }
+            return await DoWriteV(sm, (int)a1, iovs, (int)a3, offset, 0);
         }
-
-        return totalWritten;
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
     }
 
-    internal static async ValueTask<int> SysRead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPReadV2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var bufAddr = a2;
-        var count = (int)a3;
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        // TODO: Access checks
-
-        var buf = new byte[count];
-
-        while (true)
-            try
-            {
-                var n = f.Read(buf.AsSpan(0, count));
-
-                if (n == -(int)Errno.EAGAIN)
-                {
-                    if ((f.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-
-                    // Blocking Read
-                    if (sm.Engine.Owner is not FiberTask currentTask) return -(int)Errno.EAGAIN; // Should not happen
-
-                    Logger.LogInformation("[SysRead] fd={Fd} blocking, waiting for data or interrupt", fd);
-                    
-                    var token = currentTask.CreateSyscallToken();
-                    await f.WaitForRead().AsTask().WaitAsync(token);
-
-                    Logger.LogInformation("[SysRead] fd={Fd} data ready, retrying read", fd);
-                    // File is ready, retry read
-                    continue;
-                }
-
-                if (n >= 0)
-                {
-                    if (n > 0)
-                    {
-                        var hexData = Convert.ToHexString(buf.AsSpan(0, n));
-                        Logger.LogInformation("[SysRead] fd={Fd} returning {N} bytes: {HexData}", fd, n, hexData);
-                        if (!sm.Engine.CopyToUser(bufAddr, buf.AsSpan(0, n)))
-                            return -(int)Errno.EFAULT;
-                    }
-                    return n;
-                }
-
-                return n; // Other error
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"SysRead Exception: {ex}");
-                return -(int)Errno.EIO;
-            }
+        var offset = a4 | ((long)a5 << 32);
+        var flags = (int)a6;
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT;
+        try
+        {
+            return await DoReadV(sm, (int)a1, iovs, (int)a3, offset, flags);
+        }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
     }
 
-    internal static async ValueTask<int> SysWrite(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPWriteV2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var bufAddr = a2;
-        var count = (int)a3;
-
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        // Verify read access to buffer before writing
-        var data = new byte[count];
-        if (!sm.Engine.CopyFromUser(bufAddr, data))
-            return -(int)Errno.EFAULT;
-
-        // Log write with hex dump
-        var hexString = Convert.ToHexString(data);
-        Logger.LogInformation($"[Write] fd={fd} count={count} data={hexString}");
-
-        while (true)
-            try
-            {
-                var n = f.Write(data);
-
-                if (n == -(int)Errno.EAGAIN)
-                {
-                    if ((f.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-
-                    // Blocking Write
-                    if (sm.Engine.Owner is not FiberTask currentTask) return -(int)Errno.EAGAIN;
-
-                    var token = currentTask.CreateSyscallToken();
-                    await f.WaitForWrite().AsTask().WaitAsync(token);
-                    continue;
-                }
-
-                return n;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                return -(int)Errno.EIO;
-            }
+        var offset = a4 | ((long)a5 << 32);
+        var flags = (int)a6;
+        var iovs = ReadIovecs(sm, a2, (int)a3);
+        if (iovs == null) return -(int)Errno.EFAULT;
+        try
+        {
+            return await DoWriteV(sm, (int)a1, iovs, (int)a3, offset, flags);
+        }
+        finally
+        {
+            ArrayPool<Iovec>.Shared.Return(iovs);
+        }
     }
 
     private static async ValueTask<int> SysLseek(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -640,39 +701,82 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysWriteV(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+
+    // --- IO Awaiter ---
+    public class IOAwaiter : INotifyCompletion
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var fd = (int)a1;
-        var iovAddr = a2;
-        var iovCnt = (int)a3;
+        private readonly VFS.LinuxFile _file;
+        private readonly bool _forRead;
+        private int _awoken;
+        private Action? _continuation;
+        private int _result;
+        private readonly FiberTask _task;
 
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-
-        Logger.LogInformation($"[WriteV] fd={fd} iovCnt={iovCnt}");
-
-        var total = 0;
-        for (var i = 0; i < iovCnt; i++)
+        public IOAwaiter(VFS.LinuxFile file, bool forRead, FiberTask task)
         {
-            var iovBuf = new byte[8];
-            if (!sm.Engine.CopyFromUser(iovAddr + (uint)i * 8, iovBuf)) return -(int)Errno.EFAULT;
-            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf);
-            var len = BinaryPrimitives.ReadUInt32LittleEndian(iovBuf.AsSpan(4));
+            _file = file;
+            _forRead = forRead;
+            _task = task;
+        }
 
-            if (len > 0)
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _continuation = continuation;
+            if (_task.HasUnblockedPendingSignal())
             {
-                var data = new byte[len];
-                if (!sm.Engine.CopyFromUser(baseAddr, data)) return -(int)Errno.EFAULT;
-                var hexString = Convert.ToHexString(data);
-                Logger.LogInformation($"[WriteV] iov[{i}] len={len} data={hexString}");
-                f.Write(data);
-                total += (int)len;
+                _task.WasInterrupted = true; // ensure Awake returns ERESTARTSYS
+                Awake();
+                return;
+            }
+
+            _task.RegisterBlockingSyscall(Awake);
+
+            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+            {
+                _task.WasInterrupted = true;
+                Awake();
+                return;
+            }
+
+            var registered = _file.RegisterWait(Awake, (short)(_forRead ? 0x0001 : 0x0004));
+            if (!registered)
+            {
+                // The underlying file doesn't support waiting (e.g., stdout or non-TTY stdin).
+                // Or there's no event to wait for.
+                // We should awake immediately so the syscall can return EAGAIN.
+                _result = -(int)Errno.EAGAIN;
+                Awake();
             }
         }
 
-        Logger.LogInformation($"[WriteV] total={total}");
-        return total;
+        private void Awake()
+        {
+            if (Interlocked.Exchange(ref _awoken, 1) == 0)
+                KernelScheduler.Current!.Schedule(() =>
+                {
+                    if (_task.WasInterrupted)
+                    {
+                        _result = -(int)Errno.ERESTARTSYS;
+                    }
+                    else
+                    {
+                        _result = 0;
+                    }
+
+                    _continuation?.Invoke();
+                });
+        }
+
+        public int GetResult()
+        {
+            return _result;
+        }
+
+        public IOAwaiter GetAwaiter()
+        {
+            return this;
+        }
     }
 }

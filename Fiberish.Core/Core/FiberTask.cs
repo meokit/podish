@@ -1,6 +1,4 @@
 using System.Buffers.Binary;
-using System.Threading;
-using System.Threading.Tasks;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
@@ -21,11 +19,12 @@ public class FiberTask
 {
     private static int _tidCounter = 1000;
 
-    // Interrupt handling for blocking syscalls
-    private Action? _interruptHandler;
-    
-    // Cancellation support for blocking syscalls
-    private CancellationTokenSource? _syscallCts;
+    public uint SyscallArg1;
+    public uint SyscallArg2;
+    public uint SyscallArg3;
+
+    // Saved Syscall Arguments for Async Tracing
+    public uint SyscallNr;
 
     public FiberTask(int tid, Process process, Engine cpu, KernelScheduler kernel)
     {
@@ -74,7 +73,7 @@ public class FiberTask
     public int ExitStatus { get; set; }
 
     public uint ChildClearTidPtr { get; set; }
-    public bool WasInterrupted { get; private set; }
+    public bool WasInterrupted { get; set; }
 
     // Signal that interrupted the current blocking syscall (if any)
     // Used by syscall handlers to determine SA_RESTART behavior
@@ -83,12 +82,6 @@ public class FiberTask
     // Syscall restart support (SA_RESTART)
     // Stores the EIP of the syscall instruction for potential restart
     public uint SyscallEip { get; set; }
-
-    // Saved Syscall Arguments for Async Tracing
-    public uint SyscallNr;
-    public uint SyscallArg1;
-    public uint SyscallArg2;
-    public uint SyscallArg3;
 
     public ILogger Logger { get; }
 
@@ -121,116 +114,48 @@ public class FiberTask
 
     public void RegisterBlockingSyscall(Action onInterrupt)
     {
-        _interruptHandler = onInterrupt;
         WasInterrupted = false;
-    }
-    
-    public CancellationToken CreateSyscallToken()
-    {
-        var oldCts = Interlocked.Exchange(ref _syscallCts, null);
-        if (oldCts != null && !oldCts.IsCancellationRequested)
-        {
-            // A blocking syscall is already in progress; reuse its token to avoid self-cancel.
-            Logger.LogInformation("[CreateSyscallToken] Reusing existing token. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-            _syscallCts = oldCts;
-            return oldCts.Token;
-        }
-        if (oldCts != null)
-        {
-            Logger.LogInformation("[CreateSyscallToken] Replacing existing token. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-            oldCts.Cancel();
-            oldCts.Dispose();
-        }
-        _syscallCts = new CancellationTokenSource();
-        Logger.LogInformation("[CreateSyscallToken] New token created. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-        return _syscallCts.Token;
-    }
-    
-    public void DisposeSyscallToken()
-    {
-        var oldCts = Interlocked.Exchange(ref _syscallCts, null);
-        if (oldCts != null)
-        {
-            Logger.LogInformation("[DisposeSyscallToken] Disposing token. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-            oldCts.Dispose();
-        }
-    }
-
-    public bool TryInterrupt()
-    {
-        bool interrupted = false;
-        var cts = _syscallCts;
-        if (cts != null && !cts.IsCancellationRequested)
-        {
-            Logger.LogInformation("[TryInterrupt] Interrupting blocking syscall via CTS. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-            cts.Cancel();
-            interrupted = true;
-            WasInterrupted = true;
-        }
-
-        if (_interruptHandler != null)
-        {
-            Logger.LogInformation("[TryInterrupt] Interrupting blocking syscall via Handler, EIP=0x{Eip:X}, TID={TID}, InterruptingSignal={Sig}", CPU.Eip, TID, InterruptingSignal);
-            var handler = _interruptHandler;
-            _interruptHandler = null;
-            WasInterrupted = true;
-            handler(); 
-            interrupted = true;
-        }
-        
-        if (!interrupted)
-             Logger.LogInformation("[TryInterrupt] No blocking syscall to interrupt. TID={TID}, InterruptingSignal={Sig}", TID, InterruptingSignal);
-
-        return interrupted;
-    }
-
-    public void ClearInterrupt()
-    {
-        _interruptHandler = null;
-        WasInterrupted = false;
-        // Do not clear InterruptingSignal here; it is needed by HandleAsyncSyscall
     }
 
     /// <summary>
-    /// Post a signal to this task. Safe to call from any thread.
-    /// This sets the pending flag and interrupts any blocking syscall.
-    /// Actual delivery happens in RunSlice via ProcessPendingSignals -> DeliverSignal.
+    ///     Post a signal to this task. Safe to call from any thread.
+    ///     This sets the pending flag and interrupts any blocking syscall.
+    ///     Actual delivery happens in RunSlice via ProcessPendingSignals -> DeliverSignal.
     /// </summary>
     public void PostSignal(int sig)
     {
         if (sig < 1 || sig > 64) return;
-        
+
         Logger.LogInformation("[PostSignal] Posting signal {Sig}", sig);
 
-        ulong mask = 1UL << (sig - 1);
+        var mask = 1UL << (sig - 1);
         lock (this)
         {
             PendingSignals |= mask;
         }
-        
+
         // Check if we should interrupt syscall
         // SIGKILL(9) and SIGSTOP(19) cannot be blocked
-        bool isBlocked = (SignalMask & mask) != 0;
-        if (sig == (int)Fiberish.Native.Signal.SIGKILL || sig == (int)Fiberish.Native.Signal.SIGSTOP) isBlocked = false;
-        
+        var isBlocked = (SignalMask & mask) != 0;
+        if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
+
         if (!isBlocked)
         {
             InterruptingSignal = sig;
-            TryInterrupt(); // Use TryInterrupt to cancel token
         }
     }
 
     private void ProcessPendingSignals()
     {
         if (PendingSignals == 0) return;
-        
+
         // Iterate signals 1..32 (standard)
         // We only deliver one signal per slice to keep stack clean and allow re-scheduling
-        for (int i = 1; i <= 32; i++)
+        for (var i = 1; i <= 32; i++)
         {
-            ulong mask = 1UL << (i - 1);
-            bool pending = false;
-            
+            var mask = 1UL << (i - 1);
+            var pending = false;
+
             lock (this)
             {
                 if ((PendingSignals & mask) != 0) pending = true;
@@ -240,24 +165,36 @@ public class FiberTask
             {
                 // Check blocked
                 if ((SignalMask & mask) != 0 && i != 9 && i != 19) continue;
-                
+
                 // Clear pending
                 lock (this)
                 {
                     PendingSignals &= ~mask;
                 }
-                
+
                 DeliverSignal(i);
-                return; 
+                break; // Only one per slice
             }
+        }
+    }
+
+    public bool HasUnblockedPendingSignal()
+    {
+        lock (this)
+        {
+            // SIGKILL (9) and SIGSTOP (19) are never blocked
+            var unblocked = PendingSignals & ~SignalMask;
+            var hasUnmaskable = (PendingSignals & (1UL << 8)) != 0 || (PendingSignals & (1UL << 18)) != 0;
+            return unblocked != 0 || hasUnmaskable;
         }
     }
 
     // Prepare stack frame for signal handler
     private void DeliverSignal(int sig)
     {
-        Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip, CPU.RegRead(Reg.ESP));
-        
+        Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip,
+            CPU.RegRead(Reg.ESP));
+
         // 1. Check if ignored
         if (Process.SignalActions.TryGetValue(sig, out var action))
         {
@@ -278,19 +215,22 @@ public class FiberTask
                 {
                     Logger.LogInformation("[DeliverSignal] Signal {Sig} default action is ignore/continue", sig);
                 }
+
                 return;
             }
 
             // 2. Setup frame for handler
-            Logger.LogInformation("[DeliverSignal] Setting up signal frame for signal {Sig}, handler=0x{Handler:X}", sig, action.Handler);
-            
+            Logger.LogInformation("[DeliverSignal] Setting up signal frame for signal {Sig}, handler=0x{Handler:X}",
+                sig, action.Handler);
+
             // Push SigContext/StackFrame
             var sp = CPU.RegRead(Reg.ESP);
 
             // Check altstack
             if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
             {
-                Logger.LogInformation("[DeliverSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}", AltStackSp, AltStackSize);
+                Logger.LogInformation("[DeliverSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}",
+                    AltStackSp, AltStackSize);
                 sp = AltStackSp + AltStackSize;
             }
 
@@ -300,7 +240,8 @@ public class FiberTask
 
             // Setup Stack with SA_SIGINFO support
             SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
-            Logger.LogInformation("[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
+            Logger.LogInformation(
+                "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
                 sp, frameEsp, action.Handler);
             CPU.RegWrite(Reg.ESP, frameEsp);
             CPU.Eip = action.Handler;
@@ -497,7 +438,7 @@ public class FiberTask
                 // or set a timer. We return to scheduler loop.
                 return;
             }
-            
+
             // 0.1 Check for Pending Signals
             // Handle signals before executing CPU
             ProcessPendingSignals();
@@ -508,10 +449,8 @@ public class FiberTask
             }
 
             // 1. Run CPU execution
-            if (Process.Syscalls.Strace)
-            {
-                Logger.LogTrace("[RunSlice] EAX=0x{Eax:X}", CPU.RegRead(Reg.EAX));
-            }
+            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] EAX=0x{Eax:X}", CPU.RegRead(Reg.EAX));
+
             CPU.Run(maxInsts: (ulong)instructionLimit);
 
             // 2. Check Exit
@@ -550,12 +489,12 @@ public class FiberTask
             {
                 // Crash
                 Logger.LogCritical("CPU Fault detected at EIP=0x{EIP:X}. Terminating task with SIGSEGV.", CPU.Eip);
-                Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}", 
+                Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}",
                     CPU.RegRead(Reg.EAX), CPU.RegRead(Reg.EBX), CPU.RegRead(Reg.ECX), CPU.RegRead(Reg.EDX));
-                Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}", 
+                Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}",
                     CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
                 Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
-                
+
                 TerminateBySignal((int)Signal.SIGSEGV);
                 Status = FiberTaskStatus.Terminated;
             }
@@ -663,241 +602,98 @@ public class FiberTask
 
         if (cloneChildClearTid) child.ChildClearTidPtr = ctidPtr;
 
-        // CLONE_VFORK: child will wake parent on exit/exec
-        // For FiberTask, we can use a WaitHandle or just block the parent?
-        // Blocking parent: Parent awaits Child.ExecWaitHandle?
-        // Or we just don't schedule Parent until Child signals?
         if (cloneVfork)
         {
             // TODO: Implement VFORK blocking.
-            // Parent should yield and not be scheduled until child execs or exits.
-            // Implementation: Set parent status to Waiting, register callback on Child.
-            // But simpler for now: Just schedule child.
         }
 
-        CommonKernel.Schedule(child);
         return child;
     }
 
-        private bool _handlingAsyncSyscall;
+    private bool _handlingAsyncSyscall;
 
-    
-
-        private async void HandleAsyncSyscall()
-
+    private async void HandleAsyncSyscall()
+    {
+        if (_handlingAsyncSyscall)
         {
-
-            if (_handlingAsyncSyscall)
-
-            {
-
-                Logger.LogWarning("[HandleAsyncSyscall] Re-entry detected! Ignoring.");
-
-                return;
-
-            }
-
-    
-
-            _handlingAsyncSyscall = true;
-
-            try
-
-            {
-
-                if (PendingSyscall == null) return;
-
-    
-
-                int result = 0;
-
-                try
-
-                {
-
-                    var task = PendingSyscall();
-
-                    PendingSyscall = null; // Clear immediately
-
-    
-
-                    // Allow the async operation to complete (suspend this method)
-
-                    result = await task;
-
-                }
-
-                catch (OperationCanceledException)
-
-                {
-
-                    Logger.LogInformation("[HandleAsyncSyscall] Syscall Task Cancelled (caught exception)");
-
-                    result = -512; // Treat as ERESTARTSYS
-
-                }
-
-                catch (Exception ex)
-
-                {
-
-                    Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
-
-                    // Return EFAULT or similar?
-
-                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
-
-                    CommonKernel.Schedule(this);
-
-                    return;
-
-                }
-
-                finally
-
-                {
-
-                    DisposeSyscallToken(); // Clean up
-
-                }
-
-    
-
-                // Handle SA_RESTART for interrupted syscalls
-
-                if (result == -512) // -ERESTARTSYS
-
-                {
-
-                    var sig = InterruptingSignal;
-
-                    InterruptingSignal = null; // Clear after reading
-
-    
-
-                    Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
-
-    
-
-                    if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
-
-                    {
-
-                        var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
-
-                        Logger.LogInformation("[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
-
-                            sig.Value, action.Flags, hasRestart);
-
-    
-
-                        if (hasRestart)
-
-                        {
-
-                            // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
-
-                            // SyscallEip was saved before syscall execution
-
-                            Logger.LogInformation(
-
-                                "[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
-
-                                CPU.Eip, SyscallEip);
-
-    
-
-                            if (SyscallEip == 0)
-
-                            {
-
-                                Logger.LogWarning(
-
-                                    "[HandleAsyncSyscall] SyscallEip is 0! This will cause a crash. Attempting to recover...");
-
-                                // Recovery logic? We can't really recover without knowing where to restart.
-
-                                // But we can try to return -EINTR instead.
-
-                                Logger.LogWarning("[HandleAsyncSyscall] Falling back to -EINTR due to invalid SyscallEip");
-
-                                result = -(int)Errno.EINTR;
-
-                            }
-
-                            else
-
-                            {
-
-                                CPU.Eip = SyscallEip;
-
-                                // Don't modify EAX - the syscall will be re-executed with original args
-
-                                // Reschedule and return
-
-                                CommonKernel.Schedule(this);
-
-                                return;
-
-                            }
-
-                        }
-
-                    }
-
-    
-
-                    // No SA_RESTART or no handler: return -EINTR
-
-                    Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
-
-                    result = -(int)Errno.EINTR;
-
-                }
-
-                else
-
-                {
-
-                    // Clear interrupting signal if syscall completed normally
-
-                    InterruptingSignal = null;
-
-                }
-
-    
-
-                // Resume: write result to EAX
-
-                CPU.RegWrite(Reg.EAX, (uint)result);
-
-    
-
-                if (Process.Syscalls.Strace)
-
-                {
-
-                    SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
-
-                        SyscallArg3);
-
-                }
-
-    
-
-                // Reschedule the task
-
-                CommonKernel.Schedule(this);
-
-            }
-
-            finally
-
-            {
-
-                _handlingAsyncSyscall = false;
-
-            }
-
+            Logger.LogWarning("[HandleAsyncSyscall] Re-entry detected! Ignoring.");
+            return;
         }
+
+        _handlingAsyncSyscall = true;
+        try
+        {
+            if (PendingSyscall == null) return;
+
+            var result = 0;
+            try
+            {
+                var task = PendingSyscall();
+                PendingSyscall = null; // Clear immediately
+
+                // Allow the async operation to complete (suspend this method)
+                result = await task;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
+                // Return EFAULT or similar?
+                CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
+                CommonKernel.Schedule(this);
+                return;
+            }
+
+            // Handle SA_RESTART for interrupted syscalls
+            if (result == -512) // -ERESTARTSYS
+            {
+                var sig = InterruptingSignal;
+                InterruptingSignal = null; // Clear after reading
+                Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
+                if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
+                {
+                    var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
+                    Logger.LogInformation(
+                        "[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
+                        sig.Value, action.Flags, hasRestart);
+                    if (hasRestart)
+                    {
+                        // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
+                        // SyscallEip was saved before syscall execution
+                        Logger.LogInformation(
+                            "[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
+                            CPU.Eip, SyscallEip);
+
+                        CPU.Eip = SyscallEip;
+                        // Don't modify EAX - the syscall will be re-executed with original args
+                        // Reschedule and return
+                        CommonKernel.Schedule(this);
+                        return;
+                    }
+                }
+
+                // No SA_RESTART or no handler: return -EINTR
+                Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
+                result = -(int)Errno.EINTR;
+            }
+            else
+            {
+                // Clear interrupting signal if syscall completed normally
+                InterruptingSignal = null;
+            }
+
+            // Resume: write result to EAX
+            CPU.RegWrite(Reg.EAX, (uint)result);
+
+            if (Process.Syscalls.Strace)
+                SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
+                    SyscallArg3);
+
+            // Reschedule the task
+            CommonKernel.Schedule(this);
+        }
+        finally
+        {
+            _handlingAsyncSyscall = false;
+        }
+    }
 }

@@ -1,11 +1,13 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 using Process = System.Diagnostics.Process;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -179,24 +181,73 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
+
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        
+
         Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
-        
-        var token = task.CreateSyscallToken();
-        
-        try
+
+        return await new PauseAwaiter(task);
+    }
+
+    private sealed class PauseAwaiter : INotifyCompletion
+    {
+        private readonly FiberTask _task;
+        private Action? _continuation;
+        private int _result;
+
+        public PauseAwaiter(FiberTask task)
         {
-            await Task.Delay(-1, token);
+            _task = task;
         }
-        catch (OperationCanceledException)
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
         {
-            // Pause returns EINTR when interrupted by signal
-            return -(int)Errno.EINTR;
+            _continuation = continuation;
+            if (_task.HasUnblockedPendingSignal())
+            {
+                _task.WasInterrupted = true;
+                Awake();
+                return;
+            }
+
+            _task.RegisterBlockingSyscall(Awake);
+
+            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+            {
+                _task.WasInterrupted = true;
+                Awake();
+            }
         }
-        return 0; 
+
+        private void Awake()
+        {
+            KernelScheduler.Current!.Schedule(() =>
+            {
+                if (_task.WasInterrupted)
+                {
+                    _result = -(int)Errno.ERESTARTSYS;
+                }
+                else
+                {
+                    _result = 0;
+                }
+
+                _continuation?.Invoke();
+            });
+        }
+
+        public int GetResult()
+        {
+            return _result;
+        }
+
+        public PauseAwaiter GetAwaiter()
+        {
+            return this;
+        }
     }
 
     private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -311,36 +362,82 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var token = fiberTask.CreateSyscallToken();
-        var tcs = new TaskCompletionSource<int>();
-        using var reg = token.Register(() => tcs.TrySetCanceled(token));
+        var res = await new NanosleepAwaiter(fiberTask, totalUsec);
 
-        var startTime = KernelScheduler.Current!.CurrentTick;
-        var timer = KernelScheduler.Current.ScheduleTimer(startTime + totalUsec, () => tcs.TrySetResult(0));
-
-        try
+        if (res < 0 && a2 != 0)
         {
-            return await tcs.Task;
+            // TODO: Write remaining time
         }
-        catch (OperationCanceledException)
-        {
-            timer.Cancel();
-            var now = KernelScheduler.Current.CurrentTick;
-            var elapsed = now - startTime;
-            var rem = totalUsec - elapsed;
-            if (rem < 0) rem = 0;
 
-            if (a2 != 0)
+        return res;
+    }
+
+    private sealed class NanosleepAwaiter : INotifyCompletion
+    {
+        private readonly FiberTask _task;
+        private readonly long _totalUsec;
+        private int _awoken;
+        private Action? _continuation;
+        private int _result;
+        private Timer? _timer;
+
+        public NanosleepAwaiter(FiberTask task, long totalUsec)
+        {
+            _task = task;
+            _totalUsec = totalUsec;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _continuation = continuation;
+            if (_task.HasUnblockedPendingSignal())
             {
-                var remSec = (int)(rem / 1000000);
-                var remNsec = (int)((rem % 1000000) * 1000);
-                var remBuf = new byte[8];
-                BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(0, 4), remSec);
-                BinaryPrimitives.WriteInt32LittleEndian(remBuf.AsSpan(4, 4), remNsec);
-                sm.Engine.CopyToUser(a2, remBuf);
+                _task.WasInterrupted = true;
+                Awake();
+                return;
             }
 
-            return -(int)Errno.EINTR;
+            _task.RegisterBlockingSyscall(Awake);
+
+            _timer = KernelScheduler.Current!.ScheduleTimer(KernelScheduler.Current.CurrentTick + _totalUsec,
+                () => { Awake(); });
+
+            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+            {
+                _task.WasInterrupted = true;
+                Awake();
+            }
+        }
+
+        private void Awake()
+        {
+            if (Interlocked.Exchange(ref _awoken, 1) == 0)
+                KernelScheduler.Current!.Schedule(() =>
+                {
+                    _timer?.Cancel();
+                    if (_task.WasInterrupted)
+                    {
+                        _result = -(int)Errno.ERESTARTSYS;
+                    }
+                    else
+                    {
+                        _result = 0;
+                    }
+
+                    _continuation?.Invoke();
+                });
+        }
+
+        public int GetResult()
+        {
+            return _result;
+        }
+
+        public NanosleepAwaiter GetAwaiter()
+        {
+            return this;
         }
     }
 }

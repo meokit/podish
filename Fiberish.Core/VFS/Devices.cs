@@ -54,7 +54,7 @@ public class ConsoleInode : Inode
 
         // Await the event. If already signaled, completes immediately.
         await _discipline.DataAvailable;
-        
+
         // Reset after waking up. This ensures:
         // 1. If event was already signaled, we wake immediately and retry Read()
         // 2. If queue is still empty after retry, next WaitForRead() will block
@@ -105,7 +105,7 @@ public class ConsoleInode : Inode
         return revents;
     }
 
-    public override void RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
         if (_isInput && _discipline != null)
         {
@@ -113,8 +113,11 @@ public class ConsoleInode : Inode
             if ((events & POLLIN) != 0)
             {
                 _discipline.DataAvailable.Register(callback);
+                return true;
             }
         }
+
+        return false;
     }
 
     public override void Truncate(long size)

@@ -11,7 +11,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.fcntl64, SysFcntl64);
         Register(X86SyscallNumbers.waitpid, SysWaitPid);
         Register(X86SyscallNumbers.read, SysRead);
-        Register(X86SyscallNumbers.pwritev2, SysPWriteV);
+        Register(X86SyscallNumbers.preadv2, SysPReadV2);
+        Register(X86SyscallNumbers.pwritev2, SysPWriteV2);
         Register(X86SyscallNumbers.statx, SysStatx);
         Register(X86SyscallNumbers.openat2, SysOpenAt2);
         Register(X86SyscallNumbers.write, SysWrite);

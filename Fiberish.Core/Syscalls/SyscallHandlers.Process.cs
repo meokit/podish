@@ -198,17 +198,10 @@ public partial class SyscallManager
                 tcs.TrySetResult(false); // Interrupted
             });
 
-            try
-            {
-                var success = await tcs.Task;
-                if (!success)
-                    // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                    return -(int)Errno.ERESTARTSYS;
-            }
-            finally
-            {
-                fiberTask.ClearInterrupt();
-            }
+            var success = await tcs.Task;
+            if (!success)
+                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                return -(int)Errno.ERESTARTSYS;
         }
     }
 
@@ -301,17 +294,11 @@ public partial class SyscallManager
 
             fiberTask.RegisterBlockingSyscall(() => { tcs.TrySetResult(false); });
 
-            try
-            {
-                var success = await tcs.Task;
-                if (!success)
-                    // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                    return -(int)Errno.ERESTARTSYS;
-            }
-            finally
-            {
-                fiberTask.ClearInterrupt();
-            }
+            var success = await tcs.Task;
+            if (!success)
+                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                return -(int)Errno.ERESTARTSYS;
+            
         }
     }
 

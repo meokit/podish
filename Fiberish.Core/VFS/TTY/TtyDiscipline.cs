@@ -166,13 +166,14 @@ public class TtyDiscipline
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
-        _logger.LogInformation("[TTY] Read: Called with buffer len={BufferLen}, flags={Flags}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
+        _logger.LogInformation(
+            "[TTY] Read: Called with buffer len={BufferLen}, flags={Flags}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             buffer.Length, flags, _inq.Count, _canonBuffer.Count);
-        
+
         ProcessPendingInput();
 
         var result = _inq.Read(buffer, flags);
-        
+
         _logger.LogInformation("[TTY] Read: _inq.Read returned {Result}, buffer contents=[{BufferContents}]",
             result, string.Join(", ", buffer.Slice(0, Math.Max(0, result)).ToArray().Select(b => $"0x{b:X2}")));
 
@@ -231,7 +232,7 @@ public class TtyDiscipline
         var span = winSizeBytes.AsSpan();
         var rows = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(0, 2));
         var cols = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(2, 2));
-        
+
         if (_rows != rows || _cols != cols)
         {
             _rows = rows;
@@ -239,7 +240,7 @@ public class TtyDiscipline
             // Send SIGWINCH to foreground process group
             _broadcaster.SignalProcessGroup(ForegroundPgrp, (int)Signal.SIGWINCH);
         }
-        
+
         return 0;
     }
 
@@ -376,14 +377,16 @@ public class TtyDiscipline
     /// </summary>
     public void ProcessPendingInput()
     {
-        _logger.LogInformation("[TTY] ProcessPendingInput: Device.HasInterrupt={HasInterrupt}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
+        _logger.LogInformation(
+            "[TTY] ProcessPendingInput: Device.HasInterrupt={HasInterrupt}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             Device.HasInterrupt, _inq.Count, _canonBuffer.Count);
-        
+
         // Handle Resize first
         var resize = Device.ConsumeResize();
         if (resize.HasValue)
         {
-            _logger.LogInformation("[TTY] ProcessPendingInput: Resize event detected {Rows}x{Cols}", resize.Value.Rows, resize.Value.Cols);
+            _logger.LogInformation("[TTY] ProcessPendingInput: Resize event detected {Rows}x{Cols}", resize.Value.Rows,
+                resize.Value.Cols);
             HandleResize((ushort)resize.Value.Rows, (ushort)resize.Value.Cols);
         }
 
@@ -391,7 +394,8 @@ public class TtyDiscipline
         var inputs = Device.ConsumeAll();
         if (inputs != null)
         {
-            _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Chunks} input chunks from device", inputs.Count);
+            _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Chunks} input chunks from device",
+                inputs.Count);
             foreach (var inputData in inputs)
             {
                 _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Count} bytes: [{Data}]",
@@ -399,7 +403,8 @@ public class TtyDiscipline
                 foreach (var b in inputData) InputByte(b);
             }
 
-            _logger.LogInformation("[TTY] ProcessPendingInput: Done processing, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
+            _logger.LogInformation(
+                "[TTY] ProcessPendingInput: Done processing, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
                 _inq.Count, _canonBuffer.Count);
         }
     }
@@ -408,7 +413,8 @@ public class TtyDiscipline
     {
         if (_rows != rows || _cols != cols)
         {
-            _logger.LogInformation("[TTY] HandleResize: Window size changing from {OldRows}x{OldCols} to {Rows}x{Cols}, sending SIGWINCH",
+            _logger.LogInformation(
+                "[TTY] HandleResize: Window size changing from {OldRows}x{OldCols} to {Rows}x{Cols}, sending SIGWINCH",
                 _rows, _cols, rows, cols);
             _rows = rows;
             _cols = cols;
@@ -418,9 +424,10 @@ public class TtyDiscipline
 
     private void InputByte(byte b)
     {
-        _logger.LogInformation("[TTY] InputByte: {Char} (0x{Hex}), _canonBuffer.Count={CanonCount}, _inq.Count={InqCount}",
+        _logger.LogInformation(
+            "[TTY] InputByte: {Char} (0x{Hex}), _canonBuffer.Count={CanonCount}, _inq.Count={InqCount}",
             (char)b, b.ToString("X2"), _canonBuffer.Count, _inq.Count);
-        
+
         // Handle LNEXT (literal next) - this character should be treated literally
         if (_lnextPending)
         {
@@ -578,9 +585,10 @@ public class TtyDiscipline
 
     private void ProcessRegularChar(byte b)
     {
-        _logger.LogInformation("[TTY] ProcessRegularChar: 0x{Hex} ({Char}), ICANON={IsCanon}, _canonBuffer.Count={CanonCount}",
+        _logger.LogInformation(
+            "[TTY] ProcessRegularChar: 0x{Hex} ({Char}), ICANON={IsCanon}, _canonBuffer.Count={CanonCount}",
             b.ToString("X2"), (char)b, (_lflag & ICANON) != 0, _canonBuffer.Count);
-        
+
         // Canonical Mode
         if ((_lflag & ICANON) != 0)
         {
@@ -638,7 +646,8 @@ public class TtyDiscipline
         else
         {
             // Raw mode
-            _logger.LogInformation("[TTY] ProcessRegularChar: Raw mode, writing 0x{Hex} directly to input queue", b.ToString("X2"));
+            _logger.LogInformation("[TTY] ProcessRegularChar: Raw mode, writing 0x{Hex} directly to input queue",
+                b.ToString("X2"));
             _inq.Write(b);
             if ((_lflag & ECHO) != 0) EchoByte(TtyEndpointKind.Stdout, b);
         }
@@ -658,7 +667,7 @@ public class TtyDiscipline
     {
         _logger.LogInformation("[TTY] FlushCanonical: count={Count}, eof={Eof}, buffer contents=[{BufferContents}]",
             _canonBuffer.Count, eof, string.Join(", ", _canonBuffer.Select(b => $"0x{b:X2}")));
-        
+
         // If empty and NOT eof, nothing to flush.
         // But if EOF, we must flush (even empty) to signal the reader (0 bytes read).
         if (_canonBuffer.Count == 0 && !eof)
@@ -678,11 +687,9 @@ public class TtyDiscipline
         _canonBuffer.Clear();
 
         if (eof)
-        {
             _logger.LogInformation("[TTY] FlushCanonical: EOF was signaled, input queue marked as canonical ready");
-            // If this was an EOF, we just flushed whatever was there.
-            // If _canonBuffer was empty, _inq.Write with canonicalReady=true will ensure Read() returns.
-        }
+        // If this was an EOF, we just flushed whatever was there.
+        // If _canonBuffer was empty, _inq.Write with canonicalReady=true will ensure Read() returns.
     }
 
     private void CanonErase()
@@ -875,12 +882,14 @@ public class TtyDiscipline
 
     private void SendSignal(int sig)
     {
-        _logger.LogInformation("[TTY] SendSignal: sig={Sig}, ForegroundPgrp={Pgrp}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
+        _logger.LogInformation(
+            "[TTY] SendSignal: sig={Sig}, ForegroundPgrp={Pgrp}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             sig, ForegroundPgrp, _inq.Count, _canonBuffer.Count);
-        
+
         if (ForegroundPgrp > 0)
         {
-            _logger.LogInformation("[TTY] SendSignal: Signaling process group {Pgrp} with signal {Sig}", ForegroundPgrp, sig);
+            _logger.LogInformation("[TTY] SendSignal: Signaling process group {Pgrp} with signal {Sig}", ForegroundPgrp,
+                sig);
             _broadcaster.SignalProcessGroup(ForegroundPgrp, sig);
         }
         else
@@ -921,6 +930,8 @@ internal sealed class TtyInputQueue
             _queue.Clear();
             _hasCanonicalLine = false;
         }
+
+        DataAvailable.Reset();
     }
 
     public void Write(byte b)
@@ -986,11 +997,11 @@ internal sealed class TtyInputQueue
         }
 
         // No data available.
-        // DO NOT reset here - let WaitForRead() handle the reset after await.
-        // This avoids race conditions where we reset just before new data arrives.
-        // For non-blocking mode, return EAGAIN immediately.
-        // For blocking mode, also return EAGAIN - the caller (SysRead) will handle
-        // the blocking by awaiting WaitForRead() and then retrying.
+        // We must reset the event here. Previously this was deferred to WaitForRead(),
+        // but with IOAwaiter/RegisterWait handling waits, we need the event properly reset
+        // when we return EAGAIN, otherwise the next await will complete instantly in an infinite loop.
+        DataAvailable.Reset();
+
         if ((flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
 
         return -(int)Errno.EAGAIN;

@@ -195,37 +195,29 @@ public class PipeInode : Inode
             {
                 // Check if there's data to read or EOF
                 if (_count > 0)
-                {
                     revents |= POLLIN;
-                }
                 else if (_writersClosed)
-                {
                     // EOF - no writers left, return POLLHUP
                     revents |= POLLHUP;
-                }
             }
 
             if ((events & POLLOUT) != 0 && (mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR))
             {
                 // Check if there's space to write or broken pipe
                 if (_readersClosed)
-                {
                     revents |= POLLERR;
-                }
-                else if (_count < BufferSize)
-                {
-                    revents |= POLLOUT;
-                }
+                else if (_count < BufferSize) revents |= POLLOUT;
             }
         }
 
         return revents;
     }
 
-    public override void RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
+        var registered = false;
 
         lock (_lock)
         {
@@ -233,14 +225,18 @@ public class PipeInode : Inode
             {
                 // Register for read availability
                 _readHandle.Register(callback);
+                registered = true;
             }
 
             if ((events & POLLOUT) != 0)
             {
                 // Register for write space availability
                 _writeHandle.Register(callback);
+                registered = true;
             }
         }
+
+        return registered;
     }
 
     public override void Release(LinuxFile linuxFile)
