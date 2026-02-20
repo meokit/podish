@@ -61,6 +61,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.chown32, SysChown);
         Register(X86SyscallNumbers.getcwd, SysGetCwd);
         Register(X86SyscallNumbers.mmap2, SysMmap2);
+        Register(X86SyscallNumbers.statfs, SysStatfs);
+        Register(X86SyscallNumbers.fstatfs, SysFstatfs);
         Register(X86SyscallNumbers.stat64, SysStat64);
         Register(X86SyscallNumbers.lstat64, SysLstat64);
         Register(X86SyscallNumbers.fstat64, SysFstat64);
@@ -79,6 +81,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.fchownat, SysFchownAt);
         Register(X86SyscallNumbers.fchmodat, SysFchmodAt);
         Register(X86SyscallNumbers.faccessat, SysFaccessAt);
+        Register(X86SyscallNumbers.statfs64, SysStatfs64);
+        Register(X86SyscallNumbers.fstatfs64, SysFstatfs64);
 
         Register(X86SyscallNumbers.creat, SysCreat);
         Register(X86SyscallNumbers.link, SysLink);

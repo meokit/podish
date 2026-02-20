@@ -859,6 +859,140 @@ public partial class SyscallManager
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }
 
+    private static int GetFsMagic(Dentry dentry)
+    {
+        var fsName = dentry.SuperBlock.Type.Name;
+        return fsName switch
+        {
+            "tmpfs" => 0x01021994,
+            "devtmpfs" => 0x01021994,
+            "proc" => 0x00009FA0,
+            "overlay" => unchecked((int)0x794C7630),
+            "hostfs" => 0x0000EF53,
+            _ => 0x0000EF53
+        };
+    }
+
+    private static void WriteStatfs32(SyscallManager sm, uint addr, Dentry dentry)
+    {
+        const int blockSize = 4096;
+        const int totalBlocks = 256 * 1024 * 1024 / blockSize; // 256 MiB synthetic capacity
+        const int freeBlocks = totalBlocks / 2;
+        const int totalFiles = 1_000_000;
+        const int freeFiles = 900_000;
+        const int fsid0 = 0x78656D75; // "xemu"
+        const int fsid1 = 0x46535031; // "FSP1"
+
+        var buf = new byte[64];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0), GetFsMagic(dentry));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4), blockSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8), (uint)totalBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)freeBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), (uint)freeBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), (uint)totalFiles);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), (uint)freeFiles);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(28), fsid0);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(32), fsid1);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(36), 255); // f_namelen
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(40), blockSize); // f_frsize
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(44), 0); // f_flags
+        // f_spare[4] at [48..63] left as zero
+
+        sm.Engine.CopyToUser(addr, buf);
+    }
+
+    private static void WriteStatfs64(SyscallManager sm, uint addr, Dentry dentry)
+    {
+        const int blockSize = 4096;
+        const ulong totalBlocks = 256UL * 1024UL * 1024UL / blockSize; // 256 MiB synthetic capacity
+        const ulong freeBlocks = totalBlocks / 2;
+        const ulong totalFiles = 1_000_000;
+        const ulong freeFiles = 900_000;
+        const int fsid0 = 0x78656D75; // "xemu"
+        const int fsid1 = 0x46535031; // "FSP1"
+
+        // i386 statfs64: sizeof(struct statfs64) = 84 bytes.
+        var buf = new byte[84];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0), GetFsMagic(dentry));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4), blockSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(8), totalBlocks);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(16), freeBlocks);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(24), freeBlocks);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(32), totalFiles);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(40), freeFiles);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(48), fsid0);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(52), fsid1);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(56), 255); // f_namelen
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(60), blockSize); // f_frsize
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(64), 0); // f_flags
+        // f_spare[4] at [68..83] left as zero
+
+        sm.Engine.CopyToUser(addr, buf);
+    }
+
+    private static async ValueTask<int> SysStatfs(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var path = sm.ReadString(a1);
+        var dentry = sm.PathWalk(path);
+        if (dentry?.Inode == null) return -(int)Errno.ENOENT;
+
+        if (!sm.Engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
+        WriteStatfs32(sm, a2, dentry);
+        return 0;
+    }
+
+    private static async ValueTask<int> SysFstatfs(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var file = sm.GetFD(fd);
+        if (file?.Dentry.Inode == null) return -(int)Errno.EBADF;
+
+        if (!sm.Engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
+        WriteStatfs32(sm, a2, file.Dentry);
+        return 0;
+    }
+
+    private static async ValueTask<int> SysStatfs64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var size = (int)a2;
+        if (size < 84) return -(int)Errno.EINVAL;
+
+        var path = sm.ReadString(a1);
+        var dentry = sm.PathWalk(path);
+        if (dentry?.Inode == null) return -(int)Errno.ENOENT;
+
+        if (!sm.Engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
+        WriteStatfs64(sm, a3, dentry);
+        return 0;
+    }
+
+    private static async ValueTask<int> SysFstatfs64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var size = (int)a2;
+        if (size < 84) return -(int)Errno.EINVAL;
+
+        var file = sm.GetFD(fd);
+        if (file?.Dentry.Inode == null) return -(int)Errno.EBADF;
+
+        if (!sm.Engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
+        WriteStatfs64(sm, a3, file.Dentry);
+        return 0;
+    }
+
     private static async ValueTask<int> SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ImplStat64(state, a1, a2);
@@ -1031,6 +1165,10 @@ public partial class SyscallManager
         var targetDentry = sm.PathWalk(target);
         if (targetDentry == null) return -(int)Errno.ENOENT;
 
+        // mount(2) operates on the mountpoint itself, not on a followed mount root.
+        if (targetDentry.MountedAt != null)
+            targetDentry = targetDentry.MountedAt;
+
         SuperBlock? newSb = null;
 
         // Handle MS_BIND (Bind Mount)
@@ -1098,9 +1236,14 @@ public partial class SyscallManager
 
         if (newSb != null)
         {
+            var targetPath = BuildPath(targetDentry);
             targetDentry.IsMounted = true;
             targetDentry.MountRoot = newSb.Root;
             newSb.Root.MountedAt = targetDentry;
+
+            var src = string.IsNullOrEmpty(source) ? fstype : source;
+            var opts = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
+            sm.AddMountInfo(src, targetPath, fstype, opts);
             return 0;
         }
 
@@ -1121,6 +1264,7 @@ public partial class SyscallManager
             // This dentry is a mount root, find the mount point
             var mountPoint = targetDentry.MountedAt;
             var mountRoot = mountPoint.MountRoot;
+            var targetPath = BuildPath(mountPoint);
 
             if (mountRoot == null) return -(int)Errno.EINVAL;
 
@@ -1131,6 +1275,7 @@ public partial class SyscallManager
             mountPoint.IsMounted = false;
             mountPoint.MountRoot = null;
             targetDentry.MountedAt = null;
+            sm.RemoveMountInfo(targetPath);
 
             // Release SuperBlock reference
             mountRoot.SuperBlock.Put();
@@ -1141,6 +1286,7 @@ public partial class SyscallManager
         {
             // This is the mount point itself
             var mountRoot = targetDentry.MountRoot;
+            var targetPath = BuildPath(targetDentry);
 
             if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes()) return -16; // EBUSY
 
@@ -1152,6 +1298,7 @@ public partial class SyscallManager
             }
 
             targetDentry.MountRoot = null;
+            sm.RemoveMountInfo(targetPath);
             return 0;
         }
 
@@ -1188,6 +1335,8 @@ public partial class SyscallManager
 
         if (mountRoot == null) return -22; // EINVAL
 
+        var targetPath = BuildPath(mountPoint);
+
         if ((flags & MNT_DETACH) != 0)
         {
             // Lazy unmount: detach immediately but allow active references to continue
@@ -1195,6 +1344,7 @@ public partial class SyscallManager
             mountPoint.MountRoot = null;
             if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
             else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
+            sm.RemoveMountInfo(targetPath);
             // Don't call sb.Put() - let reference counting naturally decrease when files close
             return 0;
         }
@@ -1207,6 +1357,7 @@ public partial class SyscallManager
         mountPoint.MountRoot = null;
         if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
         else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
+        sm.RemoveMountInfo(targetPath);
         mountRoot.SuperBlock.Put();
 
         return 0;

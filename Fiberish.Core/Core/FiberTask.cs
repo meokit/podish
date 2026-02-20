@@ -637,6 +637,7 @@ public class FiberTask
                 PGID = Process.PGID,
                 SID = Process.SID
             };
+            newProc.CopyImageFrom(Process);
             KernelScheduler.Current!.RegisterProcess(newProc);
         }
 

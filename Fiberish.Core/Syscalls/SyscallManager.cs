@@ -77,17 +77,19 @@ public partial class SyscallManager
         // Mount devtmpfs to /dev
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
         var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
-        Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime");
+        Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
 
         // Mount procfs to /proc
         var procFsType = FileSystemRegistry.Get("proc")!;
         var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
-        Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime");
+        Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
 
         // Mount tmpfs to /dev/shm for POSIX shm_open userspace ABI.
-        EnsureDirectory(devSb.Root, "shm");
+        // Resolve through the mounted /dev dentry to avoid creating shm under a detached devtmpfs root.
+        var devRoot = PathWalk("/dev") ?? devSb.Root;
+        EnsureDirectory(devRoot, "shm");
         var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
-        Mount(devSb.Root, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev");
+        Mount(devRoot, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
         DevShmRoot = shmSb.Root;
 
         // Separate tmpfs namespace for memfd_create (unnamed file descriptors).
@@ -196,7 +198,8 @@ public partial class SyscallManager
         }
     }
 
-    private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options)
+    private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options,
+        string? targetOverride = null)
     {
         var dentry = parent.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
 
@@ -206,17 +209,37 @@ public partial class SyscallManager
         sb.Root.MountedAt = dentry;
 
         // Track mount
-        var targetPath = BuildPath(dentry);
-        MountList.Add(new MountInfo { Source = source, Target = targetPath, FsType = fstype, Options = options });
+        var targetPath = targetOverride ?? BuildPath(dentry);
+        AddMountInfo(source, targetPath, fstype, options);
+    }
+
+    internal void AddMountInfo(string source, string target, string fsType, string options)
+    {
+        MountList.RemoveAll(m => m.Target == target);
+        MountList.Add(new MountInfo { Source = source, Target = target, FsType = fsType, Options = options });
+    }
+
+    internal void RemoveMountInfo(string target)
+    {
+        MountList.RemoveAll(m => m.Target == target);
     }
 
     private static string BuildPath(Dentry dentry)
     {
         var parts = new List<string>();
-        var cur = dentry;
-        while (cur.Parent != null && cur.Parent != cur)
+        Dentry? cur = dentry;
+        while (cur != null)
         {
             if (cur.Name != "/") parts.Add(cur.Name);
+
+            // Root of a mounted filesystem: continue from mountpoint in parent namespace.
+            if (cur.MountedAt != null)
+            {
+                cur = cur.MountedAt;
+                continue;
+            }
+
+            if (cur.Parent == null || cur.Parent == cur) break;
             cur = cur.Parent;
         }
 

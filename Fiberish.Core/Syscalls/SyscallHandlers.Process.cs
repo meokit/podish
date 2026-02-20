@@ -92,8 +92,8 @@ public partial class SyscallManager
         // Clone
         var child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
 
-        // TODO: Re-verify ProcFsManager compatibility
-        // ProcFsManager.OnProcessStart(sm, child.TID);
+        if ((flags & LinuxConstants.CLONE_THREAD) == 0)
+            ProcFsManager.OnProcessStart(child.Process.Syscalls, child.Process);
 
         return child.TID;
     }
@@ -410,6 +410,7 @@ public partial class SyscallManager
         try
         {
             task.Process.Exec(absPath, [.. args], [.. envs]);
+            ProcFsManager.OnProcessExec(sm, task.Process);
             return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }
         catch (FileNotFoundException)

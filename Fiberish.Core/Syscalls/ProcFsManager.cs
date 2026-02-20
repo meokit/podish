@@ -1,11 +1,12 @@
 using System.Text;
+using Fiberish.Core;
 using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
 public static class ProcFsManager
 {
-    public static void OnProcessStart(SyscallManager sm, int pid)
+    public static void OnProcessStart(SyscallManager sm, Process process)
     {
         try
         {
@@ -18,18 +19,27 @@ public static class ProcFsManager
 
             if (procDentry.Inode == null) return;
 
-            var pidStr = pid.ToString();
-            var pidDentry = new Dentry(pidStr, null, procDentry, procDentry.SuperBlock);
-            procDentry.Inode.Mkdir(pidDentry, 0x1ED, 0, 0); // 555
+            var pidStr = process.TGID.ToString();
+            var pidDentry = procDentry.Inode.Lookup(pidStr);
+            if (pidDentry == null)
+            {
+                pidDentry = new Dentry(pidStr, null, procDentry, procDentry.SuperBlock);
+                procDentry.Inode.Mkdir(pidDentry, 0x1ED, 0, 0); // 555
+            }
 
             // Create status file
-            CreateProcFile(pidDentry, "status", () => GenerateStatus(pid));
-            CreateProcFile(pidDentry, "cmdline", () => GenerateCmdline(pid));
-            CreateProcFile(pidDentry, "stat", () => GenerateStat(pid));
+            CreateOrUpdateProcFile(pidDentry, "status", () => GenerateStatus(process));
+            CreateOrUpdateProcFile(pidDentry, "cmdline", () => GenerateCmdline(process));
+            CreateOrUpdateProcFile(pidDentry, "stat", () => GenerateStat(process));
         }
         catch
         {
         }
+    }
+
+    public static void OnProcessExec(SyscallManager sm, Process process)
+    {
+        OnProcessStart(sm, process);
     }
 
     public static void OnProcessExit(SyscallManager sm, int pid)
@@ -66,10 +76,17 @@ public static class ProcFsManager
         }
     }
 
-    private static void CreateProcFile(Dentry parent, string name, Func<string> contentGen)
+    private static void CreateOrUpdateProcFile(Dentry parent, string name, Func<string> contentGen)
     {
-        var dentry = new Dentry(name, null, parent, parent.SuperBlock);
-        parent.Inode!.Create(dentry, 0x124, 0, 0); // 444
+        var dentry = parent.Inode!.Lookup(name);
+        if (dentry == null)
+        {
+            dentry = new Dentry(name, null, parent, parent.SuperBlock);
+            parent.Inode.Create(dentry, 0x124, 0, 0); // 444
+        }
+
+        dentry.Inode!.Truncate(0);
+
         // Write content?
         // Since Tmpfs is static, we write it once at start.
         // For dynamic content, we'd need a specialized ProcInode.
@@ -91,22 +108,23 @@ public static class ProcFsManager
         }
     }
 
-    private static string GenerateStatus(int pid)
+    private static string GenerateStatus(Process process)
     {
         // Minimal status
-        return $"Name:\tprocess_{pid}\nState:\tR (running)\nPid:\t{pid}\nPPid:\t0\n";
+        return $"Name:\t{process.Comm}\nState:\tR (running)\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\n";
     }
 
-    private static string GenerateCmdline(int pid)
+    private static string GenerateCmdline(Process process)
     {
-        return $"process_{pid}\0";
+        return Encoding.UTF8.GetString(process.CommandLineRaw);
     }
 
-    private static string GenerateStat(int pid)
+    private static string GenerateStat(Process process)
     {
         // Minimal stat for ps
         // pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy
-        return $"{pid} (process_{pid}) R 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+        return
+            $"{process.TGID} ({process.Comm}) R {process.PPID} {process.PGID} {process.SID} 0 0 0 0 0 0 0 0 0 0 0 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
     }
 
     public static void Init(SyscallManager sm)
@@ -119,10 +137,10 @@ public static class ProcFsManager
 
         if (procDentry.Inode == null) return;
 
-        CreateProcFile(procDentry, "mounts", () => GenerateMounts(sm));
-        CreateProcFile(procDentry, "cpuinfo", GenerateCpuInfo);
-        CreateProcFile(procDentry, "meminfo", GenerateMemInfo);
-        CreateProcFile(procDentry, "version",
+        CreateOrUpdateProcFile(procDentry, "mounts", () => GenerateMounts(sm));
+        CreateOrUpdateProcFile(procDentry, "cpuinfo", GenerateCpuInfo);
+        CreateOrUpdateProcFile(procDentry, "meminfo", GenerateMemInfo);
+        CreateOrUpdateProcFile(procDentry, "version",
             () =>
                 "Linux version 6.1.0-x86emu (jiangyiheng@antigravity) (gcc version 12.2.0 (Debian 12.2.0-14)) #1 SMP PREEMPT\n");
     }

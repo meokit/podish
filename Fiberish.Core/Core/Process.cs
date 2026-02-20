@@ -4,6 +4,7 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
+using System.Text;
 
 namespace Fiberish.Core;
 
@@ -59,6 +60,8 @@ public struct SigAction
 
 public class Process
 {
+    private static readonly byte[] EmptyCmdline = [];
+
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
         TGID = tgid;
@@ -100,6 +103,10 @@ public class Process
     public List<int> Children { get; } = []; // Child Process IDs
     public ProcessState State { get; set; } = ProcessState.Running;
     public int ExitStatus { get; set; } = 0;
+    public string ExecutablePath { get; private set; } = string.Empty;
+    public string[] CommandLineArguments { get; private set; } = [];
+    public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
+    public string Comm { get; private set; } = "process";
 
     // Use our new single-threaded compatible synchronization primitive
     public AsyncWaitQueue ZombieEvent { get; } = new();
@@ -108,6 +115,8 @@ public class Process
 
     public void LoadExecutable(string exe, string[] args, string[] envs)
     {
+        UpdateProcessImage(exe, args);
+
         var res = ElfLoader.Load(exe, Syscalls, args, envs);
         Syscalls.BrkAddr = res.BrkAddr;
 
@@ -141,6 +150,33 @@ public class Process
         // 3. Load Executable
         // LoadExecutable handles ELF loading, stack setup and CPU state reset
         LoadExecutable(exePath, args, envs);
+    }
+
+    public void CopyImageFrom(Process src)
+    {
+        ExecutablePath = src.ExecutablePath;
+        CommandLineArguments = [.. src.CommandLineArguments];
+        CommandLineRaw = [.. src.CommandLineRaw];
+        Comm = src.Comm;
+    }
+
+    private void UpdateProcessImage(string exe, string[] args)
+    {
+        ExecutablePath = exe;
+        CommandLineArguments = [.. args];
+
+        var commBase = args.Length > 0 ? args[0] : exe;
+        Comm = Path.GetFileName(commBase);
+        if (string.IsNullOrEmpty(Comm)) Comm = "process";
+
+        if (args.Length == 0)
+        {
+            CommandLineRaw = EmptyCmdline;
+            return;
+        }
+
+        var cmdline = string.Join('\0', args) + '\0';
+        CommandLineRaw = Encoding.UTF8.GetBytes(cmdline);
     }
 
     public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
@@ -184,6 +220,7 @@ public class Process
 
         // 7. Load Executable
         proc.LoadExecutable(exePath, args, envs);
+        ProcFsManager.OnProcessStart(sys, proc);
 
         return mainTask;
     }
