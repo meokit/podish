@@ -255,6 +255,19 @@ public partial class SyscallManager
         // Restore
         // ucontext.mcontext is at offset 20
         task.RestoreSigContext(ucontextAddr + 20);
+        
+        // RT signals have full 64-bit signal mask in ucontext (offset 20 + 88 roughly, wait: ucontext layout is different)
+        // Normal i386 ucontext:
+        // uc_flags (4)
+        // uc_link (4)
+        // uc_stack (12)
+        // uc_mcontext (88)
+        // uc_sigmask (128 bytes, but we only use 8) -> offset 108
+        var maskBuf = new byte[8];
+        if (task.CPU.CopyFromUser(ucontextAddr + 108, maskBuf))
+        {
+            task.SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+        }
 
         return (int)task.CPU.RegRead(Reg.EAX);
     }

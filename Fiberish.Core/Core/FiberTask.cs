@@ -236,10 +236,34 @@ public class FiberTask
 
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
+            if ((action.Flags & 0x04000000) != 0) // SA_RESTORER
+            {
+                retAddr = action.Restorer;
+            }
             var frameEsp = sp;
 
-            // Setup Stack with SA_SIGINFO support
-            SetupSigContext(sp, ref frameEsp, sig, action, retAddr);
+            var oldMask = SignalMask;
+            
+            // Apply new mask for the duration of the handler
+            // The signal being delivered is also blocked unless SA_NODEFER is set
+            var handlerMask = action.Mask;
+            if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
+            {
+                handlerMask |= 1UL << (sig - 1);
+            }
+            SignalMask |= handlerMask;
+
+            // Setup Stack based on SA_SIGINFO
+            if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
+            {
+                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.RtSigReturnAddr;
+                SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask);
+            }
+            else
+            {
+                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.SigReturnAddr;
+                SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask);
+            }
             Logger.LogInformation(
                 "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
                 sp, frameEsp, action.Handler);
@@ -299,7 +323,27 @@ public class FiberTask
         }
     }
 
-    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr)
+    private void SetupOldSigFrame(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)
+    {
+        // Traditional sigframe:
+        // esp+0: retAddr
+        // esp+4: sig
+        // esp+8: sigcontext
+        // sizeof(sigframe) = 732
+        
+        esp = (esp - 736u) & ~0xFu;
+        var sigcontextAddr = esp + 8;
+        
+        // Zero out the frame
+        CPU.CopyToUser(esp, new byte[736]);
+        
+        WriteSigContext(sigcontextAddr, oldMask);
+        
+        if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return;
+        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+    }
+
+    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)
     {
         // Push UContext (approx 400 bytes inc fpstate)
         // Align to 16 bytes
@@ -313,7 +357,7 @@ public class FiberTask
         uint mcontextOffset = 4 + 4 + 12;
 
         // Save registers to mcontext
-        WriteSigContext(esp + mcontextOffset);
+        WriteSigContext(esp + mcontextOffset, oldMask);
 
         // Push SigInfo (128 bytes)
         esp = (esp - 128u) & ~0xFu;
@@ -374,21 +418,36 @@ public class FiberTask
             CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
             CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
             CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
+            
+            // Restore signal mask
+            if (buf.Length >= 88) 
+            {
+                var lowerMask = BinaryPrimitives.ReadUInt32LittleEndian(s[80..]);
+                // ucontext typically has upper 32 bits next to it or in extramask, but old sigcontext might only have 32?
+                // actually sigcontext offset 80 is `oldmask` (32 bit)
+                // extramask is usually placed after the frame. For now we just restore the lower 32 bit if it's oldframe,
+                // or the rt_sigframe will have it in uc_sigmask. But Linux uses ucontext's uc_sigmask in rt_sigreturn.
+                // For simplicity, we just save/restore the full 64-bit at offset 80 for our own emulator convenience
+                SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
+            }
         }
         catch
         {
         }
     }
 
-    private void WriteSigContext(uint addr)
+    private void WriteSigContext(uint addr, ulong oldMask)
     {
         // offset 0: gs, fs, es, ds
         // offset 16: edi, esi, ebp, esp, ebx, edx, ecx, eax
         // offset 48: trapno, err
         // offset 56: eip, cs, efl, uesp, ss
+        // offset 76: fpstate (null ptr)
+        // offset 80: oldmask
+        // offset 84: cr2
         try
         {
-            var buf = new byte[80];
+            var buf = new byte[88];
             var s = buf.AsSpan();
 
             // Segments (dummy for now)
@@ -412,6 +471,8 @@ public class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP));
             BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
 
+            BinaryPrimitives.WriteUInt64LittleEndian(s[80..], oldMask);
+
             if (!CPU.CopyToUser(addr, buf))
             {
             }
@@ -422,7 +483,7 @@ public class FiberTask
     }
 
     // Main execution slice called by KernelScheduler
-    public void RunSlice(int instructionLimit = 1000)
+    public void RunSlice(int instructionLimit = 1000000)
     {
         CommonKernel.CurrentTask = this;
         try
@@ -449,7 +510,7 @@ public class FiberTask
             }
 
             // 1. Run CPU execution
-            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] EAX=0x{Eax:X}", CPU.RegRead(Reg.EAX));
+            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             CPU.Run(maxInsts: (ulong)instructionLimit);
 

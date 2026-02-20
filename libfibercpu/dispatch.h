@@ -20,6 +20,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                                            mem::MicroTLB utlb, uint32_t branch) {
     // Prefetch next cache line
     PREFETCH((void*)(op + 4));
+
     // Execute Logic
     auto flow = Target(state, reinterpret_cast<ShimOp*>(op), &utlb, op->imm, &branch);
 

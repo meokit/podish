@@ -391,7 +391,8 @@ FORCE_INLINE LogicFlow OpNop(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpHlt(LogicFuncParams) {
     // HLT
-    // TODO: Don't allow on userspace?
+    LogMsgState(state, 4, "[ABORT] USER ABORT DETECTED: HLT instruction executed at EIP: 0x%08X",
+                op->next_eip - op->len);
     state->status = EmuStatus::Stopped;
     return LogicFlow::ExitOnCurrentEIP;
 }
