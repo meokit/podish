@@ -1,5 +1,6 @@
 using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -14,14 +15,12 @@ public partial class SyscallManager
 
         if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
 
-        // TTY specific ioctls - delegate to TtyDiscipline
-        if (sm.Tty != null)
-        {
-            return sm.Tty.Ioctl(request, arg, sm.Engine);
-        }
+        // Delegate to the inode's Ioctl method (polymorphic dispatch)
+        var inode = file.Dentry.Inode;
+        if (inode != null)
+            return inode.Ioctl(request, arg, sm.Engine);
 
-        // Generic ioctls or ignore
-        return 0;
+        return -(int)Errno.ENOTTY;
     }
 
     private static async ValueTask<int> SysFcntl64(IntPtr state, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)

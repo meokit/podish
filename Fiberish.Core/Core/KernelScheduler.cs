@@ -375,6 +375,12 @@ public class KernelScheduler
 
     public void SignalProcessGroup(int pgid, int signal)
     {
+        _ = SignalProcessGroupWithCount(pgid, signal);
+    }
+
+    public int SignalProcessGroupWithCount(int pgid, int signal)
+    {
+        var count = 0;
         lock (_processes)
         {
             foreach (var p in _processes.Values)
@@ -388,9 +394,49 @@ public class KernelScheduler
                     // Typically signal pending on process, handled by any eligible thread.
                     // Simplified: Signal the main thread (TID=TGID).
                     var mainTask = GetTask(p.TGID);
-                    mainTask?.PostSignal(signal);
+                    if (mainTask == null) continue;
+                    mainTask.PostSignal(signal);
+                    count++;
                 }
         }
+
+        return count;
+    }
+
+    public bool SignalProcess(int pid, int signal)
+    {
+        Process? proc;
+        lock (_processes)
+        {
+            if (!_processes.TryGetValue(pid, out proc)) return false;
+        }
+
+        var mainTask = GetTask(proc.TGID);
+        if (mainTask == null) return false;
+        mainTask.PostSignal(signal);
+        return true;
+    }
+
+    public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)
+    {
+        List<int> pids = [];
+        lock (_processes)
+        {
+            foreach (var p in _processes.Values)
+            {
+                if (excludePid.HasValue && p.TGID == excludePid.Value) continue;
+                if (skipInit && p.TGID == 1) continue;
+                pids.Add(p.TGID);
+            }
+        }
+
+        var count = 0;
+        foreach (var pid in pids)
+        {
+            if (SignalProcess(pid, signal)) count++;
+        }
+
+        return count;
     }
 
     public void SignalTask(int tid, int signal)

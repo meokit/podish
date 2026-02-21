@@ -103,8 +103,8 @@ public partial class SyscallManager
     private static async ValueTask<int> SysGetPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm?.GetTGID != null) return sm.GetTGID(sm.Engine);
-        return 1000;
+        var task = sm?.Engine.Owner as FiberTask;
+        return task?.Process.TGID ?? 1000;
     }
 
     private static async ValueTask<int> SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -129,8 +129,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         var task = sm?.Engine.Owner as FiberTask;
-        // Simple PGID = TGID for now
-        return task?.Process.TGID ?? -1;
+        return task?.Process.PGID ?? -1;
     }
 
     private static async ValueTask<int> SysUmask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

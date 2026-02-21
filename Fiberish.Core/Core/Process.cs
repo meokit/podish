@@ -94,6 +94,9 @@ public class Process
     // Namespaces
     public UTSNamespace UTS { get; set; }
 
+    // Controlling terminal (set by TIOCSCTTY)
+    public VFS.TTY.TtyDiscipline? ControllingTty { get; set; }
+
     // Other process state
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
 
@@ -143,12 +146,33 @@ public class Process
         // 1. Clear Memory
         Syscalls.Mem.Clear(Syscalls.Engine);
 
+        // 1.1 Linux exec semantics: handlers set to user function are reset to SIG_DFL.
+        // Dispositions explicitly set to SIG_IGN stay ignored.
+        ResetSignalDispositionsForExec();
+
         // 2. Re-setup vDSO (Important! execve clears memory map including vDSO)
         Syscalls.SetupVDSO();
 
         // 3. Load Executable
         // LoadExecutable handles ELF loading, stack setup and CPU state reset
         LoadExecutable(exePath, args, envs);
+    }
+
+    private void ResetSignalDispositionsForExec()
+    {
+        if (SignalActions.Count == 0) return;
+
+        var reset = new List<int>();
+        foreach (var (sig, action) in SignalActions)
+        {
+            // Keep SIG_IGN; reset user handlers to default.
+            if (action.Handler > 1) reset.Add(sig);
+        }
+
+        foreach (var sig in reset)
+        {
+            SignalActions.Remove(sig);
+        }
     }
 
     public void CopyImageFrom(Process src)

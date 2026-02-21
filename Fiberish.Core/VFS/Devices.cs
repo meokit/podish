@@ -1,4 +1,6 @@
+using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
@@ -8,6 +10,11 @@ public class ConsoleInode : Inode
     private static readonly Stream _stdin = Console.OpenStandardInput();
     private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
+
+    /// <summary>
+    ///     Indicates whether this inode is backed by a TTY discipline.
+    /// </summary>
+    public bool IsTty => _discipline != null;
 
     public ConsoleInode(SuperBlock sb, bool isInput, TtyDiscipline? discipline = null)
     {
@@ -118,6 +125,16 @@ public class ConsoleInode : Inode
         }
 
         return false;
+    }
+
+    public override int Ioctl(uint request, uint arg, Engine engine)
+    {
+        // Delegate to TTY discipline if available
+        if (_discipline != null)
+            return _discipline.Ioctl(request, arg, engine);
+
+        // Non-TTY console: return ENOTTY for TTY ioctls
+        return -(int)Errno.ENOTTY;
     }
 
     public override void Truncate(long size)

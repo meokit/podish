@@ -11,7 +11,29 @@ public partial class SyscallManager
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysSignal(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return 0;
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var sig = (int)a1;
+        var handler = a2;
+        if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
+        if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) return -(int)Errno.EINVAL;
+
+        task.Process.SignalActions.TryGetValue(sig, out var oldAction);
+
+        // signal(2) compatibility shim: map to our sigaction storage.
+        // Keep restart-friendly behavior for legacy callers.
+        var newAction = new SigAction
+        {
+            Handler = handler,
+            Flags = LinuxConstants.SA_RESTART,
+            Restorer = 0,
+            Mask = 0
+        };
+        task.Process.SignalActions[sig] = newAction;
+
+        return unchecked((int)oldAction.Handler);
     }
 
     private static async ValueTask<int> SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -132,34 +154,34 @@ public partial class SyscallManager
         var sig = (int)a2;
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
-
-        // Simplified: only support current process/group for now or direct PID match
-        // Kill 0: current process group. Kill -1: all processes. Kill < -1: process group -pid.
-
-        List<FiberTask> targets = [];
+        var kernel = task.CommonKernel;
+        var delivered = 0;
 
         if (pid > 0)
         {
-            lock (task.Process.Threads)
-            {
-                if (task.Process.Threads.Count > 0) targets.Add(task.Process.Threads[0]);
-            }
+            if (kernel.GetProcess(pid) == null) return -(int)Errno.ESRCH;
+            if (sig != 0 && kernel.SignalProcess(pid, sig)) delivered = 1;
+            return 0;
         }
-        else if (pid == -1)
+
+        if (pid == 0)
         {
-            // All processes. Dangerous!
-            return -(int)Errno.EPERM;
+            if (!kernel.IsValidProcessGroup(task.Process.PGID, task.Process.SID)) return -(int)Errno.ESRCH;
+            if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(task.Process.PGID, sig);
+            return 0;
         }
-        else // pid < -1: PGRP = -pid
+
+        if (pid == -1)
         {
-            // Not implemented PGRP signaling yet.
-            return -(int)Errno.ESRCH;
+            if (sig != 0) delivered = kernel.SignalAllProcesses(sig, excludePid: task.Process.TGID);
+            if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
+            return 0;
         }
 
-        if (targets.Count == 0) return -(int)Errno.ESRCH;
-
-        foreach (var t in targets) t.PostSignal(sig);
-
+        var pgid = -pid;
+        if (!kernel.IsValidProcessGroup(pgid, task.Process.SID)) return -(int)Errno.ESRCH;
+        if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(pgid, sig);
+        if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
         return 0;
     }
 
@@ -172,6 +194,7 @@ public partial class SyscallManager
         var tid = (int)a1;
         var sig = (int)a2;
 
+        if (tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
         var target = KernelScheduler.Current!.GetTask(tid);
@@ -194,9 +217,12 @@ public partial class SyscallManager
         var tid = (int)a2;
         var sig = (int)a3;
 
+        if (tgid <= 0 || tid <= 0) return -(int)Errno.EINVAL;
+        if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+
         var target = KernelScheduler.Current!.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
-        if (target.Process.TGID != tgid && tgid != -1) return -(int)Errno.ESRCH;
+        if (target.Process.TGID != tgid) return -(int)Errno.ESRCH;
 
         if (sig != 0) target.PostSignal(sig);
         return 0;
@@ -226,29 +252,16 @@ public partial class SyscallManager
 
         var sp = task.CPU.RegRead(Reg.ESP);
 
-        // Heuristic to detect if Arg1 (sig) was popped by handler (e.g. legacy handler doing 'pop' or ret 4?)
-        // Layout 1 (Standard): [ESP]=Sig, [ESP+4]=SigInfo*, [ESP+8]=UContext*
-        // Layout 2 (Shifted):  [ESP]=SigInfo*, [ESP+4]=UContext*
-
-        var spBuf = new byte[4];
-        if (!task.CPU.CopyFromUser(sp, spBuf)) return -(int)Errno.EFAULT;
-        var val0 = BinaryPrimitives.ReadUInt32LittleEndian(spBuf);
         uint ucontextAddr;
+        // Standard i386 rt frame: [esp]=sig, [esp+4]=siginfo*, [esp+8]=ucontext*
+        var ptrBuf = new byte[4];
+        if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
+        ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
 
-        if (val0 > 0x1000) // Likely a pointer (SigInfo*) -> Shifted stack
+        // Compatibility fallback for legacy handlers that accidentally shifted stack by one arg.
+        if (ucontextAddr < 0x1000)
         {
-            // ESP points to Arg2
-            // Arg3 (UContext*) is at ESP+4
-            var ptrBuf = new byte[4];
             if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) return -(int)Errno.EFAULT;
-            ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
-        }
-        else // Likely a small int (Sig) -> Standard stack
-        {
-            // ESP points to Arg1
-            // Arg3 (UContext*) is at ESP+8
-            var ptrBuf = new byte[4];
-            if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
             ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
         }
 

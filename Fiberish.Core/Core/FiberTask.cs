@@ -154,7 +154,7 @@ public class FiberTask
     {
         if (PendingSignals == 0) return;
         
-        for (var i = 1; i <= 32; i++)
+        for (var i = 1; i <= 64; i++)
         {
             var mask = 1UL << (i - 1);
             SigAction action = default;
@@ -533,11 +533,11 @@ public class FiberTask
             }
 
             // 1. Run CPU execution
-            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+            if (Process.Syscalls?.Strace == true) Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             CPU.Run(maxInsts: (ulong)instructionLimit);
             
-            if (Process.Syscalls.Strace) Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+            if (Process.Syscalls?.Strace == true) Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             // 2. Check Exit
             if (Exited)
@@ -635,7 +635,8 @@ public class FiberTask
             {
                 PPID = Process.TGID,
                 PGID = Process.PGID,
-                SID = Process.SID
+                SID = Process.SID,
+                ControllingTty = Process.ControllingTty // Inherit controlling tty
             };
             newProc.CopyImageFrom(Process);
             KernelScheduler.Current!.RegisterProcess(newProc);
@@ -643,6 +644,9 @@ public class FiberTask
 
         var newTid = cloneThread ? NextTID() : newProc.TGID;
         var child = new FiberTask(newTid, newProc, newCpu, KernelScheduler.Current!);
+        child.SignalMask = SignalMask;
+        child.PendingSignals = 0;
+        child.InterruptingSignal = null;
 
         // Register engine with SyscallManager
         if (!cloneThread)

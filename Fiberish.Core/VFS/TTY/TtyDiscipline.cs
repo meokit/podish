@@ -332,6 +332,13 @@ public class TtyDiscipline
                 var task = engine.Owner as FiberTask;
                 if (task == null) return -(int)Errno.EPERM;
 
+                // Linux: pgid == 0 means use caller's process group
+                if (pgid == 0) pgid = task.Process.PGID;
+
+                // Caller must have this tty as its controlling terminal
+                if (task.Process.ControllingTty != this)
+                    return -(int)Errno.ENOTTY;
+
                 // Verify pgid exists and belongs to the caller's session
                 if (!KernelScheduler.Current!.IsValidProcessGroup(pgid, task.Process.SID))
                     return -(int)Errno.EPERM;
@@ -351,8 +358,10 @@ public class TtyDiscipline
                 if (SessionId != 0 && SessionId != proc.SID && arg != 1)
                     return -(int)Errno.EPERM;
 
+                // Set up controlling terminal relationship
                 SessionId = proc.SID;
                 ForegroundPgrp = proc.PGID;
+                proc.ControllingTty = this;
                 return 0;
             }
             default:

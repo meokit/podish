@@ -1,3 +1,5 @@
+using Fiberish.Native;
+
 namespace Fiberish.VFS;
 
 public enum InodeType
@@ -222,6 +224,14 @@ public abstract class Inode
     public virtual void Truncate(long size)
     {
         throw new NotSupportedException();
+    }
+
+    /// <summary>
+    ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.
+    /// </summary>
+    public virtual int Ioctl(uint request, uint arg, Core.Engine engine)
+    {
+        return -(int)Errno.ENOTTY;
     }
 
     // File operations hooks

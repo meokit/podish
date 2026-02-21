@@ -17,10 +17,13 @@ public static class ProcessFactory
         proc.PGID = proc.TGID;
         proc.SID = proc.TGID;
 
+        // Set up controlling terminal for init process
+        // This mimics what happens when a session leader calls TIOCSCTTY
         if (tty != null)
         {
             tty.SessionId = proc.SID;
             tty.ForegroundPgrp = proc.PGID;
+            proc.ControllingTty = tty;
         }
 
         scheduler.RegisterProcess(proc);

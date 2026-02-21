@@ -78,8 +78,8 @@ public class SysVShmManagerTests
         var attachRet = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine);
         Assert.Equal((long)addr, attachRet);
 
-        // Same process, different TID should still be allowed to detach.
-        var detachRet = ctx.Manager.ShmDt(addr, 3002, ctx.Vma, ctx.Engine);
+        // Same process, different TID, but the TGID (process ID) passed to IPC is the same.
+        var detachRet = ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine);
         Assert.Equal(0, detachRet);
     }
 
