@@ -111,7 +111,25 @@ public static class ProcFsManager
     private static string GenerateStatus(Process process)
     {
         // Minimal status
-        return $"Name:\t{process.Comm}\nState:\tR (running)\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\n";
+        var stateChar = process.State switch
+        {
+            ProcessState.Running => 'R',
+            ProcessState.Sleeping => 'S',
+            ProcessState.Stopped => 'T',
+            ProcessState.Zombie => 'Z',
+            ProcessState.Dead => 'X',
+            _ => 'R'
+        };
+        var stateMsg = stateChar switch
+        {
+            'R' => "R (running)",
+            'S' => "S (sleeping)",
+            'T' => "T (stopped)",
+            'Z' => "Z (zombie)",
+            'X' => "X (dead)",
+            _ => "R (running)"
+        };
+        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\n";
     }
 
     private static string GenerateCmdline(Process process)
@@ -123,8 +141,31 @@ public static class ProcFsManager
     {
         // Minimal stat for ps
         // pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy
+        
+        var stateChar = process.State switch
+        {
+            ProcessState.Running => 'R',
+            ProcessState.Sleeping => 'S',
+            ProcessState.Stopped => 'T',
+            ProcessState.Zombie => 'Z',
+            ProcessState.Dead => 'X',
+            _ => 'R'
+        };
+
+        // Determine TTY info
+        int ttyNr = 0;
+        int tpgid = -1;
+        if (process.ControllingTty != null)
+        {
+            // Try to assign a device number. Standard /dev/ttyx is typically major 4. Let's just mock one or use 0x8800 for pty
+            // Realistically busybox ps checks if ttyNr > 0 to display it.
+            // Let's use 34816 (0x8800) which is commonly used for /dev/pts/0 or similar.
+            ttyNr = 34816; 
+            tpgid = process.ControllingTty.ForegroundPgrp;
+        }
+
         return
-            $"{process.TGID} ({process.Comm}) R {process.PPID} {process.PGID} {process.SID} 0 0 0 0 0 0 0 0 0 0 0 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+            $"{process.TGID} ({process.Comm}) {stateChar} {process.PPID} {process.PGID} {process.SID} {ttyNr} {tpgid} 0 0 0 0 0 0 0 0 0 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
     }
 
     public static void Init(SyscallManager sm)

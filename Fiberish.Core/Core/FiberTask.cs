@@ -246,6 +246,25 @@ public class FiberTask
         }
     }
 
+    public bool IsSignalIgnoredOrBlocked(int sig)
+    {
+        if (sig < 1 || sig > 64) return false;
+        // SIGKILL(9) and SIGSTOP(19) cannot be caught, blocked, or ignored
+        if (sig == 9 || sig == 19) return false;
+
+        var mask = 1UL << (sig - 1);
+        lock (this)
+        {
+            if ((SignalMask & mask) != 0) return true; // Blocked
+            if (Process.SignalActions.TryGetValue(sig, out var action))
+            {
+                if (action.Handler == 1) // SIG_IGN
+                    return true;
+            }
+        }
+        return false;
+    }
+
     // Prepare stack frame for signal handler
     private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask)
     {
@@ -403,21 +422,39 @@ public class FiberTask
         Process.HasWaitableContinue = false;
         Process.StateChangeEvent.Set();
 
+        // Put the task in stopped state
+        ExecutionMode = TaskExecutionMode.Stopped;
+        Status = FiberTaskStatus.Waiting;
+
+        // Wake up parent's wait4
         var ppid = Process.PPID;
         if (ppid > 0)
         {
             var parentTask = CommonKernel.GetTask(ppid);
+            // Send SIGCHLD to parent
             parentTask?.PostSignal((int)Signal.SIGCHLD);
         }
     }
 
     private void ContinueBySignal()
     {
+        // Even if not fully stopped, we might need to clear pending stop signals
+        // Clear pending stop signals (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU)
+        var stopMask = (1UL << 18) | (1UL << 19) | (1UL << 20) | (1UL << 21);
+        lock (this)
+        {
+            PendingSignals &= ~stopMask;
+        }
+
         if (Process.State != ProcessState.Stopped) return;
+
         Process.State = ProcessState.Running;
         Process.HasWaitableContinue = true;
         Process.HasWaitableStop = false;
         Process.StateChangeEvent.Set();
+
+        // Restore execution mode
+        ExecutionMode = TaskExecutionMode.RunningGuest;
 
         var ppid = Process.PPID;
         if (ppid > 0)
@@ -425,6 +462,9 @@ public class FiberTask
             var parentTask = CommonKernel.GetTask(ppid);
             parentTask?.PostSignal((int)Signal.SIGCHLD);
         }
+
+        // Reschedule task
+        CommonKernel.Schedule(this);
     }
 
     private void SetupOldSigFrame(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)

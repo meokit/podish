@@ -166,6 +166,9 @@ public class TtyDiscipline
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
+        var bgCheck = CheckBackgroundJob(isRead: true);
+        if (bgCheck < 0) return bgCheck;
+
         _logger.LogInformation(
             "[TTY] Read: Called with buffer len={BufferLen}, flags={Flags}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             buffer.Length, flags, _inq.Count, _canonBuffer.Count);
@@ -191,7 +194,48 @@ public class TtyDiscipline
 
     public int Write(ReadOnlySpan<byte> buffer)
     {
+        var bgCheck = CheckBackgroundJob(isRead: false);
+        if (bgCheck < 0) return bgCheck;
+
         return OutputProcess(TtyEndpointKind.Stdout, buffer);
+    }
+
+    private int CheckBackgroundJob(bool isRead)
+    {
+        var scheduler = KernelScheduler.Current;
+        var task = scheduler?.CurrentTask;
+        if (task == null) return 0; // Not running in a context (e.g. tests)
+
+        var process = task.Process;
+        // If the process is not in the foreground process group of this TTY
+        if (ForegroundPgrp > 0 && process.PGID != ForegroundPgrp)
+        {
+            if (isRead)
+            {
+                // Background read: always send SIGTTIN
+                // Ignore if process is ignoring SIGTTIN or blocking it, or in orphaned pgrp (simplification: just send it)
+                if (!task.IsSignalIgnoredOrBlocked(21)) // SIGTTIN = 21
+                {
+                    _broadcaster.SignalProcessGroup(process.PGID, 21);
+                    return -(int)Errno.ERESTARTSYS; // Wait for signal to be handled
+                }
+                return -(int)Errno.EIO; // If ignored/blocked and orphaned, usually EIO
+            }
+            else
+            {
+                // Background write: send SIGTTOU only if TOSTOP is set
+                if ((_lflag & TOSTOP) != 0)
+                {
+                    if (!task.IsSignalIgnoredOrBlocked(22)) // SIGTTOU = 22
+                    {
+                        _broadcaster.SignalProcessGroup(process.PGID, 22);
+                        return -(int)Errno.ERESTARTSYS;
+                    }
+                }
+            }
+        }
+
+        return 0; // Allowed
     }
 
     public int GetAttr(byte[] termiosData)
