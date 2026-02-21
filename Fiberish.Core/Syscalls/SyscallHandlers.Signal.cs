@@ -131,9 +131,13 @@ public partial class SyscallManager
                     break;
                 case (int)SigProcMaskAction.SIG_UNBLOCK:
                     task.SignalMask &= ~set;
+                    // After unblocking, re-check if any pending signals became deliverable
+                    CheckAndTriggerPendingSignals(task);
                     break;
                 case (int)SigProcMaskAction.SIG_SETMASK:
                     task.SignalMask = set;
+                    // After changing mask, re-check if any pending signals became deliverable
+                    CheckAndTriggerPendingSignals(task);
                     break;
                 default:
                     return -(int)Errno.EINVAL;
@@ -141,6 +145,27 @@ public partial class SyscallManager
         }
 
         return 0;
+    }
+
+    private static void CheckAndTriggerPendingSignals(FiberTask task)
+    {
+        lock (task)
+        {
+            var unblocked = task.PendingSignals & ~task.SignalMask;
+            if (unblocked != 0)
+            {
+                // Find the first unblocked pending signal and mark as interrupting
+                // so the guest execution loop will pick it up after the syscall returns
+                for (int i = 1; i <= 64; i++)
+                {
+                    if ((unblocked & (1UL << (i - 1))) != 0)
+                    {
+                        task.WakeReason = WakeReason.Signal;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     private static async ValueTask<int> SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -339,4 +364,73 @@ public partial class SyscallManager
 
         return -(int)Errno.EINTR;
     }
+
+    private static async ValueTask<int> SysRtSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+
+        var pid = (int)a1;
+        var sig = (int)a2;
+        var uinfoPtr = a3;
+
+        if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+
+        var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
+
+        var kernel = task?.CommonKernel ?? KernelScheduler.Current!;
+        if (sig != 0 && !kernel.SignalProcessInfo(pid, sig, info)) return -(int)Errno.ESRCH;
+        return 0;
+    }
+
+    private static async ValueTask<int> SysRtTgSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var tgid = (int)a1;
+        var tid = (int)a2;
+        var sig = (int)a3;
+        var uinfoPtr = a4;
+
+        if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+
+        var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
+
+        var kernel = KernelScheduler.Current!;
+        var targetTask = kernel.GetTask(tid);
+        if (targetTask == null) return -(int)Errno.ESRCH;
+        if (targetTask.Process.TGID != tgid) return -(int)Errno.ESRCH;
+
+        if (sig != 0) targetTask.PostSignalInfo(info);
+        return 0;
+    }
+
+    private static SigInfo ReadSigInfo(Engine engine, uint ptr, int defaultSig)
+    {
+        if (ptr == 0) return new SigInfo { Signo = defaultSig, Code = 0 };
+
+        var buf = new byte[24];
+        if (!engine.CopyFromUser(ptr, buf))
+            return new SigInfo { Signo = defaultSig, Code = 0 };
+
+        var signo = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var errno = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        var code  = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
+        var pid   = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+        var uid   = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
+        var value = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(20, 4));
+
+        return new SigInfo
+        {
+            Signo = signo != 0 ? signo : defaultSig,
+            Errno = errno,
+            Code = code,
+            Pid = pid,
+            Uid = uid,
+            Value = (ulong)value
+        };
+    }
+#pragma warning restore CS1998
 }

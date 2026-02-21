@@ -184,6 +184,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.kill, SysKill);
         Register(X86SyscallNumbers.tkill, SysTkill);
         Register(X86SyscallNumbers.tgkill, SysTgkill);
+        Register(X86SyscallNumbers.rt_sigqueueinfo, SysRtSigQueueInfo);
+        Register(X86SyscallNumbers.rt_tgsigqueueinfo, SysRtTgSigQueueInfo);
         Register(X86SyscallNumbers.execve, SysExecve);
 
         Register(X86SyscallNumbers.select, SysSelect);
