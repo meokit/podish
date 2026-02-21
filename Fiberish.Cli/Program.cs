@@ -190,8 +190,9 @@ internal class Program
 
         try
         {
-            // 3. Spawn Process
-            var mainTask = Process.Spawn(exe, fullArgs, envs, rootfs, traceInstruction, trace, scheduler, tty);
+            // 3. Bootstrap runtime and first process
+            var runtime = KernelRuntime.Bootstrap(rootfs, trace, tty);
+            var mainTask = ProcessFactory.CreateInitProcess(runtime, exe, fullArgs, envs, scheduler, tty);
 
             Logger.LogInformation("Spawned Main Task {TID}", mainTask.TID);
 

@@ -35,6 +35,7 @@ public partial class SyscallManager
             if (task.TID == task.Process.TGID)
             {
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+                sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
                 task.Process.State = ProcessState.Zombie;
                 task.Process.ExitStatus = exitCode;
                 task.Process.ZombieEvent.Set();
@@ -66,6 +67,7 @@ public partial class SyscallManager
             }
 
             ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+            sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
             task.Process.State = ProcessState.Zombie;
             task.Process.ExitStatus = exitCode;
             task.Process.ZombieEvent.Set();

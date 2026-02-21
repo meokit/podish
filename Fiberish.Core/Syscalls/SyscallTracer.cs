@@ -316,6 +316,7 @@ public static class SyscallTracer
             X86SyscallNumbers.pkey_alloc => "pkey_alloc",
             X86SyscallNumbers.pkey_free => "pkey_free",
             X86SyscallNumbers.statx => "statx",
+            X86SyscallNumbers.ipc => "ipc",
             _ => $"syscall_{nr}"
         };
     }

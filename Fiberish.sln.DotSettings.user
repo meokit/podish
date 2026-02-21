@@ -8,5 +8,6 @@
   &lt;TestAncestor&gt;
     &lt;TestId&gt;xUnit::3FC2B15B-F193-4569-19BA-5D52F8F23E18::net8.0::Fiberish.Tests.Core.SleepTests&lt;/TestId&gt;
     &lt;TestId&gt;xUnit::3FC2B15B-F193-4569-19BA-5D52F8F23E18::net8.0::Fiberish.Tests.Core.KernelSchedulerTests&lt;/TestId&gt;
+    &lt;TestId&gt;xUnit::3FC2B15B-F193-4569-19BA-5D52F8F23E18::net8.0::Fiberish.Tests.SysVShm.SysVShmManagerTests&lt;/TestId&gt;
   &lt;/TestAncestor&gt;
 &lt;/SessionState&gt;</s:String></wpf:ResourceDictionary>

@@ -27,6 +27,7 @@ public partial class SyscallManager
         BrkBase = brk;
         Tty = tty;
         Futex = new FutexManager();
+        SysVShm = new SysVShmManager();
 
         RegisterEngine(engine);
         RegisterHandlers();
@@ -101,7 +102,7 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, uint brk,
+    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, SysVShmManager sysvShm, uint brk,
         uint brkBase,
         bool strace,
         Dentry root, Dentry cwd, Dentry procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock, TtyDiscipline? tty)
@@ -109,6 +110,7 @@ public partial class SyscallManager
         Mem = mem;
         FDs = fds;
         Futex = futex;
+        SysVShm = sysvShm;
         BrkAddr = brk;
         BrkBase = brkBase;
         Strace = strace;
@@ -140,6 +142,9 @@ public partial class SyscallManager
     public Dentry ProcessRoot { get; set; } = null!;
     public Dentry DevShmRoot { get; set; } = null!;
     public SuperBlock MemfdSuperBlock { get; set; } = null!;
+
+    // System V Shared Memory (Global IPC namespace)
+    public SysVShmManager SysVShm { get; }
 
     // File Descriptors (Shared if CLONE_FILES)
     public Dictionary<int, VFS.LinuxFile> FDs { get; } = [];
@@ -293,7 +298,7 @@ public partial class SyscallManager
                     { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
         }
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, BrkAddr, BrkBase, Strace, Root,
+        var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty)
         {

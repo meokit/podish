@@ -93,6 +93,24 @@ public class VMAManager
         return newMM;
     }
 
+    /// <summary>
+    /// Add a pre-constructed VMA directly. Used by SysV SHM subsystem.
+    /// </summary>
+    internal void AddVmaInternal(VMA vma)
+    {
+        // Insert sorted by start address
+        var inserted = false;
+        for (var i = 0; i < _vmas.Count; i++)
+            if (vma.End <= _vmas[i].Start)
+            {
+                _vmas.Insert(i, vma);
+                inserted = true;
+                break;
+            }
+
+        if (!inserted) _vmas.Add(vma);
+    }
+
     public void Munmap(uint addr, uint length, Engine engine)
     {
         if (length == 0) return;

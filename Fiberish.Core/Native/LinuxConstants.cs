@@ -38,8 +38,9 @@ public enum Errno
     EDOM = 33, /* Math argument out of domain of func */
     ERANGE = 34, /* Math result not representable */
     ENOSYS = 38, /* Invalid system call number */
-    ELOOP = 40, /* Too many levels of symbolic links */
     ENOTEMPTY = 39, /* Directory not empty */
+    ELOOP = 40, /* Too many levels of symbolic links */
+    EIDRM = 43, /* Identifier removed */
     ERESTARTSYS = 512
 }
 
@@ -244,4 +245,48 @@ public static class LinuxConstants
     public const uint TIOCSPGRP = 0x5410;
     public const uint TIOCSCTTY = 0x540E;
     public const uint FIONREAD = 0x541B;
+
+    // IPC commands for sys_ipc multiplexer (from linux/ipc.h)
+    public const int SHMAT = 21;
+    public const int SHMDT = 22;
+    public const int SHMGET = 23;
+    public const int SHMCTL = 24;
+
+    // IPC flags (from linux/ipc.h) - these are octal values in Linux
+    public const int IPC_CREAT = 0x200; // 01000 octal = create if key is nonexistent
+    public const int IPC_EXCL = 0x400; // 02000 octal = fail if key exists
+    public const int IPC_NOWAIT = 0x800; // 04000 octal = return error on wait
+    public const int IPC_PRIVATE = 0; // private key
+
+    // shmctl commands (from linux/ipc.h)
+    public const int IPC_RMID = 0; // remove resource
+    public const int IPC_SET = 1; // set ipc_perm options
+    public const int IPC_STAT = 2; // get ipc_perm options
+    public const int IPC_INFO = 3; // see ipcs
+
+    // IPC_64 flag for shmctl (from linux/ipc.h)
+    // On i386, glibc uses IPC_64 | cmd to indicate 64-bit ipc_perm layout
+    public const int IPC_64 = 0x0100;
+
+    // shmctl commands (from linux/shm.h)
+    public const int SHM_LOCK = 11;
+    public const int SHM_UNLOCK = 12;
+    public const int SHM_STAT = 13;
+    public const int SHM_INFO = 14;
+    public const int SHM_STAT_ANY = 15;
+
+    // shmat flags (from linux/shm.h)
+    public const int SHM_RDONLY = 010000; // read-only access
+    public const int SHM_RND = 020000; // round attach address to SHMLBA
+    public const int SHM_REMAP = 040000; // take-over region on attach
+    public const int SHM_EXEC = 0100000; // execution access
+
+    // shmget flags (from linux/shm.h)
+    public const int SHM_R = 0400; // or S_IRUGO
+    public const int SHM_W = 0200; // or S_IWUGO
+    public const int SHM_HUGETLB = 04000; // segment will use huge TLB pages
+    public const int SHM_NORESERVE = 010000; // don't check for reservations
+
+    // IPC version flags
+    public const int IPC_OLD = 0;
 }

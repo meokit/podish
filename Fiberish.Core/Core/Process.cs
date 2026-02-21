@@ -1,4 +1,3 @@
-using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -177,51 +176,5 @@ public class Process
 
         var cmdline = string.Join('\0', args) + '\0';
         CommandLineRaw = Encoding.UTF8.GetBytes(cmdline);
-    }
-
-    public static FiberTask Spawn(string exePath, string[] args, string[] envs, string rootRes, bool traceInstructions,
-        bool strace, KernelScheduler scheduler, TtyDiscipline? tty = null)
-    {
-        // 1. Init System Components
-        var engine = new Engine();
-        var mm = new VMAManager();
-
-        // 2. Init Syscalls
-        var sys = new SyscallManager(engine, mm, 0, rootRes, tty)
-        {
-            Strace = strace
-        };
-        ProcFsManager.Init(sys);
-
-        // 3. Create Process
-        var proc = new Process(FiberTask.NextTID(), mm, sys);
-
-        proc.PGID = proc.TGID; // Process Group Leader
-        proc.SID = proc.TGID; // Session Leader
-
-        if (tty != null)
-        {
-            // Initial process is the session leader and has the TTY as controlling terminal
-            tty.SessionId = proc.SID;
-            tty.ForegroundPgrp = proc.PGID;
-        }
-
-        scheduler.RegisterProcess(proc);
-
-        // 4. Create Main Task
-        var mainTask = new FiberTask(proc.TGID, proc, engine, scheduler);
-
-        // 5. Register with Scheduler and ProcFs
-        // FiberTask ctor already registers with KernelScheduler
-        // ProcFsManager.OnProcessStart(sys, proc.TGID);
-
-        // 6. Connect Engine Context
-        engine.Owner = mainTask;
-
-        // 7. Load Executable
-        proc.LoadExecutable(exePath, args, envs);
-        ProcFsManager.OnProcessStart(sys, proc);
-
-        return mainTask;
     }
 }

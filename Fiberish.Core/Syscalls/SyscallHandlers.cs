@@ -22,7 +22,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.chmod, SysChmod);
         Register(X86SyscallNumbers.chown, SysChown);
         Register(X86SyscallNumbers.lseek, SysLseek);
-        Register(140, SysLlseek);
+        Register(X86SyscallNumbers._llseek, SysLlseek);
         Register(X86SyscallNumbers.getpid, SysGetPid);
         Register(X86SyscallNumbers.mount, SysMount);
         Register(X86SyscallNumbers.umount, SysUmount);
@@ -158,7 +158,10 @@ public partial class SyscallManager
         Register(X86SyscallNumbers._newselect, SysNewSelect);
         Register(X86SyscallNumbers.poll, SysPoll);
         Register(X86SyscallNumbers.pipe, SysPipe);
-        Register(239, SysSendfile64);
+        Register(X86SyscallNumbers.sendfile64, SysSendfile64);
         Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
+
+        // System V IPC
+        Register(X86SyscallNumbers.ipc, SysIpc);
     }
 }

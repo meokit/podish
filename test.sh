@@ -19,10 +19,10 @@ fi
 
 # 3. Build C# Project (Fiberish)
 echo ">>> Building Fiberish..."
-dotnet build Fiberish.App/Fiberish.App.csproj
+dotnet build Fiberish.Cli/Fiberish.Cli.csproj
 
 # Copy dylib to output
-cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net8.0/
+cp build/bin/libfibercpu.dylib Fiberish.Cli/bin/Debug/net8.0/
 
 # 4. Build Linux Test Cases (Static x86 binaries)
 echo ">>> Building Linux test cases..."
@@ -61,7 +61,7 @@ run_test() {
     # Dotnet run --no-build will propagate the exit code of our Main method.
     
     # Define variables for clarity in the new logic
-    local EMULATOR="dotnet run --project Fiberish.App/Fiberish.App.csproj --no-build --"
+    local EMULATOR="dotnet run --project Fiberish.Cli/Fiberish.Cli.csproj --no-build --"
     local TEST_BIN="$bin"
     local TEST_ARGS="$args"
     local LOG_FILE="/tmp/emu_test_cs.log" # Using the original log file name
