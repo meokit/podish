@@ -105,13 +105,20 @@ public class Process
     public List<int> Children { get; } = []; // Child Process IDs
     public ProcessState State { get; set; } = ProcessState.Running;
     public int ExitStatus { get; set; } = 0;
+    public bool ExitedBySignal { get; set; }
+    public int TermSignal { get; set; }
+    public bool CoreDumped { get; set; }
+    public bool HasWaitableStop { get; set; }
+    public int StopSignal { get; set; }
+    public bool HasWaitableContinue { get; set; }
     public string ExecutablePath { get; private set; } = string.Empty;
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
     public string Comm { get; private set; } = "process";
 
-    // Use our new single-threaded compatible synchronization primitive
-    public AsyncWaitQueue ZombieEvent { get; } = new();
+    // Event signaled when process state changes (exit, stop, continue)
+    // Used by parent's wait4() to avoid busy-polling
+    public AsyncWaitQueue StateChangeEvent { get; } = new();
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 

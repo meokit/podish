@@ -17,6 +17,15 @@ public enum FiberTaskStatus
 
 public class FiberTask
 {
+    private enum DefaultSignalAction
+    {
+        Ignore,
+        Terminate,
+        Core,
+        Stop,
+        Continue
+    }
+
     private static int _tidCounter = 1000;
 
     public uint SyscallArg1;
@@ -143,10 +152,16 @@ public class FiberTask
         if (!isBlocked)
         {
             InterruptingSignal = sig;
+            WasInterrupted = true;
         }
         else
         {
             Logger.LogDebug("[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.", sig, SignalMask);
+        }
+
+        if (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped)
+        {
+            CommonKernel.Schedule(this);
         }
     }
 
@@ -225,16 +240,7 @@ public class FiberTask
 
             if (action.Handler == 0) // SIG_DFL
             {
-                if (IsFatalSignal(sig))
-                {
-                    Logger.LogInformation("[DeliverSignal] Signal {Sig} is fatal (SIG_DFL), terminating task", sig);
-                    TerminateBySignal(sig);
-                }
-                else
-                {
-                    Logger.LogInformation("[DeliverSignal] Signal {Sig} default action is ignore/continue", sig);
-                }
-
+                ApplyDefaultSignalAction(sig, GetDefaultSignalAction(sig));
                 return;
             }
 
@@ -284,11 +290,7 @@ public class FiberTask
         {
             // No action registered = SIG_DFL
             Logger.LogInformation("[DeliverSignal] Signal {Sig} has no registered action (SIG_DFL)", sig);
-            if (IsFatalSignal(sig))
-            {
-                Logger.LogInformation("[DeliverSignal] Signal {Sig} is fatal (no handler), terminating task", sig);
-                TerminateBySignal(sig);
-            }
+            ApplyDefaultSignalAction(sig, GetDefaultSignalAction(sig));
         }
     }
 
@@ -297,18 +299,48 @@ public class FiberTask
     // Note: I renamed HandleSignal to DeliverSignal and made it private.
     // I added Signal(sig) as the public API.
 
-    private static bool IsFatalSignal(int sig)
+    private static DefaultSignalAction GetDefaultSignalAction(int sig)
     {
-        // Signals that terminate the process by default
-        return sig == (int)Signal.SIGKILL ||
-               sig == (int)Signal.SIGTERM ||
-               sig == (int)Signal.SIGINT ||
-               sig == (int)Signal.SIGQUIT ||
-               sig == (int)Signal.SIGABRT ||
-               sig == (int)Signal.SIGSEGV;
+        return sig switch
+        {
+            (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH => DefaultSignalAction.Ignore,
+            (int)Signal.SIGSTOP or (int)Signal.SIGTSTP or (int)Signal.SIGTTIN or (int)Signal.SIGTTOU => DefaultSignalAction.Stop,
+            (int)Signal.SIGCONT => DefaultSignalAction.Continue,
+            (int)Signal.SIGQUIT or (int)Signal.SIGILL or (int)Signal.SIGTRAP or
+                (int)Signal.SIGABRT or (int)Signal.SIGBUS or (int)Signal.SIGFPE or
+                (int)Signal.SIGSEGV or (int)Signal.SIGXCPU or (int)Signal.SIGXFSZ or
+                (int)Signal.SIGSYS => DefaultSignalAction.Core,
+            _ => DefaultSignalAction.Terminate
+        };
     }
 
-    private void TerminateBySignal(int sig)
+    private void ApplyDefaultSignalAction(int sig, DefaultSignalAction action)
+    {
+        switch (action)
+        {
+            case DefaultSignalAction.Ignore:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: ignore", sig);
+                break;
+            case DefaultSignalAction.Terminate:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: terminate", sig);
+                TerminateBySignal(sig, coreDumped: false);
+                break;
+            case DefaultSignalAction.Core:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: core/terminate", sig);
+                TerminateBySignal(sig, coreDumped: true);
+                break;
+            case DefaultSignalAction.Stop:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: stop", sig);
+                StopBySignal(sig);
+                break;
+            case DefaultSignalAction.Continue:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: continue", sig);
+                ContinueBySignal();
+                break;
+        }
+    }
+
+    private void TerminateBySignal(int sig, bool coreDumped)
     {
         if (Exited) return;
 
@@ -329,7 +361,46 @@ public class FiberTask
             ProcFsManager.OnProcessExit(Process.Syscalls, Process.TGID);
             Process.State = ProcessState.Zombie;
             Process.ExitStatus = ExitStatus;
-            Process.ZombieEvent.Set();
+            Process.ExitedBySignal = true;
+            Process.TermSignal = sig;
+            Process.CoreDumped = coreDumped;
+            Process.HasWaitableStop = false;
+            Process.HasWaitableContinue = false;
+            Process.StateChangeEvent.Set();
+        }
+    }
+
+    private void StopBySignal(int sig)
+    {
+        if (Process.State == ProcessState.Zombie || Process.State == ProcessState.Stopped) return;
+
+        Process.State = ProcessState.Stopped;
+        Process.HasWaitableStop = true;
+        Process.StopSignal = sig;
+        Process.HasWaitableContinue = false;
+        Process.StateChangeEvent.Set();
+
+        var ppid = Process.PPID;
+        if (ppid > 0)
+        {
+            var parentTask = CommonKernel.GetTask(ppid);
+            parentTask?.PostSignal((int)Signal.SIGCHLD);
+        }
+    }
+
+    private void ContinueBySignal()
+    {
+        if (Process.State != ProcessState.Stopped) return;
+        Process.State = ProcessState.Running;
+        Process.HasWaitableContinue = true;
+        Process.HasWaitableStop = false;
+        Process.StateChangeEvent.Set();
+
+        var ppid = Process.PPID;
+        if (ppid > 0)
+        {
+            var parentTask = CommonKernel.GetTask(ppid);
+            parentTask?.PostSignal((int)Signal.SIGCHLD);
         }
     }
 
@@ -532,6 +603,22 @@ public class FiberTask
                 return;
             }
 
+            if (Process.State == ProcessState.Stopped)
+            {
+                Status = FiberTaskStatus.Waiting;
+                return;
+            }
+
+            // If an async syscall is still pending, never re-enter guest CPU execution.
+            // Resume only through HandleAsyncSyscall completion.
+            if (PendingSyscall != null)
+            {
+                Status = FiberTaskStatus.Waiting;
+                if (!_handlingAsyncSyscall)
+                    HandleAsyncSyscall();
+                return;
+            }
+
             // 1. Run CPU execution
             if (Process.Syscalls?.Strace == true) Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
@@ -581,7 +668,7 @@ public class FiberTask
                     CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
                 Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
 
-                TerminateBySignal((int)Signal.SIGSEGV);
+                TerminateBySignal((int)Signal.SIGSEGV, coreDumped: true);
                 Status = FiberTaskStatus.Terminated;
             }
             else
@@ -740,12 +827,17 @@ public class FiberTask
                 var sig = InterruptingSignal;
                 InterruptingSignal = null; // Clear after reading
                 Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
+                var defaultIgnored = false;
                 if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
                 {
                     var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
                     Logger.LogInformation(
                         "[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
                         sig.Value, action.Flags, hasRestart);
+                    if (action.Handler == 1) // SIG_IGN
+                    {
+                        defaultIgnored = true;
+                    }
                     if (hasRestart)
                     {
                         // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
@@ -760,6 +852,22 @@ public class FiberTask
                         CommonKernel.Schedule(this);
                         return;
                     }
+                }
+                else if (sig.HasValue)
+                {
+                    defaultIgnored = sig.Value == (int)Signal.SIGCHLD ||
+                                     sig.Value == (int)Signal.SIGURG ||
+                                     sig.Value == (int)Signal.SIGWINCH;
+                }
+
+                if (defaultIgnored)
+                {
+                    Logger.LogInformation(
+                        "[HandleAsyncSyscall] Signal {Sig} is ignored by default; restarting syscall",
+                        sig);
+                    CPU.Eip = SyscallEip;
+                    CommonKernel.Schedule(this);
+                    return;
                 }
 
                 // No SA_RESTART or no handler: return -EINTR

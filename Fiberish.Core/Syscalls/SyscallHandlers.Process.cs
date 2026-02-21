@@ -38,7 +38,12 @@ public partial class SyscallManager
                 sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
                 task.Process.State = ProcessState.Zombie;
                 task.Process.ExitStatus = exitCode;
-                task.Process.ZombieEvent.Set();
+                task.Process.ExitedBySignal = false;
+                task.Process.TermSignal = 0;
+                task.Process.CoreDumped = false;
+                task.Process.HasWaitableStop = false;
+                task.Process.HasWaitableContinue = false;
+                task.Process.StateChangeEvent.Set();
             }
         }
 
@@ -70,7 +75,12 @@ public partial class SyscallManager
             sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
             task.Process.State = ProcessState.Zombie;
             task.Process.ExitStatus = exitCode;
-            task.Process.ZombieEvent.Set();
+            task.Process.ExitedBySignal = false;
+            task.Process.TermSignal = 0;
+            task.Process.CoreDumped = false;
+            task.Process.HasWaitableStop = false;
+            task.Process.HasWaitableContinue = false;
+            task.Process.StateChangeEvent.Set();
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, true);
@@ -121,6 +131,9 @@ public partial class SyscallManager
         var pidVal = (int)pid;
         var optVal = (int)options;
         var hang = (optVal & 1) != 0; // WNOHANG
+        var wantStopped = (optVal & 2) != 0; // WUNTRACED/WSTOPPED
+        var wantContinued = (optVal & 8) != 0; // WCONTINUED
+        var noReap = (optVal & 0x01000000) != 0; // WNOWAIT - report but don't reap
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.ECHILD;
 
@@ -132,8 +145,6 @@ public partial class SyscallManager
         {
             // Scan children
             var hasChildren = false;
-
-            List<Process> candidates = [];
 
             // Iterate over copy to allow modification if needed? No, removing from dict is what matters.
             // currentProc.Children is List<int>.
@@ -159,24 +170,48 @@ public partial class SyscallManager
                         if (statusPtr != 0)
                         {
                             var stBuf = new byte[4];
-                            // Status word: bits 8-15 = exit status, bits 0-6 = signal (0 if exited)
-                            // If signaled: bits 0-6 = signal, bit 7 = core dump
-                            // We assume normal exit for now (childProc.ExitStatus is the code)
-                            // TODO: If childProc was killed by signal, we need to store that differently
-                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, (childProc.ExitStatus << 8) & 0xFF00);
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, EncodeWaitExitStatus(childProc));
                             if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
 
-                        // Reap
-                        currentProc.Children.Remove(childPid);
-                        // Also remove from global table? Or let it be garbage collected if no other refs?
-                        // If we remove from global table, PID can be reused properly (if allocator reuses).
-                        // Current allocator is monotonic increment.
+                        // Reap only if WNOWAIT is not set
+                        if (!noReap)
+                        {
+                            currentProc.Children.Remove(childPid);
+                            // Also remove from global table? Or let it be garbage collected if no other refs?
+                            // If we remove from global table, PID can be reused properly (if allocator reuses).
+                            // Current allocator is monotonic increment.
+                        }
 
                         return childPid;
                     }
+                    
+                    if (wantStopped && childProc.State == ProcessState.Stopped && childProc.HasWaitableStop)
+                    {
+                        if (statusPtr != 0)
+                        {
+                            var stBuf = new byte[4];
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, EncodeWaitStoppedStatus(childProc.StopSignal));
+                            if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
+                        }
 
-                    candidates.Add(childProc);
+                        childProc.HasWaitableStop = false;
+                        return childPid;
+                    }
+
+                    if (wantContinued && childProc.HasWaitableContinue)
+                    {
+                        if (statusPtr != 0)
+                        {
+                            var stBuf = new byte[4];
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, 0xffff);
+                            if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
+                        }
+
+                        childProc.HasWaitableContinue = false;
+                        return childPid;
+                    }
+
                 }
             }
 
@@ -184,26 +219,14 @@ public partial class SyscallManager
 
             if (hang) return 0;
 
-            // Block until ONE of candidates becomes zombie
-            // Use TaskCompletionSource and register on all candidates
-            var tcs = new TaskCompletionSource<bool>();
-
-            void continuation()
+            await new ChildStateAwaitable(currentProc, pidVal);
+            if (fiberTask.HasUnblockedPendingSignal())
             {
-                tcs.TrySetResult(true);
-            }
-
-            foreach (var c in candidates) c.ZombieEvent.Register(continuation);
-
-            fiberTask.RegisterBlockingSyscall(() =>
-            {
-                tcs.TrySetResult(false); // Interrupted
-            });
-
-            var success = await tcs.Task;
-            if (!success)
-                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
+                // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
+                // and let it re-scan children, not force EINTR.
+                if (!HasPendingInterruptingSignal(fiberTask)) continue;
                 return -(int)Errno.ERESTARTSYS;
+            }
         }
     }
 
@@ -228,12 +251,13 @@ public partial class SyscallManager
 
         var wnohang = ((int)options & 1) != 0;
         var wexited = ((int)options & 4) != 0;
-        // Other flags ignored for now
+        var wstopped = ((int)options & 2) != 0;
+        var wcontinued = ((int)options & 8) != 0;
+        var wnowait = ((int)options & 0x01000000) != 0;
         if (options == 0) wexited = true; // Default?
 
         while (true)
         {
-            List<Process> candidates = [];
             var hasChildren = false;
 
             foreach (var childPid in currentProc.Children)
@@ -254,20 +278,11 @@ public partial class SyscallManager
                         // Found
                         if (infop != 0)
                         {
-                            var info = new SigInfo
-                            {
-                                si_signo = 17, // SIGCHLD
-                                si_pid = childProc.TGID,
-                                si_status = childProc.ExitStatus,
-                                si_code = 1 // CLD_EXITED
-                            };
+                            var info = BuildSigchldInfoForExit(childProc);
 
                             if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
                         }
 
-                        // Waitid keeps child unless WNOWAIT? 
-                        // "waitid()... If WNOWAIT is set... leave the child in a waitable state"
-                        var wnowait = ((int)options & 0x01000000) != 0;
                         if (!wnowait)
                             lock (currentProc.Children)
                             {
@@ -276,32 +291,136 @@ public partial class SyscallManager
 
                         return 0; // Success
                     }
+                    
+                    if (wstopped && childProc.State == ProcessState.Stopped && childProc.HasWaitableStop)
+                    {
+                        if (infop != 0)
+                        {
+                            var info = new SigInfo
+                            {
+                                si_signo = (int)Signal.SIGCHLD,
+                                si_pid = childProc.TGID,
+                                si_status = childProc.StopSignal,
+                                si_code = 5 // CLD_STOPPED
+                            };
+                            if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
+                        }
 
-                    candidates.Add(childProc);
+                        if (!wnowait) childProc.HasWaitableStop = false;
+                        return 0;
+                    }
+
+                    if (wcontinued && childProc.HasWaitableContinue)
+                    {
+                        if (infop != 0)
+                        {
+                            var info = new SigInfo
+                            {
+                                si_signo = (int)Signal.SIGCHLD,
+                                si_pid = childProc.TGID,
+                                si_status = (int)Signal.SIGCONT,
+                                si_code = 6 // CLD_CONTINUED
+                            };
+                            if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
+                        }
+
+                        if (!wnowait) childProc.HasWaitableContinue = false;
+                        return 0;
+                    }
+
                 }
             }
 
             if (!hasChildren) return -(int)Errno.ECHILD;
             if (wnohang) return 0;
 
-            // Block
-            var tcs = new TaskCompletionSource<bool>();
-
-            void continuation()
+            await new ChildStateAwaitable(currentProc, (int)id);
+            if (fiberTask.HasUnblockedPendingSignal())
             {
-                tcs.TrySetResult(true);
+                // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
+                // and let it re-scan children, not force EINTR.
+                if (!HasPendingInterruptingSignal(fiberTask)) continue;
+                return -(int)Errno.ERESTARTSYS;
+            }
+        }
+    }
+
+    private static bool HasPendingInterruptingSignal(FiberTask task)
+    {
+        lock (task)
+        {
+            var pending = task.PendingSignals;
+            var unblocked = pending & ~task.SignalMask;
+
+            // SIGKILL/SIGSTOP are unmaskable.
+            var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
+            unblocked |= pending & unmaskable;
+
+            if (unblocked == 0) return false;
+
+            for (var sig = 1; sig <= 64; sig++)
+            {
+                var mask = 1UL << (sig - 1);
+                if ((unblocked & mask) == 0) continue;
+
+                if (task.Process.SignalActions.TryGetValue(sig, out var action))
+                {
+                    if (action.Handler == 1) continue; // SIG_IGN
+                    if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
+                    return true;
+                }
+
+                if (!IsDefaultIgnoredSignal(sig)) return true;
             }
 
-            foreach (var c in candidates) c.ZombieEvent.Register(continuation);
-
-            fiberTask.RegisterBlockingSyscall(() => { tcs.TrySetResult(false); });
-
-            var success = await tcs.Task;
-            if (!success)
-                // Return -ERESTARTSYS so HandleAsyncSyscall can handle SA_RESTART
-                return -(int)Errno.ERESTARTSYS;
-            
+            return false;
         }
+    }
+
+    private static bool IsDefaultIgnoredSignal(int sig)
+    {
+        return sig == (int)Signal.SIGCHLD ||
+               sig == (int)Signal.SIGURG ||
+               sig == (int)Signal.SIGWINCH;
+    }
+
+    private static int EncodeWaitExitStatus(Process childProc)
+    {
+        if (childProc.ExitedBySignal)
+        {
+            var status = childProc.TermSignal & 0x7f;
+            if (childProc.CoreDumped) status |= 0x80;
+            return status;
+        }
+
+        return (childProc.ExitStatus & 0xff) << 8;
+    }
+
+    private static int EncodeWaitStoppedStatus(int stopSignal)
+    {
+        return 0x7f | ((stopSignal & 0xff) << 8);
+    }
+
+    private static SigInfo BuildSigchldInfoForExit(Process childProc)
+    {
+        if (!childProc.ExitedBySignal)
+        {
+            return new SigInfo
+            {
+                si_signo = (int)Signal.SIGCHLD,
+                si_pid = childProc.TGID,
+                si_status = childProc.ExitStatus,
+                si_code = 1 // CLD_EXITED
+            };
+        }
+
+        return new SigInfo
+        {
+            si_signo = (int)Signal.SIGCHLD,
+            si_pid = childProc.TGID,
+            si_status = childProc.TermSignal,
+            si_code = childProc.CoreDumped ? 3 : 2 // CLD_DUMPED / CLD_KILLED
+        };
     }
 
     private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)

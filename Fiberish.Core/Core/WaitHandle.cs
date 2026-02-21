@@ -158,3 +158,110 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
         }
     }
 }
+/// <summary>
+///     Awaitable for waiting on child process state changes.
+///     Used by wait4() to avoid busy-polling.
+/// </summary>
+public readonly struct ChildStateAwaitable
+{
+    private readonly Process _parent;
+    private readonly int _targetPid; // -1=any, 0=same pgid, >0=specific, <-1=pgid
+    private readonly KernelScheduler _scheduler;
+    private readonly FiberTask _task;
+
+    public ChildStateAwaitable(Process parent, int targetPid)
+    {
+        _parent = parent;
+        _targetPid = targetPid;
+        _scheduler = KernelScheduler.Current ?? throw new InvalidOperationException("No active KernelScheduler");
+        _task = _scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
+    }
+
+    public ChildStateAwaiter GetAwaiter()
+    {
+        return new ChildStateAwaiter(_parent, _targetPid, _scheduler, _task);
+    }
+
+    public readonly struct ChildStateAwaiter : INotifyCompletion
+    {
+        private readonly Process _parent;
+        private readonly int _targetPid;
+        private readonly KernelScheduler _scheduler;
+        private readonly FiberTask _task;
+
+        public ChildStateAwaiter(Process parent, int targetPid, KernelScheduler scheduler, FiberTask task)
+        {
+            _parent = parent;
+            _targetPid = targetPid;
+            _scheduler = scheduler;
+            _task = task;
+        }
+
+        public bool IsCompleted
+        {
+            get
+            {
+                // Check if any matching child already has a waitable state
+                foreach (var childPid in _parent.Children)
+                {
+                    var childProc = _scheduler.GetProcess(childPid);
+                    if (childProc == null) continue;
+                    if (!MatchesTarget(childPid, childProc)) continue;
+                    if (childProc.State == ProcessState.Zombie ||
+                        childProc.State == ProcessState.Stopped ||
+                        childProc.HasWaitableContinue)
+                        return true;
+                }
+                return false;
+            }
+        }
+
+        public void OnCompleted(Action continuation)
+        {
+            // Register on all matching children's StateChangeEvent queues
+            // Only register on events that are NOT yet signaled to avoid duplicate scheduling
+            var runOnce = new RunOnceAction(continuation);
+            var registered = false;
+
+            foreach (var childPid in _parent.Children)
+            {
+                var childProc = _scheduler.GetProcess(childPid);
+                if (childProc == null) continue;
+                if (!MatchesTarget(childPid, childProc)) continue;
+
+                // Skip if already signaled - IsCompleted check should have caught this
+                // but we check again to avoid duplicate scheduling
+                if (childProc.StateChangeEvent.IsSignaled) continue;
+
+                childProc.StateChangeEvent.Register(runOnce.Invoke, _task);
+                registered = true;
+            }
+
+            // If no registrations happened (all events already signaled), schedule immediately
+            if (!registered) _scheduler.Schedule(continuation, _task);
+        }
+
+        public void GetResult()
+        {
+            // Just completion notification, no result
+        }
+
+        private bool MatchesTarget(int childPid, Process childProc)
+        {
+            if (_targetPid == -1) return true;
+            if (_targetPid > 0) return childPid == _targetPid;
+            if (_targetPid == 0) return childProc.PGID == _parent.PGID;
+            return childProc.PGID == -_targetPid;
+        }
+
+        private class RunOnceAction(Action action)
+        {
+            private int _called;
+
+            public void Invoke()
+            {
+                if (Interlocked.Exchange(ref _called, 1) == 0) action();
+            }
+        }
+    }
+}

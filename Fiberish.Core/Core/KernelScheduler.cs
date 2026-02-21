@@ -200,6 +200,11 @@ public class KernelScheduler
                 // 2. Run Task
                 if (TryDequeue(out var task) && task != null)
                 {
+                    // Stale queue entry: task may have transitioned to Waiting/Terminated
+                    // after it was enqueued (e.g., async syscall path). Skip safely.
+                    if (task.Status != FiberTaskStatus.Ready)
+                        continue;
+
                     task.Status = FiberTaskStatus.Running;
 
                     // Execute a slice
