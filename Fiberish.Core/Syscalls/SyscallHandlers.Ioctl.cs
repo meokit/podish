@@ -1,6 +1,4 @@
-using Fiberish.Core;
 using Fiberish.Native;
-using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -18,7 +16,7 @@ public partial class SyscallManager
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
         var inode = file.Dentry.Inode;
         if (inode != null)
-            return inode.Ioctl(request, arg, sm.Engine);
+            return inode.Ioctl(file, request, arg, sm.Engine);
 
         return -(int)Errno.ENOTTY;
     }

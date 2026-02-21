@@ -11,11 +11,6 @@ public class ConsoleInode : Inode
     private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
 
-    /// <summary>
-    ///     Indicates whether this inode is backed by a TTY discipline.
-    /// </summary>
-    public bool IsTty => _discipline != null;
-
     public ConsoleInode(SuperBlock sb, bool isInput, TtyDiscipline? discipline = null)
     {
         SuperBlock = sb;
@@ -25,6 +20,11 @@ public class ConsoleInode : Inode
         Ino = 1; // Dummy
         _discipline = discipline;
     }
+
+    /// <summary>
+    ///     Indicates whether this inode is backed by a TTY discipline.
+    /// </summary>
+    public bool IsTty => _discipline != null;
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
@@ -127,7 +127,7 @@ public class ConsoleInode : Inode
         return false;
     }
 
-    public override int Ioctl(uint request, uint arg, Engine engine)
+    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
         // Delegate to TTY discipline if available
         if (_discipline != null)

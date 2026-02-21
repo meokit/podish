@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -97,6 +98,12 @@ public abstract class Inode
     public DateTime MTime { get; set; }
     public DateTime ATime { get; set; }
     public DateTime CTime { get; set; }
+
+    /// <summary>
+    ///     Device number (rdev) for character/block devices.
+    ///     Encoded as (major << 8) | minor for compatibility.
+    /// </summary>
+    public uint Rdev { get; set; }
 
     public SuperBlock SuperBlock { get; set; } = null!;
 
@@ -229,7 +236,7 @@ public abstract class Inode
     /// <summary>
     ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.
     /// </summary>
-    public virtual int Ioctl(uint request, uint arg, Core.Engine engine)
+    public virtual int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
         return -(int)Errno.ENOTTY;
     }

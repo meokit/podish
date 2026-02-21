@@ -246,6 +246,11 @@ public static class LinuxConstants
     public const uint TIOCSCTTY = 0x540E;
     public const uint FIONREAD = 0x541B;
 
+    // PTY ioctls (from linux/tty.h)
+    public const uint TIOCGPTN = 0x80045430; // Get PTY number
+    public const uint TIOCSPTLCK = 0x40045431; // Lock/unlock PTY
+    public const uint TIOCGPTLCK = 0x80045432; // Get PTY lock status
+
     // IPC commands for sys_ipc multiplexer (from linux/ipc.h)
     public const int SHMAT = 21;
     public const int SHMDT = 22;

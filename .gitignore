@@ -29,3 +29,4 @@ benchmark/coremark/
 ia32_test
 tests/test_safe_access
 Fiberish.X86/build_native
+*.DotSettings.user

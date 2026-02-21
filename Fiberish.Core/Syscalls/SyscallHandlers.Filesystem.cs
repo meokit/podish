@@ -774,6 +774,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), uid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), gid);
 
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(32), inode.Rdev); // st_rdev
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(44), (ulong)size);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(52), 4096);
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(56), (ulong)((size + 511) / 512));
@@ -804,7 +805,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), 1); // nlink
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12), (ushort)uid);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(14), (ushort)gid);
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), 0); // st_rdev
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), (ushort)inode.Rdev); // st_rdev
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), (uint)size);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), 4096); // blksize
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), (uint)((size + 511) / 512));
@@ -851,8 +852,9 @@ public partial class SyscallManager
         writeTime(0x60, inode.CTime);
         writeTime(0x70, inode.MTime);
 
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x80), 0); // rdev_major
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x84), 0); // rdev_minor
+        // rdev is encoded as (major << 8) | minor, decode for statx
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x80), (inode.Rdev >> 8) & 0xFF); // rdev_major
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x84), inode.Rdev & 0xFF); // rdev_minor
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), 0x8); // dev_major (faked)
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), 0x0); // dev_minor (faked)
 
@@ -867,7 +869,7 @@ public partial class SyscallManager
             "tmpfs" => 0x01021994,
             "devtmpfs" => 0x01021994,
             "proc" => 0x00009FA0,
-            "overlay" => unchecked((int)0x794C7630),
+            "overlay" => unchecked(0x794C7630),
             "hostfs" => 0x0000EF53,
             _ => 0x0000EF53
         };
@@ -886,11 +888,11 @@ public partial class SyscallManager
         var buf = new byte[64];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0), GetFsMagic(dentry));
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4), blockSize);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8), (uint)totalBlocks);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)freeBlocks);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), (uint)freeBlocks);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), (uint)totalFiles);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), (uint)freeFiles);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8), totalBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), freeBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), freeBlocks);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), totalFiles);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), freeFiles);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(28), fsid0);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(32), fsid1);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(36), 255); // f_namelen

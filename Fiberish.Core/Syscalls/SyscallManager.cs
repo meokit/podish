@@ -33,12 +33,17 @@ public partial class SyscallManager
         RegisterHandlers();
 
         // 1. Initialize Registry and Register Filesystems
-        // 1. Initialize Registry and Register Filesystems
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() });
+
+        // Initialize PTY manager and devpts filesystem
+        PtyManager = new PtyManager(Logger);
+        var signalBroadcaster = new SignalBroadcasterImpl(this);
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "devpts", FileSystem = new DevPtsFileSystem(PtyManager, signalBroadcaster, Logger) });
 
         // 2. Setup Rootfs (OverlayFS: Lower=Hostfs, Upper=Tmpfs)
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
@@ -102,7 +107,8 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex, SysVShmManager sysvShm, uint brk,
+    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex,
+        SysVShmManager sysvShm, uint brk,
         uint brkBase,
         bool strace,
         Dentry root, Dentry cwd, Dentry procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock, TtyDiscipline? tty)
@@ -130,6 +136,9 @@ public partial class SyscallManager
 
     public TtyDiscipline? Tty { get; }
 
+    // PTY Manager for /dev/ptmx and /dev/pts/N
+    public PtyManager PtyManager { get; } = null!;
+
     // The current engine executing a syscall (protected by GIL)
     public Engine Engine { get; set; } = null!;
 
@@ -152,7 +161,7 @@ public partial class SyscallManager
     public FutexManager Futex { get; }
 
     public uint BrkAddr { get; set; }
-    public uint BrkBase { get; private set; }
+    public uint BrkBase { get; }
     public bool Strace { get; set; }
     public List<MountInfo> MountList { get; } = [];
 
@@ -206,7 +215,17 @@ public partial class SyscallManager
     private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options,
         string? targetOverride = null)
     {
-        var dentry = parent.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
+        // Use cached dentry if available (PathWalk checks Children first, so we must mount on the same object)
+        Dentry dentry;
+        if (parent.Children.TryGetValue(name, out var cached))
+        {
+            dentry = cached;
+        }
+        else
+        {
+            dentry = parent.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
+            parent.Children[name] = dentry; // Cache it so PathWalk finds the mounted dentry
+        }
 
         // Mount it
         dentry.IsMounted = true;
@@ -232,7 +251,7 @@ public partial class SyscallManager
     private static string BuildPath(Dentry dentry)
     {
         var parts = new List<string>();
-        Dentry? cur = dentry;
+        var cur = dentry;
         while (cur != null)
         {
             if (cur.Name != "/") parts.Add(cur.Name);
@@ -272,6 +291,32 @@ public partial class SyscallManager
         var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
         FDs[1] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
         FDs[2] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
+
+        // Resolve the mounted /dev dentry (goes through OverlayFS -> mount -> devtmpfs root)
+        var devRoot = PathWalk("/dev") ?? devSb.Root;
+
+        // Create /dev/ptmx (PTY multiplexer)
+        var signalBroadcaster = new SignalBroadcasterImpl(this);
+        var ptmxInode = new PtmxInode(devSb, PtyManager, signalBroadcaster, Logger);
+        ptmxInode.Rdev = PtyManager.GetPtmxRdev();
+        var ptmxDentry = new Dentry("ptmx", ptmxInode, devRoot, devSb);
+        devRoot.Children["ptmx"] = ptmxDentry;
+        if (devSb is TmpfsSuperBlock tmpDevSb)
+            tmpDevSb.Dentries[new DCacheKey(devRoot.Id, "ptmx")] = ptmxDentry;
+
+        // Create /dev/tty (controlling terminal)
+        var ttyInode = new ConsoleInode(devSb, true, tty);
+        ttyInode.Rdev = 0x0500; // TTY major 5, minor 0
+        var ttyDentry = new Dentry("tty", ttyInode, devRoot, devSb);
+        devRoot.Children["tty"] = ttyDentry;
+        if (devSb is TmpfsSuperBlock tmpDevSb2)
+            tmpDevSb2.Dentries[new DCacheKey(devRoot.Id, "tty")] = ttyDentry;
+
+        // Create /dev/pts directory and mount devpts
+        EnsureDirectory(devRoot, "pts");
+        var devptsFsType = FileSystemRegistry.Get("devpts")!;
+        var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
+        Mount(devRoot, "pts", devptsSb, "devpts", "devpts", "rw,relatime,gid=5,mode=620", "/dev/pts");
     }
 
     public void RegisterEngine(Engine engine)
@@ -466,5 +511,30 @@ public partial class SyscallManager
         public string Target { get; set; } = "/";
         public string FsType { get; set; } = "unknown";
         public string Options { get; set; } = "";
+    }
+}
+
+/// <summary>
+///     Implementation of ISignalBroadcaster that delegates to the KernelScheduler.
+/// </summary>
+file class SignalBroadcasterImpl : ISignalBroadcaster
+{
+    private readonly SyscallManager _sm;
+
+    public SignalBroadcasterImpl(SyscallManager sm)
+    {
+        _sm = sm;
+    }
+
+    public void SignalProcessGroup(int pgid, int signal)
+    {
+        KernelScheduler.Current?.SignalProcessGroup(pgid, signal);
+    }
+
+    public void SignalForegroundTask(int signal)
+    {
+        // Signal the current task
+        var task = KernelScheduler.Current?.CurrentTask;
+        if (task != null) task.PendingSignals |= 1UL << (signal - 1);
     }
 }
