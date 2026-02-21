@@ -34,7 +34,11 @@ public class AsyncWaitQueue
         // Resume all waiters outside the lock
         // Use the captured scheduler reference (not KernelScheduler.Current) because
         // Signal() may be called from a background thread where Current is null
-        foreach (var (continuation, context, scheduler) in toWake) scheduler.Schedule(continuation, context);
+        foreach (var (continuation, context, scheduler) in toWake)
+        {
+            if (context != null) context.WakeReason = WakeReason.Event;
+            scheduler.Schedule(continuation, context);
+        }
     }
 
     public void Reset()
@@ -75,8 +79,11 @@ public class AsyncWaitQueue
         lock (_lock)
         {
             if (IsSignaled)
+            {
                 // If already signaled, schedule immediately
+                if (context != null) context.WakeReason = WakeReason.Event;
                 scheduler?.Schedule(continuation, context);
+            }
             else
                 _waiters.Add((continuation, context, scheduler!));
         }
@@ -99,12 +106,27 @@ public readonly struct WaitQueueAwaiter(AsyncWaitQueue queue) : INotifyCompletio
     {
         // Capture current task context
         var currentTask = KernelScheduler.Current?.CurrentTask;
+
+        if (currentTask != null && currentTask.HasUnblockedPendingSignal())
+        {
+            currentTask.WakeReason = WakeReason.Signal;
+            KernelScheduler.Current?.Schedule(continuation, currentTask);
+            return;
+        }
+
         _queue.Register(continuation, currentTask);
     }
 
-    public void GetResult()
+    public AwaitResult GetResult()
     {
-        // No result, just completion
+        var task = KernelScheduler.Current?.CurrentTask;
+        if (task != null && task.WakeReason != WakeReason.Event && task.WakeReason != WakeReason.None)
+        {
+            task.WakeReason = WakeReason.None;
+            return AwaitResult.Interrupted;
+        }
+        if (task != null) task.WakeReason = WakeReason.None;
+        return AwaitResult.Completed;
     }
 }
 
@@ -137,6 +159,13 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
         var scheduler = KernelScheduler.Current;
         var currentTask = scheduler?.CurrentTask;
 
+        if (currentTask != null && currentTask.HasUnblockedPendingSignal())
+        {
+            currentTask.WakeReason = WakeReason.Signal;
+            scheduler?.Schedule(continuation, currentTask);
+            return;
+        }
+
         // We use a shared state to ensure only one invocation
         var runOnce = new RunOnceAction(continuation);
         var action = runOnce.Invoke;
@@ -144,8 +173,16 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
         foreach (var q in _queues) q.Register(action, currentTask);
     }
 
-    public void GetResult()
+    public AwaitResult GetResult()
     {
+        var task = KernelScheduler.Current?.CurrentTask;
+        if (task != null && task.WakeReason != WakeReason.Event && task.WakeReason != WakeReason.None)
+        {
+            task.WakeReason = WakeReason.None;
+            return AwaitResult.Interrupted;
+        }
+        if (task != null) task.WakeReason = WakeReason.None;
+        return AwaitResult.Completed;
     }
 
     private class RunOnceAction(Action action)
@@ -218,6 +255,13 @@ public readonly struct ChildStateAwaitable
 
         public void OnCompleted(Action continuation)
         {
+            if (_task.HasUnblockedPendingSignal())
+            {
+                _task.WakeReason = WakeReason.Signal;
+                _scheduler.Schedule(continuation, _task);
+                return;
+            }
+
             // Register on all matching children's StateChangeEvent queues
             // Only register on events that are NOT yet signaled to avoid duplicate scheduling
             var runOnce = new RunOnceAction(continuation);
@@ -238,12 +282,22 @@ public readonly struct ChildStateAwaitable
             }
 
             // If no registrations happened (all events already signaled), schedule immediately
-            if (!registered) _scheduler.Schedule(continuation, _task);
+            if (!registered)
+            {
+                _task.WakeReason = WakeReason.Event;
+                _scheduler.Schedule(continuation, _task);
+            }
         }
 
-        public void GetResult()
+        public AwaitResult GetResult()
         {
-            // Just completion notification, no result
+            if (_task.WakeReason != WakeReason.Event && _task.WakeReason != WakeReason.None)
+            {
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
+            }
+            _task.WakeReason = WakeReason.None;
+            return AwaitResult.Completed;
         }
 
         private bool MatchesTarget(int childPid, Process childProc)

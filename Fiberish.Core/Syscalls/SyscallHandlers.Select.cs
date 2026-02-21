@@ -296,6 +296,13 @@ public partial class SyscallManager
             _continuation = continuation;
             _task = (_sm.Engine.Owner as FiberTask)!;
 
+            if (_task.HasUnblockedPendingSignal())
+            {
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
+                return;
+            }
+
             if (_timeoutMs > 0)
                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 1000, () =>
                 {
@@ -429,6 +436,13 @@ public partial class SyscallManager
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
             _continuation = continuation;
+
+            if (_task.HasUnblockedPendingSignal())
+            {
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
+                return;
+            }
 
             if (_timeoutMs > 0)
                 // Schedule timeout

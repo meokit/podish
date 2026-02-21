@@ -382,8 +382,8 @@ public partial class SyscallManager
 
                         if (sm.Engine.Owner is not FiberTask fiberTask) return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        var waitResult = await new IOAwaiter(f, true, fiberTask);
-                        if (waitResult < 0) return totalRead > 0 ? totalRead : waitResult;
+                        if (await new IOAwaiter(f, true, fiberTask) == AwaitResult.Interrupted)
+                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
                         continue;
                     }
 
@@ -453,8 +453,8 @@ public partial class SyscallManager
                         if (sm.Engine.Owner is not FiberTask fiberTask)
                             return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
 
-                        var waitResult = await new IOAwaiter(f, false, fiberTask);
-                        if (waitResult < 0) return totalWritten > 0 ? totalWritten : waitResult;
+                        if (await new IOAwaiter(f, false, fiberTask) == AwaitResult.Interrupted)
+                            return totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS;
                         continue;
                     }
 
@@ -748,9 +748,6 @@ public partial class SyscallManager
     {
         private readonly VFS.LinuxFile _file;
         private readonly bool _forRead;
-        private int _awoken;
-        private Action? _continuation;
-        private int _result;
         private readonly FiberTask _task;
 
         public IOAwaiter(VFS.LinuxFile file, bool forRead, FiberTask task)
@@ -764,60 +761,53 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            _continuation = continuation;
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WasInterrupted = true; // ensure Awake returns ERESTARTSYS
-                Awake();
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
 
-            _task.RegisterBlockingSyscall(Awake);
+            var runOnce = new RunOnceAction(continuation, _task);
 
-            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+            var registered = _file.RegisterWait(() =>
             {
-                _task.WasInterrupted = true;
-                Awake();
-                return;
-            }
+                _task.WakeReason = WakeReason.IO;
+                runOnce.Invoke();
+            }, (short)(_forRead ? 0x0001 : 0x0004));
 
-            var registered = _file.RegisterWait(Awake, (short)(_forRead ? 0x0001 : 0x0004));
             if (!registered)
             {
-                // The underlying file doesn't support waiting (e.g., stdout or non-TTY stdin).
-                // Or there's no event to wait for.
-                // We should awake immediately so the syscall can return EAGAIN.
-                _result = -(int)Errno.EAGAIN;
-                Awake();
+                _task.WakeReason = WakeReason.IO;
+                runOnce.Invoke();
             }
         }
 
-        private void Awake()
+        public AwaitResult GetResult()
         {
-            if (Interlocked.Exchange(ref _awoken, 1) == 0)
-                KernelScheduler.Current!.Schedule(() =>
+            if (_task.WakeReason != WakeReason.IO && _task.WakeReason != WakeReason.None)
+            {
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
+            }
+            _task.WakeReason = WakeReason.None;
+            return AwaitResult.Completed;
+        }
+
+        public IOAwaiter GetAwaiter() => this;
+
+        private class RunOnceAction(Action action, FiberTask task)
+        {
+            private int _called;
+
+            public void Invoke()
+            {
+                if (Interlocked.Exchange(ref _called, 1) == 0)
                 {
-                    if (_task.WasInterrupted)
-                    {
-                        _result = -(int)Errno.ERESTARTSYS;
-                    }
-                    else
-                    {
-                        _result = 0;
-                    }
-
-                    _continuation?.Invoke();
-                });
-        }
-
-        public int GetResult()
-        {
-            return _result;
-        }
-
-        public IOAwaiter GetAwaiter()
-        {
-            return this;
+                    task.Continuation = action;
+                    KernelScheduler.Current?.Schedule(task);
+                }
+            }
         }
     }
 }

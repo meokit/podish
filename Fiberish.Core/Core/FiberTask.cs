@@ -15,6 +15,30 @@ public enum FiberTaskStatus
     Terminated
 }
 
+public enum AwaitResult
+{
+    Completed,
+    Interrupted
+}
+
+public enum TaskExecutionMode
+{
+    RunningGuest,
+    WaitingAsyncSyscall,
+    WaitingContinuation,
+    Stopped,
+    Terminated
+}
+
+public enum WakeReason
+{
+    None,
+    Signal,
+    Timer,
+    IO,
+    Event
+}
+
 public class FiberTask
 {
     private enum DefaultSignalAction
@@ -82,7 +106,9 @@ public class FiberTask
     public int ExitStatus { get; set; }
 
     public uint ChildClearTidPtr { get; set; }
-    public bool WasInterrupted { get; set; }
+    
+    public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
+    public WakeReason WakeReason { get; set; } = WakeReason.None;
 
     // Signal that interrupted the current blocking syscall (if any)
     // Used by syscall handlers to determine SA_RESTART behavior
@@ -121,10 +147,7 @@ public class FiberTask
         return HandlePageFault(addr, isWrite);
     }
 
-    public void RegisterBlockingSyscall(Action onInterrupt)
-    {
-        WasInterrupted = false;
-    }
+    // RegisterBlockingSyscall removed
 
     /// <summary>
     ///     Post a signal to this task. Safe to call from any thread.
@@ -152,7 +175,7 @@ public class FiberTask
         if (!isBlocked)
         {
             InterruptingSignal = sig;
-            WasInterrupted = true;
+            WakeReason = WakeReason.Signal;
         }
         else
         {
@@ -576,46 +599,63 @@ public class FiberTask
         }
     }
 
+    public bool TryEnterGuestRun()
+    {
+        return !Exited && 
+               Process.State != ProcessState.Stopped && 
+               PendingSyscall == null && 
+               Continuation == null && 
+               ExecutionMode == TaskExecutionMode.RunningGuest;
+    }
+
     // Main execution slice called by KernelScheduler
     public void RunSlice(int instructionLimit = 1000000)
     {
         CommonKernel.CurrentTask = this;
         try
         {
-            // 0. Check for Continuation (Kernel Mode Resume)
-            // This is used for Sleep/Yield awaitables and tests
+            ProcessPendingSignals();
+
             if (Continuation != null)
             {
+                ExecutionMode = TaskExecutionMode.WaitingContinuation;
                 var c = Continuation;
                 Continuation = null;
                 c();
-                // If the continuation suspended again (await), it will have re-scheduled itself
-                // or set a timer. We return to scheduler loop.
+                
+                if (Status == FiberTaskStatus.Running)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                }
+                
                 return;
             }
 
-            // 0.1 Check for Pending Signals
-            // Handle signals before executing CPU
-            ProcessPendingSignals();
-            if (Exited)
-            {
-                Status = FiberTaskStatus.Terminated;
-                return;
-            }
-
-            if (Process.State == ProcessState.Stopped)
-            {
-                Status = FiberTaskStatus.Waiting;
-                return;
-            }
-
-            // If an async syscall is still pending, never re-enter guest CPU execution.
-            // Resume only through HandleAsyncSyscall completion.
             if (PendingSyscall != null)
             {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
                 Status = FiberTaskStatus.Waiting;
                 if (!_handlingAsyncSyscall)
                     HandleAsyncSyscall();
+                return;
+            }
+
+            if (!TryEnterGuestRun())
+            {
+                if (Process.State == ProcessState.Stopped)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                    ExecutionMode = TaskExecutionMode.Stopped;
+                }
+                else if (Exited)
+                {
+                    Status = FiberTaskStatus.Terminated;
+                    ExecutionMode = TaskExecutionMode.Terminated;
+                }
+                else if (Status == FiberTaskStatus.Running)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                }
                 return;
             }
 
@@ -630,6 +670,7 @@ public class FiberTask
             if (Exited)
             {
                 Status = FiberTaskStatus.Terminated;
+                ExecutionMode = TaskExecutionMode.Terminated;
                 return;
             }
 
@@ -638,13 +679,11 @@ public class FiberTask
             {
                 if (PendingSyscall != null)
                 {
-                    // We are blocked on an async syscall
-                    Logger.LogTrace("[RunSlice] Yielded with PendingSyscall, calling HandleAsyncSyscall");
+                    ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
                     Status = FiberTaskStatus.Waiting;
-                    HandleAsyncSyscall();
-                    // We return here. The Scheduler will NOT reschedule us immediately 
-                    // because Status is Waiting. HandleAsyncSyscall ensures we are 
-                    // rescheduled when done.
+                    Logger.LogTrace("[RunSlice] Yielded with PendingSyscall, calling HandleAsyncSyscall");
+                    if (!_handlingAsyncSyscall)
+                        HandleAsyncSyscall();
                 }
                 else
                 {
@@ -670,6 +709,7 @@ public class FiberTask
 
                 TerminateBySignal((int)Signal.SIGSEGV, coreDumped: true);
                 Status = FiberTaskStatus.Terminated;
+                ExecutionMode = TaskExecutionMode.Terminated;
             }
             else
             {
@@ -848,6 +888,7 @@ public class FiberTask
 
                         CPU.Eip = SyscallEip;
                         // Don't modify EAX - the syscall will be re-executed with original args
+                        ExecutionMode = TaskExecutionMode.RunningGuest;
                         // Reschedule and return
                         CommonKernel.Schedule(this);
                         return;
@@ -866,6 +907,7 @@ public class FiberTask
                         "[HandleAsyncSyscall] Signal {Sig} is ignored by default; restarting syscall",
                         sig);
                     CPU.Eip = SyscallEip;
+                    ExecutionMode = TaskExecutionMode.RunningGuest;
                     CommonKernel.Schedule(this);
                     return;
                 }
@@ -887,6 +929,7 @@ public class FiberTask
                 SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
                     SyscallArg3);
 
+            ExecutionMode = TaskExecutionMode.RunningGuest;
             // Reschedule the task
             CommonKernel.Schedule(this);
         }

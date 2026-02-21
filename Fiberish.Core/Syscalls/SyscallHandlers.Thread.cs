@@ -32,8 +32,8 @@ public partial class SyscallManager
             var task = sm.Engine.Owner as FiberTask;
             if (task != null)
             {
-                task.RegisterBlockingSyscall(() => waiter.Tcs.TrySetResult(false));
-                if (!await waiter.Tcs.Task) return -(int)Errno.ERESTARTSYS;
+                if (await new FutexAwaiter(waiter, task) == AwaitResult.Interrupted)
+                    return -(int)Errno.ERESTARTSYS;
             }
 
             return 0;
@@ -46,6 +46,84 @@ public partial class SyscallManager
         }
 
         return -(int)Errno.ENOSYS;
+    }
+
+    private sealed class FutexAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    {
+        private readonly Fiberish.Core.Waiter _waiter;
+        private readonly FiberTask _task;
+
+        public FutexAwaiter(Fiberish.Core.Waiter waiter, FiberTask task)
+        {
+            _waiter = waiter;
+            _task = task;
+        }
+
+        public bool IsCompleted => _waiter.Tcs.Task.IsCompleted;
+
+        public void OnCompleted(Action continuation)
+        {
+            if (_task.HasUnblockedPendingSignal())
+            {
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
+                return;
+            }
+
+            var runOnce = new RunOnceAction(continuation, _task);
+
+            _task.Continuation = runOnce.Invoke;
+
+            _waiter.Tcs.Task.ContinueWith(_ =>
+            {
+                if (_task.WakeReason == WakeReason.None)
+                {
+                    _task.WakeReason = WakeReason.Event;
+                }
+                runOnce.Invoke();
+            });
+        }
+
+        public AwaitResult GetResult()
+        {
+            if (_task.WakeReason != WakeReason.Event && _task.WakeReason != WakeReason.None)
+            {
+                _waiter.Tcs.TrySetResult(false);
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
+            }
+            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result)
+            {
+                return AwaitResult.Interrupted;
+            }
+
+            _task.WakeReason = WakeReason.None;
+            return AwaitResult.Completed;
+        }
+
+        public FutexAwaiter GetAwaiter() => this;
+
+        private class RunOnceAction
+        {
+            private readonly Action _action;
+            private readonly FiberTask _task;
+            private int _called;
+
+            public RunOnceAction(Action action, FiberTask task)
+            {
+                _action = action;
+                _task = task;
+            }
+
+            public void Invoke()
+            {
+                if (Interlocked.Exchange(ref _called, 1) == 0)
+                {
+                    _task.Continuation = _action;
+                    KernelScheduler.Current?.Schedule(_task);
+                }
+            }
+        }
     }
 
     private static async ValueTask<int> SysSetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,

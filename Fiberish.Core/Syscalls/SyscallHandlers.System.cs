@@ -186,14 +186,14 @@ public partial class SyscallManager
 
         Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
 
-        return await new PauseAwaiter(task);
+        if (await new PauseAwaiter(task) == AwaitResult.Interrupted)
+            return -(int)Errno.ERESTARTSYS;
+        return -(int)Errno.EINTR;
     }
 
     private sealed class PauseAwaiter : INotifyCompletion
     {
         private readonly FiberTask _task;
-        private Action? _continuation;
-        private int _result;
 
         public PauseAwaiter(FiberTask task)
         {
@@ -204,49 +204,27 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            _continuation = continuation;
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WasInterrupted = true;
-                Awake();
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
 
-            _task.RegisterBlockingSyscall(Awake);
+            _task.Continuation = continuation;
+        }
 
-            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+        public AwaitResult GetResult()
+        {
+            if (_task.WakeReason != WakeReason.None)
             {
-                _task.WasInterrupted = true;
-                Awake();
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
             }
+            return AwaitResult.Completed;
         }
 
-        private void Awake()
-        {
-            KernelScheduler.Current!.Schedule(() =>
-            {
-                if (_task.WasInterrupted)
-                {
-                    _result = -(int)Errno.ERESTARTSYS;
-                }
-                else
-                {
-                    _result = 0;
-                }
-
-                _continuation?.Invoke();
-            });
-        }
-
-        public int GetResult()
-        {
-            return _result;
-        }
-
-        public PauseAwaiter GetAwaiter()
-        {
-            return this;
-        }
+        public PauseAwaiter GetAwaiter() => this;
     }
 
     private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -363,22 +341,22 @@ public partial class SyscallManager
 
         var res = await new NanosleepAwaiter(fiberTask, totalUsec);
 
-        if (res < 0 && a2 != 0)
+        if (res == AwaitResult.Interrupted)
         {
-            // TODO: Write remaining time
+            if (a2 != 0)
+            {
+                // TODO: Write remaining time properly
+            }
+            return -(int)Errno.ERESTARTSYS;
         }
 
-        return res;
+        return 0;
     }
 
     private sealed class NanosleepAwaiter : INotifyCompletion
     {
         private readonly FiberTask _task;
         private readonly long _totalUsec;
-        private int _awoken;
-        private Action? _continuation;
-        private int _result;
-        private Timer? _timer;
 
         public NanosleepAwaiter(FiberTask task, long totalUsec)
         {
@@ -390,53 +368,33 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            _continuation = continuation;
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WasInterrupted = true;
-                Awake();
+                _task.WakeReason = WakeReason.Signal;
+                KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
 
-            _task.RegisterBlockingSyscall(Awake);
-
-            _timer = KernelScheduler.Current!.ScheduleTimer(KernelScheduler.Current.CurrentTick + _totalUsec,
-                () => { Awake(); });
-
-            if (_task.WasInterrupted || _task.HasUnblockedPendingSignal())
+            var scheduler = KernelScheduler.Current!;
+            scheduler.ScheduleTimer(scheduler.CurrentTick + _totalUsec, () =>
             {
-                _task.WasInterrupted = true;
-                Awake();
+                _task.WakeReason = WakeReason.Timer;
+                _task.Continuation = continuation;
+                scheduler.Schedule(_task);
+            });
+        }
+
+        public AwaitResult GetResult()
+        {
+            if (_task.WakeReason != WakeReason.Timer && _task.WakeReason != WakeReason.None)
+            {
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
             }
+            _task.WakeReason = WakeReason.None;
+            return AwaitResult.Completed;
         }
 
-        private void Awake()
-        {
-            if (Interlocked.Exchange(ref _awoken, 1) == 0)
-                KernelScheduler.Current!.Schedule(() =>
-                {
-                    _timer?.Cancel();
-                    if (_task.WasInterrupted)
-                    {
-                        _result = -(int)Errno.ERESTARTSYS;
-                    }
-                    else
-                    {
-                        _result = 0;
-                    }
-
-                    _continuation?.Invoke();
-                });
-        }
-
-        public int GetResult()
-        {
-            return _result;
-        }
-
-        public NanosleepAwaiter GetAwaiter()
-        {
-            return this;
-        }
+        public NanosleepAwaiter GetAwaiter() => this;
     }
 }

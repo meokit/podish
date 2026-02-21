@@ -35,9 +35,15 @@ public readonly struct SleepAwaitable
 
         public bool IsCompleted => false;
 
-        public int GetResult()
+        public AwaitResult GetResult()
         {
-            return 0;
+            if (_task.WakeReason != WakeReason.Timer && _task.WakeReason != WakeReason.None)
+            {
+                _task.WakeReason = WakeReason.None;
+                return AwaitResult.Interrupted;
+            }
+            _task.WakeReason = WakeReason.None;
+            return AwaitResult.Completed;
         }
 
         public void OnCompleted(Action continuation)
@@ -45,10 +51,18 @@ public readonly struct SleepAwaitable
             var scheduler = _scheduler;
             var task = _task;
 
+            if (task.HasUnblockedPendingSignal())
+            {
+                task.WakeReason = WakeReason.Signal;
+                scheduler.Schedule(continuation, task);
+                return;
+            }
+
             // Register timer callback
             // When timer fires, we schedule the task back to run queue
             scheduler.ScheduleTimer(_tickDuration, () =>
             {
+                task.WakeReason = WakeReason.Timer;
                 task.Continuation = continuation;
                 scheduler.Schedule(task);
             });
