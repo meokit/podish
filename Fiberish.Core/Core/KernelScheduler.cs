@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Channels;
+using System.Diagnostics;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -30,7 +31,8 @@ public class KernelScheduler
 
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly Dictionary<int, FiberTask> _tasks = [];
-    private readonly TimerSystem _timerSystem = new();
+    private readonly TimeWheel _timerSystem = new();
+    private readonly Stopwatch _sw = Stopwatch.StartNew();
 
     private TtyDiscipline? _tty;
 
@@ -117,9 +119,17 @@ public class KernelScheduler
         _events.Writer.TryWrite((continuation, context));
     }
 
-    public Timer ScheduleTimer(long delayTicks, Action callback)
+    public Timer ScheduleTimer(long delayMs, Action callback)
     {
-        var timer = _timerSystem.Schedule(delayTicks, callback);
+        var targetTick = _timerSystem.CurrentTick + delayMs;
+        // Adjust for any lag between CurrentTick and real time
+        var realNow = _sw.ElapsedMilliseconds;
+        if (targetTick < realNow + delayMs)
+        {
+            targetTick = realNow + delayMs;
+        }
+
+        var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
         // to re-evaluate our wait time.
         EnqueueWake();
@@ -136,10 +146,16 @@ public class KernelScheduler
         Current = this;
         Logger.LogInformation("KernelScheduler started.");
 
+        long startTick = _timerSystem.CurrentTick;
+
         try
         {
             while (Running)
             {
+                // Advance timer to current physical time (in ms)
+                long nowMs = startTick + _sw.ElapsedMilliseconds;
+                _timerSystem.Advance(nowMs);
+
                 if (maxTicks > 0 && CurrentTick >= maxTicks)
                 {
                     Logger.LogWarning("KernelScheduler reached max ticks limit. Stopping.");
@@ -149,9 +165,7 @@ public class KernelScheduler
                 // 0. Process Continuations (High Priority)
                 var drainedEvents = DrainEvents();
 
-                // 1. Process Timers
-                // If the queue is empty, we MUST advance time to the next timer event
-                // to avoid busy loop deadlocks if all tasks are waiting on timers.
+                // 1. Process Timers & Wait
                 if (_runQueue.Count == 0 && !drainedEvents)
                 {
                     if (TryProcessPendingInput())
@@ -168,33 +182,20 @@ public class KernelScheduler
                         break;
                     }
 
-                    if (TryAdvanceToNextTimer())
+                    if (_timerSystem.HasTimers || (Tty != null && anyWaiting))
+                    {
+                        // Sleep briefly to avoid 100% CPU when purely polling physical time
+                        Thread.Sleep(1);
                         continue;
+                    }
 
                     // No tasks and no timers? Check if we should wait for external input.
                     if (Running)
                     {
-                        // If we have a TTY and tasks are waiting for input, wait a bit
-                        // This allows the background InputLoop to provide input
-                        // Optimized: Wait for signal instead of sleeping
-                        if (Tty != null && anyWaiting)
-                        {
-                            Logger.LogDebug("Waiting for external input (blocking)...");
-                            WaitForEvent();
-                            continue;
-                        }
-
-                        Logger.LogInformation("No ready tasks and no pending timers. Exiting loop.");
+                        Logger.LogInformation("No ready tasks, no pending timers, and no active waiting. Exiting loop.");
                         Running = false;
                         break;
                     }
-                }
-                else
-                {
-                    // Normal execution: Advance time by small slice?
-                    // For determinism, maybe we advance time by X ticks per instruction executed?
-                    // For now, let's just process timers at current tick.
-                    _timerSystem.Advance(0);
                 }
 
                 // 2. Run Task
@@ -269,16 +270,6 @@ public class KernelScheduler
         if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
 
         _events.Writer.TryWrite((() => { _wakePending = 0; }, null));
-    }
-
-    private bool TryAdvanceToNextTimer()
-    {
-        var nextWakeup = _timerSystem.NextExpiration;
-        if (!nextWakeup.HasValue) return false;
-
-        var jump = nextWakeup.Value - CurrentTick;
-        _timerSystem.Advance(jump > 0 ? jump : 0);
-        return true;
     }
 
     private bool TryProcessPendingInput()
@@ -419,6 +410,20 @@ public class KernelScheduler
         var mainTask = GetTask(proc.TGID);
         if (mainTask == null) return false;
         mainTask.PostSignal(signal);
+        return true;
+    }
+
+    public bool SignalProcessInfo(int pid, int signal, Fiberish.Native.SigInfo info)
+    {
+        Process? proc;
+        lock (_processes)
+        {
+            if (!_processes.TryGetValue(pid, out proc)) return false;
+        }
+
+        var mainTask = GetTask(proc.TGID);
+        if (mainTask == null) return false;
+        mainTask.PostSignalInfo(info);
         return true;
     }
 

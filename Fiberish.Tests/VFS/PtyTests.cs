@@ -190,12 +190,12 @@ public class PtyTests
 
         // Write from master (goes to slave's input)
         var data = new[] { (byte)'H', (byte)'e', (byte)'l', (byte)'l', (byte)'o' };
-        var written = pair.Master.Write(data);
+        var written = pair.Master!.Write(data);
         Assert.Equal(5, written);
 
         // Read from slave's input buffer
         var readBuffer = new byte[10];
-        var read = pair.Master.InputBuffer.Read(readBuffer);
+        var read = pair.Master!.InputBuffer.Read(readBuffer);
         Assert.Equal(5, read);
     }
 
@@ -208,7 +208,7 @@ public class PtyTests
         Assert.False(pair.Master.HasDataAvailable);
 
         // Write to slave output buffer (simulating slave output)
-        pair.Master.OutputBuffer.Write(new byte[] { 1, 2, 3 });
+        pair.Master!.OutputBuffer.Write(new byte[] { 1, 2, 3 });
 
         Assert.True(pair.Master.HasDataAvailable);
     }

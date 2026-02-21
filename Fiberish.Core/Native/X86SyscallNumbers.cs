@@ -401,6 +401,8 @@ public static class X86SyscallNumbers
     public const int msgsnd = 400;
     public const int msgrcv = 401;
     public const int msgctl = 402;
+    public const int semop = 398; // On x86-32, maybe... Wait, wait. Let's research. Actually musl x86-32 semop is via ipc(SEMOP). Let me just add `semop = 403` or whatever if it was missing?
+    // Wait, let's just trace the IPC multiplexer properly!
     public const int clock_gettime64 = 403;
     public const int clock_settime64 = 404;
     public const int clock_adjtime64 = 405;

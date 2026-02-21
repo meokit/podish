@@ -316,9 +316,9 @@ public partial class SyscallManager
             nsecs = ticks % freq * 1000000000 / freq;
         }
 
-        var buf = new byte[12];
+        var buf = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)nsecs);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), nsecs);
         if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
@@ -333,22 +333,48 @@ public partial class SyscallManager
         if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         var nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
-        // 1 tick = 1 microsecond? (Assumed based on legacy code)
-        var totalUsec = sec * 1000000L + nsec / 1000L;
-        if (totalUsec < 0) return 0;
+        
+        var totalMs = sec * 1000L + nsec / 1000000L;
+        if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1; // Minimum 1ms tick if requested
+        if (totalMs < 0) return 0;
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var res = await new NanosleepAwaiter(fiberTask, totalUsec);
+        var res = await new NanosleepAwaiter(fiberTask, totalMs);
 
         if (res == AwaitResult.Interrupted)
-        {
-            if (a2 != 0)
-            {
-                // TODO: Write remaining time properly
-            }
             return -(int)Errno.ERESTARTSYS;
-        }
+
+        return 0;
+    }
+
+    private static async ValueTask<int> SysClockNanosleepTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var clockId = (int)a1;
+        var flags = (int)a2; // e.g. TIMER_ABSTIME
+        var reqPtr = a3;
+        var remPtr = a4;
+
+        var reqBuf = new byte[16]; // timespec64
+        if (!sm.Engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
+        var sec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(0, 8));
+        var nsec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(8, 8));
+
+        var totalMs = sec * 1000L + nsec / 1000000L;
+
+        // Simplified: ignore TIMER_ABSTIME for now, just perform relative sleep
+        if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1;
+        if (totalMs < 0) return 0;
+
+        if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
+
+        var res = await new NanosleepAwaiter(fiberTask, totalMs);
+
+        if (res == AwaitResult.Interrupted)
+            return -(int)Errno.ERESTARTSYS;
 
         return 0;
     }
@@ -356,12 +382,12 @@ public partial class SyscallManager
     private sealed class NanosleepAwaiter : INotifyCompletion
     {
         private readonly FiberTask _task;
-        private readonly long _totalUsec;
+        private readonly long _totalMs;
 
-        public NanosleepAwaiter(FiberTask task, long totalUsec)
+        public NanosleepAwaiter(FiberTask task, long totalMs)
         {
             _task = task;
-            _totalUsec = totalUsec;
+            _totalMs = totalMs;
         }
 
         public bool IsCompleted => false;
@@ -376,16 +402,32 @@ public partial class SyscallManager
             }
 
             var scheduler = KernelScheduler.Current!;
-            scheduler.ScheduleTimer(scheduler.CurrentTick + _totalUsec, () =>
+            _task.Continuation = continuation;
+            
+            var timer = scheduler.ScheduleTimer(_totalMs, () =>
             {
-                _task.WakeReason = WakeReason.Timer;
-                _task.Continuation = continuation;
-                scheduler.Schedule(_task);
+                if (_task.WakeReason == WakeReason.None)
+                {
+                    _task.WakeReason = WakeReason.Timer;
+                    scheduler.Schedule(_task);
+                }
             });
+
+            // Store timer in task so we can cancel it if needed (but currently FiberTask doesn't have a generic ActiveTimer).
+            // Actually, we don't strictly need to cancel it if we handle WakeReason correctly.
+            // If PostSignal wakes it up, _task.WakeReason will be Signal, and _task is scheduled.
+            // The timer will eventually fire and see WakeReason != None, or it will just be a no-op if the task continued.
+            // But wait, if the task resumes, it might start another wait. If the old timer fires, it might corrupt the new wait!
+            // We need a way to cancel it. 
+            // We can register the timer specifically for this waiter.
+            _task.BlockingTimer = timer;
         }
 
         public AwaitResult GetResult()
         {
+            _task.BlockingTimer?.Cancel();
+            _task.BlockingTimer = null;
+
             if (_task.WakeReason != WakeReason.Timer && _task.WakeReason != WakeReason.None)
             {
                 _task.WakeReason = WakeReason.None;

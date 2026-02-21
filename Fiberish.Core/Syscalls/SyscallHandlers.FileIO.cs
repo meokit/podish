@@ -59,7 +59,8 @@ public partial class SyscallManager
                         initialOffset + totalWritten);
                 else
                     // Read from current position via File object
-                    bytesRead = inFile.Read(buffer.AsSpan(0, toRead));
+                    bytesRead = inFile.Dentry.Inode!.Read(inFile, buffer.AsSpan(0, toRead), inFile.Position);
+                    if (bytesRead > 0) inFile.Position += bytesRead;
 
                 if (bytesRead <= 0)
                 {
@@ -71,7 +72,8 @@ public partial class SyscallManager
                 }
 
                 // Write to out_fd
-                var bytesWritten = outFile.Write(buffer.AsSpan(0, bytesRead));
+                var bytesWritten = outFile.Dentry.Inode!.Write(outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
+                if (bytesWritten > 0) outFile.Position += bytesWritten;
 
                 if (bytesWritten < 0)
                 {
@@ -770,7 +772,7 @@ public partial class SyscallManager
 
             var runOnce = new RunOnceAction(continuation, _task);
 
-            var registered = _file.RegisterWait(() =>
+            var registered = _file.Dentry.Inode!.RegisterWait(_file, () =>
             {
                 _task.WakeReason = WakeReason.IO;
                 runOnce.Invoke();

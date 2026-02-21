@@ -24,16 +24,6 @@ public enum ProcessState
     Dead // Reaped by parent
 }
 
-public class SigInfo
-{
-    public int si_code;
-    public int si_errno;
-    public int si_pid;
-    public int si_signo;
-    public int si_status;
-    public int si_uid;
-}
-
 public class UTSNamespace
 {
     public string SysName { get; set; } = "Linux";
@@ -99,6 +89,11 @@ public class Process
 
     // Other process state
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
+    public Fiberish.Core.Timer? AlarmTimer { get; set; }
+
+    // POSIX Timers
+    public Dictionary<int, PosixTimer> PosixTimers { get; } = [];
+    public int NextPosixTimerId { get; set; } = 0;
 
     // Parent-child relationship
     public int PPID { get; set; } = 0; // Parent Process ID

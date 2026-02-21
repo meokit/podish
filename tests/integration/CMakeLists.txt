@@ -54,6 +54,10 @@ add_integration_binary("test_full_features" "tests/linux/test_full_features.c")
 add_integration_binary("test_fork_wait" "tests/test_fork_wait.c")
 add_integration_binary("test_smc_linux" "tests/linux/test_smc_linux.c" OPT_LEVEL "-O0")
 add_integration_binary("test_rdtsc" "tests/linux/test_rdtsc.c")
+add_integration_binary("test_sysv_sem" "tests/bin/test_sysv_sem.c")
+add_integration_binary("test_posix_timers" "tests/bin/test_posix_timers.c")
+add_integration_binary("test_virtual_fds" "tests/bin/test_virtual_fds.c")
+add_integration_binary("test_nanosleep" "tests/bin/test_nanosleep.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 

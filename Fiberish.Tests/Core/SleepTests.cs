@@ -42,10 +42,14 @@ public class SleepTests
         kernel.Run(1000);
 
         var result = sb.ToString();
-        // Ticks start at 0.
 
-        Assert.Contains("SleepStart@0;", result);
-        Assert.Contains("SleepEnd@5;", result); // Start 0 + Sleep 5 = 5.
+        var match = System.Text.RegularExpressions.Regex.Match(result, @"SleepStart@(\d+);SleepEnd@(\d+);");
+        Assert.True(match.Success, $"Regex match failed on result: {result}");
+        
+        var start = long.Parse(match.Groups[1].Value);
+        var end = long.Parse(match.Groups[2].Value);
+        
+        Assert.True(end - start >= 5, $"Expected at least 5 ticks to elapse, but got {end - start}. Result: {result}");
     }
 
     private class MockEngine : Engine

@@ -143,6 +143,38 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.sched_yield, SysSchedYield);
         Register(X86SyscallNumbers.pause, SysPause);
 
+        // Alarm
+        Register(27, SysAlarm); // alarm
+
+        // POSIX Timers 32-bit (Using 64-bit implementations because timespec padding allows identical parsing if careful, or we just direct them to the 64-bit handlers that adapt for missing padding if applicable. For now, we point to the implementations in Time64).
+        Register(259, SysTimerCreate);
+        Register(260, SysTimerSetTime32);
+        Register(261, SysTimerGetTime32);
+        Register(262, SysTimerGetOverrun);
+        Register(263, SysTimerDelete);
+
+        // 64-bit time syscalls (i386)
+        Register(403, SysClockGetTime64);
+        Register(404, SysClockSetTime64);
+        Register(405, SysClockAdjTime64);
+        Register(406, SysClockGetResTime64);
+        Register(407, SysClockNanosleepTime64);
+        Register(408, SysTimerGetTime64);
+        Register(409, SysTimerSetTime64);
+        Register(410, SysTimerFdGetTime64);
+        Register(411, SysTimerFdSetTime64);
+        
+        // FDs / Virtual
+        Register(322, SysTimerFdCreate); // timerfd_create
+        Register(325, SysTimerFdSetTime); // timerfd_settime
+        Register(326, SysTimerFdGetTime); // timerfd_gettime
+        
+        Register(323, SysEventFd); // eventfd
+        Register(328, SysEventFd2); // eventfd2
+        
+        Register(321, SysSignalFd); // signalfd
+        Register(327, SysSignalFd4); // signalfd4
+
         Register(X86SyscallNumbers.fsync, SysFsync);
         Register(X86SyscallNumbers.fdatasync, SysFdatasync);
         Register(X86SyscallNumbers.sync, SysSync);
@@ -163,5 +195,8 @@ public partial class SyscallManager
 
         // System V IPC
         Register(X86SyscallNumbers.ipc, SysIpc);
+        Register(X86SyscallNumbers.semget, SysSemGet);
+        Register(X86SyscallNumbers.semctl, SysSemCtl);
+        Register(X86SyscallNumbers.semop, SysSemOp);
     }
 }

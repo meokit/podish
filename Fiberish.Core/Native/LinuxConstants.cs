@@ -79,7 +79,8 @@ public enum Signal
     SIGPOLL = 29,
     SIGPWR = 30,
     SIGSYS = 31,
-    SIGUNUSED = 31
+    SIGUNUSED = 31,
+    SIGRTMIN = 32
 }
 
 public enum SigProcMaskAction
@@ -94,6 +95,12 @@ public static class LinuxConstants
     public const int PageSize = 4096;
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
+
+    // sigevent notify types
+    public const int SIGEV_SIGNAL = 0;
+    public const int SIGEV_NONE = 1;
+    public const int SIGEV_THREAD = 2;
+    public const int SIGEV_THREAD_ID = 4;
 
     public const int TERMIOS_SIZE_I386 = 60;
     public const int WINSIZE_SIZE = 8;
@@ -246,16 +253,45 @@ public static class LinuxConstants
     public const uint TIOCSCTTY = 0x540E;
     public const uint FIONREAD = 0x541B;
 
+    // Signal constants
+    public const int SIGALRM = 14;
+
+    // virtual FDs definitions (eventfd, timerfd, signalfd)
+    public const int EFD_SEMAPHORE = 1;
+    public const int EFD_NONBLOCK = 2048; // 04000 octal
+    public const int EFD_CLOEXEC = 524288; // 02000000 octal
+    public const int TFD_NONBLOCK = 2048;
+    public const int TFD_CLOEXEC = 524288;
+    public const int SFD_NONBLOCK = 2048;
+    public const int SFD_CLOEXEC = 524288;
+
+    // Poll events
+    public const int POLLIN = 0x0001;
+    public const int POLLOUT = 0x0004;
+
     // PTY ioctls (from linux/tty.h)
     public const uint TIOCGPTN = 0x80045430; // Get PTY number
     public const uint TIOCSPTLCK = 0x40045431; // Lock/unlock PTY
     public const uint TIOCGPTLCK = 0x80045432; // Get PTY lock status
 
     // IPC commands for sys_ipc multiplexer (from linux/ipc.h)
+    public const int SEMOP = 1;
+    public const int SEMGET = 2;
+    public const int SEMCTL = 3;
+    public const int SEMTIMEDOP = 4;
     public const int SHMAT = 21;
     public const int SHMDT = 22;
     public const int SHMGET = 23;
     public const int SHMCTL = 24;
+
+    // semctl commands (from linux/sem.h)
+    public const int GETPID = 11;
+    public const int GETVAL = 12;
+    public const int GETALL = 13;
+    public const int GETNCNT = 14;
+    public const int GETZCNT = 15;
+    public const int SETVAL = 16;
+    public const int SETALL = 17;
 
     // IPC flags (from linux/ipc.h) - these are octal values in Linux
     public const int IPC_CREAT = 0x200; // 01000 octal = create if key is nonexistent

@@ -40,14 +40,28 @@ public partial class SyscallManager
         var op = (int)(call & 0xFFFF);
         var version = (int)(call >> 16);
 
-        return op switch
+        int ret = op switch
         {
             LinuxConstants.SHMGET => DoShmGet(sm, (int)first, second, (int)third, uid, gid, pid),
             LinuxConstants.SHMAT => DoShmAt(sm, (int)first, second, (int)third, ptr, pid),
             LinuxConstants.SHMDT => DoShmDt(sm, first, pid),
             LinuxConstants.SHMCTL => DoShmCtl(sm, (int)first, (int)second, third, uid, gid, pid, version),
+            
+            LinuxConstants.SEMGET => sm.SysVSem.SemGet((int)first, (int)second, (int)third, uid, gid),
+            LinuxConstants.SEMCTL => DoSemCtlFromIpc(sm, (int)first, (int)second, third, ptr, uid, gid),
+            
             _ => -(int)Errno.ENOSYS
         };
+
+        if (ret == -(int)Errno.ENOSYS)
+        {
+            if (op == LinuxConstants.SEMOP)
+                ret = await sm.SysVSem.SemOp((int)first, ptr, second, sm.Engine);
+            else if (op == LinuxConstants.SEMTIMEDOP)
+                ret = await sm.SysVSem.SemOp((int)first, ptr, second, sm.Engine); // Ignore timeout for now
+        }
+
+        return ret;
     }
 
     /// <summary>
@@ -118,6 +132,54 @@ public partial class SyscallManager
         }
         
         return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, sm.Engine, uid, gid, pid);
+    }
+
+    private static int DoSemCtlFromIpc(SyscallManager sm, int first, int second, uint third, uint ptr, int uid, int gid)
+    {
+        // In sys_ipc on i386, the 4th arg (ptr) is a pointer to the union semun.
+        // We must dereference it to get the actual value for SETVAL/IPC_STAT.
+        uint argVal = 0;
+        if (ptr != 0) 
+        {
+            Span<byte> buf = stackalloc byte[4];
+            if (sm.Engine.CopyFromUser(ptr, buf))
+            {
+                argVal = BitConverter.ToUInt32(buf);
+            }
+        }
+        return sm.SysVSem.SemCtl(first, second, (int)third, argVal, sm.Engine, uid, gid);
+    }
+
+    private static ValueTask<int> SysSemGet(IntPtr state, uint key, uint nsems, uint semflg, uint _4, uint _5, uint _6)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
+        return new ValueTask<int>(sm.SysVSem.SemGet((int)key, (int)nsems, (int)semflg, uid, gid));
+    }
+
+    private static async ValueTask<int> SysSemOp(IntPtr state, uint semid, uint sops, uint nsops, uint _4, uint _5, uint _6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        return await sm.SysVSem.SemOp((int)semid, sops, nsops, sm.Engine);
+    }
+
+    private static ValueTask<int> SysSemCtl(IntPtr state, uint semid, uint semnum, uint cmd, uint arg, uint _5, uint _6)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
+        
+        int actualCmd = (int)cmd;
+        if ((cmd & LinuxConstants.IPC_64) != 0)
+            actualCmd = (int)(cmd & ~LinuxConstants.IPC_64);
+
+        return new ValueTask<int>(sm.SysVSem.SemCtl((int)semid, (int)semnum, actualCmd, arg, sm.Engine, uid, gid));
     }
 #pragma warning restore CS1998
 }

@@ -334,49 +334,6 @@ public class LinuxFile
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put(); // Decrease reference count
     }
-
-    public virtual int Read(Span<byte> buffer)
-    {
-        var n = Dentry.Inode!.Read(this, buffer, Position);
-        if (n > 0) Position += n;
-        return n;
-    }
-
-    public virtual int Write(ReadOnlySpan<byte> buffer)
-    {
-        var n = Dentry.Inode!.Write(this, buffer, Position);
-        if (n > 0) Position += n;
-        return n;
-    }
-
-    public virtual ValueTask WaitForRead()
-    {
-        return Dentry.Inode!.WaitForRead(this);
-    }
-
-    public virtual ValueTask WaitForWrite()
-    {
-        return Dentry.Inode!.WaitForWrite(this);
-    }
-
-    public virtual void Sync()
-    {
-        Dentry.Inode?.Sync(this);
-    }
-
-    /// <summary>
-    ///     Check for readiness. Returns a bitmask of POLL* constants.
-    ///     Delegates to the inode's Poll method.
-    /// </summary>
-    public virtual short Poll(short events)
-    {
-        return Dentry.Inode?.Poll(this, events) ?? 0;
-    }
-
-    public virtual bool RegisterWait(Action callback, short events)
-    {
-        return Dentry.Inode?.RegisterWait(this, callback, events) ?? false;
-    }
 }
 
 public struct DCacheKey(long parentId, string name) : IEquatable<DCacheKey>

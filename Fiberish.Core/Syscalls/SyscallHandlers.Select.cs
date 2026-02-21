@@ -141,7 +141,7 @@ public partial class SyscallManager
             if (checkWrite) pollEvents |= PollEvents.POLLOUT;
             if (checkEx) pollEvents |= PollEvents.POLLPRI;
 
-            var revents = file.Poll(pollEvents);
+            var revents = file.Dentry.Inode!.Poll(file, pollEvents);
 
             if ((revents & PollEvents.POLLIN) != 0 && checkRead)
             {
@@ -189,7 +189,7 @@ public partial class SyscallManager
             {
                 if (sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
-                    var revents = file.Poll(pfd.Events);
+                    var revents = file.Dentry.Inode!.Poll(file, pfd.Events);
                     // Debug logging
                     // SyscallManager.Logger.LogInformation("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd, pfd.Events, revents, file.GetType().Name);
 
@@ -402,7 +402,7 @@ public partial class SyscallManager
                     if (checkEx) events |= PollEvents.POLLPRI;
 
                     if (events != 0)
-                        file.RegisterWait(ScheduleRePoll, events);
+                        file.Dentry.Inode!.RegisterWait(file, ScheduleRePoll, events);
                 }
             }
         }
@@ -523,7 +523,7 @@ public partial class SyscallManager
                 var itemAddr = _fdsAddr + i * (uint)sizeOfPollfd;
                 var pfd = ReadStruct<Pollfd>(_sm.Engine, itemAddr);
                 if (pfd.Fd >= 0 && _sm.FDs.TryGetValue(pfd.Fd, out var file))
-                    file.RegisterWait(ScheduleRePoll, pfd.Events);
+                    file.Dentry.Inode!.RegisterWait(file, ScheduleRePoll, pfd.Events);
             }
         }
     }

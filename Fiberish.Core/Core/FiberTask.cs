@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
+using Fiberish.Core.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Core;
@@ -97,6 +98,7 @@ public class FiberTask
     // Signal System
     public ulong SignalMask { get; set; }
     public ulong PendingSignals { get; set; } // Bitmask - Access should be synchronized
+    public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new());
     public uint AltStackSp { get; set; }
     public uint AltStackSize { get; set; }
     public int AltStackFlags { get; set; }
@@ -122,6 +124,7 @@ public class FiberTask
 
     // Blocking Syscall Support
     public Func<ValueTask<int>>? PendingSyscall { get; set; }
+    public Timer? BlockingTimer { get; set; }
 
     public static int NextTID()
     {
@@ -149,22 +152,68 @@ public class FiberTask
 
     // RegisterBlockingSyscall removed
 
-    /// <summary>
-    ///     Post a signal to this task. Safe to call from any thread.
-    ///     This sets the pending flag and interrupts any blocking syscall.
-    ///     Actual delivery happens in RunSlice via ProcessPendingSignals -> DeliverSignal.
-    /// </summary>
     public void PostSignal(int sig)
     {
+        PostSignalInfo(new SigInfo { Signo = sig, Code = 0 /* SI_USER */, Pid = Process.TGID, Uid = 0 });
+    }
+
+    /// <summary>
+    ///     Post a signal with full SigInfo payload to this task. Safe to call from any thread.
+    ///     This sets the pending flag, queues the payload, and interrupts any blocking syscall.
+    /// </summary>
+    public void PostSignalInfo(SigInfo info)
+    {
+        int sig = info.Signo;
         if (sig < 1 || sig > 64) return;
 
-        Logger.LogInformation("[PostSignal] Posting signal {Sig}", sig);
+        Logger.LogInformation("[PostSignalInfo] Posting signal {Sig}", sig);
 
         var mask = 1UL << (sig - 1);
+        bool isIgnored = false;
         lock (this)
         {
-            Logger.LogDebug("[PostSignal] Setting PendingSignals to {1} from {2}", PendingSignals | mask, PendingSignals);
+            if (sig != 9 && sig != 19)
+            {
+                if (Process.SignalActions.TryGetValue(sig, out var action))
+                {
+                    if (action.Handler == 1) isIgnored = true; // SIG_IGN
+                }
+                else
+                {
+                    if (GetDefaultSignalAction(sig) == DefaultSignalAction.Ignore) isIgnored = true;
+                }
+            }
+
+            // Immediately discard ignored signals if they shouldn't trigger wakeups
+            if (isIgnored) 
+            {
+                Logger.LogDebug("[PostSignalInfo] Signal {Sig} is ignored. Discarding.", sig);
+                return;
+            }
+
+            Logger.LogDebug("[PostSignalInfo] Setting PendingSignals to {1} from {2}", PendingSignals | mask, PendingSignals);
             PendingSignals |= mask;
+            
+            PendingSignalQueue.Lock(q => 
+            {
+                if (sig < 32)
+                {
+                    bool found = false;
+                    foreach (var s in q)
+                    {
+                        if (s.Signo == sig)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) q.Add(info);
+                }
+                else
+                {
+                    q.Add(info);
+                }
+            });
         }
 
         // Check if we should interrupt syscall
@@ -172,7 +221,7 @@ public class FiberTask
         var isBlocked = (SignalMask & mask) != 0;
         if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
 
-        if (!isBlocked)
+        if (!isBlocked && !isIgnored)
         {
             InterruptingSignal = sig;
             WakeReason = WakeReason.Signal;
@@ -199,6 +248,8 @@ public class FiberTask
             bool hasAction = false;
             ulong oldMask = 0;
 
+            SigInfo dequeuedInfo = default;
+
             lock (this)
             {
                 if ((PendingSignals & mask) == 0) continue;
@@ -211,7 +262,18 @@ public class FiberTask
                 }
 
                 // POP SIGNAL
-                PendingSignals &= ~mask;
+                var nullableInfo = DequeueSignalUnsafe(i);
+                if (nullableInfo.HasValue)
+                {
+                    dequeuedInfo = nullableInfo.Value;
+                }
+                else
+                {
+                    // Fallback if queue desynced
+                    dequeuedInfo = new SigInfo { Signo = i, Code = 0 };
+                    PendingSignals &= ~mask;
+                }
+
                 oldMask = SignalMask;
                 hasAction = Process.SignalActions.TryGetValue(i, out action);
 
@@ -230,7 +292,7 @@ public class FiberTask
                 }
             }
 
-            DeliverSignal(i, action, hasAction, oldMask);
+            DeliverSignal(i, action, hasAction, oldMask, dequeuedInfo);
             break; // Only one per slice
         }
     }
@@ -261,12 +323,49 @@ public class FiberTask
                 if (action.Handler == 1) // SIG_IGN
                     return true;
             }
+            else
+            {
+                if (GetDefaultSignalAction(sig) == DefaultSignalAction.Ignore)
+                    return true;
+            }
         }
         return false;
     }
 
+    /// <summary>
+    /// Must be called under lock(this) to maintain atomic mask sync.
+    /// </summary>
+    public SigInfo? DequeueSignalUnsafe(int sig)
+    {
+        return PendingSignalQueue.Lock(list => 
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].Signo == sig)
+                {
+                    var info = list[i];
+                    list.RemoveAt(i);
+                    
+                    // Update PendingSignals mask if no more RT signals of this type
+                    if (sig >= 32)
+                    {
+                        bool stillPending = false;
+                        foreach (var s in list) if (s.Signo == sig) { stillPending = true; break; }
+                        if (!stillPending) PendingSignals &= ~(1UL << (sig - 1));
+                    }
+                    else
+                    {
+                        PendingSignals &= ~(1UL << (sig - 1));
+                    }
+                    return (SigInfo?)info;
+                }
+            }
+            return null;
+        });
+    }
+
     // Prepare stack frame for signal handler
-    private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask)
+    private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask, SigInfo info)
     {
         Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip,
             CPU.RegRead(Reg.ESP));
@@ -315,7 +414,7 @@ public class FiberTask
             if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
             {
                 if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.RtSigReturnAddr;
-                SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask);
+                SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
             }
             else
             {
@@ -487,32 +586,32 @@ public class FiberTask
         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
     }
 
-    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)
+    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask, SigInfo info)
     {
-        // Push UContext (approx 400 bytes inc fpstate)
-        // Align to 16 bytes
+        // ... (existing stack alignment)
         esp = (esp - 512u) & ~0xFu;
-        // We always setup UContext and SigInfo because sys_rt_sigreturn expects them.
 
         var ucontextAddr = esp;
-
-        // Populate UContext
-        // uc_flags, uc_link, uc_stack, uc_mcontext, uc_sigmask
         uint mcontextOffset = 4 + 4 + 12;
 
-        // Save registers to mcontext
         WriteSigContext(esp + mcontextOffset, oldMask);
 
-        // Push SigInfo (128 bytes)
         esp = (esp - 128u) & ~0xFu;
         var siginfoAddr = esp;
 
-        // Populate SigInfo
-        // si_signo, si_errno, si_code
-        var siBuf = new byte[12];
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), sig);
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), 0); // errno
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), 0); // code (SI_USER)
+        // Populate SigInfo (128 bytes)
+        var siBuf = new byte[128];
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), info.Signo);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), info.Errno);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
+        
+        // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
+        BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        
+        // Write the unionized payload value (e.g. SIGRT)
+        BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
+        
         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
         
         // Populate UContext uc_sigmask (offset 108)

@@ -298,10 +298,10 @@ public partial class SyscallManager
                         {
                             var info = new SigInfo
                             {
-                                si_signo = (int)Signal.SIGCHLD,
-                                si_pid = childProc.TGID,
-                                si_status = childProc.StopSignal,
-                                si_code = 5 // CLD_STOPPED
+                                Signo = (int)Signal.SIGCHLD,
+                                Pid = childProc.TGID,
+                                Status = childProc.StopSignal,
+                                Code = 5 // CLD_STOPPED
                             };
                             if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
                         }
@@ -316,10 +316,10 @@ public partial class SyscallManager
                         {
                             var info = new SigInfo
                             {
-                                si_signo = (int)Signal.SIGCHLD,
-                                si_pid = childProc.TGID,
-                                si_status = (int)Signal.SIGCONT,
-                                si_code = 6 // CLD_CONTINUED
+                                Signo = (int)Signal.SIGCHLD,
+                                Pid = childProc.TGID,
+                                Status = (int)Signal.SIGCONT,
+                                Code = 6 // CLD_CONTINUED
                             };
                             if (!WriteSigInfo(sm, infop, info)) return -(int)Errno.EFAULT;
                         }
@@ -407,31 +407,31 @@ public partial class SyscallManager
         {
             return new SigInfo
             {
-                si_signo = (int)Signal.SIGCHLD,
-                si_pid = childProc.TGID,
-                si_status = childProc.ExitStatus,
-                si_code = 1 // CLD_EXITED
+                Signo = (int)Signal.SIGCHLD,
+                Pid = childProc.TGID,
+                Status = childProc.ExitStatus,
+                Code = 1 // CLD_EXITED
             };
         }
 
         return new SigInfo
         {
-            si_signo = (int)Signal.SIGCHLD,
-            si_pid = childProc.TGID,
-            si_status = childProc.TermSignal,
-            si_code = childProc.CoreDumped ? 3 : 2 // CLD_DUMPED / CLD_KILLED
+            Signo = (int)Signal.SIGCHLD,
+            Pid = childProc.TGID,
+            Status = childProc.TermSignal,
+            Code = childProc.CoreDumped ? 3 : 2 // CLD_DUMPED / CLD_KILLED
         };
     }
 
     private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
     {
         var buf = new byte[128];
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.si_signo);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), info.si_errno);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), info.si_code);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.si_pid);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(16, 4), info.si_uid);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.si_status);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.Signo);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), info.Errno);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), info.Code);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.Pid);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16, 4), info.Uid);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.Status);
         return sm.Engine.CopyToUser(addr, buf);
     }
 

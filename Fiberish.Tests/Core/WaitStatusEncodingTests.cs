@@ -82,8 +82,8 @@ public class WaitStatusEncodingTests
         };
 
         var info = InvokeBuildSigInfo(child);
-        Assert.Equal((int)Signal.SIGCHLD, info.si_signo);
-        Assert.Equal(2, info.si_code); // CLD_KILLED
-        Assert.Equal((int)Signal.SIGKILL, info.si_status);
+        Assert.Equal((int)Signal.SIGCHLD, info.Signo);
+        Assert.Equal(2, info.Code); // CLD_KILLED
+        Assert.Equal((int)Signal.SIGKILL, info.Status);
     }
 }

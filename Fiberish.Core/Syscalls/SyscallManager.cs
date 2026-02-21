@@ -28,6 +28,7 @@ public partial class SyscallManager
         Tty = tty;
         Futex = new FutexManager();
         SysVShm = new SysVShmManager();
+        SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);
         RegisterHandlers();
@@ -108,7 +109,7 @@ public partial class SyscallManager
     }
 
     private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex,
-        SysVShmManager sysvShm, uint brk,
+        SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
         bool strace,
         Dentry root, Dentry cwd, Dentry procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock, TtyDiscipline? tty)
@@ -117,6 +118,7 @@ public partial class SyscallManager
         FDs = fds;
         Futex = futex;
         SysVShm = sysvShm;
+        SysVSem = sysvSem;
         BrkAddr = brk;
         BrkBase = brkBase;
         Strace = strace;
@@ -144,6 +146,8 @@ public partial class SyscallManager
 
     public VMAManager Mem { get; set; }
 
+    public PosixTimerManager PosixTimers { get; } = new();
+
     public Dentry Root { get; set; } = null!;
     public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
 
@@ -154,6 +158,7 @@ public partial class SyscallManager
 
     // System V Shared Memory (Global IPC namespace)
     public SysVShmManager SysVShm { get; }
+    public SysVSemManager SysVSem { get; }
 
     // File Descriptors (Shared if CLONE_FILES)
     public Dictionary<int, VFS.LinuxFile> FDs { get; } = [];
@@ -343,7 +348,7 @@ public partial class SyscallManager
                     { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
         }
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, BrkAddr, BrkBase, Strace, Root,
+        var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty)
         {

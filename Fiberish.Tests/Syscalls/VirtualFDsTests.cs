@@ -1,0 +1,171 @@
+using System;
+using System.Buffers.Binary;
+using System.Threading.Tasks;
+using Xunit;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
+
+namespace Fiberish.Tests.Syscalls;
+
+public class VirtualFDsTests
+{
+    private class TestEnv : IDisposable
+    {
+        public KernelScheduler Scheduler { get; }
+        public Process Process { get; }
+        public FiberTask Task { get; }
+        public SuperBlock MemfdSuperBlock { get; }
+
+        public TestEnv()
+        {
+            Scheduler = new KernelScheduler();
+            KernelScheduler.Current = Scheduler;
+            
+            var fs = new Tmpfs();
+            MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
+
+            var vma = new Fiberish.Memory.VMAManager();
+            var engine = new Engine();
+            Process = new Process(100, vma, null!);
+            Task = new FiberTask(100, Process, engine, Scheduler);
+            
+            typeof(KernelScheduler).GetProperty("CurrentTask")!.SetValue(Scheduler, Task);
+        }
+
+        public void Dispose()
+        {
+            KernelScheduler.Current = null;
+        }
+    }
+
+    [Fact]
+    public void EventFd_Counter_ReadWrite()
+    {
+        using var env = new TestEnv();
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, FileFlags.O_RDWR);
+        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR);
+
+        // Read initial value 5
+        var buf = new byte[8];
+        var readLen = inode.Read(efd, buf, 0);
+        Assert.Equal(8, readLen);
+        Assert.Equal(5UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
+
+        // Read again should return 0 (simulated block) or EAGAIN if NONBLOCK
+        efd.Flags |= FileFlags.O_NONBLOCK;
+        readLen = inode.Read(efd, buf, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, readLen);
+
+        // Write 10
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, 10UL);
+        var writeLen = inode.Write(efd, buf, 0);
+        Assert.Equal(8, writeLen);
+
+        // Read should return 10
+        readLen = inode.Read(efd, buf, 0);
+        Assert.Equal(8, readLen);
+        Assert.Equal(10UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
+    }
+
+    [Fact]
+    public void EventFd_Semaphore_Semantics()
+    {
+        using var env = new TestEnv();
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, (FileFlags)LinuxConstants.EFD_SEMAPHORE);
+        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), (FileFlags)LinuxConstants.EFD_SEMAPHORE);
+
+        var buf = new byte[8];
+        // Read should return 1 and decrement counter
+        for (int i = 0; i < 5; i++)
+        {
+            var readLen = inode.Read(efd, buf, 0);
+            Assert.Equal(8, readLen);
+            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
+        }
+
+        // 6th read should block/EAGAIN
+        efd.Flags |= FileFlags.O_NONBLOCK;
+        var err = inode.Read(efd, buf, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, err);
+
+        // Write 2
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, 2UL);
+        inode.Write(efd, buf, 0);
+
+        // Poll should show POLLIN
+        Assert.Equal(LinuxConstants.POLLIN | LinuxConstants.POLLOUT, inode.Poll(efd, LinuxConstants.POLLIN | LinuxConstants.POLLOUT));
+    }
+
+    [Fact]
+    public void TimerFd_SetAndGetTime()
+    {
+        using var env = new TestEnv();
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
+        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR);
+
+        inode.SetTime(2000, 5000, false);
+        inode.GetTime(out var interval, out var value);
+
+        Assert.Equal(2000L, interval);
+        Assert.Equal(5000L, value);
+    }
+
+    [Fact]
+    public void TimerFd_Expiration_Read()
+    {
+        using var env = new TestEnv();
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
+        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_NONBLOCK);
+
+        // Manually invoke the callback to simulate expiration
+        var method = typeof(TimerFdInode).GetMethod("TimerCallback", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        
+        method!.Invoke(inode, null);
+        method.Invoke(inode, null);
+
+        // Should have 2 expirations
+        var buf = new byte[8];
+        var readLen = inode.Read(tfd, buf, 0);
+        Assert.Equal(8, readLen);
+        Assert.Equal(2UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
+
+        // Next read should EAGAIN
+        readLen = inode.Read(tfd, buf, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, readLen);
+    }
+
+    [Fact]
+    public void SignalFd_Read_SigInfo()
+    {
+        using var env = new TestEnv();
+        var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
+        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock), FileFlags.O_NONBLOCK);
+
+        // Queue a signal
+        env.Task.PostSignalInfo(new SigInfo
+        {
+            Signo = (int)Signal.SIGUSR1,
+            Code = 0, // SI_USER
+            Pid = 1234,
+            Uid = 1000,
+            Value = 42
+        });
+        
+        // Reading should return siginfo
+        var buf = new byte[128];
+        var readLen = inode.Read(sfd, buf, 0);
+        Assert.Equal(128, readLen);
+
+        Assert.Equal((uint)Signal.SIGUSR1, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)));
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4)));
+        Assert.Equal(1234U, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(12, 4)));
+        Assert.Equal(1000U, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4)));
+        Assert.Equal(42UL, BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(56, 8)));
+
+        // Next read should EAGAIN
+        readLen = inode.Read(sfd, buf, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, readLen);
+    }
+}
