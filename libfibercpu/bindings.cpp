@@ -404,7 +404,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
 
             if (!new_block) {
-                state->status = EmuStatus::Fault;
+                if (state->status == EmuStatus::Running) {
+                    state->status = EmuStatus::Fault;
+                }
                 break;
             }
 

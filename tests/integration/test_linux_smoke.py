@@ -38,6 +38,11 @@ from .harness import EmulatorCase, run_case
             binary_name="test_segv",
             expect_tokens=["PASS: Received SIGSEGV"],
         ),
+        EmulatorCase(
+            name="test_fetch_fault",
+            binary_name="test_fetch_fault",
+            expect_tokens=["PASS: Received SIGSEGV at fetch"],
+        ),
     ],
 )
 def test_linux_smoke_cases(project_root: Path, integration_assets_dir: Path, case: EmulatorCase) -> None:
