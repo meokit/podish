@@ -221,6 +221,8 @@ public partial class SyscallManager
 
         Register(X86SyscallNumbers.select, SysSelect);
         Register(X86SyscallNumbers._newselect, SysNewSelect);
+        Register(X86SyscallNumbers.flock, SysFlock);
+        Register(X86SyscallNumbers.msync, SysMsync);
         Register(X86SyscallNumbers.poll, SysPoll);
         Register(X86SyscallNumbers.pipe, SysPipe);
         Register(X86SyscallNumbers.sendfile, SysSendfile);

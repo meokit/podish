@@ -7,9 +7,9 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+#pragma warning disable CS1998 // Async method lacks await operators
     private static async ValueTask<int> SysUtimes(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        await Task.CompletedTask;
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 

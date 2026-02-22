@@ -1466,4 +1466,17 @@ public partial class SyscallManager
         sm.ProcessRoot = dentry;
         return 0;
     }
+
+    private static async ValueTask<int> SysFlock(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var fd = (int)a1;
+        var op = (int)a2;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+
+        return f.Dentry.Inode.Flock(f, op);
+    }
 }

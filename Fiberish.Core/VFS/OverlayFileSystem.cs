@@ -256,6 +256,13 @@ public class OverlayInode : Inode
         UpperDentry = upperParent;
     }
 
+    public override int Flock(LinuxFile linuxFile, int operation)
+    {
+        if (UpperInode != null) return UpperInode.Flock(linuxFile, operation);
+        if (LowerInode != null) return LowerInode.Flock(linuxFile, operation);
+        return -(int)Errno.ENOSYS;
+    }
+
     public override string Readlink()
     {
         if (UpperInode != null && UpperInode.Type == InodeType.Symlink)

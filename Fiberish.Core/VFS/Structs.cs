@@ -243,6 +243,14 @@ public abstract class Inode
         return -(int)Errno.ENOTTY;
     }
 
+    /// <summary>
+    ///     Handle flock requests for this inode. Default implementation returns ENOSYS.
+    /// </summary>
+    public virtual int Flock(LinuxFile linuxFile, int operation)
+    {
+        return -(int)Errno.ENOSYS;
+    }
+
     // File operations hooks
     public virtual void Open(LinuxFile linuxFile)
     {

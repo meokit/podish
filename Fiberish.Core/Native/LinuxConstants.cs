@@ -322,6 +322,12 @@ public static class LinuxConstants
     public const int SFD_NONBLOCK = 2048;
     public const int SFD_CLOEXEC = 524288;
 
+    // flock commands
+    public const int LOCK_SH = 1;
+    public const int LOCK_EX = 2;
+    public const int LOCK_NB = 4;
+    public const int LOCK_UN = 8;
+
     // Poll events
     public const int POLLIN = 0x0001;
     public const int POLLOUT = 0x0004;

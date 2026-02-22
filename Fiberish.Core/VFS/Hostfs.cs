@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
@@ -248,6 +249,25 @@ public partial class HostInode : Inode
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int link(string oldpath, string newpath);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int flock(int fd, int operation);
+
+    public override int Flock(LinuxFile linuxFile, int operation)
+    {
+        if (linuxFile.PrivateData is FileStream fs)
+        {
+            int fd = fs.SafeFileHandle.DangerousGetHandle().ToInt32();
+            if (flock(fd, operation) != 0)
+            {
+                return -Marshal.GetLastPInvokeError();
+            }
+
+            return 0;
+        }
+
+        return -(int)Errno.EBADF;
+    }
 
     public override Dentry Link(Dentry dentry, Inode oldInode)
     {

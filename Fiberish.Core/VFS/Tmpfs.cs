@@ -63,6 +63,11 @@ public class TmpfsInode : Inode
     private readonly HashSet<string> _childNames = [];
     private byte[]? _data = [];
 
+    // Flock state
+    private int _lockType = 0; // 0: None, 1: Shared, 2: Exclusive
+    private readonly HashSet<LinuxFile> _sharedHolders = [];
+    private LinuxFile? _exclusiveHolder = null;
+
     public TmpfsInode(ulong ino, SuperBlock sb)
     {
         Ino = ino;
@@ -341,6 +346,63 @@ public class TmpfsInode : Inode
             var count = Math.Min(buffer.Length, _data.Length - (int)offset);
             _data.AsSpan((int)offset, count).CopyTo(buffer);
             return count;
+        }
+    }
+
+    public override int Flock(LinuxFile linuxFile, int operation)
+    {
+        bool nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
+        int op = operation & ~LinuxConstants.LOCK_NB;
+
+        lock (Lock)
+        {
+            while (true)
+            {
+                if (op == LinuxConstants.LOCK_UN)
+                {
+                    if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
+                    _sharedHolders.Remove(linuxFile);
+                    if (_exclusiveHolder == null && _sharedHolders.Count == 0) _lockType = 0;
+                    Monitor.PulseAll(Lock);
+                    return 0;
+                }
+
+                bool canAcquire = false;
+                if (op == LinuxConstants.LOCK_SH)
+                {
+                    // Can acquire shared lock if no one has exclusive lock, OR if WE have the exclusive lock (downgrade)
+                    if (_exclusiveHolder == null || _exclusiveHolder == linuxFile) canAcquire = true;
+                }
+                else if (op == LinuxConstants.LOCK_EX)
+                {
+                    // Can acquire exclusive lock if (no one has ANY lock) OR (WE are the only one holding locks)
+                    if (_lockType == 0) canAcquire = true;
+                    else if (_exclusiveHolder == linuxFile) canAcquire = true;
+                    else if (_sharedHolders.Count == 1 && _sharedHolders.Contains(linuxFile) && _exclusiveHolder == null)
+                        canAcquire = true;
+                }
+
+                if (canAcquire)
+                {
+                    if (op == LinuxConstants.LOCK_SH)
+                    {
+                        if (_exclusiveHolder == linuxFile) _exclusiveHolder = null; // Downgrade
+                        _sharedHolders.Add(linuxFile);
+                        _lockType = 1;
+                    }
+                    else
+                    {
+                        _sharedHolders.Remove(linuxFile); // Ensure not in shared if moving to exclusive
+                        _exclusiveHolder = linuxFile;
+                        _lockType = 2;
+                    }
+
+                    return 0;
+                }
+
+                if (nonBlock) return -(int)Errno.EAGAIN;
+                Monitor.Wait(Lock);
+            }
         }
     }
 
