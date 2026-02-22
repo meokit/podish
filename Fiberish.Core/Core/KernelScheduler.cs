@@ -1,10 +1,10 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading;
 using System.Threading.Channels;
-using System.Diagnostics;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
+using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -18,23 +18,25 @@ public class KernelScheduler
     // public static KernelScheduler Instance { get; set; } = new();
 
     private static readonly AsyncLocal<KernelScheduler?> _current = new();
+
     private readonly Channel<(Action, FiberTask?)> _events =
         Channel.CreateUnbounded<(Action, FiberTask?)>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
         });
-    private int _wakePending;
 
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
 
     private readonly Queue<FiberTask> _runQueue = new();
+    private readonly Stopwatch _sw = Stopwatch.StartNew();
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
-    private readonly Stopwatch _sw = Stopwatch.StartNew();
+    private readonly ManualResetEventSlim _wakeEvent = new(false);
 
     private TtyDiscipline? _tty;
+    private int _wakePending;
 
     // TTY reference for checking pending input
     public TtyDiscipline? Tty
@@ -117,6 +119,7 @@ public class KernelScheduler
     public void Schedule(Action continuation, FiberTask? context = null)
     {
         _events.Writer.TryWrite((continuation, context));
+        EnqueueWake();
     }
 
     public Timer ScheduleTimer(long delayMs, Action callback)
@@ -124,10 +127,7 @@ public class KernelScheduler
         var targetTick = _timerSystem.CurrentTick + delayMs;
         // Adjust for any lag between CurrentTick and real time
         var realNow = _sw.ElapsedMilliseconds;
-        if (targetTick < realNow + delayMs)
-        {
-            targetTick = realNow + delayMs;
-        }
+        if (targetTick < realNow + delayMs) targetTick = realNow + delayMs;
 
         var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
@@ -146,14 +146,14 @@ public class KernelScheduler
         Current = this;
         Logger.LogInformation("KernelScheduler started.");
 
-        long startTick = _timerSystem.CurrentTick;
+        var startTick = _timerSystem.CurrentTick;
 
         try
         {
             while (Running)
             {
                 // Advance timer to current physical time (in ms)
-                long nowMs = startTick + _sw.ElapsedMilliseconds;
+                var nowMs = startTick + _sw.ElapsedMilliseconds;
                 _timerSystem.Advance(nowMs);
 
                 if (maxTicks > 0 && CurrentTick >= maxTicks)
@@ -182,20 +182,38 @@ public class KernelScheduler
                         break;
                     }
 
-                    if (_timerSystem.HasTimers || (Tty != null && anyWaiting))
+                    // Calculate wait time
+                    long waitTime = -1;
+                    if (_timerSystem.HasTimers)
                     {
-                        // Sleep briefly to avoid 100% CPU when purely polling physical time
-                        Thread.Sleep(1);
-                        continue;
+                        var nextTick = _timerSystem.GetNextExpiration();
+                        if (nextTick.HasValue)
+                        {
+                            waitTime = nextTick.Value - _timerSystem.CurrentTick;
+                            if (waitTime < 0) waitTime = 0;
+                        }
+                    }
+                    else if (Tty != null && anyWaiting)
+                    {
+                        waitTime = -1; // Wait indefinitely for TTY or external events
+                    }
+                    else
+                    {
+                        // No timers, no tasks waiting on TTY?
+                        // If anyWaiting is true, we must wait indefinitely (e.g. waiting on a signal or socket)
+                        if (anyWaiting) waitTime = -1;
+                        else
+                            // Should not happen if anyAlive is true but runQueue empty (ValidateSchedulerState handles Ready tasks)
+                            // Maybe just yield?
+                            waitTime = 0;
                     }
 
-                    // No tasks and no timers? Check if we should wait for external input.
-                    if (Running)
-                    {
-                        Logger.LogInformation("No ready tasks, no pending timers, and no active waiting. Exiting loop.");
-                        Running = false;
-                        break;
-                    }
+                    // If waitTime is 0 (timer due now), we must wait at least 1ms to let wall clock advance
+                    // otherwise we busy loop until _sw.ElapsedMilliseconds increases.
+                    if (waitTime == 0) waitTime = 1;
+
+                    WaitForEvent((int)waitTime);
+                    continue;
                 }
 
                 // 2. Run Task
@@ -213,7 +231,7 @@ public class KernelScheduler
                     task.RunSlice();
 
                     // Time accounting (simplified)
-                    _timerSystem.Advance(1);
+                    // _timerSystem.Advance(1); // Removed: Time is driven by _sw.ElapsedMilliseconds
                 }
             }
         }
@@ -237,13 +255,19 @@ public class KernelScheduler
             ExecuteEvent(item);
         }
 
+        if (drained) _wakeEvent.Reset();
         return drained;
     }
 
     private void WaitForEvent()
     {
-        var item = _events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
-        ExecuteEvent(item);
+        WaitForEvent(-1);
+    }
+
+    private void WaitForEvent(int timeoutMs)
+    {
+        _wakeEvent.Wait(timeoutMs);
+        _wakeEvent.Reset();
     }
 
     private void ExecuteEvent((Action, FiberTask?) item)
@@ -267,8 +291,10 @@ public class KernelScheduler
 
     private void EnqueueWake()
     {
-        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
+        // Always signal event
+        _wakeEvent.Set();
 
+        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
         _events.Writer.TryWrite((() => { _wakePending = 0; }, null));
     }
 
@@ -350,7 +376,7 @@ public class KernelScheduler
                     case FiberTaskStatus.Waiting:
                         // Waiting is normal - task is waiting for I/O (terminal, timer, futex, etc.)
                         // This is NOT a scheduler bug, just normal blocking
-                        Logger.LogDebug("Task TID={TID} is Waiting (normal I/O block)", task.TID);
+                        // Logger.LogDebug("Task TID={TID} is Waiting (normal I/O block)", task.TID);
                         break;
 
                     case FiberTaskStatus.Zombie:
@@ -413,7 +439,7 @@ public class KernelScheduler
         return true;
     }
 
-    public bool SignalProcessInfo(int pid, int signal, Fiberish.Native.SigInfo info)
+    public bool SignalProcessInfo(int pid, int signal, SigInfo info)
     {
         Process? proc;
         lock (_processes)
@@ -442,9 +468,8 @@ public class KernelScheduler
 
         var count = 0;
         foreach (var pid in pids)
-        {
-            if (SignalProcess(pid, signal)) count++;
-        }
+            if (SignalProcess(pid, signal))
+                count++;
 
         return count;
     }

@@ -17,7 +17,7 @@ public partial class SyscallManager
         // ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
+
         var outFd = (int)a1;
         var inFd = (int)a2;
         var offsetPtr = a3;
@@ -34,20 +34,19 @@ public partial class SyscallManager
         var (result, newOffset) = await DoSendfile(sm, outFd, inFd, offset, count);
 
         if (result >= 0 && offsetPtr != 0 && offset.HasValue)
-        {
             if (!sm.Engine.CopyToUser(offsetPtr, BitConverter.GetBytes((uint)offset.Value)))
                 return -(int)Errno.EFAULT;
-        }
 
         return result;
     }
 
-    internal static async ValueTask<int> SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal static async ValueTask<int> SysSendfile64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
+
         var outFd = (int)a1;
         var inFd = (int)a2;
         var offsetPtr = a3;
@@ -64,15 +63,14 @@ public partial class SyscallManager
         var (result, newOffset) = await DoSendfile(sm, outFd, inFd, offset, count);
 
         if (result >= 0 && offsetPtr != 0 && newOffset.HasValue)
-        {
             if (!sm.Engine.CopyToUser(offsetPtr, BitConverter.GetBytes(newOffset.Value)))
                 return -(int)Errno.EFAULT;
-        }
 
         return result;
     }
 
-    private static async ValueTask<(int, long?)> DoSendfile(SyscallManager sm, int outFd, int inFd, long? offset, int count)
+    private static async ValueTask<(int, long?)> DoSendfile(SyscallManager sm, int outFd, int inFd, long? offset,
+        int count)
     {
         if (!sm.FDs.TryGetValue(inFd, out var inFile) || !sm.FDs.TryGetValue(outFd, out var outFile))
             return (-(int)Errno.EBADF, null);
@@ -91,7 +89,7 @@ public partial class SyscallManager
         try
         {
             var remaining = count;
-            long readOffset = offset ?? inFile.Position;
+            var readOffset = offset ?? inFile.Position;
 
             while (remaining > 0)
             {
@@ -111,6 +109,7 @@ public partial class SyscallManager
                             return (-(int)Errno.ERESTARTSYS, null);
                         continue;
                     }
+
                     if (totalWritten > 0)
                         break;
                     return (bytesRead, null); // Return error code
@@ -130,12 +129,10 @@ public partial class SyscallManager
                         if (sm.Engine.Owner is FiberTask fiberTask)
                         {
                             if (await new IOAwaiter(outFile, false, fiberTask) == AwaitResult.Interrupted)
-                            {
                                 // We read data but were interrupted before writing.
                                 // If we don't handle this perfectly, bytes are technically lost. For now, return ERESTARTSYS.
                                 return (-(int)Errno.ERESTARTSYS, null);
-                            }
-                            
+
                             // Unwind the read loop since we need to retry write, but we already advanced the read position!
                             // This gets complex. But wait, if we got EAGAIN on write, we've already consumed read.
                             // In real Linux, sendfile might block on write, so we should just continue writing what we read.
@@ -144,6 +141,7 @@ public partial class SyscallManager
                             continue;
                         }
                     }
+
                     if (totalWritten > 0) break;
 
                     return (bytesWritten, null);
@@ -452,7 +450,8 @@ public partial class SyscallManager
                         if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        if (sm.Engine.Owner is not FiberTask fiberTask) return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+                        if (sm.Engine.Owner is not FiberTask fiberTask)
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
                         if (await new IOAwaiter(f, true, fiberTask) == AwaitResult.Interrupted)
                             return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
@@ -516,6 +515,12 @@ public partial class SyscallManager
                 while (true)
                 {
                     var n = f.Dentry.Inode!.Write(f, data.AsSpan(0, (int)iov.Len), currentOffset);
+
+                    if (n == -(int)Errno.EPIPE)
+                    {
+                        if (sm.Engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
+                        return n;
+                    }
 
                     if (n == -(int)Errno.EAGAIN)
                     {
@@ -862,11 +867,15 @@ public partial class SyscallManager
                 _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
+
             _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
 
-        public IOAwaiter GetAwaiter() => this;
+        public IOAwaiter GetAwaiter()
+        {
+            return this;
+        }
 
         private class RunOnceAction(Action action, FiberTask task)
         {

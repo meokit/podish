@@ -15,8 +15,8 @@ public class Timer
 }
 
 /// <summary>
-/// A hierarchical time wheel implementation optimized for fast insertion and tick processing.
-/// Tick size is assumed to be 1 millisecond.
+///     A hierarchical time wheel implementation optimized for fast insertion and tick processing.
+///     Tick size is assumed to be 1 millisecond.
 /// </summary>
 public class TimeWheel
 {
@@ -32,14 +32,14 @@ public class TimeWheel
     private readonly Timer?[] _tv3 = new Timer?[TVN_SIZE];
     private readonly Timer?[] _tv4 = new Timer?[TVN_SIZE];
     private readonly Timer?[] _tv5 = new Timer?[TVN_SIZE];
-
-    public long CurrentTick { get; private set; } // Milliseconds
-    private int _count = 0;
+    private int _count;
 
     public TimeWheel(long startTick = 0)
     {
         CurrentTick = startTick;
     }
+
+    public long CurrentTick { get; private set; } // Milliseconds
 
     public bool HasTimers => _count > 0;
 
@@ -114,16 +114,74 @@ public class TimeWheel
             while (timer != null)
             {
                 var next = timer.Next;
-                if (!timer.Canceled)
-                {
-                    timer.Callback?.Invoke();
-                }
+                if (!timer.Canceled) timer.Callback?.Invoke();
                 _count--;
                 timer = next;
             }
 
             CurrentTick++;
         }
+    }
+
+    public long? GetNextExpiration()
+    {
+        if (_count == 0) return null;
+
+        // Check TV1
+        var currentIdx = (int)(CurrentTick & TVR_MASK);
+        for (var i = 0; i < TVR_SIZE; i++)
+        {
+            var idx = (currentIdx + i) & TVR_MASK;
+            if (_tv1[idx] != null)
+            {
+                var min = GetMinExpiration(_tv1[idx]);
+                if (min.HasValue) return min;
+            }
+        }
+
+        // Check TV2 .. TV5
+        long? ret;
+        if ((ret = CheckCascade(_tv2, 0, TVR_BITS)) != null) return ret;
+        if ((ret = CheckCascade(_tv3, 1, TVR_BITS + TVN_BITS)) != null) return ret;
+        if ((ret = CheckCascade(_tv4, 2, TVR_BITS + 2 * TVN_BITS)) != null) return ret;
+        if ((ret = CheckCascade(_tv5, 3, TVR_BITS + 3 * TVN_BITS)) != null) return ret;
+
+        return null;
+    }
+
+    private long? CheckCascade(Timer?[] vec, int levelIndex, int shift)
+    {
+        var currentIdx = (int)((CurrentTick >> shift) & TVN_MASK);
+        for (var i = 1; i < TVN_SIZE; i++)
+        {
+            var idx = (currentIdx + i) & TVN_MASK;
+            if (vec[idx] != null)
+            {
+                var min = GetMinExpiration(vec[idx]);
+                if (min.HasValue) return min;
+            }
+        }
+
+        return null;
+    }
+
+    private long? GetMinExpiration(Timer? head)
+    {
+        var min = long.MaxValue;
+        var t = head;
+        var found = false;
+        while (t != null)
+        {
+            if (!t.Canceled)
+            {
+                if (t.ExpirationTick < min) min = t.ExpirationTick;
+                found = true;
+            }
+
+            t = t.Next;
+        }
+
+        return found ? min : null;
     }
 
     private void Cascade(Timer?[] vec, int index)

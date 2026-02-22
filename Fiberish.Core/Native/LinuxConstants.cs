@@ -393,4 +393,27 @@ public static class LinuxConstants
 
     // IPC version flags
     public const int IPC_OLD = 0;
+
+    // Socket message flags (from linux/socket.h)
+    public const int MSG_OOB = 0x01;
+    public const int MSG_PEEK = 0x02;
+    public const int MSG_DONTROUTE = 0x04;
+    public const int MSG_CTRUNC = 0x08;
+    public const int MSG_PROXY = 0x10;
+    public const int MSG_TRUNC = 0x20;
+    public const int MSG_DONTWAIT = 0x40;
+    public const int MSG_EOR = 0x80;
+    public const int MSG_WAITALL = 0x100;
+    public const int MSG_FIN = 0x200;
+    public const int MSG_SYN = 0x400;
+    public const int MSG_CONFIRM = 0x800;
+    public const int MSG_RST = 0x1000;
+    public const int MSG_ERRQUEUE = 0x2000;
+    public const int MSG_NOSIGNAL = 0x4000;
+    public const int MSG_MORE = 0x8000;
+    public const int MSG_WAITFORONE = 0x10000;
+    public const int MSG_BATCH = 0x40000;
+    public const int MSG_ZEROCOPY = 0x4000000;
+    public const int MSG_FASTOPEN = 0x20000000;
+    public const int MSG_CMSG_CLOEXEC = 0x40000000;
 }

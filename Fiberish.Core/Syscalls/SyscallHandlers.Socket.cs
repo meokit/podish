@@ -1,9 +1,6 @@
-using System;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -21,11 +18,11 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int domain = (int)a1;
-        int type = (int)a2; // May contain SOCK_NONBLOCK / SOCK_CLOEXEC
-        int protocol = (int)a3;
+        var domain = (int)a1;
+        var type = (int)a2; // May contain SOCK_NONBLOCK / SOCK_CLOEXEC
+        var protocol = (int)a3;
 
-        int realType = type & 0xf;
+        var realType = type & 0xf;
         AddressFamily af;
         SocketType sockType;
         ProtocolType proto;
@@ -41,9 +38,7 @@ public partial class SyscallManager
         else return -(int)Errno.EINVAL;
 
         if (protocol == 0)
-        {
             proto = sockType == SocketType.Stream ? ProtocolType.Tcp : ProtocolType.Udp;
-        }
         else if (protocol == 6 /* IPPROTO_TCP */) proto = ProtocolType.Tcp;
         else if (protocol == 17 /* IPPROTO_UDP */) proto = ProtocolType.Udp;
         else return -(int)Errno.EPROTONOSUPPORT;
@@ -52,14 +47,14 @@ public partial class SyscallManager
         {
             var inode = new HostSocketInode(0, sm.MemfdSuperBlock, af, sockType, proto);
             var fileFlags = FileFlags.O_RDWR;
-            
+
             // Linux socket type flags: SOCK_NONBLOCK=04000 (0x800), SOCK_CLOEXEC=02000000 (0x80000)
             if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((type & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
             var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, sm.MemfdSuperBlock);
-            var file = new Fiberish.VFS.LinuxFile(dentry, fileFlags);
-            
+            var file = new VFS.LinuxFile(dentry, fileFlags);
+
             return sm.AllocFD(file);
         }
         catch (SocketException ex)
@@ -75,9 +70,9 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint addrPtr = a2;
-        int addrLen = (int)a3;
+        var fd = (int)a1;
+        var addrPtr = a2;
+        var addrLen = (int)a3;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -88,15 +83,7 @@ public partial class SyscallManager
 
         try
         {
-            // System.Net.Sockets.Socket.Connect blocks natively if we just call it.
-            // But since our socket is non-blocking, it will throw WouldBlock and connect in the background!
-            sockInode.NativeSocket.Connect(endpoint);
-            return 0;
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock || ex.SocketErrorCode == SocketError.IOPending)
-        {
-            // EINPROGRESS
-            return -(int)Errno.EINPROGRESS;
+            return await sockInode.ConnectAsync(file, endpoint);
         }
         catch (SocketException ex)
         {
@@ -111,9 +98,9 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint addrPtr = a2;
-        int addrLen = (int)a3;
+        var fd = (int)a1;
+        var addrPtr = a2;
+        var addrLen = (int)a3;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -140,8 +127,8 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        int backlog = (int)a2;
+        var fd = (int)a1;
+        var backlog = (int)a2;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -170,56 +157,34 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint addrPtr = a2;
-        uint addrLenPtr = a3;
-        int flags = (int)a4;
+        var fd = (int)a1;
+        var addrPtr = a2;
+        var addrLenPtr = a3;
+        var flags = (int)a4;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
         if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
 
-        while (true)
+        try
         {
-            try
-            {
-                var newSock = sockInode.NativeSocket.Accept();
-                
-                var newInode = new HostSocketInode(0, sm.MemfdSuperBlock, newSock);
-                var fileFlags = FileFlags.O_RDWR;
-                if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-                if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
-                
-                var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
-                var newFile = new Fiberish.VFS.LinuxFile(dentry, fileFlags);
-                
-                if (addrPtr != 0 && addrLenPtr != 0)
-                {
-                    WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
-                }
+            var newSock = await sockInode.AcceptAsync(file, flags);
 
-                return sm.AllocFD(newFile);
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock || ex.SocketErrorCode == SocketError.IOPending)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                
-                // Block until POLLIN
-                sockInode.RegisterWait(file, () => { }, PollEvents.POLLIN);
-                
-                // We're digging slightly into the wait queue implementation here...
-                // Ideally HostSocketInode exposes an AcceptAsync(). 
-                // Because .Accept() blocks, we rely on the same AsyncWaitQueue mechanisms.
-                // For simplicity here, we yield to schedule a re-poll
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-            
-            // Re-eval check
-            if (task.HasUnblockedPendingSignal()) return -(int)Errno.ERESTARTSYS;
-            await sockInode.WaitReadAsync();
+            var newInode = new HostSocketInode(0, sm.MemfdSuperBlock, newSock);
+            var fileFlags = FileFlags.O_RDWR;
+            if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+            if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+
+            var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
+            var newFile = new VFS.LinuxFile(dentry, fileFlags);
+
+            if (addrPtr != 0 && addrLenPtr != 0) WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
+
+            return sm.AllocFD(newFile);
+        }
+        catch (SocketException ex)
+        {
+            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
         }
     }
 
@@ -240,12 +205,12 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint bufPtr = a2;
-        int len = (int)a3;
-        int flags = (int)a4;
-        uint destAddrPtr = a5;
-        int destAddrLen = (int)a6;
+        var fd = (int)a1;
+        var bufPtr = a2;
+        var len = (int)a3;
+        var flags = (int)a4;
+        var destAddrPtr = a5;
+        var destAddrLen = (int)a6;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -256,17 +221,23 @@ public partial class SyscallManager
 
         try
         {
+            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
+
             if (destAddrPtr != 0)
             {
                 var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen);
                 if (endpoint == null) return -(int)Errno.EINVAL;
-                
-                // FIXME: Connectless sendto missing async wrapper just for MVP.
-                return sockInode.NativeSocket.SendTo(buf, (SocketFlags)flags, endpoint);
+
+                var ret = await sockInode.SendToAsync(file, buf, hostFlags, endpoint);
+                if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+                return ret;
             }
             else
             {
-                return await sockInode.SendAsync(file, buf, flags);
+                // SendAsync also needs to handle flags
+                var ret = await sockInode.SendAsync(file, buf, hostFlags);
+                if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+                return ret;
             }
         }
         catch (SocketException ex)
@@ -282,40 +253,44 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint bufPtr = a2;
-        int len = (int)a3;
-        int flags = (int)a4;
-        uint srcAddrPtr = a5;
-        uint addrLenPtr = a6;
+        var fd = (int)a1;
+        var bufPtr = a2;
+        var len = (int)a3;
+        var flags = (int)a4;
+        var srcAddrPtr = a5;
+        var addrLenPtr = a6;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
         if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
 
         var buf = new byte[len];
-        
+
         try
         {
+            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
             int bytes;
+
             if (srcAddrPtr != 0 && addrLenPtr != 0)
             {
-                EndPoint remoteEp = sockInode.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6 
-                    ? new IPEndPoint(IPAddress.IPv6Any, 0) : new IPEndPoint(IPAddress.Any, 0);
+                EndPoint remoteEp = sockInode.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+                    ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                    : new IPEndPoint(IPAddress.Any, 0);
 
-                // FIXME: Blocking behavior in ReceiveFrom without wrapping...
-                bytes = sockInode.NativeSocket.ReceiveFrom(buf, (SocketFlags)flags, ref remoteEp);
-                WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, remoteEp);
+                var result = await sockInode.RecvFromAsync(file, buf, hostFlags, remoteEp);
+                bytes = result.Bytes;
+
+                if (bytes >= 0 && result.RemoteEp != null)
+                    WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, result.RemoteEp);
             }
             else
             {
-                bytes = await sockInode.RecvAsync(file, buf, flags);
+                bytes = await sockInode.RecvAsync(file, buf, hostFlags);
             }
 
             if (bytes > 0)
-            {
-                if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes))) return -(int)Errno.EFAULT;
-            }
+                if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
+                    return -(int)Errno.EFAULT;
             return bytes;
         }
         catch (SocketException ex)
@@ -331,9 +306,9 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint msgPtr = a2;
-        int flags = (int)a3;
+        var fd = (int)a1;
+        var msgPtr = a2;
+        var flags = (int)a3;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -341,56 +316,56 @@ public partial class SyscallManager
         var msgRaw = new byte[28];
         if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
 
-        uint iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
-        int iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
-        uint controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
-        int controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
+        var iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
+        var iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
+        var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
+        var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
 
-        int totalBytes = 0;
+        var totalBytes = 0;
         var iovs = new (uint Base, int Len)[iovLen];
-        for (int i=0; i<iovLen; i++)
+        for (var i = 0; i < iovLen; i++)
         {
             var iovRaw = new byte[8];
-            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i*8), iovRaw)) return -(int)Errno.EFAULT;
-            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)), 
-                       BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
+            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return -(int)Errno.EFAULT;
+            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
+                BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
             totalBytes += iovs[i].Len;
         }
 
         var data = new byte[totalBytes];
-        int offset = 0;
+        var offset = 0;
         foreach (var iov in iovs)
-        {
             if (iov.Len > 0)
             {
                 if (!task.CPU.CopyFromUser(iov.Base, data.AsSpan(offset, iov.Len))) return -(int)Errno.EFAULT;
                 offset += iov.Len;
             }
-        }
 
-        var fds = new System.Collections.Generic.List<Fiberish.VFS.LinuxFile>();
+        var fds = new List<VFS.LinuxFile>();
         if (controlPtr != 0 && controlLen > 0)
         {
             var cmsgRaw = new byte[controlLen];
             if (!task.CPU.CopyFromUser(controlPtr, cmsgRaw)) return -(int)Errno.EFAULT;
 
-            int cmsgOffset = 0;
+            var cmsgOffset = 0;
             while (cmsgOffset + 12 <= controlLen)
             {
-                int cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset, 4));
-                int level = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 4, 4));
-                int type = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 8, 4));
+                var cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset, 4));
+                var level = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 4, 4));
+                var type = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 8, 4));
 
                 if (level == 1 /* SOL_SOCKET */ && type == 1 /* SCM_RIGHTS */)
                 {
-                    int fdCount = (cmsgLen - 12) / 4;
-                    for (int i=0; i<fdCount; i++)
+                    var fdCount = (cmsgLen - 12) / 4;
+                    for (var i = 0; i < fdCount; i++)
                     {
-                        int passedFd = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 12 + i * 4, 4));
+                        var passedFd =
+                            BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 12 + i * 4, 4));
                         var passedFile = sm.GetFD(passedFd);
                         if (passedFile != null) fds.Add(passedFile);
                     }
                 }
+
                 cmsgOffset += Math.Max(cmsgLen, 12);
                 cmsgOffset = (cmsgOffset + 3) & ~3; // align to 4 bytes
             }
@@ -398,14 +373,19 @@ public partial class SyscallManager
 
         if (file.Dentry.Inode is UnixSocketInode unixSock)
         {
-            return await unixSock.SendMessageAsync(file, data, fds.Count > 0 ? fds : null, flags);
+            var ret = await unixSock.SendMessageAsync(file, data, fds.Count > 0 ? fds : null, flags);
+            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+            return ret;
         }
-        else if (file.Dentry.Inode is HostSocketInode hostSock)
+
+        if (file.Dentry.Inode is HostSocketInode hostSock)
         {
             // Host sockets don't support SCM_RIGHTS, fallback to basic send
-            return await hostSock.SendAsync(file, data, flags);
+            var ret = await hostSock.SendAsync(file, data, flags);
+            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+            return ret;
         }
-        
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -416,9 +396,9 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd = (int)a1;
-        uint msgPtr = a2;
-        int flags = (int)a3;
+        var fd = (int)a1;
+        var msgPtr = a2;
+        var flags = (int)a3;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -426,25 +406,28 @@ public partial class SyscallManager
         var msgRaw = new byte[28];
         if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
 
-        uint iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
-        int iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
-        uint controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
-        int controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
+        var iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
+        var iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
+        var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
+        var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
 
-        int totalBytes = 0;
+        var totalBytes = 0;
         var iovs = new (uint Base, int Len)[iovLen];
-        for (int i=0; i<iovLen; i++)
+        for (var i = 0; i < iovLen; i++)
         {
             var iovRaw = new byte[8];
-            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i*8), iovRaw)) return -(int)Errno.EFAULT;
-            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)), 
-                       BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
+            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return -(int)Errno.EFAULT;
+            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
+                BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
             totalBytes += iovs[i].Len;
         }
 
         var buffer = new byte[totalBytes];
-        int bytesRead = 0;
-        System.Collections.Generic.List<Fiberish.VFS.LinuxFile>? receivedFds = null;
+        var bytesRead = 0;
+        List<VFS.LinuxFile>? receivedFds = null;
+
+        var namePtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(0, 4));
+        var nameLenPtr = msgPtr + 4; // msg_namelen is at offset 4
 
         if (file.Dentry.Inode is UnixSocketInode unixSock)
         {
@@ -452,38 +435,50 @@ public partial class SyscallManager
             if (res.BytesRead < 0) return res.BytesRead;
             bytesRead = res.BytesRead;
             receivedFds = res.Fds;
+            // TODO: Unix socket peer name?
         }
         else if (file.Dentry.Inode is HostSocketInode hostSock)
         {
-            bytesRead = await hostSock.RecvAsync(file, buffer, flags);
-            if (bytesRead < 0) return bytesRead;
-        }
-        else return -(int)Errno.ENOTSOCK;
+            EndPoint remoteEp = hostSock.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+                ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                : new IPEndPoint(IPAddress.Any, 0);
 
-        int offset = 0;
-        foreach (var iov in iovs)
+            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
+            var res = await hostSock.RecvFromAsync(file, buffer, hostFlags, remoteEp);
+
+            if (res.Bytes < 0) return res.Bytes;
+            bytesRead = res.Bytes;
+
+            if (bytesRead >= 0 && namePtr != 0 && res.RemoteEp != null)
+                WriteSockaddr(sm.Engine, namePtr, nameLenPtr, res.RemoteEp);
+        }
+        else
         {
+            return -(int)Errno.ENOTSOCK;
+        }
+
+        var offset = 0;
+        foreach (var iov in iovs)
             if (iov.Len > 0 && offset < bytesRead)
             {
-                int toCopy = Math.Min(iov.Len, bytesRead - offset);
+                var toCopy = Math.Min(iov.Len, bytesRead - offset);
                 task.CPU.CopyToUser(iov.Base, buffer.AsSpan(offset, toCopy));
                 offset += toCopy;
             }
-        }
 
         if (receivedFds != null && receivedFds.Count > 0 && controlPtr != 0)
         {
-            int cmsgLen = 12 + receivedFds.Count * 4;
+            var cmsgLen = 12 + receivedFds.Count * 4;
             if (controlLen >= cmsgLen)
             {
                 var cmsgRaw = new byte[cmsgLen];
                 BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(0, 4), cmsgLen);
                 BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(4, 4), 1); // SOL_SOCKET
                 BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(8, 4), 1); // SCM_RIGHTS
-                
-                for (int i=0; i<receivedFds.Count; i++)
+
+                for (var i = 0; i < receivedFds.Count; i++)
                 {
-                    int newFd = sm.AllocFD(receivedFds[i]);
+                    var newFd = sm.AllocFD(receivedFds[i]);
                     BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(12 + i * 4, 4), newFd);
                 }
 
@@ -496,22 +491,25 @@ public partial class SyscallManager
         return bytesRead;
     }
 
-    private static async ValueTask<int> SysSocketPair(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSocketPair(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int domain = (int)a1;
-        int type = (int)a2;
-        int protocol = (int)a3;
-        uint svPtr = a4;
+        var domain = (int)a1;
+        var type = (int)a2;
+        var protocol = (int)a3;
+        var svPtr = a4;
 
         if (domain != 1) return -(int)Errno.EAFNOSUPPORT; // AF_UNIX only
 
-        int realType = type & 0xf;
-        SocketType sockType = realType == 1 ? SocketType.Stream : SocketType.Dgram;
+        if (protocol != 0 && protocol != 1 /* PF_UNIX */) return -(int)Errno.EPROTONOSUPPORT;
+
+        var realType = type & 0xf;
+        var sockType = realType == 1 ? SocketType.Stream : SocketType.Dgram;
 
         var fileFlags = FileFlags.O_RDWR;
         if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
@@ -522,11 +520,13 @@ public partial class SyscallManager
         inode1.ConnectPair(inode2);
         inode2.ConnectPair(inode1);
 
-        var file1 = new Fiberish.VFS.LinuxFile(new Dentry($"socket:[{inode1.Ino}]", inode1, null, sm.MemfdSuperBlock), fileFlags);
-        var file2 = new Fiberish.VFS.LinuxFile(new Dentry($"socket:[{inode2.Ino}]", inode2, null, sm.MemfdSuperBlock), fileFlags);
+        var file1 = new VFS.LinuxFile(new Dentry($"socket:[{inode1.Ino}]", inode1, null, sm.MemfdSuperBlock),
+            fileFlags);
+        var file2 = new VFS.LinuxFile(new Dentry($"socket:[{inode2.Ino}]", inode2, null, sm.MemfdSuperBlock),
+            fileFlags);
 
-        int fd1 = sm.AllocFD(file1);
-        int fd2 = sm.AllocFD(file2);
+        var fd1 = sm.AllocFD(file1);
+        var fd2 = sm.AllocFD(file2);
 
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), fd1);
@@ -536,20 +536,21 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysSocketCall(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSocketCall(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        
-        int call = (int)a1;
-        uint argsPtr = a2;
 
-        uint[] args = new uint[6];
-        byte[] argsRaw = new byte[24];
+        var call = (int)a1;
+        var argsPtr = a2;
+
+        var args = new uint[6];
+        var argsRaw = new byte[24];
         if (!sm.Engine.CopyFromUser(argsPtr, argsRaw)) return -(int)Errno.EFAULT;
-        
-        for (int i=0; i<6; i++)
-            args[i] = BinaryPrimitives.ReadUInt32LittleEndian(argsRaw.AsSpan(i*4, 4));
+
+        for (var i = 0; i < 6; i++)
+            args[i] = BinaryPrimitives.ReadUInt32LittleEndian(argsRaw.AsSpan(i * 4, 4));
 
         return call switch
         {
@@ -565,11 +566,11 @@ public partial class SyscallManager
             12 /* SYS_RECVFROM */ => await SysRecvFrom(state, args[0], args[1], args[2], args[3], args[4], args[5]),
             14 /* SYS_SETSOCKOPT */ => await SysSetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
             15 /* SYS_GETSOCKOPT */ => await SysGetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
-            16 /* SYS_SENDMSG */    => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),
-            17 /* SYS_RECVMSG */    => await SysRecvMsg(state, args[0], args[1], args[2], 0, 0, 0),
-            18 /* SYS_ACCEPT4 */    => await SysAccept4(state, args[0], args[1], args[2], args[3], 0, 0),
-            19 /* SYS_RECVMMSG */   => await SysRecvMMsg(state, args[0], args[1], args[2], args[3], args[4], 0),
-            20 /* SYS_SENDMMSG */   => await SysSendMMsg(state, args[0], args[1], args[2], args[3], 0, 0),
+            16 /* SYS_SENDMSG */ => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),
+            17 /* SYS_RECVMSG */ => await SysRecvMsg(state, args[0], args[1], args[2], 0, 0, 0),
+            18 /* SYS_ACCEPT4 */ => await SysAccept4(state, args[0], args[1], args[2], args[3], 0, 0),
+            19 /* SYS_RECVMMSG */ => await SysRecvMMsg(state, args[0], args[1], args[2], args[3], args[4], 0),
+            20 /* SYS_SENDMMSG */ => await SysSendMMsg(state, args[0], args[1], args[2], args[3], 0, 0),
             _ => -(int)Errno.ENOSYS
         };
     }
@@ -582,20 +583,21 @@ public partial class SyscallManager
         var buf = new byte[addrLen];
         if (!engine.CopyFromUser(addrPtr, buf)) return null;
 
-        short family = BinaryPrimitives.ReadInt16LittleEndian(buf.AsSpan(0, 2));
-        
+        var family = BinaryPrimitives.ReadInt16LittleEndian(buf.AsSpan(0, 2));
+
         if (family == 2) // AF_INET
         {
             if (addrLen < 16) return null;
-            ushort port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2)); // Network byte order!
+            var port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2)); // Network byte order!
             var ipBuf = buf.AsSpan(4, 4).ToArray();
             var ip = new IPAddress(ipBuf);
             return new IPEndPoint(ip, port);
         }
-        else if (family == 10) // AF_INET6
+
+        if (family == 10) // AF_INET6
         {
             if (addrLen < 28) return null;
-            ushort port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2));
+            var port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2));
             // flowinfo = 4..8
             var ipBuf = buf.AsSpan(8, 16).ToArray();
             var ip = new IPAddress(ipBuf);
@@ -609,10 +611,10 @@ public partial class SyscallManager
     private static void WriteSockaddr(Engine engine, uint addrPtr, uint addrLenPtr, EndPoint? ep)
     {
         if (ep == null) return;
-        
+
         var lenBuf = new byte[4];
         if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;
-        int maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+        var maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
 
         if (ep is IPEndPoint ipEp)
         {
@@ -623,9 +625,9 @@ public partial class SyscallManager
                 BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(2, 2), (ushort)ipEp.Port);
                 ipEp.Address.TryWriteBytes(buf.AsSpan(4, 4), out _);
 
-                int toCopy = Math.Min(maxLen, 16);
+                var toCopy = Math.Min(maxLen, 16);
                 engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy));
-                
+
                 BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 16);
                 engine.CopyToUser(addrLenPtr, lenBuf);
             }
@@ -635,10 +637,10 @@ public partial class SyscallManager
                 BinaryPrimitives.WriteInt16LittleEndian(buf.AsSpan(0, 2), 10); // AF_INET6
                 BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(2, 2), (ushort)ipEp.Port);
                 ipEp.Address.TryWriteBytes(buf.AsSpan(8, 16), out _);
-                
-                int toCopy = Math.Min(maxLen, 28);
+
+                var toCopy = Math.Min(maxLen, 28);
                 engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy));
-                
+
                 BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 28);
                 engine.CopyToUser(addrLenPtr, lenBuf);
             }
@@ -665,6 +667,10 @@ public partial class SyscallManager
             SocketError.ConnectionRefused => (int)Errno.ECONNREFUSED,
             SocketError.HostUnreachable => (int)Errno.EHOSTUNREACH,
             SocketError.WouldBlock => (int)Errno.EAGAIN,
+            SocketError.InvalidArgument => (int)Errno.EINVAL,
+            SocketError.MessageSize => (int)Errno.EMSGSIZE,
+            SocketError.ProtocolNotSupported => (int)Errno.EPROTONOSUPPORT,
+            SocketError.SocketNotSupported => (int)Errno.ESOCKTNOSUPPORT,
             _ => (int)Errno.EIO
         };
     }

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
@@ -190,8 +191,8 @@ public partial class SyscallManager
                 if (sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
                     var revents = file.Dentry.Inode!.Poll(file, pfd.Events);
-                    // Debug logging
-                    // SyscallManager.Logger.LogInformation("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd, pfd.Events, revents, file.GetType().Name);
+                    Logger.LogInformation("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
+                        pfd.Events, revents, file.Dentry.Inode!.GetType().Name);
 
                     if (revents != 0)
                     {
@@ -201,9 +202,14 @@ public partial class SyscallManager
                 }
                 else
                 {
+                    Logger.LogInformation("[ScanPoll] FD={Fd} (INVALID)", pfd.Fd);
                     pfd.Revents = PollEvents.POLLNVAL;
                     readyCount++;
                 }
+            }
+            else
+            {
+                Logger.LogInformation("[ScanPoll] FD={Fd} (IGNORED)", pfd.Fd);
             }
 
             WriteStruct(sm.Engine, itemAddr, pfd);
@@ -304,7 +310,7 @@ public partial class SyscallManager
             }
 
             if (_timeoutMs > 0)
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 1000, () =>
+                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();
@@ -446,8 +452,7 @@ public partial class SyscallManager
 
             if (_timeoutMs > 0)
                 // Schedule timeout
-                // Note: ScheduleTimer takes ticks. 1ms = 10_000 ticks.
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 10_000, () =>
+                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();
