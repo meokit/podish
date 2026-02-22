@@ -5,6 +5,7 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Fiberish.Core;
 using LibObjectFile.Elf;
 using Microsoft.Extensions.Logging;
 using File = System.IO.File;
@@ -28,132 +29,67 @@ public class ElfLoader
 
     // Auxv types moved to LinuxConstants
 
-    public static LoaderResult Load(string filename, SyscallManager sys, string[] args, string[] envs)
+    /// <summary>
+    /// Result of loading an ELF's LOAD segments into guest memory.
+    /// </summary>
+    private class ElfLoadInfo
+    {
+        public uint PhdrAddr { get; set; }
+        public uint PhNum { get; set; }
+        public uint PhEnt { get; set; }
+        public uint EntryPoint { get; set; }
+        public uint BrkAddr { get; set; }
+        public uint FirstLoadVaddr { get; set; }
+        public string? InterpPath { get; set; }
+    }
+
+    public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args, string[] envs)
     {
         var mm = sys.Mem;
         var engine = sys.Engine;
 
-        // Try to find the file in VFS to get a Dentry for mmap
-        // If filename is absolute on host, try to make it relative to rootfs if possible
-        var vfsLookupPath = filename;
-        string? hostRoot = null;
-        HostSuperBlock? hsb = null;
-
-        if (sys.Root.SuperBlock is HostSuperBlock h)
-        {
-            hsb = h;
-            hostRoot = h.HostRoot;
-        }
-        else if (sys.Root.SuperBlock is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
-        {
-            hsb = lh;
-            hostRoot = lh.HostRoot;
-        }
-
-        if (hostRoot != null)
-        {
-            hostRoot = Path.GetFullPath(hostRoot).TrimEnd(Path.DirectorySeparatorChar);
-            var absFilename = Path.GetFullPath(filename);
-
-            if (absFilename.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                vfsLookupPath = absFilename[hostRoot.Length..];
-                if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
-                else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/')
-                    vfsLookupPath = "/" + vfsLookupPath;
-                vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
-            }
-        }
-
-        var dentry = sys.PathWalk(vfsLookupPath);
-
-        // If PathWalk failed (e.g. file is outside rootfs), try to get a Dentry directly from Hostfs if applicable
-        if (dentry == null && hsb != null)
-            try
-            {
-                var absPath = Path.GetFullPath(filename);
-                if (File.Exists(absPath)) dentry = hsb.GetDentry(absPath, Path.GetFileName(absPath), null);
-            }
-            catch
-            {
-                /* ignore */
-            }
-
-        // Resolve the host path for reading the ELF file
-        var hostPath = filename;
-
-        // If we found a dentry with a HostInode, use its HostPath directly
-        if (dentry?.Inode is HostInode hi)
-            hostPath = hi.HostPath;
-        else if (dentry?.Inode is OverlayInode oi && oi.UpperInode == null && oi.LowerInode is HostInode lhi)
-            hostPath = lhi.HostPath;
-        else if (hostRoot != null && filename.StartsWith("/") && !Path.IsPathRooted(filename))
-            // Only combine if it's a guest absolute path AND not a host absolute path
-            // Note: On Linux/Mac, Path.IsPathRooted("/") is true. 
-            // We need a better way to distinguish.
-            hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
-        else if (hostRoot != null && filename.StartsWith("/") && !filename.StartsWith(hostRoot))
-            // If it's a guest path (starts with /) but not already pointing into hostRoot
-            hostPath = Path.Combine(hostRoot, filename.TrimStart('/'));
-
-        // Still use Host IO for ElfFile reader as it needs a Stream
-        using var stream = File.OpenRead(hostPath);
+        // Open the main ELF via VFS
+        var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
+        using var stream = new VfsStream(mainFile);
         var elf = ElfFile.Read(stream);
 
         uint loadBase = 0;
-        if (elf.FileType == ElfFileType.Dynamic) loadBase = 0x40000000; // PIE base
-        Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", filename, elf.FileType, loadBase);
+        if (elf.FileType == ElfFileType.Dynamic) loadBase = 0x08000000; // PIE base for main binary
+        Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", guestPath, elf.FileType, loadBase);
 
-        uint phnum = 0;
-        uint phdrAddr = 0;
-        uint firstLoadVaddr = 0;
-        bool foundFirstLoad = false;
+        // Load main binary's segments
+        var mainInfo = LoadSegments(elf, loadBase, mm, engine, dentry, guestPath, stream);
 
-        foreach (var segment in elf.Segments)
+        // Check for PT_INTERP (dynamic linker)
+        uint interpBase = 0;
+        uint interpEntry = 0;
+        if (mainInfo.InterpPath != null)
         {
-            if (segment.Type == ElfSegmentTypeCore.Load)
+            Logger.LogInformation("ElfLoader: PT_INTERP detected, interpreter={InterpPath}", mainInfo.InterpPath);
+
+            // Resolve the interpreter file through VFS
+            var (interpDentry, _) = sys.ResolvePath(mainInfo.InterpPath);
+
+            if (interpDentry == null)
+                throw new FileNotFoundException($"Interpreter not found in VFS: {mainInfo.InterpPath}");
+
+            var interpFile = new LinuxFile(interpDentry, FileFlags.O_RDONLY);
+            using var interpStream = new VfsStream(interpFile);
+            var interpElf = ElfFile.Read(interpStream);
+
+            // Choose a base address that won't collide with the main binary
+            // Place interpreter at a high address to avoid conflicts
+            interpBase = 0x40000000;
+            if (interpElf.FileType == ElfFileType.Executable)
             {
-                if (!foundFirstLoad)
-                {
-                    firstLoadVaddr = (uint)segment.VirtualAddress;
-                    foundFirstLoad = true;
-                }
-
-                var perms = Protection.None;
-                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Executable) != 0) perms |= Protection.Exec;
-                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Writable) != 0) perms |= Protection.Write;
-                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Readable) != 0) perms |= Protection.Read;
-
-                var vaddrRaw = (uint)segment.VirtualAddress + loadBase;
-                var offsetRaw = (long)segment.Position;
-                var sizeRaw = (uint)segment.SizeInMemory;
-
-                var pageStart = vaddrRaw & LinuxConstants.PageMask;
-                var pageOffset = offsetRaw & LinuxConstants.PageMask;
-                var diff = vaddrRaw - pageStart;
-
-                var totalSize = sizeRaw + diff;
-                var alignedLen = (totalSize + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-
-                if (sizeRaw > 0)
-                {
-                    if (dentry == null)
-                        throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {filename}");
-
-                    var fileSzLimit = diff + (long)segment.Size;
-                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
-                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
-                        fileSzLimit, "ELF_LOAD", engine);
-                }
+                // Static interpreter (rare), use its own addresses
+                interpBase = 0;
             }
 
-            if (segment.Type == ElfSegmentTypeCore.ProgramHeader) phdrAddr = (uint)segment.VirtualAddress + loadBase;
-            phnum++;
+            Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
+            var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPath, interpStream);
+            interpEntry = interpInfo.EntryPoint;
         }
-
-        if (phdrAddr == 0 && foundFirstLoad) phdrAddr = firstLoadVaddr + loadBase + elf.Layout.SizeOfElfHeader;
-        Logger.LogDebug("ElfLoader: loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={Phnum}", loadBase, phdrAddr,
-            phnum);
 
         // Setup Stack
         var stackStart = StackTop - StackSize;
@@ -189,7 +125,7 @@ public class ElfLoader
         for (var i = envs.Length - 1; i >= 0; i--) envPtrs[i] = PushString(envs[i]);
 
         var platPtr = PushString("i686");
-        var execFnPtr = PushString(filename);
+        var execFnPtr = PushString(guestPath);
         var randPtr = PushBytes(new byte[16]);
 
         sp &= ~0xFu;
@@ -204,16 +140,19 @@ public class ElfLoader
         PushAux(LinuxConstants.AT_PLATFORM, platPtr);
         PushAux(LinuxConstants.AT_EXECFN, execFnPtr);
         PushAux(LinuxConstants.AT_RANDOM, randPtr);
-        PushAux(LinuxConstants.AT_UID, 1000);
-        PushAux(LinuxConstants.AT_EUID, 1000);
-        PushAux(LinuxConstants.AT_GID, 1000);
-        PushAux(LinuxConstants.AT_EGID, 1000);
-        PushAux(LinuxConstants.AT_PHNUM, (uint)elf.Segments.Count);
-        PushAux(LinuxConstants.AT_PHENT, elf.Layout.SizeOfProgramHeaderEntry);
-        PushAux(LinuxConstants.AT_PHDR, phdrAddr);
+        PushAux(LinuxConstants.AT_UID, 0);
+        PushAux(LinuxConstants.AT_EUID, 0);
+        PushAux(LinuxConstants.AT_GID, 0);
+        PushAux(LinuxConstants.AT_EGID, 0);
+        // Always describe the MAIN binary's program headers to the dynamic linker
+        PushAux(LinuxConstants.AT_PHNUM, mainInfo.PhNum);
+        PushAux(LinuxConstants.AT_PHENT, mainInfo.PhEnt);
+        PushAux(LinuxConstants.AT_PHDR, mainInfo.PhdrAddr);
         PushAux(LinuxConstants.AT_PAGESZ, LinuxConstants.PageSize);
-        PushAux(LinuxConstants.AT_ENTRY, (uint)elf.EntryPointAddress + loadBase);
-        PushAux(LinuxConstants.AT_BASE, 0); // For static-pie/PIE with no interpreter, this should be 0
+        // AT_ENTRY is always the main binary's entry point
+        PushAux(LinuxConstants.AT_ENTRY, mainInfo.EntryPoint);
+        // AT_BASE is the interpreter's load base (0 if no interpreter)
+        PushAux(LinuxConstants.AT_BASE, interpBase);
         PushAux(LinuxConstants.AT_FLAGS, 0);
         PushAux(LinuxConstants.AT_HWCAP, 0);
         PushAux(LinuxConstants.AT_CLKTCK, 100);
@@ -226,26 +165,112 @@ public class ElfLoader
 
         PushUint32((uint)args.Length);
 
-        uint brkAddr = 0;
-        foreach (var segment in elf.Segments)
-            if (segment.Type == ElfSegmentTypeCore.Load)
-            {
-                var end = (uint)segment.VirtualAddress + (uint)segment.SizeInMemory + loadBase;
-                end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-                if (end > brkAddr) brkAddr = end;
-            }
-
         sys.Engine.FlushCache();
+
+        // If there's an interpreter, start execution at interpreter's entry point; 
+        // otherwise at the main binary's entry point.
+        var entryPoint = mainInfo.InterpPath != null ? interpEntry : mainInfo.EntryPoint;
 
         var res = new LoaderResult
         {
-            Entry = (uint)elf.EntryPointAddress + loadBase,
+            Entry = entryPoint,
             SP = sp,
             InitialStack = stackData.AsSpan((int)(sp - stackStart)).ToArray(),
-            BrkAddr = brkAddr
+            BrkAddr = mainInfo.BrkAddr
         };
-        Logger.LogInformation("ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen}",
-            res.Entry, res.SP, res.BrkAddr, res.InitialStack.Length);
+        Logger.LogInformation("ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
+            res.Entry, res.SP, res.BrkAddr, res.InitialStack.Length, interpBase);
         return res;
+    }
+
+    /// <summary>
+    /// Load all PT_LOAD segments from an ELF file into guest memory.
+    /// Also detects PT_INTERP and PT_PHDR.
+    /// </summary>
+    private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
+        Dentry? dentry, string fileDesc, Stream elfStream)
+    {
+        var info = new ElfLoadInfo
+        {
+            PhEnt = elf.Layout.SizeOfProgramHeaderEntry,
+            EntryPoint = (uint)elf.EntryPointAddress + loadBase
+        };
+
+        uint firstLoadVaddr = 0;
+        bool foundFirstLoad = false;
+
+        foreach (var segment in elf.Segments)
+        {
+            if (segment.Type == ElfSegmentTypeCore.Load)
+            {
+                if (!foundFirstLoad)
+                {
+                    firstLoadVaddr = (uint)segment.VirtualAddress;
+                    foundFirstLoad = true;
+                }
+
+                var perms = Protection.None;
+                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Executable) != 0) perms |= Protection.Exec;
+                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Writable) != 0) perms |= Protection.Write;
+                if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Readable) != 0) perms |= Protection.Read;
+
+                var vaddrRaw = (uint)segment.VirtualAddress + loadBase;
+                var offsetRaw = (long)segment.Position;
+                var sizeRaw = (uint)segment.SizeInMemory;
+
+                var pageStart = vaddrRaw & LinuxConstants.PageMask;
+                var pageOffset = offsetRaw & LinuxConstants.PageMask;
+                var diff = vaddrRaw - pageStart;
+
+                var totalSize = sizeRaw + diff;
+                var alignedLen = (totalSize + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+
+                if (sizeRaw > 0)
+                {
+                    if (dentry == null)
+                        throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {fileDesc}");
+
+                    var fileSzLimit = diff + (long)segment.Size;
+                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
+                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
+                        fileSzLimit, "ELF_LOAD", engine);
+                }
+
+                // Track brk
+                var end = (uint)segment.VirtualAddress + (uint)segment.SizeInMemory + loadBase;
+                end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+                if (end > info.BrkAddr) info.BrkAddr = end;
+            }
+
+            if (segment.Type == ElfSegmentTypeCore.ProgramHeader)
+            {
+                info.PhdrAddr = (uint)segment.VirtualAddress + loadBase;
+            }
+
+            // Detect PT_INTERP
+            if (segment.Type == ElfSegmentTypeCore.Interpreter)
+            {
+                // Read the interpreter path directly from the file stream
+                var interpData = new byte[(int)segment.Size];
+                elfStream.Seek((long)segment.Position, SeekOrigin.Begin);
+                elfStream.ReadExactly(interpData, 0, interpData.Length);
+                // Trim null terminator
+                var interpLen = Array.IndexOf(interpData, (byte)0);
+                if (interpLen < 0) interpLen = interpData.Length;
+                info.InterpPath = Encoding.ASCII.GetString(interpData, 0, interpLen);
+            }
+
+            info.PhNum++;
+        }
+
+        if (info.PhdrAddr == 0 && foundFirstLoad)
+            info.PhdrAddr = firstLoadVaddr + loadBase + elf.Layout.SizeOfElfHeader;
+
+        info.FirstLoadVaddr = firstLoadVaddr + loadBase;
+
+        Logger.LogDebug("ElfLoader: [{FileDesc}] loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={PhNum} entry=0x{Entry:x} brk=0x{Brk:x}",
+            fileDesc, loadBase, info.PhdrAddr, info.PhNum, info.EntryPoint, info.BrkAddr);
+
+        return info;
     }
 }

@@ -45,12 +45,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, ShimOp* op, T dest, T src,
             AluSub<T, UpdateFlags>(state, dest, src);
             return LogicFlow::Continue;  // CMP (No writeback)
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-            return LogicFlow::Continue;
+            return LogicFlow::ExitOnCurrentEIP;
     }
 
     if constexpr (sizeof(T) == 1) {
@@ -206,23 +205,21 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
             if constexpr (sizeof(T) == 1) {  // AX / r/m8
                 uint16_t ax = (uint16_t)GetReg(state, EAX) & 0xFFFF;
                 if (val == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
                 uint16_t q = ax / val;
                 uint16_t r = ax % val;
 
                 if (q > 0xFF) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 uint32_t* rax = GetRegPtr(state, EAX);
@@ -230,23 +227,21 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
             } else if constexpr (sizeof(T) == 2) {  // DX:AX / r/m16
                 uint32_t dx_ax = ((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF);
                 if (val == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
                 uint32_t q = dx_ax / val;
                 uint32_t r = dx_ax % val;
 
                 if (q > 0xFFFF) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 uint32_t* rax = GetRegPtr(state, EAX);
@@ -256,13 +251,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
             } else {  // EDX:EAX / r/m32
                 uint64_t edx_eax = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
                 if (val == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
-                    }
-                    if (state->eip_dirty) {
-                        return LogicFlow::ExitWithoutSyncEIP;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
@@ -270,12 +261,11 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
                 uint64_t r = edx_eax % val;
 
                 if (q > 0xFFFFFFFF) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 SetReg(state, EAX, (uint32_t)q);
@@ -289,24 +279,22 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
                 int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
                 int8_t v = (int8_t)val;
                 if (v == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 int16_t q = ax / v;
                 int16_t r = ax % v;
 
                 if (q > 127 || q < -128) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 uint32_t* rax = GetRegPtr(state, EAX);
@@ -316,23 +304,21 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
                     (int32_t)(((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF));
                 int16_t v = (int16_t)val;
                 if (v == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
                 int32_t q = dx_ax / v;
                 int32_t r = dx_ax % v;
 
                 if (q > 32767 || q < -32768) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 uint32_t* rax = GetRegPtr(state, EAX);
@@ -343,23 +329,21 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
                 int64_t edx_eax = ((int64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
                 int32_t v = (int32_t)val;
                 if (v == 0) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
                 int64_t q = edx_eax / v;
                 int64_t r = edx_eax % v;
 
                 if (q > 2147483647LL || q < -2147483648LL) {
+                    state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
-                        state->fault_vector = 0;  // #DE
                         state->status = EmuStatus::Fault;
-                        return LogicFlow::ExitOnCurrentEIP;
                     }
-                    return LogicFlow::Continue;
+                    return LogicFlow::ExitOnCurrentEIP;
                 }
 
                 SetReg(state, EAX, (uint32_t)q);
@@ -368,12 +352,11 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, ShimOp* op, T val, mem::Mi
             break;
         }
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-            return LogicFlow::Continue;
+            return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }
@@ -426,11 +409,11 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, ShimOp* op, T val, mem::Mi
             break;
         }
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }
@@ -516,12 +499,11 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, ShimOp* op, T val, mem::Mi
             break;
         }
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-            break;
+            return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }

@@ -88,6 +88,7 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
 
 // Cache Control
 void X86_FlushCache(EmuState* state);
+void X86_ResetMemory(EmuState* state);
 void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size);
 
 // Diagnostics

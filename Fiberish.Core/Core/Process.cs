@@ -2,6 +2,7 @@ using Fiberish.Loader;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Fiberish.X86.Native;
 using System.Text;
 
@@ -118,11 +119,11 @@ public class Process
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 
-    public void LoadExecutable(string exe, string[] args, string[] envs)
+    public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs)
     {
-        UpdateProcessImage(exe, args);
+        UpdateProcessImage(guestPath, args);
 
-        var res = ElfLoader.Load(exe, Syscalls, args, envs);
+        var res = ElfLoader.Load(dentry, guestPath, Syscalls, args, envs);
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
@@ -144,10 +145,20 @@ public class Process
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
     }
 
-    internal void Exec(string exePath, string[] args, string[] envs)
+    internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs)
     {
-        // 1. Clear Memory
-        Syscalls.Mem.Clear(Syscalls.Engine);
+        // 1. Replace memory with a fresh VMAManager.
+        // This is critical for vfork+execve: the child may share the parent's VMAManager
+        // via CLONE_VM. We must NOT clear the shared memory — instead, create a private
+        // VMAManager for this process before proceeding.
+        var freshMem = new VMAManager();
+        Mem = freshMem;
+        Syscalls.Mem = freshMem;
+
+        // Clear old native MMU page tables + JIT cache.
+        // FlushCache only clears JIT; ResetMemory also resets the native page directory
+        // so the new binary's pages are demand-faulted fresh (not stale from old image).
+        Syscalls.Engine.ResetMemory();
 
         // 1.1 Linux exec semantics: handlers set to user function are reset to SIG_DFL.
         // Dispositions explicitly set to SIG_IGN stay ignored.
@@ -158,7 +169,7 @@ public class Process
 
         // 3. Load Executable
         // LoadExecutable handles ELF loading, stack setup and CPU state reset
-        LoadExecutable(exePath, args, envs);
+        LoadExecutable(dentry, guestPath, args, envs);
     }
 
     private void ResetSignalDispositionsForExec()

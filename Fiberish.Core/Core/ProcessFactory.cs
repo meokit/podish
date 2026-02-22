@@ -1,11 +1,12 @@
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 
 namespace Fiberish.Core;
 
 public static class ProcessFactory
 {
-    public static FiberTask CreateInitProcess(KernelRuntime runtime, string exePath, string[] args, string[] envs,
+    public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, string guestPath, string[] args, string[] envs,
         KernelScheduler scheduler, TtyDiscipline? tty = null)
     {
         var proc = new Process(FiberTask.NextTID(), runtime.Memory, runtime.Syscalls)
@@ -31,7 +32,7 @@ public static class ProcessFactory
         var mainTask = new FiberTask(proc.TGID, proc, runtime.Engine, scheduler);
         runtime.Engine.Owner = mainTask;
 
-        proc.LoadExecutable(exePath, args, envs);
+        proc.LoadExecutable(dentry, guestPath, args, envs);
         ProcFsManager.OnProcessStart(runtime.Syscalls, proc);
 
         return mainTask;

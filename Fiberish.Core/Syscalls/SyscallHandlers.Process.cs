@@ -448,30 +448,17 @@ public partial class SyscallManager
 
         var filename = sm.ReadString(a1);
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
-        // Resolve path via VFS
-        var dentry = sm.PathWalk(filename);
-        string? hostPath = null;
 
-        if (dentry?.Inode is HostInode hi)
-            hostPath = hi.HostPath;
-        else if (dentry?.Inode is OverlayInode oi && oi.UpperInode == null && oi.LowerInode is HostInode lhi)
-            hostPath = lhi.HostPath;
+        // Resolve path via VFS/Host
+        var (dentry, guestPath) = sm.ResolvePath(filename, isHostRelativeDefault: false);
 
-        if (hostPath == null)
+        if (dentry == null)
         {
-            Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' to a host-backed file in VFS", filename);
+            Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' to a valid Dentry (Guest: {GuestPath})",
+                filename, guestPath);
             return -(int)Errno.ENOENT;
         }
 
-        if (!File.Exists(hostPath))
-        {
-            Logger.LogWarning("[SysExecve] VFS resolved '{Filename}' to '{HostPath}', but file does not exist on host",
-                filename, hostPath);
-            return -(int)Errno.ENOENT;
-        }
-
-        // We use the host path for loading
-        var absPath = hostPath;
 
         // Read Args (must be done BEFORE clearing memory)
         List<string> args = [];
@@ -524,13 +511,13 @@ public partial class SyscallManager
         task.AltStackFlags = 0;
 
         // Load new ELF via Process.Exec (Handles memory clearing + vDSO setup + ELF loading)
-        Logger.LogInformation("[SysExecve] Loading {Path} with {ArgCount} args, {EnvCount} envs via Process.Exec", absPath, args.Count,
+        Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec", guestPath, args.Count,
             envs.Count);
         foreach (var arg in args) Logger.LogDebug("  arg: {Arg}", arg);
         
         try
         {
-            task.Process.Exec(absPath, [.. args], [.. envs]);
+            task.Process.Exec(dentry, guestPath, [.. args], [.. envs]);
             ProcFsManager.OnProcessExec(sm, task.Process);
             return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }

@@ -192,7 +192,16 @@ internal class Program
         {
             // 3. Bootstrap runtime and first process
             var runtime = KernelRuntime.Bootstrap(rootfs, trace, tty);
-            var mainTask = ProcessFactory.CreateInitProcess(runtime, exe, fullArgs, envs, scheduler, tty);
+
+            // Resolve exe path for the initial process
+            var (dentry, guestPath) = runtime.Syscalls.ResolvePath(exe, isHostRelativeDefault: true);
+
+            if (dentry == null)
+            {
+                throw new FileNotFoundException($"Could not find executable in VFS: {exe}");
+            }
+
+            var mainTask = ProcessFactory.CreateInitProcess(runtime, dentry, guestPath, fullArgs, envs, scheduler, tty);
 
             Logger.LogInformation("Spawned Main Task {TID}", mainTask.TID);
 

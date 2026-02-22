@@ -265,6 +265,14 @@ public:
         tlb.flush();
     }
 
+    // API: reset_memory - Replace entire page directory with a fresh empty one.
+    // Used during execve to clear all native pages before loading the new binary.
+    // Old pages (including external ones) are released by the old PageDirectory destructor.
+    void reset_memory() {
+        page_dir = std::make_shared<PageDirectory>();
+        tlb.flush();
+    }
+
     // Internal helper for resolution (TLB or Slow) without hooks
     [[nodiscard]] FORCE_INLINE MemResult<HostAddr> resolve_ptr(GuestAddr addr, Property req_perm);
 

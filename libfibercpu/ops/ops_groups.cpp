@@ -20,6 +20,7 @@ void RegisterGroupOps() {
     g_Handlers[0x1C7] = DispatchWrapper<OpGroup9>;
     g_Handlers[0x1C0] = DispatchWrapper<OpXadd_Byte>;
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Word>;
+    g_Handlers[0x118] = DispatchWrapper<OpPrefetch>;
     g_Handlers[0x10B] = DispatchWrapper<OpUd2_Groups>;
 
     // Specializations (Call macros defined above)

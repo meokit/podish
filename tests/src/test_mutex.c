@@ -1,13 +1,14 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/syscall.h>
+#include <unistd.h>
 
 // Simple write-based print
 void print_str(const char* s) {
     int len = 0;
-    while(s[len]) len++;
+    while (s[len])
+        len++;
     syscall(4, 1, s, len);
 }
 

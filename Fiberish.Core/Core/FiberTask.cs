@@ -4,6 +4,7 @@ using Fiberish.Syscalls;
 using Fiberish.X86.Native;
 using Fiberish.Core.Utils;
 using Microsoft.Extensions.Logging;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.Core;
 
@@ -75,15 +76,17 @@ public class FiberTask
         CommonKernel = kernel;
 
         Logger = kernel.LoggerFactory.CreateLogger($"Fiberish.Task.{TID}");
-        CPU.LogHandler = (engine, level, msg) => { Logger.Log((LogLevel)level, "[Native] {Message}", msg); };
+        CPU.LogHandler = EngineLogHandler;
 
         kernel.RegisterTask(this);
 
         CPU.PageFaultResolver = HandlePageFault;
 
         CPU.InterruptHandler = HandleInterrupt;
-        CPU.FaultHandler = HandleCpuFault;
+        CPU.FaultHandler = HandleNativeFault;
     }
+
+    private bool _pendingFaultFromInterrupt;
 
     public int TID { get; }
     public int PID { get; }
@@ -131,22 +134,48 @@ public class FiberTask
         return Interlocked.Increment(ref _tidCounter);
     }
 
+    private void EngineLogHandler(Engine engine, int level, string msg)
+    {
+        Logger.Log((LogLevel)level, "[Native] {Message}", msg);
+    }
+
     private bool HandlePageFault(uint addr, bool isWrite)
     {
-        return Process.Mem.HandleFault(addr, isWrite, CPU);
+        if (Process.Mem.HandleFault(addr, isWrite, CPU))
+            return true;
+
+        // Not handled by VMAManager (no VMA or permission error)
+        Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.", 
+            addr, isWrite ? "Write" : "Read");
+            
+        // Deliver SIGSEGV and yield
+        PostSignal((int)Signal.SIGSEGV);
+        _pendingFaultFromInterrupt = true;
+        CPU.Yield();
+        return true; // Return true to C++ so it stops with Yield status instead of Fault status
     }
 
     private bool HandleInterrupt(Engine engine, uint vector)
     {
+        Logger.LogTrace("[HandleInterrupt] vector={Vector}", vector);
+        
         // 0x80 is Syscall
         if (vector == 0x80) return Process.Syscalls.Handle(engine, vector);
+        
+        // #DE (Divide Error) and #UD (Invalid Opcode)
+        if (vector == 0 || vector == 6)
+        {
+            Logger.LogTrace("[HandleInterrupt] Caught fault vector {Vector}, yielding...", vector);
+            _pendingFaultFromInterrupt = true;
+            engine.Yield();
+            return true;
+        }
+        
         return false;
     }
 
-    private bool HandleCpuFault(Engine engine, uint addr, bool isWrite)
+    private bool HandleNativeFault(Engine engine, uint addr, bool isWrite)
     {
-        // This is usually for unhandled page faults or other CPU exceptions
-        // For now, delegate to PageFaultResolver if it was a memory issue
         return HandlePageFault(addr, isWrite);
     }
 
@@ -858,9 +887,17 @@ public class FiberTask
                         HandleAsyncSyscall();
                     break;
 
-                case EmuStatus.Yield:   // cooperative yield (sched_yield / manual)
+                case EmuStatus.Yield when _pendingFaultFromInterrupt:
+                    // Yielded due to a #UD or other fault interrupt handled in C#
+                    _pendingFaultFromInterrupt = false;
+                    HandleCpuFault();
+                    break;
+
+                case EmuStatus.Yield:
                 case EmuStatus.Running: // instruction quota exhausted
-                    // Re-queue immediately; another task may run in between.
+                    // Normal yield (quota or explicit sched_yield if implemented)
+                    // Re-queue so other tasks get a turn
+                    Status = FiberTaskStatus.Ready;
                     CommonKernel.Schedule(this);
                     break;
 
@@ -884,16 +921,38 @@ public class FiberTask
     // Logs register state, delivers SIGSEGV, and marks the task Terminated.
     private void HandleCpuFault()
     {
-        Logger.LogCritical("CPU Fault detected at EIP=0x{EIP:X}. Terminating task with SIGSEGV.", CPU.Eip);
-        Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}",
-            CPU.RegRead(Reg.EAX), CPU.RegRead(Reg.EBX), CPU.RegRead(Reg.ECX), CPU.RegRead(Reg.EDX));
-        Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}",
-            CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
-        Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
+        var vector = CPU.FaultVector;
+        var sig = vector switch
+        {
+            0 => Signal.SIGFPE,
+            6 => Signal.SIGILL,
+            11 => Signal.SIGBUS,
+            12 => Signal.SIGBUS,
+            13 => Signal.SIGSEGV,
+            14 => Signal.SIGSEGV,
+            _ => Signal.SIGILL
+        };
 
-        TerminateBySignal((int)Signal.SIGSEGV, coreDumped: true);
-        Status = FiberTaskStatus.Terminated;
-        ExecutionMode = TaskExecutionMode.Terminated;
+        var faultName = vector switch
+        {
+            0 => "#DE (Divide Error)",
+            6 => "#UD (Invalid Opcode)",
+            13 => "#GP (General Protection Fault)",
+            14 => "#PF (Page Fault)",
+            _ => $"Vector {vector}"
+        };
+
+        // Log the fault for transparency, but at Debug/Trace level if it's expected to be handled?
+        // Actually, hardware faults are serious, so Information level is a good middle ground.
+        Logger.LogInformation("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.", 
+            faultName, CPU.Eip, sig);
+        
+        // Deliver the signal!
+        PostSignal((int)sig);
+        
+        // Re-schedule to allow signal processing (either handler or default action)
+        Status = FiberTaskStatus.Ready;
+        CommonKernel.Schedule(this);
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators

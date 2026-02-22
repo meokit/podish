@@ -1,7 +1,7 @@
-#include <unistd.h>
-#include <sys/syscall.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 void print_str(const char* s) {
     write(1, s, strlen(s));
@@ -9,8 +9,10 @@ void print_str(const char* s) {
 
 void* thread_func(void* arg) {
     int id = *(int*)arg;
-    if (id == 1) print_str("Hello from thread 1!\n");
-    else if (id == 2) print_str("Hello from thread 2!\n");
+    if (id == 1)
+        print_str("Hello from thread 1!\n");
+    else if (id == 2)
+        print_str("Hello from thread 2!\n");
     return NULL;
 }
 
@@ -24,7 +26,7 @@ int main() {
         print_str("pthread_create 1 failed\n");
         return 1;
     }
-    
+
     if (pthread_create(&t2, NULL, thread_func, &id2) != 0) {
         print_str("pthread_create 2 failed\n");
         return 1;

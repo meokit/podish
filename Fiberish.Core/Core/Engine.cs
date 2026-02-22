@@ -23,6 +23,7 @@ public class Engine : IDisposable
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
     }
 
@@ -41,10 +42,12 @@ public class Engine : IDisposable
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
     }
 
     public IntPtr State { get; private set; }
+    internal GCHandle GcHandle => _gcHandle;
 
     // Callbacks
     public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
@@ -120,15 +123,21 @@ public class Engine : IDisposable
     }
 
     [UnmanagedCallersOnly]
-    private static int OnNativeInterrupt(IntPtr state, uint vector, IntPtr userdata)
+    internal static int OnNativeInterrupt(IntPtr state, uint vector, IntPtr userdata)
     {
         try
         {
             if (userdata == IntPtr.Zero) return 0;
             var handle = GCHandle.FromIntPtr(userdata);
             if (handle.Target is Engine engine)
+            {
                 if (engine.InterruptHandler != null)
-                    return engine.InterruptHandler(engine, vector) ? 1 : 0;
+                {
+                    engine.InterruptHandler(engine, vector);
+                    return 1; // Always return 1 (handled) as requested
+                }
+                return 1; // Default to 1 to avoid native fault
+            }
         }
         catch (Exception ex)
         {
@@ -366,6 +375,15 @@ public class Engine : IDisposable
     public void FlushCache()
     {
         X86Native.FlushCache(State);
+    }
+
+    /// <summary>
+    /// Reset entire native MMU page directory + JIT cache.
+    /// Used during execve to clear all stale native pages before loading new binary.
+    /// </summary>
+    public void ResetMemory()
+    {
+        X86Native.ResetMemory(State);
     }
 
     public unsafe string? DumpStats()

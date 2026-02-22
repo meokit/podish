@@ -109,11 +109,11 @@ FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
             st0 = f80_div(val, st0);
             break;  // FDIVR
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }
@@ -213,11 +213,11 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
         } else if (op_byte == 0xFF) {  // FCOS
             FpuTop(state, 0) = f80_cos(FpuTop(state, 0));
         } else {
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
         }
     } else {
         // Memory Access (Blocking)
@@ -282,11 +282,11 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
                 break;
             }
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -362,11 +362,11 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
                 st0 = f80_div(val, st0);
                 break;  // FIDIVR
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -437,11 +437,11 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                 state->ctx.eflags |= fiberish::CF_MASK;
             }
         } else {
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
         }
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -496,11 +496,11 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                 break;
             }
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -537,11 +537,11 @@ FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
                 dest = f80_div(src, dest);
                 break;  // FDIVR
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     } else {
         auto val_res = ReadF64(state, op, utlb);
@@ -585,11 +585,11 @@ FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
                 st0 = f80_div(val, st0);
                 break;  // FDIVR
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -608,11 +608,11 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
             FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
             FpuPop(state);
         } else {
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
         }
     } else {
         switch (subop) {
@@ -643,11 +643,11 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
                 break;
             }
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -684,11 +684,11 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
                 dest = f80_div(dest, src);
                 break;  // FDIVP (dest = dest / src)
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
         FpuPop(state);
     } else {
@@ -743,11 +743,11 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
                 break;
             }
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;
@@ -792,11 +792,11 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
             }
             FpuPop(state);
         } else {
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+            return LogicFlow::ExitOnCurrentEIP;
         }
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -846,11 +846,11 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
                 break;
             }
             default:
+                state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
                 }
-                if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+                return LogicFlow::ExitOnCurrentEIP;
         }
     }
     return LogicFlow::Continue;

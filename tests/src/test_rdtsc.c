@@ -1,5 +1,5 @@
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 
 static inline uint64_t rdtsc() {
     uint32_t low, high;
@@ -11,13 +11,14 @@ int main() {
     printf("RDTSC Test\n");
     uint64_t t1 = rdtsc();
     printf("T1: %llu\n", t1);
-    
+
     // Busy wait
-    for (volatile int i = 0; i < 1000000; i++);
-    
+    for (volatile int i = 0; i < 1000000; i++)
+        ;
+
     uint64_t t2 = rdtsc();
     printf("T2: %llu\n", t2);
-    
+
     if (t2 > t1) {
         printf("SUCCESS: TSC increased by %llu\n", t2 - t1);
         return 0;

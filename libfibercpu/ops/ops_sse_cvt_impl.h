@@ -31,11 +31,11 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
         // F3: CVTSI2SS
         *dest_ptr = simde_mm_cvtsi32_ss(*dest_ptr, val);
     } else {
+        state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;
-            state->fault_vector = 6;
         }
-        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }
@@ -68,12 +68,11 @@ FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
         }
         res = (int32_t)b;
     } else {
+        state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;
-            state->fault_vector = 6;
         }
-        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-        return LogicFlow::Continue;
+        return LogicFlow::ExitOnCurrentEIP;
     }
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
     return LogicFlow::Continue;
@@ -106,12 +105,11 @@ FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) {
         }
         res = simde_mm_cvtss_si32(simde_mm_set_ss(b));
     } else {
+        state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;
-            state->fault_vector = 6;
         }
-        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-        return LogicFlow::Continue;
+        return LogicFlow::ExitOnCurrentEIP;
     }
     SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
     return LogicFlow::Continue;
@@ -245,11 +243,11 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
         simde__m128i res = simde_mm_cvtpd_epi32(src_pd);
         *dest_ptr = simde_mm_castsi128_ps(res);
     } else {
+        state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;
-            state->fault_vector = 6;
         }
-        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return LogicFlow::ExitOnCurrentEIP;
     }
     return LogicFlow::Continue;
 }

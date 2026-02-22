@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace Fiberish.VFS;
@@ -37,15 +38,33 @@ public class HostSuperBlock : SuperBlock
     {
         if (_dentryCache.TryGetValue(hostPath, out var dentry)) return dentry;
 
-        // Check existence
-        var isDir = Directory.Exists(hostPath);
-        var isFile = File.Exists(hostPath);
-        if (!isDir && !isFile) return null;
+        // Check for symlink first (so we don't follow)
+        // FileInfo.LinkTarget returns non-null for symlinks (including broken ones)
+        if (new FileInfo(hostPath).LinkTarget != null)
+        {
+            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Symlink);
+            var newDentry = new Dentry(name, newInode, parent, this);
+            _dentryCache[hostPath] = newDentry;
+            return newDentry;
+        }
 
-        var newInode = new HostInode(_nextIno++, this, hostPath, isDir);
-        var newDentry = new Dentry(name, newInode, parent, this);
-        _dentryCache[hostPath] = newDentry;
-        return newDentry;
+        if (Directory.Exists(hostPath))
+        {
+            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Directory);
+            var newDentry = new Dentry(name, newInode, parent, this);
+            _dentryCache[hostPath] = newDentry;
+            return newDentry;
+        }
+
+        if (File.Exists(hostPath))
+        {
+            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.File);
+            var newDentry = new Dentry(name, newInode, parent, this);
+            _dentryCache[hostPath] = newDentry;
+            return newDentry;
+        }
+
+        return null;
     }
 
     public override void WriteInode(Inode inode)
@@ -71,7 +90,11 @@ public class HostSuperBlock : SuperBlock
 
     public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
-        var inode = new HostInode(_nextIno++, this, hostPath, isDir);
+        var type = isDir ? InodeType.Directory : InodeType.File;
+        // Check for symlink
+        if (new FileInfo(hostPath).LinkTarget != null) type = InodeType.Symlink;
+
+        var inode = new HostInode(_nextIno++, this, hostPath, type);
         if (mode != 0) inode.Mode = mode;
         dentry.Instantiate(inode);
         lock (Lock)
@@ -85,13 +108,33 @@ public class HostSuperBlock : SuperBlock
 
 public partial class HostInode : Inode
 {
-    public HostInode(ulong ino, SuperBlock sb, string hostPath, bool isDir)
+    public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type)
     {
         Ino = ino;
         SuperBlock = sb;
         HostPath = hostPath;
-        Type = isDir ? InodeType.Directory : InodeType.File;
+        Type = type;
+        var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
+
+        if (type == InodeType.Symlink)
+        {
+            Size = 0; // Readlink will compute it if needed
+            // Fill stat if possible
+            try
+            {
+                var sinfo = new FileInfo(hostPath);
+                MTime = sinfo.LastWriteTime;
+                ATime = sinfo.LastAccessTime;
+                CTime = sinfo.CreationTime;
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+            return;
+        }
 
         var info = isDir ? (FileSystemInfo)new DirectoryInfo(hostPath) : new FileInfo(hostPath);
         if (info.Exists)

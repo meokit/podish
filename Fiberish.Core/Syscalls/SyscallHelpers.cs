@@ -112,6 +112,73 @@ public partial class SyscallManager
     {
         if (FDs.Remove(fd, out var f)) f.Close();
     }
+
+    public (Dentry? dentry, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)
+    {
+        string guestPath;
+        Dentry? dentry;
+
+        if (path.StartsWith("/") || !isHostRelativeDefault)
+        {
+            // Absolute guest path OR relative guest path (not defaulting to host)
+            dentry = PathWalk(path);
+            if (dentry != null || !isHostRelativeDefault)
+            {
+                guestPath = path;
+                return (dentry, guestPath);
+            }
+        }
+
+        // Host resolution (relative path or absolute host path during bootstrap)
+        var hostPath = Path.GetFullPath(path);
+
+        // Try to find if it fits in VFS
+        dentry = null;
+        guestPath = path; // Default guest path to the input if not internal
+
+        // Find host root
+        string? hostRoot = null;
+        HostSuperBlock? hsb = null;
+
+        if (Root.SuperBlock is HostSuperBlock h)
+        {
+            hsb = h;
+            hostRoot = h.HostRoot;
+        }
+        else if (Root.SuperBlock is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
+        {
+            hsb = lh;
+            hostRoot = lh.HostRoot;
+        }
+
+        if (hostRoot != null)
+        {
+            hostRoot = Path.GetFullPath(hostRoot).TrimEnd(Path.DirectorySeparatorChar);
+            if (hostPath.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                var vfsLookupPath = hostPath[hostRoot.Length..];
+                if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
+                else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/')
+                    vfsLookupPath = "/" + vfsLookupPath;
+                vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
+
+                dentry = PathWalk(vfsLookupPath);
+                if (dentry != null) guestPath = vfsLookupPath;
+            }
+        }
+
+        if (dentry == null && hsb != null && File.Exists(hostPath))
+            try
+            {
+                dentry = hsb.GetDentry(hostPath, Path.GetFileName(hostPath), null);
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+        return (dentry, guestPath);
+    }
 }
 
 // Wait syscall support

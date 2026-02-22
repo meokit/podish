@@ -168,9 +168,7 @@ public class OverlayInode : Inode
     {
         // Create in Upper.
         if (UpperDentry == null)
-            // If this directory doesn't exist in Upper (only in Lower), we must "Copy Up" the directory structure first.
-            throw new InvalidOperationException(
-                "Cannot create in a read-only lower directory. (Directory Copy-Up not fully implemented yet)");
+            CopyUpDirectory();
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
@@ -185,7 +183,8 @@ public class OverlayInode : Inode
 
     public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        if (UpperDentry == null) throw new InvalidOperationException("Lower-only directory write not supported yet");
+        if (UpperDentry == null)
+            CopyUpDirectory();
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Mkdir(upperDentry, mode, uid, gid);
@@ -194,6 +193,76 @@ public class OverlayInode : Inode
         dentry.Instantiate(newOverlayInode);
 
         return dentry;
+    }
+
+    /// <summary>
+    /// Copy-up a lower-only directory to the upper FS.
+    /// Creates an empty directory in the upper FS with the same mode/uid/gid.
+    /// Does NOT copy children — they remain in the lower layer and are merged via Lookup.
+    /// </summary>
+    private void CopyUpDirectory()
+    {
+        if (UpperDentry != null) return;
+        if (LowerDentry == null)
+            throw new InvalidOperationException("Cannot copy-up: no lower dentry");
+
+        // We need to find the upper FS parent. Walk up overlay dentries to find/create
+        // the upper parent directory.
+        var osb = (OverlaySuperBlock)SuperBlock;
+
+        // If this is the overlay root, create a root directory in upper
+        // (this shouldn't normally happen since the overlay root should always have upper)
+        if (LowerDentry.Parent == null || LowerDentry.Parent == LowerDentry)
+        {
+            // Root — create directly in upper root
+            UpperDentry = osb.UpperSB.Root;
+            return;
+        }
+
+        // Find the overlay dentry for our parent to get/ensure its upper dentry
+        // We need to use the overlay's Root and walk down, or trust the parent overlay inode.
+        // For simplicity: create in the upper SB root's matching path.
+        // Recursion: ensure parent overlay inode has upper dentry too.
+
+        // Build the path from lower dentry to root
+        var pathParts = new List<string>();
+        var current = LowerDentry;
+        while (current != null && current.Parent != null && current.Parent != current)
+        {
+            pathParts.Add(current.Name);
+            current = current.Parent;
+        }
+        pathParts.Reverse();
+
+        // Walk/create in upper FS
+        var upperParent = osb.UpperSB.Root;
+        for (int i = 0; i < pathParts.Count; i++)
+        {
+            var name = pathParts[i];
+            var existing = upperParent.Inode?.Lookup(name);
+            if (existing != null)
+            {
+                upperParent = existing;
+            }
+            else
+            {
+                // Create the intermediate directory
+                var newDir = new Dentry(name, null, upperParent, osb.UpperSB);
+                upperParent.Inode!.Mkdir(newDir, LowerInode?.Mode ?? 0x1ED, LowerInode?.Uid ?? 0, LowerInode?.Gid ?? 0);
+                upperParent = newDir;
+            }
+        }
+
+        UpperDentry = upperParent;
+    }
+
+    public override string Readlink()
+    {
+        if (UpperInode != null && UpperInode.Type == InodeType.Symlink)
+            return UpperInode.Readlink();
+        if (LowerInode != null && LowerInode.Type == InodeType.Symlink)
+            return LowerInode.Readlink();
+        throw new InvalidOperationException("Not a symlink");
     }
 
     public override void Unlink(string name)

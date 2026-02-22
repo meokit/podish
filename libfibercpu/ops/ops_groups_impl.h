@@ -318,6 +318,13 @@ IMPL_G4_EB(0, OpGroup4_Eb_Inc)
 IMPL_G4_EB(1, OpGroup4_Eb_Dec)
 
 // Misc Ops (unchanged)
+FORCE_INLINE LogicFlow OpPrefetch(LogicFuncParams) {
+    // 0F 18 /r: PREFETCHh (T0, T1, T2, NTA)
+    // These are hints for the processor about future memory access.
+    // In our emulator, they are pure NOPs. They never fault even if address is invalid.
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpCdq(LogicFuncParams) {
     uint32_t eax = GetReg(state, EAX);
     uint32_t edx = ((int32_t)eax < 0) ? 0xFFFFFFFF : 0;
@@ -339,12 +346,13 @@ FORCE_INLINE LogicFlow OpCwde(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpUd2_Groups(LogicFuncParams) {
+    state->fault_vector = 6;
     if (!state->hooks.on_invalid_opcode(state)) {
         state->status = EmuStatus::Fault;
-        state->fault_vector = 6;
-        return LogicFlow::ExitOnCurrentEIP;
     }
-    return LogicFlow::Continue;
+    // Always exit to sync EIP to the start of this instruction.
+    // If handled correctly by C#, status might be set to Yield or EIP changed.
+    return LogicFlow::ExitOnCurrentEIP;
 }
 
 FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
@@ -373,8 +381,7 @@ FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
             SetReg(state, EDX, (uint32_t)(mem_val >> 32));
         }
     } else {
-        OpUd2_Groups(LogicPassParams);
-        if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
+        return OpUd2_Groups(LogicPassParams);
     }
     return LogicFlow::Continue;
 }

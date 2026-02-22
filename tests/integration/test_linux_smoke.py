@@ -23,6 +23,21 @@ from .harness import EmulatorCase, run_case
             rootfs=Path("tests/linux"),
             expect_tokens=["All Tests Passed!"],
         ),
+        EmulatorCase(
+            name="test_sigill",
+            binary_name="test_sigill",
+            expect_tokens=["PASS: Received SIGILL"],
+        ),
+        EmulatorCase(
+            name="test_div0",
+            binary_name="test_div0",
+            expect_tokens=["PASS: Received SIGFPE"],
+        ),
+        EmulatorCase(
+            name="test_segv",
+            binary_name="test_segv",
+            expect_tokens=["PASS: Received SIGSEGV"],
+        ),
     ],
 )
 def test_linux_smoke_cases(project_root: Path, integration_assets_dir: Path, case: EmulatorCase) -> None:

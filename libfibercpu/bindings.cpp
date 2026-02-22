@@ -591,12 +591,20 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, fiberish::InterruptHa
 }
 
 int32_t X86_GetFaultVector(EmuState* state) {
-    if (state->status != EmuStatus::Fault) return -1;
-    return (int32_t)state->fault_vector;
+    if (!state) return -1;
+    return (state->fault_vector == 0xFF) ? -1 : (int32_t)state->fault_vector;
 }
 
 void X86_FlushCache(EmuState* state) {
     if (state) {
+        state->block_cache.clear();
+        state->page_to_blocks.clear();
+    }
+}
+
+void X86_ResetMemory(EmuState* state) {
+    if (state) {
+        state->mmu.reset_memory();
         state->block_cache.clear();
         state->page_to_blocks.clear();
     }

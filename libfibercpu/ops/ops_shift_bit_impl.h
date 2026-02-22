@@ -89,12 +89,11 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, ShimOp* op, uint3
                 res = AluSar<uint32_t>(state, dest, count);
             break;
         default:
+            state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
                 state->status = EmuStatus::Fault;
-                state->fault_vector = 6;
             }
-            if (state->status == EmuStatus::Fault) return LogicFlow::ExitOnCurrentEIP;
-            return LogicFlow::Continue;
+            return LogicFlow::ExitOnCurrentEIP;
     }
 
     // Write Back
