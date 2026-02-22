@@ -563,9 +563,13 @@ public partial class SyscallManager
             10 /* SYS_RECV */ => await SysRecv(state, args[0], args[1], args[2], args[3], 0, 0),
             11 /* SYS_SENDTO */ => await SysSendTo(state, args[0], args[1], args[2], args[3], args[4], args[5]),
             12 /* SYS_RECVFROM */ => await SysRecvFrom(state, args[0], args[1], args[2], args[3], args[4], args[5]),
-            16 /* SYS_SENDMSG */ => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),
-            17 /* SYS_RECVMSG */ => await SysRecvMsg(state, args[0], args[1], args[2], 0, 0, 0),
-            18 /* SYS_ACCEPT4 */ => await SysAccept4(state, args[0], args[1], args[2], args[3], 0, 0),
+            14 /* SYS_SETSOCKOPT */ => await SysSetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
+            15 /* SYS_GETSOCKOPT */ => await SysGetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
+            16 /* SYS_SENDMSG */    => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),
+            17 /* SYS_RECVMSG */    => await SysRecvMsg(state, args[0], args[1], args[2], 0, 0, 0),
+            18 /* SYS_ACCEPT4 */    => await SysAccept4(state, args[0], args[1], args[2], args[3], 0, 0),
+            19 /* SYS_RECVMMSG */   => await SysRecvMMsg(state, args[0], args[1], args[2], args[3], args[4], 0),
+            20 /* SYS_SENDMMSG */   => await SysSendMMsg(state, args[0], args[1], args[2], args[3], 0, 0),
             _ => -(int)Errno.ENOSYS
         };
     }

@@ -152,16 +152,23 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.accept4, SysAccept4);
         Register(X86SyscallNumbers.sendto, SysSendTo);
         Register(X86SyscallNumbers.recvfrom, SysRecvFrom);
+        Register(X86SyscallNumbers.socketpair, SysSocketPair);
+        Register(X86SyscallNumbers.sendmsg, SysSendMsg);
+        Register(X86SyscallNumbers.recvmsg, SysRecvMsg);
+        Register(X86SyscallNumbers.setsockopt, SysSetSockOpt);
+        Register(X86SyscallNumbers.getsockopt, SysGetSockOpt);
+        Register(X86SyscallNumbers.sendmmsg, SysSendMMsg);
+        Register(X86SyscallNumbers.recvmmsg, SysRecvMMsg);
 
         // Alarm
-        Register(27, SysAlarm); // alarm
+        Register(X86SyscallNumbers.alarm, SysAlarm); // alarm
 
         // POSIX Timers 32-bit (Using 64-bit implementations because timespec padding allows identical parsing if careful, or we just direct them to the 64-bit handlers that adapt for missing padding if applicable. For now, we point to the implementations in Time64).
-        Register(259, SysTimerCreate);
-        Register(260, SysTimerSetTime32);
-        Register(261, SysTimerGetTime32);
-        Register(262, SysTimerGetOverrun);
-        Register(263, SysTimerDelete);
+        Register(X86SyscallNumbers.timer_create, SysTimerCreate);
+        Register(X86SyscallNumbers.timer_settime, SysTimerSetTime32);
+        Register(X86SyscallNumbers.timer_gettime, SysTimerGetTime32);
+        Register(X86SyscallNumbers.timer_getoverrun, SysTimerGetOverrun);
+        Register(X86SyscallNumbers.timer_delete, SysTimerDelete);
 
         // 64-bit time syscalls (i386)
         Register(403, SysClockGetTime64);
@@ -175,15 +182,15 @@ public partial class SyscallManager
         Register(411, SysTimerFdSetTime64);
         
         // FDs / Virtual
-        Register(322, SysTimerFdCreate); // timerfd_create
-        Register(325, SysTimerFdSetTime); // timerfd_settime
-        Register(326, SysTimerFdGetTime); // timerfd_gettime
+        Register(X86SyscallNumbers.timerfd_create, SysTimerFdCreate); // timerfd_create
+        Register(X86SyscallNumbers.timerfd_settime, SysTimerFdSetTime); // timerfd_settime
+        Register(X86SyscallNumbers.timerfd_gettime, SysTimerFdGetTime); // timerfd_gettime
         
-        Register(323, SysEventFd); // eventfd
-        Register(328, SysEventFd2); // eventfd2
+        Register(X86SyscallNumbers.eventfd, SysEventFd); // eventfd
+        Register(X86SyscallNumbers.eventfd2, SysEventFd2); // eventfd2
         
-        Register(321, SysSignalFd); // signalfd
-        Register(327, SysSignalFd4); // signalfd4
+        Register(X86SyscallNumbers.signalfd, SysSignalFd); // signalfd
+        Register(X86SyscallNumbers.signalfd4, SysSignalFd4); // signalfd4
 
         Register(X86SyscallNumbers.fsync, SysFsync);
         Register(X86SyscallNumbers.fdatasync, SysFdatasync);
@@ -202,7 +209,10 @@ public partial class SyscallManager
         Register(X86SyscallNumbers._newselect, SysNewSelect);
         Register(X86SyscallNumbers.poll, SysPoll);
         Register(X86SyscallNumbers.pipe, SysPipe);
+        Register(X86SyscallNumbers.sendfile, SysSendfile);
         Register(X86SyscallNumbers.sendfile64, SysSendfile64);
+        Register(X86SyscallNumbers.splice, SysSplice);
+        Register(X86SyscallNumbers.tee, SysTee);
         Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
         Register(X86SyscallNumbers.epoll_create, SysEpollCreate);
         Register(X86SyscallNumbers.epoll_create1, SysEpollCreate1);

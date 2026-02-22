@@ -96,7 +96,7 @@ public class UnixSocketInode : Inode
             if (_shutDownRead) return; // Dropped
             _receiveQueue.Enqueue(msg);
         }
-        _readWaitQueue.Signal();
+        _readWaitQueue.Set(); // Signal that data is available (like PipeInode)
     }
 
     public void PeerDisconnected()
@@ -202,5 +202,70 @@ public class UnixSocketInode : Inode
         }
         
         base.Release();
+    }
+
+    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    {
+        lock (_lock)
+        {
+            if (_partialBuffer != null)
+            {
+                int toCopy = Math.Min(buffer.Length, _partialBuffer.Length - _partialOffset);
+                new ReadOnlySpan<byte>(_partialBuffer, _partialOffset, toCopy).CopyTo(buffer.Slice(0, toCopy));
+                _partialOffset += toCopy;
+                if (_partialOffset >= _partialBuffer.Length)
+                {
+                    _partialBuffer = null;
+                    _partialOffset = 0;
+                }
+                // Reset read wait queue if no more data
+                if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                    _readWaitQueue.Reset();
+                return toCopy;
+            }
+
+            if (_receiveQueue.TryDequeue(out var msg))
+            {
+                int toCopy = Math.Min(buffer.Length, msg.Data.Length);
+                new ReadOnlySpan<byte>(msg.Data, 0, toCopy).CopyTo(buffer.Slice(0, toCopy));
+                
+                if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
+                {
+                    _partialBuffer = msg.Data;
+                    _partialOffset = toCopy;
+                }
+
+                if (msg.Fds != null)
+                {
+                    foreach (var f in msg.Fds) f.Dentry.Inode?.Put();
+                }
+
+                // Reset read wait queue if no more data
+                if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                    _readWaitQueue.Reset();
+
+                return toCopy; 
+            }
+
+            if (_shutDownRead || _peer == null)
+                return 0; // EOF
+        }
+
+        return -(int)Errno.EAGAIN;
+    }
+
+    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    {
+        UnixSocketInode? peer;
+        lock (_lock)
+        {
+            if (_shutDownWrite || _peer == null) return -(int)Errno.EPIPE;
+            peer = _peer;
+        }
+
+        var clonedData = buffer.ToArray();
+        var msg = new UnixMessage { Data = clonedData };
+        peer.EnqueueMessage(msg);
+        return buffer.Length;
     }
 }

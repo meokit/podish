@@ -1,41 +1,48 @@
 import pexpect
 import os
-import subprocess
-import time
 import sys
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 CLI_PROJECT = os.path.join(PROJECT_ROOT, "Fiberish.Cli")
+CLI_DLL = os.path.join(CLI_PROJECT, "bin", "Debug", "net8.0", "Fiberish.Cli.dll")
 EMULATOR_LOG = os.path.join(PROJECT_ROOT, "emulator.log")
+ROOTFS = os.path.join(PROJECT_ROOT, "tests/linux/rootfs")
+VI_BIN = os.path.join(ROOTFS, "bin/busybox")
 
-def test_vi_poll_spam():
-    # 1. Build
-    print("Building Fiberish.Cli...")
-    subprocess.run(["dotnet", "build", CLI_PROJECT, "-c", "Debug"], check=True)
 
-    # 2. Clean log
+def test_vi_poll_spam(build_cli):
+    """
+    Runs busybox vi under the emulator with --trace, then checks the log for
+    excessive poll busy-wait messages.
+
+    The `build_cli` fixture (from conftest.py) ensures a single build per session.
+    We use the pre-built DLL directly to skip redundant build checks.
+    """
+    # Clean old log
     if os.path.exists(EMULATOR_LOG):
         os.remove(EMULATOR_LOG)
 
-    # 3. Run vi
-    # We use busybox vi
-    cmd = f"dotnet run --project {CLI_PROJECT} -- --trace --rootfs tests/linux/rootfs tests/linux/rootfs/bin/busybox vi"
-    print(f"Running: {cmd}")
+    if not os.path.exists(VI_BIN):
+        import pytest
+        pytest.skip(f"busybox binary not found at {VI_BIN}")
+
+    # Use pre-built DLL; --trace writes the log we want to inspect afterward.
+    cmd = f"dotnet {CLI_DLL} --trace --rootfs {ROOTFS} {VI_BIN} vi"
+    print(f"\nRunning: {cmd}")
 
     child = pexpect.spawn(cmd, encoding='utf-8', timeout=20)
-    
+
     try:
-        # vi starts, clears screen, etc.
-        # We assume it eventually reaches interactive state. 
-        # Busybox vi might print version info or just show empty buffer.
-        time.sleep(5) 
-        
-        # Send Exit command
-        child.send(":q\r") # Enter
-        
-        # Expect exit
-        child.expect(pexpect.EOF)
-        
+        # Wait for vi to show its first screen character ('~' marks empty lines).
+        # This is faster and more reliable than a fixed sleep(5).
+        child.expect(r"~", timeout=15)
+
+        # Send quit command
+        child.send(":q\r")
+
+        # Wait for vi to exit cleanly
+        child.expect(pexpect.EOF, timeout=10)
+
     except pexpect.exceptions.TIMEOUT:
         print("Timeout waiting for vi to exit. Sending Ctrl+C...")
         child.sendintr()
@@ -44,7 +51,7 @@ def test_vi_poll_spam():
         print(f"Error: {e}")
         child.close()
 
-    # 4. Check log
+    # Inspect log for busy-wait spam
     print("Checking emulator.log for spam...")
     if not os.path.exists(EMULATOR_LOG):
         print("Error: emulator.log not found!")
@@ -55,23 +62,17 @@ def test_vi_poll_spam():
         for line in f:
             if "no fds ready, scheduling timer re-poll" in line:
                 spam_count += 1
-    
+
     print(f"Found {spam_count} occurrences of busy-wait log.")
-    
-    # Ideally should be 0 or very low (maybe 1-2 if race condition at startup?)
-    # But since we register waits, it should never happen unless we timeout.
-    # And we don't expect timeouts in normal vi idle loop? 
-    # Actually vi uses poll with timeout. If it times out, it re-polls.
-    # If vi sets a timeout, and we time out, we might log "timeout" or just "ready=0".
-    # The spam message "no fds ready, scheduling timer re-poll" was specifically when
-    # we *scheduled* a re-poll because we *didn't* block properly.
-    # With new logic, we register waits and return. We don't loop endlessly printing that message.
-    
-    if spam_count > 100: # Arbitrary threshold, before it was thousands per second
+
+    # Before the fix this was thousands per second; now it should be near zero.
+    # A small number is tolerated in case vi legitimately times out a poll.
+    if spam_count > 100:
         print("FAIL: Too much log spam!")
         sys.exit(1)
     else:
         print("PASS: Log spam eliminated/reduced.")
 
+
 if __name__ == "__main__":
-    test_vi_poll_spam()
+    test_vi_poll_spam(build_cli=None)

@@ -223,6 +223,41 @@ public class HostSocketInode : Inode
         }
     }
 
+    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    {
+        try
+        {
+            var arr = buffer.ToArray();
+            var bytes = _hostSocket.Receive(arr);
+            arr.AsSpan(0, bytes).CopyTo(buffer);
+            return bytes;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock || ex.SocketErrorCode == SocketError.IOPending)
+        {
+            return -(int)Errno.EAGAIN;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+    }
+
+    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    {
+        try
+        {
+            return _hostSocket.Send(buffer.ToArray());
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock || ex.SocketErrorCode == SocketError.IOPending)
+        {
+            return -(int)Errno.EAGAIN;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+    }
+
     public int MapSocketError(SocketError err)
     {
         return err switch

@@ -97,23 +97,47 @@ public class PipeInode : Inode
                 var firstChunk = Math.Min(available, BufferSize - _tail);
 
                 if (firstChunk > 0)
-                {
                     new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
-                    _tail = (_tail + firstChunk) % BufferSize;
-                }
 
                 if (available > firstChunk)
                 {
                     var secondChunk = available - firstChunk;
-                    new ReadOnlySpan<byte>(_buffer, _tail, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
-                    _tail = (_tail + secondChunk) % BufferSize;
+                    new ReadOnlySpan<byte>(_buffer, 0, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
                 }
 
+                _tail = (_tail + available) % BufferSize;
                 _count -= available;
 
                 // Update handles
                 if (_count == 0) _readHandle.Reset();
                 _writeHandle.Set(); // Space available
+
+                return available;
+            }
+
+            if (_writersClosed) return 0; // EOF
+
+            return -(int)Errno.EAGAIN;
+        }
+    }
+
+    public int Peek(Span<byte> buffer)
+    {
+        lock (_lock)
+        {
+            if (_count > 0)
+            {
+                var available = Math.Min(buffer.Length, _count);
+                var firstChunk = Math.Min(available, BufferSize - _tail);
+
+                if (firstChunk > 0)
+                    new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
+
+                if (available > firstChunk)
+                {
+                    var secondChunk = available - firstChunk;
+                    new ReadOnlySpan<byte>(_buffer, 0, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
+                }
 
                 return available;
             }

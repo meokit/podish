@@ -105,6 +105,19 @@ public partial class SyscallManager
         // Note: epoll_event is 12 bytes long on i386
         var buf = new byte[maxevents * 12];
         
+        // 1. Synchronous check first (like SysPoll does ScanPoll before creating awaiter)
+        int ready = epollInode.TryHarvestNow(buf, maxevents);
+        if (ready > 0 || timeout == 0)
+        {
+            if (ready > 0)
+            {
+                if (!task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, ready * 12)))
+                    return -(int)Errno.EFAULT;
+            }
+            return ready;
+        }
+
+        // 2. Nothing ready, go async
         int result = await epollInode.WaitAsync(buf, maxevents, timeout);
 
         if (result > 0)

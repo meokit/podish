@@ -747,7 +747,14 @@ public class FiberTask
                ExecutionMode == TaskExecutionMode.RunningGuest;
     }
 
-    // Main execution slice called by KernelScheduler
+    // Called by KernelScheduler once per time-slice.
+    //
+    // Design invariant: every path that sets task.Continuation or task.PendingSyscall
+    // MUST eventually call CommonKernel.Schedule(this) to re-queue the task when it wants
+    // to resume. RunSlice itself never re-queues — it just arranges state and returns.
+    //
+    // RunSlice is always called with Status == Running (enforced by the scheduler).
+    // When it returns, the task must be in one of: Waiting, Ready, or Terminated.
     public void RunSlice(int instructionLimit = 1000000)
     {
         CommonKernel.CurrentTask = this;
@@ -755,21 +762,34 @@ public class FiberTask
         {
             ProcessPendingSignals();
 
+            // ── Phase 1: Resume a stored continuation ────────────────────────────────
+            // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
+            // has completed an async wait and wants the task to advance its syscall
+            // state machine by one step. The continuation itself is responsible for
+            // deciding what happens next:
+            //   • If the syscall is done → it calls CommonKernel.Schedule(this)
+            //     which sets Status = Ready and re-queues us.
+            //   • If the syscall needs to wait again → it leaves Status = Waiting.
+            // Either way we just return after invoking it.
             if (Continuation != null)
             {
-                ExecutionMode = TaskExecutionMode.WaitingContinuation;
                 var c = Continuation;
                 Continuation = null;
+                ExecutionMode = TaskExecutionMode.WaitingContinuation;
                 c();
-                
+
+                // Ensure we are not left in Running state — the continuation should
+                // have set us to Ready (via Schedule) or Waiting. If it forgot, park.
                 if (Status == FiberTaskStatus.Running)
-                {
                     Status = FiberTaskStatus.Waiting;
-                }
-                
                 return;
             }
 
+            // ── Phase 2: Kick off a pending async syscall ─────────────────────────────
+            // PendingSyscall is a Func<ValueTask<int>> installed by the syscall handler
+            // (via Engine.Yield) before the CPU yields. HandleAsyncSyscall() drives the
+            // ValueTask to completion on the scheduler thread, then calls
+            // CommonKernel.Schedule(this). Until that happens the task stays Waiting.
             if (PendingSyscall != null)
             {
                 ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
@@ -779,17 +799,24 @@ public class FiberTask
                 return;
             }
 
+            // ── Phase 3: Guard — verify we can actually run guest code ─────────────────
             if (!TryEnterGuestRun())
             {
-                if (Process.State == ProcessState.Stopped)
-                {
-                    Status = FiberTaskStatus.Waiting;
-                    ExecutionMode = TaskExecutionMode.Stopped;
-                }
-                else if (Exited)
+                // TryEnterGuestRun returns false if any of the following holds:
+                //   • task has exited
+                //   • process is SIGSTOP-stopped
+                //   • ExecutionMode != RunningGuest
+                // Park appropriately; the something external (signal, resume) will
+                // re-queue us when conditions change.
+                if (Exited)
                 {
                     Status = FiberTaskStatus.Terminated;
                     ExecutionMode = TaskExecutionMode.Terminated;
+                }
+                else if (Process.State == ProcessState.Stopped)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                    ExecutionMode = TaskExecutionMode.Stopped;
                 }
                 else if (Status == FiberTaskStatus.Running)
                 {
@@ -798,14 +825,15 @@ public class FiberTask
                 return;
             }
 
-            // 1. Run CPU execution
-            if (Process.Syscalls?.Strace == true) Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+            // ── Phase 4: Execute guest instructions ───────────────────────────────────
+            if (Process.Syscalls?.Strace == true)
+                Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
             CPU.Run(maxInsts: (ulong)instructionLimit);
-            
-            if (Process.Syscalls?.Strace == true) Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
-            // 2. Check Exit
+            if (Process.Syscalls?.Strace == true)
+                Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+
             if (Exited)
             {
                 Status = FiberTaskStatus.Terminated;
@@ -813,53 +841,59 @@ public class FiberTask
                 return;
             }
 
-            // 3. Check for Syscall Yield or Quanta exhaustion
-            if (CPU.Status == EmuStatus.Yield)
+            // ── Phase 5: Dispatch on CPU exit reason ──────────────────────────────────
+            // CPU.Status tells us WHY Run() returned:
+            //   Yield   — guest executed INT 0x80 (syscall) or called sched_yield.
+            //   Running — instruction quota exhausted; yield to other tasks.
+            //   Fault   — unrecoverable CPU exception.
+            switch (CPU.Status)
             {
-                if (PendingSyscall != null)
-                {
+                case EmuStatus.Yield when PendingSyscall != null:
+                    // Syscall handler installed a PendingSyscall before yielding.
+                    // Start driving it asynchronously; task parks until done.
                     ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
                     Status = FiberTaskStatus.Waiting;
                     Logger.LogTrace("[RunSlice] Yielded with PendingSyscall, calling HandleAsyncSyscall");
                     if (!_handlingAsyncSyscall)
                         HandleAsyncSyscall();
-                }
-                else
-                {
-                    // Cooperative Yield (sched_yield or just manual yield)
-                    // Re-schedule for next round
-                    CommonKernel.Schedule(this);
-                }
-            }
-            else if (CPU.Status == EmuStatus.Running)
-            {
-                // Quanta exhausted, reschedule
-                CommonKernel.Schedule(this);
-            }
-            else if (CPU.Status == EmuStatus.Fault)
-            {
-                // Crash
-                Logger.LogCritical("CPU Fault detected at EIP=0x{EIP:X}. Terminating task with SIGSEGV.", CPU.Eip);
-                Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}",
-                    CPU.RegRead(Reg.EAX), CPU.RegRead(Reg.EBX), CPU.RegRead(Reg.ECX), CPU.RegRead(Reg.EDX));
-                Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}",
-                    CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
-                Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
+                    break;
 
-                TerminateBySignal((int)Signal.SIGSEGV, coreDumped: true);
-                Status = FiberTaskStatus.Terminated;
-                ExecutionMode = TaskExecutionMode.Terminated;
-            }
-            else
-            {
-                // Stopped/Unknown -> Reschedule?
-                CommonKernel.Schedule(this);
+                case EmuStatus.Yield:   // cooperative yield (sched_yield / manual)
+                case EmuStatus.Running: // instruction quota exhausted
+                    // Re-queue immediately; another task may run in between.
+                    CommonKernel.Schedule(this);
+                    break;
+
+                case EmuStatus.Fault:
+                    HandleCpuFault();
+                    break;
+
+                default:
+                    // Unknown status — re-queue defensively so we don't livelock.
+                    CommonKernel.Schedule(this);
+                    break;
             }
         }
         finally
         {
             CommonKernel.CurrentTask = null;
         }
+    }
+
+    // Handles an unrecoverable CPU fault (e.g. unmapped page, illegal memory access).
+    // Logs register state, delivers SIGSEGV, and marks the task Terminated.
+    private void HandleCpuFault()
+    {
+        Logger.LogCritical("CPU Fault detected at EIP=0x{EIP:X}. Terminating task with SIGSEGV.", CPU.Eip);
+        Logger.LogCritical("Registers: EAX=0x{EAX:X} EBX=0x{EBX:X} ECX=0x{ECX:X} EDX=0x{EDX:X}",
+            CPU.RegRead(Reg.EAX), CPU.RegRead(Reg.EBX), CPU.RegRead(Reg.ECX), CPU.RegRead(Reg.EDX));
+        Logger.LogCritical("           ESI=0x{ESI:X} EDI=0x{EDI:X} EBP=0x{EBP:X} ESP=0x{ESP:X}",
+            CPU.RegRead(Reg.ESI), CPU.RegRead(Reg.EDI), CPU.RegRead(Reg.EBP), CPU.RegRead(Reg.ESP));
+        Logger.LogCritical("           EFLAGS=0x{EFLAGS:X}", CPU.Eflags);
+
+        TerminateBySignal((int)Signal.SIGSEGV, coreDumped: true);
+        Status = FiberTaskStatus.Terminated;
+        ExecutionMode = TaskExecutionMode.Terminated;
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators

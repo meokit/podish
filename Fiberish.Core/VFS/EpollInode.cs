@@ -90,10 +90,15 @@ public class EpollInode : TmpfsInode
                 _readyList.Add(item);
                 _waitQueue.Signal(); // Wake up an awaiting FiberTask (epoll_wait)
             }
-            // For Level-Triggered (LT), we might keep re-triggering, but tracking IsReady stops duplicates in _readyList.
+            // Item is already ready - no need to register a wait callback.
+            // When HarvestEventsLocked processes this item, for LT it will call
+            // CheckAndRegisterLocked again to re-arm if data still available.
+            return;
         }
 
-        // Register a callback on the target Inode so we get notified of future changes
+        // Item is NOT ready. Register a callback on the target Inode so we get notified of future changes.
+        // We only do this when not ready to avoid firing the callback synchronously
+        // while holding _lock (which would deadlock since the callback also acquires _lock).
         item.File.Dentry.Inode.RegisterWait(item.File, () => 
         {
             lock (_lock)
@@ -105,6 +110,17 @@ public class EpollInode : TmpfsInode
                 }
             }
         }, watchEvents);
+    }
+
+
+    public int TryHarvestNow(byte[] eventsBuffer, int maxEvents)
+    {
+        lock (_lock)
+        {
+            if (_readyList.Count > 0)
+                return HarvestEventsLocked(eventsBuffer, maxEvents);
+            return 0;
+        }
     }
 
     public EpollAwaiter WaitAsync(byte[] eventsBuffer, int maxEvents, int timeout)
@@ -152,7 +168,7 @@ public class EpollInode : TmpfsInode
 
             if (_timeoutMs > 0)
             {
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs * 10_000, () =>
+                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();

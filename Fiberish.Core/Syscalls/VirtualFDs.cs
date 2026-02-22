@@ -97,11 +97,16 @@ public class EventFdInode : TmpfsInode
 
     private void NotifyWaiters()
     {
-        foreach (var action in _waiters)
+        Action[] toWake;
+        lock (_lock)
+        {
+            toWake = [.._waiters];
+            _waiters.Clear(); // They will re-register if they poll again
+        }
+        foreach (var action in toWake)
         {
             action();
         }
-        _waiters.Clear(); // They will re-register if they poll again
     }
 }
 

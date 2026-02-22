@@ -59,6 +59,7 @@ add_integration_binary("test_posix_timers" "tests/src/test_posix_timers.c")
 add_integration_binary("test_virtual_fds" "tests/src/test_virtual_fds.c")
 add_integration_binary("test_nanosleep" "tests/src/test_nanosleep.c")
 add_integration_binary("test_rt_signals" "tests/src/test_rt_signals.c")
+add_integration_binary("test_network" "tests/src/test_network.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 
