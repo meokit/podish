@@ -156,6 +156,28 @@ public static class LinuxConstants
     public const uint CLONE_UNTRACED = 0x00800000;
     public const uint CLONE_CHILD_SETTID = 0x01000000;
 
+    // epoll op codes
+    public const int EPOLL_CTL_ADD = 1;
+    public const int EPOLL_CTL_DEL = 2;
+    public const int EPOLL_CTL_MOD = 3;
+
+    // epoll events
+    public const uint EPOLLIN = 0x00000001;
+    public const uint EPOLLPRI = 0x00000002;
+    public const uint EPOLLOUT = 0x00000004;
+    public const uint EPOLLERR = 0x00000008;
+    public const uint EPOLLHUP = 0x00000010;
+    public const uint EPOLLRDNORM = 0x00000040;
+    public const uint EPOLLRDBAND = 0x00000080;
+    public const uint EPOLLWRNORM = 0x00000100;
+    public const uint EPOLLWRBAND = 0x00000200;
+    public const uint EPOLLMSG = 0x00000400;
+    public const uint EPOLLRDHUP = 0x00002000;
+    public const uint EPOLLEXCLUSIVE = 1u << 28;
+    public const uint EPOLLWAKEUP = 1u << 29;
+    public const uint EPOLLONESHOT = 1u << 30;
+    public const uint EPOLLET = 1u << 31;
+
     // Futex ops
     public const int FUTEX_WAIT = 0;
     public const int FUTEX_WAKE = 1;

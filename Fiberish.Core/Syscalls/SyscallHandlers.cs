@@ -194,6 +194,11 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.pipe, SysPipe);
         Register(X86SyscallNumbers.sendfile64, SysSendfile64);
         Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
+        Register(X86SyscallNumbers.epoll_create, SysEpollCreate);
+        Register(X86SyscallNumbers.epoll_create1, SysEpollCreate1);
+        Register(X86SyscallNumbers.epoll_ctl, SysEpollCtl);
+        Register(X86SyscallNumbers.epoll_wait, SysEpollWait);
+        Register(X86SyscallNumbers.epoll_pwait, SysEpollPwait);
 
         // System V IPC
         Register(X86SyscallNumbers.ipc, SysIpc);
