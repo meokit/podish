@@ -175,7 +175,7 @@ public class PtyTests
         var pair = manager.AllocatePty();
 
         // Default is unlocked (modern behavior)
-        Assert.False(pair.IsLocked);
+        Assert.False(pair!.IsLocked);
 
         // Test unlock is idempotent
         pair.Unlock();
@@ -190,7 +190,7 @@ public class PtyTests
 
         // Write from master (goes to slave's input)
         var data = new[] { (byte)'H', (byte)'e', (byte)'l', (byte)'l', (byte)'o' };
-        var written = pair.Master!.Write(data);
+        var written = pair!.Master.Write(data);
         Assert.Equal(5, written);
 
         // Read from slave's input buffer
@@ -205,7 +205,7 @@ public class PtyTests
         var manager = new PtyManager(_logger);
         var pair = manager.AllocatePty();
 
-        Assert.False(pair.Master.HasDataAvailable);
+        Assert.False(pair!.Master.HasDataAvailable);
 
         // Write to slave output buffer (simulating slave output)
         pair.Master!.OutputBuffer.Write(new byte[] { 1, 2, 3 });
