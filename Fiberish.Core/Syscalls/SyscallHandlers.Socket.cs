@@ -324,6 +324,218 @@ public partial class SyscallManager
         }
     }
 
+    private static async ValueTask<int> SysSendMsg(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        int fd = (int)a1;
+        uint msgPtr = a2;
+        int flags = (int)a3;
+
+        var file = sm.GetFD(fd);
+        if (file == null) return -(int)Errno.EBADF;
+
+        var msgRaw = new byte[28];
+        if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
+
+        uint iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
+        int iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
+        uint controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
+        int controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
+
+        int totalBytes = 0;
+        var iovs = new (uint Base, int Len)[iovLen];
+        for (int i=0; i<iovLen; i++)
+        {
+            var iovRaw = new byte[8];
+            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i*8), iovRaw)) return -(int)Errno.EFAULT;
+            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)), 
+                       BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
+            totalBytes += iovs[i].Len;
+        }
+
+        var data = new byte[totalBytes];
+        int offset = 0;
+        foreach (var iov in iovs)
+        {
+            if (iov.Len > 0)
+            {
+                if (!task.CPU.CopyFromUser(iov.Base, data.AsSpan(offset, iov.Len))) return -(int)Errno.EFAULT;
+                offset += iov.Len;
+            }
+        }
+
+        var fds = new System.Collections.Generic.List<Fiberish.VFS.LinuxFile>();
+        if (controlPtr != 0 && controlLen > 0)
+        {
+            var cmsgRaw = new byte[controlLen];
+            if (!task.CPU.CopyFromUser(controlPtr, cmsgRaw)) return -(int)Errno.EFAULT;
+
+            int cmsgOffset = 0;
+            while (cmsgOffset + 12 <= controlLen)
+            {
+                int cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset, 4));
+                int level = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 4, 4));
+                int type = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 8, 4));
+
+                if (level == 1 /* SOL_SOCKET */ && type == 1 /* SCM_RIGHTS */)
+                {
+                    int fdCount = (cmsgLen - 12) / 4;
+                    for (int i=0; i<fdCount; i++)
+                    {
+                        int passedFd = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 12 + i * 4, 4));
+                        var passedFile = sm.GetFD(passedFd);
+                        if (passedFile != null) fds.Add(passedFile);
+                    }
+                }
+                cmsgOffset += Math.Max(cmsgLen, 12);
+                cmsgOffset = (cmsgOffset + 3) & ~3; // align to 4 bytes
+            }
+        }
+
+        if (file.Dentry.Inode is UnixSocketInode unixSock)
+        {
+            return await unixSock.SendMessageAsync(file, data, fds.Count > 0 ? fds : null, flags);
+        }
+        else if (file.Dentry.Inode is HostSocketInode hostSock)
+        {
+            // Host sockets don't support SCM_RIGHTS, fallback to basic send
+            return await hostSock.SendAsync(file, data, flags);
+        }
+        
+        return -(int)Errno.ENOTSOCK;
+    }
+
+    private static async ValueTask<int> SysRecvMsg(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        int fd = (int)a1;
+        uint msgPtr = a2;
+        int flags = (int)a3;
+
+        var file = sm.GetFD(fd);
+        if (file == null) return -(int)Errno.EBADF;
+
+        var msgRaw = new byte[28];
+        if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
+
+        uint iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
+        int iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
+        uint controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
+        int controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
+
+        int totalBytes = 0;
+        var iovs = new (uint Base, int Len)[iovLen];
+        for (int i=0; i<iovLen; i++)
+        {
+            var iovRaw = new byte[8];
+            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i*8), iovRaw)) return -(int)Errno.EFAULT;
+            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)), 
+                       BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
+            totalBytes += iovs[i].Len;
+        }
+
+        var buffer = new byte[totalBytes];
+        int bytesRead = 0;
+        System.Collections.Generic.List<Fiberish.VFS.LinuxFile>? receivedFds = null;
+
+        if (file.Dentry.Inode is UnixSocketInode unixSock)
+        {
+            var res = await unixSock.RecvMessageAsync(file, buffer, flags);
+            if (res.BytesRead < 0) return res.BytesRead;
+            bytesRead = res.BytesRead;
+            receivedFds = res.Fds;
+        }
+        else if (file.Dentry.Inode is HostSocketInode hostSock)
+        {
+            bytesRead = await hostSock.RecvAsync(file, buffer, flags);
+            if (bytesRead < 0) return bytesRead;
+        }
+        else return -(int)Errno.ENOTSOCK;
+
+        int offset = 0;
+        foreach (var iov in iovs)
+        {
+            if (iov.Len > 0 && offset < bytesRead)
+            {
+                int toCopy = Math.Min(iov.Len, bytesRead - offset);
+                task.CPU.CopyToUser(iov.Base, buffer.AsSpan(offset, toCopy));
+                offset += toCopy;
+            }
+        }
+
+        if (receivedFds != null && receivedFds.Count > 0 && controlPtr != 0)
+        {
+            int cmsgLen = 12 + receivedFds.Count * 4;
+            if (controlLen >= cmsgLen)
+            {
+                var cmsgRaw = new byte[cmsgLen];
+                BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(0, 4), cmsgLen);
+                BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(4, 4), 1); // SOL_SOCKET
+                BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(8, 4), 1); // SCM_RIGHTS
+                
+                for (int i=0; i<receivedFds.Count; i++)
+                {
+                    int newFd = sm.AllocFD(receivedFds[i]);
+                    BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(12 + i * 4, 4), newFd);
+                }
+
+                task.CPU.CopyToUser(controlPtr, cmsgRaw);
+                BinaryPrimitives.WriteInt32LittleEndian(msgRaw.AsSpan(20, 4), cmsgLen); // Update controllen
+                task.CPU.CopyToUser(msgPtr, msgRaw);
+            }
+        }
+
+        return bytesRead;
+    }
+
+    private static async ValueTask<int> SysSocketPair(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        int domain = (int)a1;
+        int type = (int)a2;
+        int protocol = (int)a3;
+        uint svPtr = a4;
+
+        if (domain != 1) return -(int)Errno.EAFNOSUPPORT; // AF_UNIX only
+
+        int realType = type & 0xf;
+        SocketType sockType = realType == 1 ? SocketType.Stream : SocketType.Dgram;
+
+        var fileFlags = FileFlags.O_RDWR;
+        if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+        if ((type & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+
+        var inode1 = new UnixSocketInode(0, sm.MemfdSuperBlock, sockType);
+        var inode2 = new UnixSocketInode(0, sm.MemfdSuperBlock, sockType);
+        inode1.ConnectPair(inode2);
+        inode2.ConnectPair(inode1);
+
+        var file1 = new Fiberish.VFS.LinuxFile(new Dentry($"socket:[{inode1.Ino}]", inode1, null, sm.MemfdSuperBlock), fileFlags);
+        var file2 = new Fiberish.VFS.LinuxFile(new Dentry($"socket:[{inode2.Ino}]", inode2, null, sm.MemfdSuperBlock), fileFlags);
+
+        int fd1 = sm.AllocFD(file1);
+        int fd2 = sm.AllocFD(file2);
+
+        var buf = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), fd1);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), fd2);
+        if (!sm.Engine.CopyToUser(svPtr, buf)) return -(int)Errno.EFAULT;
+
+        return 0;
+    }
+
     private static async ValueTask<int> SysSocketCall(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -346,10 +558,13 @@ public partial class SyscallManager
             3 /* SYS_CONNECT */ => await SysConnect(state, args[0], args[1], args[2], 0, 0, 0),
             4 /* SYS_LISTEN */ => await SysListen(state, args[0], args[1], args[2], 0, 0, 0),
             5 /* SYS_ACCEPT */ => await SysAccept(state, args[0], args[1], args[2], 0, 0, 0),
+            8 /* SYS_SOCKETPAIR */ => await SysSocketPair(state, args[0], args[1], args[2], args[3], 0, 0),
             9 /* SYS_SEND */ => await SysSend(state, args[0], args[1], args[2], args[3], 0, 0),
             10 /* SYS_RECV */ => await SysRecv(state, args[0], args[1], args[2], args[3], 0, 0),
             11 /* SYS_SENDTO */ => await SysSendTo(state, args[0], args[1], args[2], args[3], args[4], args[5]),
             12 /* SYS_RECVFROM */ => await SysRecvFrom(state, args[0], args[1], args[2], args[3], args[4], args[5]),
+            16 /* SYS_SENDMSG */ => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),
+            17 /* SYS_RECVMSG */ => await SysRecvMsg(state, args[0], args[1], args[2], 0, 0, 0),
             18 /* SYS_ACCEPT4 */ => await SysAccept4(state, args[0], args[1], args[2], args[3], 0, 0),
             _ => -(int)Errno.ENOSYS
         };
