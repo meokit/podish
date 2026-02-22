@@ -142,6 +142,16 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.setdomainname, SysSetdomainname);
         Register(X86SyscallNumbers.sched_yield, SysSchedYield);
         Register(X86SyscallNumbers.pause, SysPause);
+        
+        // Network Syscalls
+        Register(X86SyscallNumbers.socketcall, SysSocketCall);
+        Register(X86SyscallNumbers.socket, SysSocket);
+        Register(X86SyscallNumbers.bind, SysBind);
+        Register(X86SyscallNumbers.connect, SysConnect);
+        Register(X86SyscallNumbers.listen, SysListen);
+        Register(X86SyscallNumbers.accept4, SysAccept4);
+        Register(X86SyscallNumbers.sendto, SysSendTo);
+        Register(X86SyscallNumbers.recvfrom, SysRecvFrom);
 
         // Alarm
         Register(27, SysAlarm); // alarm

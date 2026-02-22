@@ -41,6 +41,34 @@ public enum Errno
     ENOTEMPTY = 39, /* Directory not empty */
     ELOOP = 40, /* Too many levels of symbolic links */
     EIDRM = 43, /* Identifier removed */
+    ENOTSOCK = 88, /* Socket operation on non-socket */
+    EDESTADDRREQ = 89, /* Destination address required */
+    EMSGSIZE = 90, /* Message too long */
+    EPROTOTYPE = 91, /* Protocol wrong type for socket */
+    ENOPROTOOPT = 92, /* Protocol not available */
+    EPROTONOSUPPORT = 93, /* Protocol not supported */
+    ESOCKTNOSUPPORT = 94, /* Socket type not supported */
+    EOPNOTSUPP = 95, /* Operation not supported on transport endpoint */
+    EPFNOSUPPORT = 96, /* Protocol family not supported */
+    EAFNOSUPPORT = 97, /* Address family not supported by protocol */
+    EADDRINUSE = 98, /* Address already in use */
+    EADDRNOTAVAIL = 99, /* Cannot assign requested address */
+    ENETDOWN = 100, /* Network is down */
+    ENETUNREACH = 101, /* Network is unreachable */
+    ENETRESET = 102, /* Network dropped connection because of reset */
+    ECONNABORTED = 103, /* Software caused connection abort */
+    ECONNRESET = 104, /* Connection reset by peer */
+    ENOBUFS = 105, /* No buffer space available */
+    EISCONN = 106, /* Transport endpoint is already connected */
+    ENOTCONN = 107, /* Transport endpoint is not connected */
+    ESHUTDOWN = 108, /* Cannot send after transport endpoint shutdown */
+    ETOOMANYREFS = 109, /* Too many references: cannot splice */
+    ETIMEDOUT = 110, /* Connection timed out */
+    ECONNREFUSED = 111, /* Connection refused */
+    EHOSTDOWN = 112, /* Host is down */
+    EHOSTUNREACH = 113, /* No route to host */
+    EALREADY = 114, /* Operation already in progress */
+    EINPROGRESS = 115, /* Operation now in progress */
     ERESTARTSYS = 512
 }
 

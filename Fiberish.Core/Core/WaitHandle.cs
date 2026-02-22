@@ -128,6 +128,8 @@ public readonly struct WaitQueueAwaiter(AsyncWaitQueue queue) : INotifyCompletio
         if (task != null) task.WakeReason = WakeReason.None;
         return AwaitResult.Completed;
     }
+
+    public WaitQueueAwaiter GetAwaiter() => this;
 }
 
 public static class SchedulerUtils
