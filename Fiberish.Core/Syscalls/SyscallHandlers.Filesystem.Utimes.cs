@@ -9,6 +9,7 @@ public partial class SyscallManager
 {
     private static async ValueTask<int> SysUtimes(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        await Task.CompletedTask;
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
