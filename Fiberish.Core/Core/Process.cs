@@ -110,6 +110,7 @@ public class Process
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
     public string Comm { get; private set; } = "process";
+    public string Name { get => Comm; set => Comm = value; }
 
     // Event signaled when process state changes (exit, stop, continue)
     // Used by parent's wait4() to avoid busy-polling

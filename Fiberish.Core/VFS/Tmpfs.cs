@@ -1,3 +1,4 @@
+using Fiberish.Native;
 using System.Text;
 
 namespace Fiberish.VFS;
@@ -359,12 +360,13 @@ public class TmpfsInode : Inode
         }
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
-        if (Type == InodeType.Directory) return;
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         Array.Resize(ref _data, (int)size);
         Size = (ulong)size;
         MTime = DateTime.Now;
+        return 0;
     }
 
     public override List<DirectoryEntry> GetEntries()

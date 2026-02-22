@@ -106,11 +106,19 @@ public class ElfLoader
 
         uint phnum = 0;
         uint phdrAddr = 0;
+        uint firstLoadVaddr = 0;
+        bool foundFirstLoad = false;
 
         foreach (var segment in elf.Segments)
         {
             if (segment.Type == ElfSegmentTypeCore.Load)
             {
+                if (!foundFirstLoad)
+                {
+                    firstLoadVaddr = (uint)segment.VirtualAddress;
+                    foundFirstLoad = true;
+                }
+
                 var perms = Protection.None;
                 if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Executable) != 0) perms |= Protection.Exec;
                 if ((segment.Flags.Value & (uint)ElfSegmentFlagsCore.Writable) != 0) perms |= Protection.Write;
@@ -143,7 +151,7 @@ public class ElfLoader
             phnum++;
         }
 
-        if (phdrAddr == 0) phdrAddr = loadBase + elf.Layout.SizeOfElfHeader;
+        if (phdrAddr == 0 && foundFirstLoad) phdrAddr = firstLoadVaddr + loadBase + elf.Layout.SizeOfElfHeader;
         Logger.LogDebug("ElfLoader: loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={Phnum}", loadBase, phdrAddr,
             phnum);
 

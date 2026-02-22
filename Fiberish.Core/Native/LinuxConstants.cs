@@ -263,6 +263,13 @@ public static class LinuxConstants
     public const uint AT_STATX_FORCE_SYNC = 0x2000;
     public const uint AT_STATX_DONT_SYNC = 0x4000;
 
+    // prctl
+    public const int PR_SET_NAME = 15;
+    public const int PR_GET_NAME = 16;
+
+    // personality
+    public const uint PER_LINUX = 0x0000;
+
     // Statx mask bits
     public const uint STATX_TYPE = 0x00000001;
     public const uint STATX_MODE = 0x00000002;

@@ -619,4 +619,30 @@ public partial class SyscallManager
 
         return task.Process.PGID;
     }
+
+    private static async ValueTask<int> SysPrlimit64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var pid = (int)a1;
+        var resource = (int)a2;
+        var newLimitPtr = a3;
+        var oldLimitPtr = a4;
+
+        if (pid != 0 && (sm.GetTID == null || pid != sm.GetTID(sm.Engine)))
+        {
+            return -(int)Errno.EPERM;
+        }
+
+        if (oldLimitPtr != 0)
+        {
+            var buf = new byte[16];
+            BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0, 8), 1024); // soft
+            BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(8, 8), 4096); // hard
+            if (!sm.Engine.CopyToUser(oldLimitPtr, buf)) return -(int)Errno.EFAULT;
+        }
+
+        return 0;
+    }
 }

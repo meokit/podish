@@ -89,15 +89,15 @@ public abstract class SuperBlock
 
 public abstract class Inode
 {
-    public ulong Ino { get; set; }
-    public InodeType Type { get; set; }
-    public int Mode { get; set; }
-    public int Uid { get; set; }
-    public int Gid { get; set; }
-    public ulong Size { get; set; }
-    public DateTime MTime { get; set; }
-    public DateTime ATime { get; set; }
-    public DateTime CTime { get; set; }
+    public virtual ulong Ino { get; set; }
+    public virtual InodeType Type { get; set; }
+    public virtual int Mode { get; set; }
+    public virtual int Uid { get; set; }
+    public virtual int Gid { get; set; }
+    public virtual ulong Size { get; set; }
+    public virtual DateTime MTime { get; set; }
+    public virtual DateTime ATime { get; set; }
+    public virtual DateTime CTime { get; set; }
 
     /// <summary>
     ///     Device number (rdev) for character/block devices.
@@ -139,6 +139,11 @@ public abstract class Inode
     public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
         throw new NotSupportedException();
+    }
+
+    public virtual int Truncate(long length)
+    {
+        return -(int)Errno.ENOSYS;
     }
 
     public virtual Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
@@ -228,10 +233,7 @@ public abstract class Inode
         return false;
     }
 
-    public virtual void Truncate(long size)
-    {
-        throw new NotSupportedException();
-    }
+
 
     /// <summary>
     ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.

@@ -42,6 +42,10 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.setreuid, SysSetReUid);
         Register(X86SyscallNumbers.setregid, SysSetReGid);
         Register(X86SyscallNumbers.munmap, SysMunmap);
+        Register(X86SyscallNumbers.truncate, SysTruncate);
+        Register(X86SyscallNumbers.ftruncate, SysFtruncate);
+        Register(X86SyscallNumbers.truncate64, SysTruncate64);
+        Register(X86SyscallNumbers.ftruncate64, SysFtruncate64);
         Register(X86SyscallNumbers.fchmod, SysFchmod);
         Register(X86SyscallNumbers.fchown, SysFchown);
         Register(X86SyscallNumbers.sigreturn, SysSigReturn);
@@ -87,7 +91,16 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.creat, SysCreat);
         Register(X86SyscallNumbers.link, SysLink);
         Register(X86SyscallNumbers.chdir, SysChdir);
+        Register(X86SyscallNumbers.fchdir, SysFchdir);
         Register(X86SyscallNumbers.time, SysTime);
+        Register(X86SyscallNumbers.nice, SysNice);
+        Register(X86SyscallNumbers.getpriority, SysGetPriority);
+        Register(X86SyscallNumbers.setpriority, SysSetPriority);
+        Register(X86SyscallNumbers.personality, SysPersonality);
+        Register(X86SyscallNumbers.prctl, SysPrctl);
+        Register(X86SyscallNumbers.getcpu, SysGetCpu);
+        Register(X86SyscallNumbers.prlimit64, SysPrlimit64);
+        Register(X86SyscallNumbers.get_thread_area, SysGetThreadArea);
 
         Register(X86SyscallNumbers.openat, SysOpenAt);
         Register(X86SyscallNumbers.dup, SysDup);
@@ -104,6 +117,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.rmdir, SysRmdir);
         Register(X86SyscallNumbers.mkdirat, SysMkdirAt);
         Register(X86SyscallNumbers.unlinkat, SysUnlinkAt);
+        Register(X86SyscallNumbers.utimes, SysUtimes);
         Register(X86SyscallNumbers.symlink, SysSymlink);
         Register(X86SyscallNumbers.readlink, SysReadlink);
         Register(X86SyscallNumbers.readlinkat, SysReadlinkAt);
@@ -213,6 +227,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.sendfile64, SysSendfile64);
         Register(X86SyscallNumbers.splice, SysSplice);
         Register(X86SyscallNumbers.tee, SysTee);
+        Register(X86SyscallNumbers.readahead, SysReadahead);
+        Register(X86SyscallNumbers.fadvise64, SysFadvise64);
         Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
         Register(X86SyscallNumbers.epoll_create, SysEpollCreate);
         Register(X86SyscallNumbers.epoll_create1, SysEpollCreate1);

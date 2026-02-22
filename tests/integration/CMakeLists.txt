@@ -20,7 +20,7 @@ set(INTEGRATION_TEST_OUTPUTS)
 
 function(add_integration_binary output_name source_relpath)
     set(options)
-    set(oneValueArgs OPT_LEVEL)
+    set(oneValueArgs OPT_LEVEL EXTRA_FLAGS)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "" ${ARGN})
 
     if (NOT ARG_OPT_LEVEL)
@@ -30,12 +30,14 @@ function(add_integration_binary output_name source_relpath)
     set(source_path "${FIBERISH_PROJECT_ROOT}/${source_relpath}")
     set(output_path "${INTEGRATION_ASSETS_DIR}/${output_name}")
 
+    separate_arguments(EXTRA_FLAGS_LIST NATIVE_COMMAND "${ARG_EXTRA_FLAGS}")
+
     add_custom_command(
         OUTPUT "${output_path}"
         COMMAND ${CMAKE_COMMAND} -E env
             "ZIG_GLOBAL_CACHE_DIR=${INTEGRATION_ZIG_CACHE_DIR}"
             "ZIG_LOCAL_CACHE_DIR=${INTEGRATION_ZIG_CACHE_DIR}"
-            "${ZIG_EXECUTABLE}" cc -target x86-linux-musl -static ${ARG_OPT_LEVEL} -o "${output_path}" "${source_path}"
+            "${ZIG_EXECUTABLE}" cc -target x86-linux-musl -static ${ARG_OPT_LEVEL} ${EXTRA_FLAGS_LIST} -o "${output_path}" "${source_path}"
         DEPENDS "${source_path}"
         COMMENT "Building integration binary ${output_name}"
         VERBATIM
@@ -60,6 +62,13 @@ add_integration_binary("test_virtual_fds" "tests/src/test_virtual_fds.c")
 add_integration_binary("test_nanosleep" "tests/src/test_nanosleep.c")
 add_integration_binary("test_rt_signals" "tests/src/test_rt_signals.c")
 add_integration_binary("test_network" "tests/src/test_network.c")
+add_integration_binary("test_low_hanging" "tests/src/test_low_hanging.c")
+add_integration_binary("test_fchdir_truncate" "tests/src/test_fchdir_truncate.c")
+add_integration_binary("test_job_control" "tests/src/test_job_control.c")
+add_integration_binary("hello_test" "tests/src/hello_test.c")
+add_integration_binary("test_jc_nolibc" "tests/src/test_jc_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
+add_integration_binary("test_pty_nolibc" "tests/src/test_pty_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
+add_integration_binary("test_low_hanging_nolibc" "tests/src/test_low_hanging_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 

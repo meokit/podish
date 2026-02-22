@@ -882,4 +882,14 @@ public partial class SyscallManager
             }
         }
     }
+
+    private static async ValueTask<int> SysReadahead(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return 0; // Success (hint)
+    }
+
+    private static async ValueTask<int> SysFadvise64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return 0; // Success (hint)
+    }
 }

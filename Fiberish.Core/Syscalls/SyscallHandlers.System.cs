@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 using Process = System.Diagnostics.Process;
 using Timer = Fiberish.Core.Timer;
@@ -438,5 +439,107 @@ public partial class SyscallManager
         }
 
         public NanosleepAwaiter GetAwaiter() => this;
+    }
+
+    private static async ValueTask<int> SysNice(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // Simple stub: for now, don't actually change host priority
+        return 0; // Success
+    }
+
+    private static async ValueTask<int> SysGetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // Simple stub: return default priority (20)
+        return 20;
+    }
+
+    private static async ValueTask<int> SysSetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // Simple stub: success
+        return 0;
+    }
+
+    private static async ValueTask<int> SysPersonality(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // personality(0xffffffff) returns current, otherwise sets.
+        // For now, always return PER_LINUX (0)
+        return (int)LinuxConstants.PER_LINUX;
+    }
+
+    private static async ValueTask<int> SysGetCpu(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var cpuPtr = a1;
+        var nodePtr = a2;
+
+        if (cpuPtr != 0)
+        {
+            if (!sm.Engine.CopyToUser(cpuPtr, BitConverter.GetBytes(0u)))
+                return -(int)Errno.EFAULT;
+        }
+
+        if (nodePtr != 0)
+        {
+            if (!sm.Engine.CopyToUser(nodePtr, BitConverter.GetBytes(0u)))
+                return -(int)Errno.EFAULT;
+        }
+
+        return 0;
+    }
+
+    private static async ValueTask<int> SysPrctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var option = (int)a1;
+
+        switch (option)
+        {
+            case LinuxConstants.PR_SET_NAME:
+                var name = sm.ReadString(a2);
+                if (name != null)
+                {
+                    task.Process.Name = name;
+                    return 0;
+                }
+                return -(int)Errno.EFAULT;
+
+            case LinuxConstants.PR_GET_NAME:
+                var procName = task.Process.Name ?? "fiberish";
+                var bytes = Encoding.ASCII.GetBytes(procName);
+                var buf = new byte[16];
+                Array.Copy(bytes, buf, Math.Min(bytes.Length, 15));
+                if (!sm.Engine.CopyToUser(a2, buf)) return -(int)Errno.EFAULT;
+                return 0;
+
+            default:
+                Logger.LogWarning($"[SysPrctl] Unhandled option: {option}");
+                return 0; // Success for many non-critical options
+        }
+    }
+
+    private static async ValueTask<int> SysGetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var uInfoAddr = a1;
+        var buf = new byte[16];
+        if (!sm.Engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+
+        // var entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
+        
+        // Return whatever was previously set via SetThreadArea
+        // We simplified set_thread_area to just set GS base, so we don't track entry indices properly.
+        // Just return current GS base as base_addr.
+        var baseAddr = sm.Engine.GetSegBase(Seg.GS);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), baseAddr);
+        
+        if (!sm.Engine.CopyToUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+        return 0;
     }
 }

@@ -1,3 +1,4 @@
+using Fiberish.Native;
 // needed for SyscallManager Access if required, but maybe not directly here yet
 
 namespace Fiberish.VFS;
@@ -69,22 +70,27 @@ public class OverlayInode : Inode
         SuperBlock = sb;
         LowerDentry = lower;
         UpperDentry = upper;
-
-        // Stat comes from upper if present, else lower
-        var source = UpperInode ?? LowerInode;
-        if (source != null)
-        {
-            Ino = source.Ino;
-            Type = source.Type;
-            Mode = source.Mode;
-            Uid = source.Uid;
-            Gid = source.Gid;
-            Size = source.Size;
-            MTime = source.MTime;
-            ATime = source.ATime;
-            CTime = source.CTime;
-        }
     }
+
+    private Inode? SourceInode => UpperInode ?? LowerInode;
+
+    public override ulong Ino { get => SourceInode?.Ino ?? 0; set { if (SourceInode != null) SourceInode.Ino = value; } }
+    public override InodeType Type { get => SourceInode?.Type ?? InodeType.File; set { if (SourceInode != null) SourceInode.Type = value; } }
+    public override int Mode { get => SourceInode?.Mode ?? 0; set { if (SourceInode != null) SourceInode.Mode = value; } }
+    public override int Uid { get => SourceInode?.Uid ?? 0; set { if (SourceInode != null) SourceInode.Uid = value; } }
+    public override int Gid { get => SourceInode?.Gid ?? 0; set { if (SourceInode != null) SourceInode.Gid = value; } }
+    public override ulong Size 
+    { 
+        get {
+            return SourceInode?.Size ?? 0;
+        }
+        set { 
+            if (SourceInode != null) SourceInode.Size = value; 
+        } 
+    }
+    public override DateTime MTime { get => SourceInode?.MTime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.MTime = value; } }
+    public override DateTime ATime { get => SourceInode?.ATime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.ATime = value; } }
+    public override DateTime CTime { get => SourceInode?.CTime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.CTime = value; } }
 
     public Dentry? LowerDentry { get; }
     public Dentry? UpperDentry { get; private set; }
@@ -237,14 +243,10 @@ public class OverlayInode : Inode
         else LowerInode?.Release(linuxFile);
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
-        UpperInode?.Truncate(size);
-        // If lower, we might need copy-up? But Truncate usually follows Open?
-        // If we allow truncate without write, we need copy up.
-        // Assuming if we desire to modify, we should have triggered copy-up or will trigger it.
-        // But Truncate changes file. 
-        // If Lower only, fail or copy-up.
+        if (UpperInode != null) return UpperInode.Truncate(size);
+        return -(int)Errno.EROFS;
     }
 
     public override List<DirectoryEntry> GetEntries()

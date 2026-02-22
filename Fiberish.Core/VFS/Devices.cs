@@ -137,7 +137,8 @@ public class ConsoleInode : Inode
         return -(int)Errno.ENOTTY;
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
+        return 0;
     }
 }

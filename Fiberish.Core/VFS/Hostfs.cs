@@ -312,11 +312,12 @@ public partial class HostInode : Inode
         return buffer.Length;
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
         using var fs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         fs.SetLength(size);
         Size = (ulong)size;
+        return 0;
     }
 
     public override List<DirectoryEntry> GetEntries()

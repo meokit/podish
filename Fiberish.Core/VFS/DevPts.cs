@@ -85,8 +85,9 @@ public class PtySlaveInode : Inode
         return -(int)Errno.ENOTTY;
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
+        return 0;
     }
 }
 
@@ -211,8 +212,9 @@ public class PtmxInode : Inode
         }
     }
 
-    public override void Truncate(long size)
+    public override int Truncate(long size)
     {
+        return 0;
     }
 }
 

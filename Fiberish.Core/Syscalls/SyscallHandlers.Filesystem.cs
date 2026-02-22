@@ -60,6 +60,23 @@ public partial class SyscallManager
         return 0;
     }
 
+    private static async ValueTask<int> SysFchdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+        var oldCwd = sm.CurrentWorkingDirectory;
+        sm.CurrentWorkingDirectory = f.Dentry;
+        f.Dentry.Inode!.Get();
+        oldCwd?.Inode?.Put();
+        return 0;
+    }
+
     private static async ValueTask<int> SysMkdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -88,6 +105,65 @@ public partial class SyscallManager
         {
             return -(int)Errno.EACCES;
         }
+    }
+
+    private static async ValueTask<int> SysTruncate(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await DoTruncate(state, a1, a2);
+    }
+
+    private static async ValueTask<int> SysTruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // 32-bit truncate64 has padding if we use 64-bit length. a2 and a3 are the split 64 bit integer
+        var length = (long)(((ulong)a3 << 32) | a2);
+        return await DoTruncate(state, a1, length);
+    }
+
+    private static ValueTask<int> DoTruncate(IntPtr state, uint pathPtr, long length)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+        var path = sm.ReadString(pathPtr);
+
+        var dentry = sm.PathWalk(path);
+        if (dentry == null || dentry.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        if (dentry.Inode.Type == InodeType.Directory) return new ValueTask<int>(-(int)Errno.EISDIR);
+
+        var t = sm.Engine.Owner as FiberTask;
+        if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
+        {
+            // Usually need write permission to truncate, simplified check for now
+        }
+
+        return new ValueTask<int>(dentry.Inode.Truncate(length));
+    }
+
+    private static async ValueTask<int> SysFtruncate(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var fd = (int)a1;
+        var length = (long)a2;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+
+        return f.Dentry.Inode.Truncate(length);
+    }
+
+    private static async ValueTask<int> SysFtruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var fd = (int)a1;
+        var length = (long)(((ulong)a3 << 32) | a2);
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+
+        return f.Dentry.Inode.Truncate(length);
     }
 
     private static async ValueTask<int> SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -339,8 +415,14 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        // Redirect to SysChown logic or similar
-        return await SysChown(state, a2, a3, a4, 0, 0, 0); // Simplified: should use dentry directly
+        var uid = (int)a3;
+        var gid = (int)a4;
+        
+        // Simplified: permissions check would go here
+        dentry.Inode.Uid = uid;
+        dentry.Inode.Gid = gid;
+        dentry.Inode.CTime = DateTime.Now;
+        return 0;
     }
 
     private static async ValueTask<int> SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -360,7 +442,11 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        return await SysChmod(state, a2, a3, 0, 0, 0, 0);
+        var mode = a3;
+        // Simplified: permissions check would go here
+        dentry.Inode.Mode = (int)(mode & 0xFFF);
+        dentry.Inode.CTime = DateTime.Now;
+        return 0;
     }
 
     private static async ValueTask<int> SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -380,7 +466,8 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        return await SysAccess(state, a2, a3, 0, 0, 0, 0);
+        // Simplified: should check mode (a3) but for now existence is enough
+        return 0;
     }
 
     private static async ValueTask<int> SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
