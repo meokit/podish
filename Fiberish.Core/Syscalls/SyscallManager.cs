@@ -364,6 +364,21 @@ public partial class SyscallManager
         var devptsFsType = FileSystemRegistry.Get("devpts")!;
         var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
         Mount(devRoot, "pts", devptsSb, "devpts", "devpts", "rw,relatime,gid=5,mode=620", "/dev/pts");
+
+        // Create /dev/urandom and /dev/random
+        var randomInode = new RandomInode(devSb);
+        randomInode.Rdev = 0x0109; // Major 1, Minor 9 (urandom)
+        var urandomDentry = new Dentry("urandom", randomInode, devRoot, devSb);
+        devRoot.Children["urandom"] = urandomDentry;
+        
+        var randomDentry = new Dentry("random", randomInode, devRoot, devSb); // Reuse inode
+        devRoot.Children["random"] = randomDentry;
+
+        if (devSb is TmpfsSuperBlock tmpDevSb3)
+        {
+            tmpDevSb3.Dentries[new DCacheKey(devRoot.Id, "urandom")] = urandomDentry;
+            tmpDevSb3.Dentries[new DCacheKey(devRoot.Id, "random")] = randomDentry;
+        }
     }
 
     public void RegisterEngine(Engine engine)

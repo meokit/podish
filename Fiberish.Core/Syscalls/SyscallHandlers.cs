@@ -90,6 +90,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.faccessat, SysFaccessAt);
         Register(X86SyscallNumbers.statfs64, SysStatfs64);
         Register(X86SyscallNumbers.fstatfs64, SysFstatfs64);
+        Register(X86SyscallNumbers.getrandom, SysGetRandom);
 
         Register(X86SyscallNumbers.creat, SysCreat);
         Register(X86SyscallNumbers.link, SysLink);

@@ -633,4 +633,26 @@ public partial class SyscallManager
 
         return 0;
     }
+
+    private static async ValueTask<int> SysGetRandom(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var bufAddr = a1;
+        var count = a2;
+        var flags = a3;
+
+        if (count == 0) return 0;
+
+        // Flags: 0x01 (GRND_NONBLOCK), 0x02 (GRND_RANDOM), 0x04 (GRND_INSECURE)
+        // We act as if we are urandom/random always ready (except strict GRND_RANDOM might block, but we simulate non-blocking behavior for now).
+
+        var buffer = new byte[count];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+
+        if (!sm.Engine.CopyToUser(bufAddr, buffer)) return -(int)Errno.EFAULT;
+
+        return (int)count;
+    }
 }

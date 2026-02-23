@@ -142,3 +142,52 @@ public class ConsoleInode : Inode
         return 0;
     }
 }
+
+public class RandomInode : Inode
+{
+    public RandomInode(SuperBlock sb)
+    {
+        SuperBlock = sb;
+        Type = InodeType.CharDev;
+        Mode = 0x1B6; // 666
+        Ino = 1; // Dummy
+    }
+
+    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot create in /dev/random");
+    }
+
+    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot mkdir in /dev/random");
+    }
+
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot symlink in /dev/random");
+    }
+
+    public override Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        throw new InvalidOperationException("Cannot link in /dev/random");
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+        return buffer.Length;
+    }
+
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        // Writing to /dev/urandom updates the entropy pool. 
+        // We can just ignore it or count it as success.
+        return buffer.Length;
+    }
+
+    public override int Truncate(long size)
+    {
+        return 0;
+    }
+}
