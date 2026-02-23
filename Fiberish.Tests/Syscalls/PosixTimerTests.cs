@@ -30,7 +30,7 @@ public class PosixTimerTests
             Task = new FiberTask(100, Process, Engine, Scheduler);
             Engine.Owner = Task;
 
-            SyscallManager = new SyscallManager(Engine, Vma, 0, ".", null);
+            SyscallManager = new SyscallManager(Engine, Vma, 0, ".", false, null);
             Manager = new PosixTimerManager();
 
             KernelScheduler.Current = Scheduler; // Set static current for tests

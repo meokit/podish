@@ -40,6 +40,10 @@ internal class Program
             "--dump-blocks",
             "Dump Basic Blocks to file on exit");
 
+        var overlayOption = new Option<bool>(
+            new[] { "--overlay", "-o" },
+            "Enable OverlayFS for the root filesystem");
+
         var exeArgument = new Argument<string>(
             "executable",
             "Path to the Linux executable to run");
@@ -57,35 +61,37 @@ internal class Program
             traceInstructionOption,
             statsOption,
             dumpBlocksOption,
+            overlayOption,
             exeArgument,
             argsArgument
         };
 
-        rootCommand.SetHandler(async (rootfs, verbose, trace, traceInstruction, stats, dumpBlocks, exe, exeArgs) =>
-            {
-                Configuration.Verbose = verbose;
-                Configuration.ShowStats = stats;
-                var exitCode = await RunEmulator(rootfs, verbose, trace, traceInstruction, stats, dumpBlocks, exe,
-                    exeArgs);
-                if (!string.IsNullOrEmpty(dumpBlocks))
-                {
-                    // Assuming single engine/process for now, dumping from the last used engine would be ideal
-                    // But RunEmulator creates Engine locally.
-                    // We need to capture the Engine instance or pass the dump path to RunEmulator.
-                    // Let's modify RunEmulator to take the dump path.
-                }
+        rootCommand.SetHandler(async (context) =>
+        {
+            var rootfs = context.ParseResult.GetValueForOption(rootOption)!;
+            var verbose = context.ParseResult.GetValueForOption(verboseOption);
+            var trace = context.ParseResult.GetValueForOption(traceOption);
+            var traceInstruction = context.ParseResult.GetValueForOption(traceInstructionOption);
+            var stats = context.ParseResult.GetValueForOption(statsOption);
+            var dumpBlocks = context.ParseResult.GetValueForOption(dumpBlocksOption);
+            var overlay = context.ParseResult.GetValueForOption(overlayOption);
+            var exe = context.ParseResult.GetValueForArgument(exeArgument);
+            var exeArgs = context.ParseResult.GetValueForArgument(argsArgument) ?? Array.Empty<string>();
 
-                Environment.ExitCode = exitCode;
-            }, rootOption, verboseOption, traceOption, traceInstructionOption, statsOption, dumpBlocksOption,
-            exeArgument,
-            argsArgument);
+            Configuration.Verbose = verbose;
+            Configuration.ShowStats = stats;
+            var exitCode = await RunEmulator(rootfs, verbose, trace, overlay, exe,
+                exeArgs);
+
+            context.ExitCode = exitCode;
+        });
 
         return await rootCommand.InvokeAsync(args);
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators
-    private static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool traceInstruction,
-        bool stats, string dumpBlocksDir, string exe, string[] exeArgs)
+    private static async Task<int> RunEmulator(string rootfs, bool verbose, bool trace, bool overlay, string exe,
+        string[] exeArgs)
     {
         // Initialize Logging
         Logging.LoggerFactory = LoggerFactory.Create(builder =>
@@ -191,7 +197,7 @@ internal class Program
         try
         {
             // 3. Bootstrap runtime and first process
-            var runtime = KernelRuntime.Bootstrap(rootfs, trace, tty);
+            var runtime = KernelRuntime.Bootstrap(rootfs, trace, overlay, tty);
 
             // Resolve exe path for the initial process
             var (dentry, guestPath) = runtime.Syscalls.ResolvePath(exe, isHostRelativeDefault: true);

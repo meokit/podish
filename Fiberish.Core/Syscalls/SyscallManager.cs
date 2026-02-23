@@ -19,7 +19,8 @@ public partial class SyscallManager
     private static readonly object _registryLock = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot, TtyDiscipline? tty = null)
+    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot, bool useOverlay,
+        TtyDiscipline? tty = null)
     {
         Engine = engine;
         Mem = mem;
@@ -54,19 +55,31 @@ public partial class SyscallManager
         // Lower: Hostfs (Read-Only access to hostRoot)
         var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
 
-        // Upper: Tmpfs (Read-Write layer)
-        var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "overlay_upper", null);
-
-        // Overlay: Combine them
-        var options = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-        var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", options);
-
-        Root = overlaySb.Root;
-        MountList.Add(new MountInfo
+        if (useOverlay)
         {
-            Source = "overlay", Target = "/", FsType = "overlay",
-            Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
-        });
+            // Upper: Tmpfs (Read-Write layer)
+            var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "overlay_upper", null);
+
+            // Overlay: Combine them
+            var options = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
+            var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", options);
+
+            Root = overlaySb.Root;
+            MountList.Add(new MountInfo
+            {
+                Source = "overlay", Target = "/", FsType = "overlay",
+                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
+            });
+        }
+        else
+        {
+            Root = lowerSb.Root;
+            MountList.Add(new MountInfo
+            {
+                Source = hostRoot, Target = "/", FsType = "hostfs",
+                Options = "rw,relatime"
+            });
+        }
 
         ProcessRoot = Root;
         CurrentWorkingDirectory = Root;
@@ -76,34 +89,63 @@ public partial class SyscallManager
         CurrentWorkingDirectory.Inode!.Get();
 
         // 3. Mount /dev and /proc
-        // Ensure /dev and /proc exist in the overlay (will be created in Upper if missing)
-        EnsureDirectory(Root, "dev");
-        EnsureDirectory(Root, "proc");
-        EnsureDirectory(Root, "tmp");
+        if (useOverlay)
+        {
+            // Ensure /dev and /proc exist in the overlay (will be created in Upper if missing)
+            EnsureDirectory(Root, "dev");
+            EnsureDirectory(Root, "proc");
+            EnsureDirectory(Root, "tmp");
+        }
 
-        // Mount devtmpfs to /dev
+        // 3. Setup devtmpfs and stdio FDs (always needed)
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
         var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
-        Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
 
-        // Mount procfs to /proc
-        var procFsType = FileSystemRegistry.Get("proc")!;
-        var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
-        Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
+        // Mount devtmpfs to /dev if it exists
+        var devDentry = Root.Inode.Lookup("dev");
+        if (devDentry != null && devDentry.Inode?.Type == InodeType.Directory)
+        {
+            Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
+        }
+        else
+        {
+            Logger.LogWarning("/dev not found in rootfs, skipping devtmpfs mount.");
+        }
 
-        // Mount tmpfs to /dev/shm for POSIX shm_open userspace ABI.
+        // Add console FDs (uses devSb which might or might not be mounted)
+        InitStdio(devSb, tty);
+
+        // 4. Mount procfs to /proc if it exists
+        var procDentry = Root.Inode.Lookup("proc");
+        if (procDentry != null && procDentry.Inode?.Type == InodeType.Directory)
+        {
+            var procFsType = FileSystemRegistry.Get("proc")!;
+            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
+            Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
+        }
+        else
+        {
+            Logger.LogWarning("/proc not found in rootfs, skipping procfs mount.");
+        }
+
+        // 5. Mount tmpfs to /dev/shm for POSIX shm_open userspace ABI.
         // Resolve through the mounted /dev dentry to avoid creating shm under a detached devtmpfs root.
         var devRoot = PathWalk("/dev") ?? devSb.Root;
-        EnsureDirectory(devRoot, "shm");
-        var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
-        Mount(devRoot, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
-        DevShmRoot = shmSb.Root;
+        if (useOverlay)
+        {
+            EnsureDirectory(devRoot, "shm");
+        }
+
+        var shmDentry = devRoot.Inode!.Lookup("shm");
+        if (shmDentry != null && shmDentry.Inode?.Type == InodeType.Directory)
+        {
+            var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
+            Mount(devRoot, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
+            DevShmRoot = shmSb.Root;
+        }
 
         // Separate tmpfs namespace for memfd_create (unnamed file descriptors).
         MemfdSuperBlock = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "memfd", null);
-
-        // Add console FDs
-        InitStdio(devSb, tty);
 
         SetupVDSO();
     }

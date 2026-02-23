@@ -20,12 +20,12 @@ public sealed class KernelRuntime
     public VMAManager Memory { get; }
     public SyscallManager Syscalls { get; }
 
-    public static KernelRuntime Bootstrap(string rootRes, bool strace, TtyDiscipline? tty = null)
+    public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)
     {
         var engine = new Engine();
         var mm = new VMAManager();
 
-        var sys = new SyscallManager(engine, mm, 0, rootRes, tty)
+        var sys = new SyscallManager(engine, mm, 0, rootRes, useOverlay, tty)
         {
             Strace = strace
         };
