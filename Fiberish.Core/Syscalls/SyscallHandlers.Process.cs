@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Fiberish.Auth.Cred;
 using Fiberish.Core;
 using Fiberish.Loader;
 using Fiberish.Native;
@@ -518,6 +519,8 @@ public partial class SyscallManager
         try
         {
             task.Process.Exec(dentry, guestPath, [.. args], [.. envs]);
+            // No namespace/nosuid/no_new_privs yet: apply classic setuid/setgid exec semantics directly.
+            CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
             ProcFsManager.OnProcessExec(sm, task.Process);
             return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }

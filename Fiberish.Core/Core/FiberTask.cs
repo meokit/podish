@@ -147,6 +147,11 @@ public class FiberTask
         // Not handled by VMAManager (no VMA or permission error)
         Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.", 
             addr, isWrite ? "Write" : "Read");
+
+        // Dump debug info
+        var stats = CPU.DumpStats();
+        if (stats != null) Logger.LogInformation("CPU State:\n{Stats}", stats);
+        Process.Mem.LogVMAs();
             
         // Deliver SIGSEGV and yield
         PostSignal((int)Signal.SIGSEGV);

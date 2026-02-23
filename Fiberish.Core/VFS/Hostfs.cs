@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -13,7 +14,8 @@ public class Hostfs : FileSystem
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        var sb = new HostSuperBlock(fsType, devName); // devName is the root path on host
+        var opts = HostfsMountOptions.Parse(data as string);
+        var sb = new HostSuperBlock(fsType, devName, opts); // devName is the root path on host
         var rootDentry = sb.GetDentry(devName, "/", null) ??
                          throw new FileNotFoundException("Root path not found", devName);
         sb.Root = rootDentry;
@@ -27,13 +29,15 @@ public class HostSuperBlock : SuperBlock
     private readonly Dictionary<string, Dentry> _dentryCache = [];
     private ulong _nextIno = 1;
 
-    public HostSuperBlock(FileSystemType type, string hostRoot)
+    public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options)
     {
         Type = type;
         HostRoot = hostRoot;
+        Options = options;
     }
 
     public string HostRoot { get; }
+    public HostfsMountOptions Options { get; }
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
@@ -96,7 +100,7 @@ public class HostSuperBlock : SuperBlock
         if (new FileInfo(hostPath).LinkTarget != null) type = InodeType.Symlink;
 
         var inode = new HostInode(_nextIno++, this, hostPath, type);
-        if (mode != 0) inode.Mode = mode;
+        if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
         dentry.Instantiate(inode);
         lock (Lock)
         {
@@ -104,6 +108,273 @@ public class HostSuperBlock : SuperBlock
         }
 
         if (dentry.Parent != null) dentry.Parent.Children[dentry.Name] = dentry;
+    }
+}
+
+public sealed class HostfsMountOptions
+{
+    public int? MountUid { get; init; }
+    public int? MountGid { get; init; }
+    public int Umask { get; init; } = -1;
+    public int Fmask { get; init; } = -1;
+    public int Dmask { get; init; } = -1;
+
+    public int GetFileMask()
+    {
+        if (Fmask >= 0) return Fmask & 0x1FF;
+        if (Umask >= 0) return Umask & 0x1FF;
+        return 0;
+    }
+
+    public int GetDirectoryMask()
+    {
+        if (Dmask >= 0) return Dmask & 0x1FF;
+        if (Umask >= 0) return Umask & 0x1FF;
+        return 0;
+    }
+
+    public int ApplyModeMask(bool isDir, int mode)
+    {
+        var perm = mode & 0x1FF;
+        var nonPerm = mode & ~0x1FF;
+        var mask = isDir ? GetDirectoryMask() : GetFileMask();
+        return nonPerm | (perm & ~mask);
+    }
+
+    public static HostfsMountOptions Parse(string? optionString)
+    {
+        if (string.IsNullOrWhiteSpace(optionString)) return new HostfsMountOptions();
+
+        int? uid = null;
+        int? gid = null;
+        var umask = -1;
+        var fmask = -1;
+        var dmask = -1;
+
+        var tokens = optionString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var token in tokens)
+        {
+            var eq = token.IndexOf('=');
+            if (eq <= 0 || eq == token.Length - 1) continue;
+
+            var key = token[..eq].Trim().ToLowerInvariant();
+            var value = token[(eq + 1)..].Trim();
+
+            switch (key)
+            {
+                case "uid":
+                    if (int.TryParse(value, out var parsedUid) && parsedUid >= 0) uid = parsedUid;
+                    break;
+                case "gid":
+                    if (int.TryParse(value, out var parsedGid) && parsedGid >= 0) gid = parsedGid;
+                    break;
+                case "umask":
+                    if (TryParseMask(value, out var parsedUmask)) umask = parsedUmask;
+                    break;
+                case "fmask":
+                    if (TryParseMask(value, out var parsedFmask)) fmask = parsedFmask;
+                    break;
+                case "dmask":
+                    if (TryParseMask(value, out var parsedDmask)) dmask = parsedDmask;
+                    break;
+            }
+        }
+
+        return new HostfsMountOptions
+        {
+            MountUid = uid,
+            MountGid = gid,
+            Umask = umask,
+            Fmask = fmask,
+            Dmask = dmask
+        };
+    }
+
+    private static bool TryParseMask(string value, out int parsed)
+    {
+        try
+        {
+            if (value.StartsWith("0", StringComparison.Ordinal) && value.Length > 1)
+            {
+                parsed = Convert.ToInt32(value, 8);
+            }
+            else
+            {
+                parsed = int.Parse(value);
+            }
+
+            parsed &= 0x1FF;
+            return true;
+        }
+        catch
+        {
+            parsed = 0;
+            return false;
+        }
+    }
+}
+
+internal static partial class HostfsOwnershipMapper
+{
+    private static readonly bool IsUnixLike = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
+    private static readonly int CurrentHostUid = IsUnixLike ? geteuid() : 0;
+    private static readonly int CurrentHostGid = IsUnixLike ? getegid() : 0;
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int geteuid();
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int getegid();
+
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int chown(string path, int owner, int group);
+
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int chmod(string path, uint mode);
+
+    public static void RefreshGuestProjection(HostInode inode, int queryUid, int queryGid, HostfsMountOptions options)
+    {
+        // Cygwin noacl-style fallback for non-Unix hosts.
+        if (!IsUnixLike)
+        {
+            var mode = options.ApplyModeMask(inode.Type == InodeType.Directory, 0x1ED); // 0755
+            inode.Mode = mode;
+            inode.Uid = options.MountUid ?? queryUid;
+            inode.Gid = options.MountGid ?? queryGid;
+            return;
+        }
+
+        if (!TryReadHostStat(inode.HostPath, out var hostUid, out var hostGid, out var modeBits)) return;
+
+        inode.Mode = options.ApplyModeMask(inode.Type == InodeType.Directory, modeBits);
+        var mappedUid = (hostUid == 0 || hostUid == CurrentHostUid) ? 0 : hostUid;
+        var mappedGid = (hostGid == 0 || hostGid == CurrentHostGid) ? 0 : hostGid;
+        inode.Uid = options.MountUid ?? mappedUid;
+        inode.Gid = options.MountGid ?? mappedGid;
+    }
+
+    public static int SetGuestOwnership(HostInode inode, int uid, int gid)
+    {
+        var opts = ((HostSuperBlock)inode.SuperBlock).Options;
+        if ((opts.MountUid.HasValue || opts.MountGid.HasValue) && (uid != -1 || gid != -1))
+            return -(int)Errno.EPERM;
+
+        if (!IsUnixLike)
+        {
+            inode.CTime = DateTime.Now;
+            return 0;
+        }
+
+        // Root in guest maps to current host user/group in rootless mode.
+        var hostUid = uid == -1 ? -1 : uid == 0 ? CurrentHostUid : uid;
+        var hostGid = gid == -1 ? -1 : gid == 0 ? CurrentHostGid : gid;
+
+        if (chown(inode.HostPath, hostUid, hostGid) != 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            return errno == 0 ? -(int)Errno.EPERM : -errno;
+        }
+
+        inode.CTime = DateTime.Now;
+        return 0;
+    }
+
+    public static int SetGuestMode(HostInode inode, int mode)
+    {
+        if (!IsUnixLike)
+        {
+            inode.Mode = 0x1ED; // noacl mode is always 0755
+            inode.CTime = DateTime.Now;
+            return 0;
+        }
+
+        var requestedMode = (uint)(mode & 0xFFF);
+        if (chmod(inode.HostPath, requestedMode) != 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            return errno == 0 ? -(int)Errno.EPERM : -errno;
+        }
+
+        inode.Mode = (int)requestedMode;
+        inode.CTime = DateTime.Now;
+        return 0;
+    }
+
+    private static bool TryReadHostStat(string path, out int uid, out int gid, out int modeBits)
+    {
+        uid = 0;
+        gid = 0;
+        modeBits = 0;
+
+        var statPath = OperatingSystem.IsMacOS() ? "/usr/bin/stat" : "stat";
+        var psi = new ProcessStartInfo
+        {
+            FileName = statPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+
+        if (OperatingSystem.IsMacOS())
+        {
+            // %p includes file type + permissions in octal on macOS.
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add("%u %g %p");
+        }
+        else
+        {
+            // %f is raw mode in hex on GNU stat.
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("%u %g %f");
+        }
+
+        psi.ArgumentList.Add(path);
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc == null) return false;
+            var output = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit();
+            if (proc.ExitCode != 0 || string.IsNullOrEmpty(output)) return false;
+
+            var parts = output.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return false;
+
+            if (!int.TryParse(parts[0], out uid)) return false;
+            if (!int.TryParse(parts[1], out gid)) return false;
+
+            if (OperatingSystem.IsMacOS())
+            {
+                if (!TryParseInt(parts[2], 8, out var rawMode)) return false;
+                modeBits = rawMode & 0xFFF;
+            }
+            else
+            {
+                if (!TryParseInt(parts[2], 16, out var rawMode)) return false;
+                modeBits = rawMode & 0xFFF;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseInt(string s, int fromBase, out int value)
+    {
+        try
+        {
+            value = Convert.ToInt32(s, fromBase);
+            return true;
+        }
+        catch
+        {
+            value = 0;
+            return false;
+        }
     }
 }
 
@@ -149,6 +420,22 @@ public partial class HostInode : Inode
     }
 
     public string HostPath { get; set; }
+
+    public void RefreshProjectedMetadata(int queryUid, int queryGid)
+    {
+        var opts = ((HostSuperBlock)SuperBlock).Options;
+        HostfsOwnershipMapper.RefreshGuestProjection(this, queryUid, queryGid, opts);
+    }
+
+    public int SetProjectedOwnership(int uid, int gid)
+    {
+        return HostfsOwnershipMapper.SetGuestOwnership(this, uid, gid);
+    }
+
+    public int SetProjectedMode(int mode)
+    {
+        return HostfsOwnershipMapper.SetGuestMode(this, mode);
+    }
 
     public override Dentry? Lookup(string name)
     {

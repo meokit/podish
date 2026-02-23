@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using Fiberish.Auth.Cred;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
@@ -138,9 +139,7 @@ public partial class SyscallManager
         var sm = Get(state);
         var task = sm?.Engine.Owner as FiberTask;
         if (task == null) return 0;
-        var old = task.Process.Umask;
-        task.Process.Umask = (int)(a1 & 0x1FF);
-        return old;
+        return CredentialService.SetUmask(task.Process, (int)a1);
     }
 
     private static async ValueTask<int> SysSethostname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -540,6 +539,98 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), baseAddr);
         
         if (!sm.Engine.CopyToUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+        return 0;
+    }
+
+    private static async ValueTask<int> SysCapget(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
+        const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;
+        const uint LINUX_CAPABILITY_VERSION_3 = 0x20080522;
+
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (a1 == 0 || a2 == 0) return -(int)Errno.EFAULT;
+
+        var hdr = new byte[8];
+        if (!sm.Engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
+        var version = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(0, 4));
+        var pid = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(4, 4));
+
+        var count = version switch
+        {
+            LINUX_CAPABILITY_VERSION_1 => 1,
+            LINUX_CAPABILITY_VERSION_2 => 2,
+            LINUX_CAPABILITY_VERSION_3 => 2,
+            _ => 0
+        };
+
+        if (count == 0)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), LINUX_CAPABILITY_VERSION_3);
+            _ = sm.Engine.CopyToUser(a1, hdr);
+            return -(int)Errno.EINVAL;
+        }
+
+        if (pid != 0 && pid != task.Process.TGID) return -(int)Errno.EPERM;
+
+        var data = new byte[count * 12];
+        for (var i = 0; i < count; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 12 + 0, 4), task.Process.CapEffective[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 12 + 4, 4), task.Process.CapPermitted[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 12 + 8, 4), task.Process.CapInheritable[i]);
+        }
+
+        if (!sm.Engine.CopyToUser(a2, data)) return -(int)Errno.EFAULT;
+        return 0;
+    }
+
+    private static async ValueTask<int> SysCapset(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
+        const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;
+        const uint LINUX_CAPABILITY_VERSION_3 = 0x20080522;
+
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (a1 == 0 || a2 == 0) return -(int)Errno.EFAULT;
+
+        var hdr = new byte[8];
+        if (!sm.Engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
+        var version = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(0, 4));
+        var pid = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(4, 4));
+
+        var count = version switch
+        {
+            LINUX_CAPABILITY_VERSION_1 => 1,
+            LINUX_CAPABILITY_VERSION_2 => 2,
+            LINUX_CAPABILITY_VERSION_3 => 2,
+            _ => 0
+        };
+        if (count == 0) return -(int)Errno.EINVAL;
+        if (pid != 0 && pid != task.Process.TGID) return -(int)Errno.EPERM;
+
+        var data = new byte[count * 12];
+        if (!sm.Engine.CopyFromUser(a2, data)) return -(int)Errno.EFAULT;
+
+        for (var i = 0; i < count; i++)
+        {
+            task.Process.CapEffective[i] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12 + 0, 4));
+            task.Process.CapPermitted[i] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12 + 4, 4));
+            task.Process.CapInheritable[i] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12 + 8, 4));
+        }
+
+        // Zero out upper slot when V1 payload was used.
+        if (count == 1)
+        {
+            task.Process.CapEffective[1] = 0;
+            task.Process.CapPermitted[1] = 0;
+            task.Process.CapInheritable[1] = 0;
+        }
+
         return 0;
     }
 }

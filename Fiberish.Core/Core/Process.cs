@@ -81,6 +81,10 @@ public class Process
     public int SGID { get; set; }
     public int FSUID { get; set; }
     public int FSGID { get; set; }
+    public List<int> SupplementaryGroups { get; } = [];
+    public uint[] CapEffective { get; } = [0U, 0U];
+    public uint[] CapPermitted { get; } = [0U, 0U];
+    public uint[] CapInheritable { get; } = [0U, 0U];
 
     // Namespaces
     public UTSNamespace UTS { get; set; }

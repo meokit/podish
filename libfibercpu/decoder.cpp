@@ -1,5 +1,6 @@
 #include "decoder.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "decoder_lut.h"
 #include "dfe_lut.h"
@@ -334,14 +335,49 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         if (limit_eip != 0 && current_eip >= limit_eip) {
             break;
         }
-        // 1. Fetch
+        // 1. Fetch with Probe
         uint8_t buf[16];
+        std::memset(buf, 0, 16);
         bool fetch_fault = false;
-        for (int i = 0; i < 16; ++i) {
-            buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
-            if (state->status != EmuStatus::Running) {
-                fetch_fault = true;
-                break;
+
+        uint32_t page_offset = current_eip & 0xFFF;
+        uint32_t bytes_to_page_end = 0x1000 - page_offset;
+
+        if (bytes_to_page_end >= 16) {
+            // Fast Path
+            for (int i = 0; i < 16; ++i) {
+                buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
+                if (state->status != EmuStatus::Running) {
+                    fetch_fault = true;
+                    break;
+                }
+            }
+        } else {
+            // Slow Path: Check boundary
+            // Fetch first part
+            for (uint32_t i = 0; i < bytes_to_page_end; ++i) {
+                buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
+                if (state->status != EmuStatus::Running) {
+                    fetch_fault = true;
+                    break;
+                }
+            }
+
+            // Check next page if no fault so far
+            if (!fetch_fault) {
+                const uint32_t next_page_addr = current_eip + bytes_to_page_end;
+                const bool next_exec_ok = state->mmu.probe_exec(next_page_addr);
+                if (next_exec_ok) {
+                    // Safe to fetch remaining
+                    for (uint32_t i = bytes_to_page_end; i < 16; ++i) {
+                        buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
+                        if (state->status != EmuStatus::Running) {
+                            fetch_fault = true;
+                            break;
+                        }
+                    }
+                }
+                // Else: Ignore, buffer already zero-padded
             }
         }
 
@@ -386,6 +422,30 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
             end_eip = current_eip + 1;
             goto finalize;
+        }
+
+        // Verify length does not exceed valid fetch (Post-Decode Check)
+        if (bytes_to_page_end < 16 && op.GetLength() > bytes_to_page_end) {
+            // Instruction spans into the probed-invalid page!
+            // Trigger fault explicitly by reading the first byte of the invalid region.
+            const uint32_t next_page_addr = current_eip + bytes_to_page_end;
+            if (!state->mmu.probe_exec(next_page_addr)) {
+                (void)state->mmu.read_for_exec<uint8_t>(state, next_page_addr);
+                if (state->status != EmuStatus::Running) {
+                    if (temp_ops.empty()) success = false;
+                    break;
+                }
+
+                // Fault handler reported success. Ensure the target page really became executable.
+                // If yes, retry decoding the same instruction with fresh bytes from the new mapping.
+                if (state->mmu.probe_exec(next_page_addr)) {
+                    continue;
+                }
+
+                if (temp_ops.empty()) success = false;
+                state->status = EmuStatus::Fault;
+                break;
+            }
         }
 
         // Check if a specialized handler exists for this opcode + modrm/etc.

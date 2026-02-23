@@ -21,6 +21,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.unlink, SysUnlink);
         Register(X86SyscallNumbers.chmod, SysChmod);
         Register(X86SyscallNumbers.chown, SysChown);
+        Register(X86SyscallNumbers.lchown, SysLchown);
         Register(X86SyscallNumbers.lseek, SysLseek);
         Register(X86SyscallNumbers._llseek, SysLlseek);
         Register(X86SyscallNumbers.getpid, SysGetPid);
@@ -57,9 +58,11 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.setfsgid, SysSetFsGid);
         Register(X86SyscallNumbers.writev, SysWriteV);
         Register(X86SyscallNumbers.setresuid, SysSetResUid);
-        Register(X86SyscallNumbers.getresuid, SysGetResUid);
+        Register(X86SyscallNumbers.getresuid, SysGetResUid16);
         Register(X86SyscallNumbers.setresgid, SysSetResGid);
-        Register(X86SyscallNumbers.getresgid, SysGetResGid);
+        Register(X86SyscallNumbers.getresgid, SysGetResGid16);
+        Register(X86SyscallNumbers.capget, SysCapget);
+        Register(X86SyscallNumbers.capset, SysCapset);
         Register(X86SyscallNumbers.rt_sigaction, SysRtSigAction);
         Register(X86SyscallNumbers.rt_sigprocmask, SysRtSigProcMask);
         Register(X86SyscallNumbers.chown32, SysChown);
@@ -136,6 +139,16 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.getegid32, SysGetEGid32);
         Register(X86SyscallNumbers.setuid32, SysSetUid32);
         Register(X86SyscallNumbers.setgid32, SysSetGid32);
+        Register(X86SyscallNumbers.setreuid32, SysSetReUid32);
+        Register(X86SyscallNumbers.setregid32, SysSetReGid32);
+        Register(X86SyscallNumbers.getgroups32, SysGetGroups32);
+        Register(X86SyscallNumbers.setgroups32, SysSetGroups32);
+        Register(X86SyscallNumbers.setresuid32, SysSetResUid32);
+        Register(X86SyscallNumbers.getresuid32, SysGetResUid32);
+        Register(X86SyscallNumbers.setresgid32, SysSetResGid32);
+        Register(X86SyscallNumbers.getresgid32, SysGetResGid32);
+        Register(X86SyscallNumbers.setfsuid32, SysSetFsUid32);
+        Register(X86SyscallNumbers.setfsgid32, SysSetFsGid32);
         Register(X86SyscallNumbers.clock_gettime, SysClockGetTime);
         Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
         Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
@@ -237,6 +250,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.epoll_ctl, SysEpollCtl);
         Register(X86SyscallNumbers.epoll_wait, SysEpollWait);
         Register(X86SyscallNumbers.epoll_pwait, SysEpollPwait);
+        Register(X86SyscallNumbers.faccessat2, SysFaccessAt2);
+        Register(X86SyscallNumbers.fchmodat2, SysFchmodAt2);
 
         // System V IPC
         Register(X86SyscallNumbers.ipc, SysIpc);

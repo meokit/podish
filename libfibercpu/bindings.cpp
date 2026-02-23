@@ -31,12 +31,27 @@ extern "C" {
 // Internal Bridge Callbacks
 // ----------------------------------------------------------------------------
 
+static bool FaultTraceEnabled() {
+    static bool enabled = []() {
+        const char* v = std::getenv("FIBERISH_TRACE_DECODE_FAULT");
+        return v && v[0] != '\0' && std::strcmp(v, "0") != 0;
+    }();
+    return enabled;
+}
+
 static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     auto* state = static_cast<EmuState*>(opaque);
     state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
+    if (FaultTraceEnabled()) {
+        fprintf(stderr, "[Bridge] Fault addr=0x%x write=%d\n", addr, is_write);
+    }
     if (state->fault_handler) {
-        return state->fault_handler(state, addr, is_write, state->fault_userdata);
+        int res = state->fault_handler(state, addr, is_write, state->fault_userdata);
+        if (FaultTraceEnabled()) {
+            fprintf(stderr, "[Bridge] Handler returned %d\n", res);
+        }
+        return res;
     } else {
         // Default behavior if no user handler: Trigger Fault
         state->status = EmuStatus::Fault;
@@ -404,6 +419,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
 
             if (!new_block) {
+                if (FaultTraceEnabled()) {
+                    fprintf(stderr,
+                            "[RunDbg] DecodeBlock returned null eip=%08X status=%d fault_vector=%u fault_addr=%08X\n",
+                            eip, (int)state->status, (unsigned)state->fault_vector, state->fault_addr);
+                }
                 if (state->status == EmuStatus::Running) {
                     state->status = EmuStatus::Fault;
                 }

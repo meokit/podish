@@ -1,9 +1,8 @@
 #pragma once
 #include "decoder.h"
+#include "logger.h"
 #include "specialization.h"
 #include "state.h"
-
-#include <cstdio>
 
 namespace fiberish {
 

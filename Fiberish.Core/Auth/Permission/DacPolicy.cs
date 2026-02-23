@@ -1,0 +1,99 @@
+using Fiberish.Auth.Cred;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.VFS;
+
+namespace Fiberish.Auth.Permission;
+
+public static class DacPolicy
+{
+    public static int ApplyUmask(int requestedMode, int umask)
+    {
+        return (requestedMode & 0xFFF) & ~umask;
+    }
+
+    public static int CheckPathAccess(Process process, Inode inode, AccessMode mode, bool useEffectiveIds)
+    {
+        if (mode == AccessMode.None) return 0;
+
+        var uid = useEffectiveIds ? process.FSUID : process.UID;
+        var gid = useEffectiveIds ? process.FSGID : process.GID;
+
+        if (uid == 0)
+        {
+            // Root bypasses read/write; for execute require at least one execute bit if regular file.
+            if ((mode & AccessMode.MayExec) != 0 && inode.Type == InodeType.File && (inode.Mode & 0x49) == 0)
+                return -(int)Errno.EACCES;
+            return 0;
+        }
+
+        var permBits = ResolvePermissionClass(process, inode, uid, gid, useEffectiveIds);
+
+        if ((mode & AccessMode.MayRead) != 0 && (permBits & 0x4) == 0) return -(int)Errno.EACCES;
+        if ((mode & AccessMode.MayWrite) != 0 && (permBits & 0x2) == 0) return -(int)Errno.EACCES;
+        if ((mode & AccessMode.MayExec) != 0 && (permBits & 0x1) == 0) return -(int)Errno.EACCES;
+
+        return 0;
+    }
+
+    public static int CanChmod(Process process, Inode inode)
+    {
+        if (process.FSUID == 0 || process.FSUID == inode.Uid) return 0;
+        return -(int)Errno.EPERM;
+    }
+
+    public static int CanChown(Process process, Inode inode, int uid, int gid)
+    {
+        if (process.EUID == 0) return 0;
+
+        // Unprivileged users may only retain ownership and optionally change group to one they are in.
+        if (uid != -1 && uid != inode.Uid) return -(int)Errno.EPERM;
+        if (process.FSUID != inode.Uid) return -(int)Errno.EPERM;
+        if (gid != -1 && !CredentialService.IsInGroup(process, gid)) return -(int)Errno.EPERM;
+
+        return 0;
+    }
+
+    public static int CanChroot(Process process)
+    {
+        return process.EUID == 0 ? 0 : -(int)Errno.EPERM;
+    }
+
+    public static int NormalizeChmodMode(Process process, Inode inode, int requestedMode)
+    {
+        var mode = requestedMode & 0xFFF;
+        if (process.FSUID == 0) return mode;
+
+        // Linux behavior: without CAP_FSETID, SGID bit is cleared when caller is not in file's group.
+        if ((mode & 0x400) != 0 && !CredentialService.IsInGroup(process, inode.Gid))
+            mode &= ~0x400;
+
+        return mode;
+    }
+
+    public static int ApplySetIdClearOnChown(Inode inode, int oldUid, int oldGid, int newUid, int newGid)
+    {
+        if (inode.Type != InodeType.File) return inode.Mode;
+        if (oldUid == newUid && oldGid == newGid) return inode.Mode;
+
+        // Linux-like: ownership change clears S_ISUID/S_ISGID on regular files.
+        return inode.Mode & ~0xC00;
+    }
+
+    private static int ResolvePermissionClass(Process process, Inode inode, int uid, int gid, bool useEffectiveIds)
+    {
+        if (uid == inode.Uid) return (inode.Mode >> 6) & 0x7;
+
+        var inGroup = inode.Gid == gid;
+        if (!inGroup)
+        {
+            if (useEffectiveIds)
+                inGroup = CredentialService.IsInGroup(process, inode.Gid);
+            else
+                inGroup = inode.Gid == process.GID || inode.Gid == process.EGID || inode.Gid == process.SGID ||
+                          process.SupplementaryGroups.Contains(inode.Gid);
+        }
+
+        return inGroup ? ((inode.Mode >> 3) & 0x7) : (inode.Mode & 0x7);
+    }
+}

@@ -1,4 +1,7 @@
 #pragma once
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include "../state.h"  // Ensure EmuState is defined
 #include "mmu.h"
 
@@ -59,16 +62,20 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     const uint32_t offset = addr & 0xFFF;
 
     // 1. Check L1
-    auto& chunk = page_dir->l1_directory[l1_idx];
-    if (!chunk) {
+    // We do NOT use a reference here because signal_fault might invalidate it
+    if (!page_dir->l1_directory[l1_idx]) {
         auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
-        // Retry, the kernel may fill pages or change permissions
-        if (!page_dir->l1_directory[l1_idx]) {
+        // Retry
+        if (!page_dir || !page_dir->l1_directory[l1_idx]) {
             return std::unexpected(FaultCode::PageFault);
         }
     }
+
+    // Now it is safe to acquire the pointer (but still safer to use raw pointer if we fear realloc)
+    // We use raw pointer to the Chunk to avoid any unique_ptr ref weirdness
+    auto* chunk = page_dir->l1_directory[l1_idx].get();
 
     // 2. Check Permissions
     Property current_perm = chunk->permissions[l2_idx];
@@ -76,9 +83,15 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
         auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
-        // Retry, the kernel may fill pages or change permissions
+        // Retry: Need to re-fetch chunk/perm because handler might have changed them!
+        if (!page_dir || !page_dir->l1_directory[l1_idx]) return std::unexpected(FaultCode::PageFault);
+
+        chunk = page_dir->l1_directory[l1_idx].get();  // Refresh pointer
         current_perm = chunk->permissions[l2_idx];
-        if (!has_property(current_perm, req_perm)) return std::unexpected(FaultCode::PageFault);
+
+        if (!has_property(current_perm, req_perm)) {
+            return std::unexpected(FaultCode::PageFault);
+        }
     }
 
     // Dirty Bit

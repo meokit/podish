@@ -321,6 +321,20 @@ public:
     template <typename T>
     [[nodiscard]] inline T read_for_exec(EmuState* state, GuestAddr addr);
 
+    // Probe Execution (Check if address is executable without faulting)
+    [[nodiscard]] inline bool probe_exec(GuestAddr addr) {
+        if (!page_dir) return false;
+        const uint32_t l1_idx = addr >> 22;
+        const uint32_t l2_idx = (addr >> 12) & 0x3FF;
+        auto& chunk = page_dir->l1_directory[l1_idx];
+        if (!chunk) return false;
+
+        // Check only permissions. The page might be mapped but not yet populated (demand paging).
+        // If it's mapped as Exec, we allow the decoder to "see" it speculatively.
+        Property current_perm = chunk->permissions[l2_idx];
+        return has_property(current_perm, Property::Exec);
+    }
+
 #ifdef ENABLE_TLB_STATS
 public:
     struct TlbStats {

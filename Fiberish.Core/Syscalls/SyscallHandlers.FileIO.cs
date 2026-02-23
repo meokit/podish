@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -279,7 +280,7 @@ public partial class SyscallManager
                 try
                 {
                     dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-                    var finalMode = (int)mode & ~(t?.Process.Umask ?? 0);
+                    var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
                     parentDentry.Inode.Create(dentry, finalMode, uid, gid);
                 }
                 catch

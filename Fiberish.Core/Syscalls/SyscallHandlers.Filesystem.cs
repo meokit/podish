@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -98,7 +99,8 @@ public partial class SyscallManager
         try
         {
             var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
+            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+            parentDentry.Inode.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
         catch
@@ -230,7 +232,8 @@ public partial class SyscallManager
         try
         {
             var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            parentDentry.Inode.Mkdir(dentry, (int)mode, uid, gid);
+            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+            parentDentry.Inode.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
         catch
@@ -377,6 +380,7 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         WriteStat64(sm, statAddr, dentry.Inode);
         return 0;
     }
@@ -417,12 +421,12 @@ public partial class SyscallManager
 
         var uid = (int)a3;
         var gid = (int)a4;
-        
-        // Simplified: permissions check would go here
-        dentry.Inode.Uid = uid;
-        dentry.Inode.Gid = gid;
-        dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        var allowed = DacPolicy.CanChown(task.Process, dentry.Inode, uid, gid);
+        if (allowed != 0) return allowed;
+        return ApplyOwnershipChange(dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -443,10 +447,12 @@ public partial class SyscallManager
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         var mode = a3;
-        // Simplified: permissions check would go here
-        dentry.Inode.Mode = (int)(mode & 0xFFF);
-        dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        var allowed = DacPolicy.CanChmod(task.Process, dentry.Inode);
+        if (allowed != 0) return allowed;
+        return ApplyModeChange(dentry.Inode, (int)mode, task.Process);
     }
 
     private static async ValueTask<int> SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -463,11 +469,41 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        var dentry = sm.PathWalk(path, startAt);
+        const uint AT_EACCESS = 0x200;
+        var knownFlags = AT_EACCESS | LinuxConstants.AT_SYMLINK_NOFOLLOW;
+        if ((a4 & ~knownFlags) != 0) return -(int)Errno.EINVAL;
+        var followLink = (a4 & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
+        var dentry = sm.PathWalk(path, startAt, followLink);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
-        // Simplified: should check mode (a3) but for now existence is enough
-        return 0;
+        var mode = (int)a3;
+        if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
+        if (mode == 0) return 0; // F_OK
+
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+
+        var req = AccessMode.None;
+        if ((mode & 4) != 0) req |= AccessMode.MayRead;
+        if ((mode & 2) != 0) req |= AccessMode.MayWrite;
+        if ((mode & 1) != 0) req |= AccessMode.MayExec;
+        var useEffectiveIds = (a4 & AT_EACCESS) != 0;
+        return DacPolicy.CheckPathAccess(task.Process, dentry.Inode, req, useEffectiveIds);
+    }
+
+    private static async ValueTask<int> SysFaccessAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        return await SysFaccessAt(state, a1, a2, a3, a4, a5, a6);
+    }
+
+    private static async ValueTask<int> SysFchmodAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        // fchmodat2 currently supports the same behavior as fchmodat(2) with flags=0.
+        if (a4 != 0) return -(int)Errno.EINVAL;
+        return await SysFchmodAt(state, a1, a2, a3, a4, a5, a6);
     }
 
     private static async ValueTask<int> SysRename(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -545,6 +581,7 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         WriteStat(sm, a2, dentry.Inode);
         return 0;
     }
@@ -557,6 +594,7 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, followLink: false);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         WriteStat(sm, a2, dentry.Inode);
         return 0;
     }
@@ -569,6 +607,7 @@ public partial class SyscallManager
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
 
+        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
         WriteStat(sm, a2, f.Dentry.Inode);
         return 0;
     }
@@ -588,6 +627,7 @@ public partial class SyscallManager
         {
             var f = sm.GetFD(dirfd);
             if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+            RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
             WriteStatx(sm, statxAddr, f.Dentry.Inode, mask);
             return 0;
         }
@@ -604,6 +644,7 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path, startAt, followLink);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         WriteStatx(sm, statxAddr, dentry.Inode, mask);
         return 0;
     }
@@ -619,15 +660,13 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
-        // Permission check: only owner or root can chmod
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
-        if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
-            return -(int)Errno.EPERM;
+        if (t == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChmod(t.Process, dentry.Inode);
+        if (allowed != 0) return allowed;
 
-        // Only modify permission bits (lower 12 bits: rwx for user/group/other + special bits)
-        dentry.Inode.Mode = (int)(mode & 0xFFF);
-        dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        return ApplyModeChange(dentry.Inode, (int)mode, t.Process);
     }
 
     private static async ValueTask<int> SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -641,14 +680,13 @@ public partial class SyscallManager
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
-        // Permission check
+        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
-        if (t != null && t.Process.EUID != 0 && t.Process.EUID != f.Dentry.Inode.Uid)
-            return -(int)Errno.EPERM;
+        if (t == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChmod(t.Process, f.Dentry.Inode);
+        if (allowed != 0) return allowed;
 
-        f.Dentry.Inode.Mode = (int)(mode & 0xFFF);
-        f.Dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        return ApplyModeChange(f.Dentry.Inode, (int)mode, t.Process);
     }
 
     private static async ValueTask<int> SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -663,16 +701,13 @@ public partial class SyscallManager
         var dentry = sm.PathWalk(path);
         if (dentry == null || dentry.Inode == null) return -2; // ENOENT
 
-        // Permission check: only root can chown
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
-        if (t != null && t.Process.EUID != 0)
-            return -1; // EPERM
+        if (t == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChown(t.Process, dentry.Inode, uid, gid);
+        if (allowed != 0) return allowed;
 
-        // -1 means "don't change"
-        if (uid != -1) dentry.Inode.Uid = uid;
-        if (gid != -1) dentry.Inode.Gid = gid;
-        dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        return ApplyOwnershipChange(dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -687,15 +722,13 @@ public partial class SyscallManager
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -9; // EBADF
 
-        // Permission check: only root can chown
+        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
-        if (t != null && t.Process.EUID != 0)
-            return -1; // EPERM
+        if (t == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChown(t.Process, f.Dentry.Inode, uid, gid);
+        if (allowed != 0) return allowed;
 
-        if (uid != -1) f.Dentry.Inode.Uid = uid;
-        if (gid != -1) f.Dentry.Inode.Gid = gid;
-        f.Dentry.Inode.CTime = DateTime.Now;
-        return 0;
+        return ApplyOwnershipChange(f.Dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -780,11 +813,23 @@ public partial class SyscallManager
     private static async ValueTask<int> SysAccess(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
+        if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a1);
+        var mode = (int)a2;
+        if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
         var dentry = sm.PathWalk(path);
-        if (dentry != null && dentry.Inode != null) return 0;
-        return -(int)Errno.ENOENT;
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (mode == 0) return 0; // F_OK
+
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+
+        var req = AccessMode.None;
+        if ((mode & 4) != 0) req |= AccessMode.MayRead;
+        if ((mode & 2) != 0) req |= AccessMode.MayWrite;
+        if ((mode & 1) != 0) req |= AccessMode.MayExec;
+        return DacPolicy.CheckPathAccess(task.Process, dentry.Inode, req, useEffectiveIds: false);
     }
 
     private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -842,6 +887,47 @@ public partial class SyscallManager
         {
             return -(int)Errno.EPERM;
         }
+    }
+
+    private static void RefreshHostfsProjectionForCaller(SyscallManager sm, Inode inode)
+    {
+        if (inode is not HostInode hostInode) return;
+        var task = sm.Engine.Owner as FiberTask;
+        var uid = task?.Process.EUID ?? 0;
+        var gid = task?.Process.EGID ?? 0;
+        hostInode.RefreshProjectedMetadata(uid, gid);
+    }
+
+    private static int ApplyOwnershipChange(Inode inode, int uid, int gid)
+    {
+        var oldUid = inode.Uid;
+        var oldGid = inode.Gid;
+        var newUid = uid == -1 ? oldUid : uid;
+        var newGid = gid == -1 ? oldGid : gid;
+
+        if (inode is HostInode hostInode)
+        {
+            var rc = hostInode.SetProjectedOwnership(uid, gid);
+            if (rc != 0) return rc;
+            inode.Mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid, oldGid, newUid, newGid);
+            return 0;
+        }
+
+        inode.Uid = newUid;
+        inode.Gid = newGid;
+        inode.Mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid, oldGid, newUid, newGid);
+        inode.CTime = DateTime.Now;
+        return 0;
+    }
+
+    private static int ApplyModeChange(Inode inode, int mode, Process? process = null)
+    {
+        var normalizedMode = process == null ? (mode & 0xFFF) : DacPolicy.NormalizeChmodMode(process, inode, mode);
+        if (inode is HostInode hostInode) return hostInode.SetProjectedMode(normalizedMode);
+
+        inode.Mode = normalizedMode;
+        inode.CTime = DateTime.Now;
+        return 0;
     }
 
     private static void WriteStat64(SyscallManager sm, uint addr, Inode inode)
@@ -1107,6 +1193,7 @@ public partial class SyscallManager
             return -(int)Errno.ENOENT;
         }
 
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
         WriteStat64(sm, ptrStat, dentry.Inode);
         return 0;
     }
@@ -1119,6 +1206,7 @@ public partial class SyscallManager
         var f = sm.GetFD(fd);
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
 
+        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
         WriteStat64(sm, a2, f.Dentry.Inode);
         return 0;
     }
@@ -1250,6 +1338,8 @@ public partial class SyscallManager
         var fstype = a3 == 0 ? "" : sm.ReadString(a3);
         var flags = a4;
         var dataAddr = a5;
+        string? dataString = null;
+        if (dataAddr != 0) dataString = sm.ReadString(dataAddr);
 
         var targetDentry = sm.PathWalk(target);
         if (targetDentry == null) return -(int)Errno.ENOENT;
@@ -1280,7 +1370,7 @@ public partial class SyscallManager
                 if (fsType != null)
                     try
                     {
-                        newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, null);
+                        newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, dataString);
                     }
                     catch
                     {
@@ -1297,14 +1387,7 @@ public partial class SyscallManager
             if (fsType != null)
             {
                 // Special handling for Overlay Options parsing could go here if we support dynamic overlay mounts
-                object? dataObj = null;
-
-                // If passing string data options
-                if (dataAddr != 0)
-                {
-                    // We could read string and pass it?
-                    // Tmpfs ignores it. Hostfs uses it as root path? No, Hostfs uses 'source'.
-                }
+                object? dataObj = dataString;
 
                 try
                 {
@@ -1332,6 +1415,7 @@ public partial class SyscallManager
 
             var src = string.IsNullOrEmpty(source) ? fstype : source;
             var opts = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
+            if (!string.IsNullOrWhiteSpace(dataString)) opts = $"{opts},{dataString}";
             sm.AddMountInfo(src, targetPath, fstype, opts);
             return 0;
         }
@@ -1456,6 +1540,10 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChroot(task.Process);
+        if (allowed != 0) return allowed;
 
         var path = sm.ReadString(a1);
         var dentry = sm.PathWalk(path);
