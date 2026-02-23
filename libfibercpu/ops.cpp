@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <vector>
 #include "dispatch.h"
+#include "ops/ops_mmx.h"
 
 namespace fiberish {
 
@@ -138,6 +139,7 @@ struct HandlerInit {
         RegisterDoubleShiftOps();
         RegisterFpuOps();
         RegisterGroupOps();
+        RegisterMmxOps();
         RegisterMulDivOps();
         RegisterShiftBitOps();
         RegisterSseCvtOps();
