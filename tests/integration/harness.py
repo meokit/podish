@@ -28,8 +28,9 @@ def _dotnet_cmd(
         "--no-build",
         "--",
     ]
-    if rootfs is not None:
+    if rootfs:
         cmd.extend(["--rootfs", str(rootfs)])
+    cmd.append("--")
     cmd.append(str(test_bin))
     cmd.extend(args)
     return "dotnet", cmd
