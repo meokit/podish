@@ -794,9 +794,22 @@ public class FiberTask
         CommonKernel.CurrentTask = this;
         try
         {
-            ProcessPendingSignals();
+            // ── Phase 1: Resume a pending async syscall ──────────────────────────────
+            // PendingSyscall MUST be handled BEFORE ProcessPendingSignals.
+            // If a signal interrupted the syscall (ERESTARTSYS + SA_RESTART),
+            // HandleAsyncSyscall rewinds EIP to 'int 0x80'. If we delivered the
+            // signal first, a signal frame would already be on the stack, and the
+            // EIP rewind would clobber the handler pointer, corrupting the stack.
+            if (PendingSyscall != null)
+            {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                Status = FiberTaskStatus.Waiting;
+                if (!_handlingAsyncSyscall)
+                    HandleAsyncSyscall();
+                return;
+            }
 
-            // ── Phase 1: Resume a stored continuation ────────────────────────────────
+            ProcessPendingSignals();
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
             // has completed an async wait and wants the task to advance its syscall
             // state machine by one step. The continuation itself is responsible for
@@ -819,21 +832,7 @@ public class FiberTask
                 return;
             }
 
-            // ── Phase 2: Kick off a pending async syscall ─────────────────────────────
-            // PendingSyscall is a Func<ValueTask<int>> installed by the syscall handler
-            // (via Engine.Yield) before the CPU yields. HandleAsyncSyscall() drives the
-            // ValueTask to completion on the scheduler thread, then calls
-            // CommonKernel.Schedule(this). Until that happens the task stays Waiting.
-            if (PendingSyscall != null)
-            {
-                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
-                Status = FiberTaskStatus.Waiting;
-                if (!_handlingAsyncSyscall)
-                    HandleAsyncSyscall();
-                return;
-            }
-
-            // ── Phase 3: Guard — verify we can actually run guest code ─────────────────
+            // ── Phase 2: Guard — verify we can actually run guest code ─────────────────
             if (!TryEnterGuestRun())
             {
                 // TryEnterGuestRun returns false if any of the following holds:
@@ -1135,7 +1134,11 @@ public class FiberTask
                     if (hasRestart)
                     {
                         // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
-                        // SyscallEip was saved before syscall execution
+                        // SyscallEip was saved before syscall execution.
+                        // NOTE: ProcessPendingSignals must NOT run before this code in RunSlice,
+                        // otherwise a signal frame would be on the stack and this rewind would
+                        // clobber the handler EIP. RunSlice handles this by checking PendingSyscall
+                        // before calling ProcessPendingSignals.
                         Logger.LogInformation(
                             "[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
                             CPU.Eip, SyscallEip);
