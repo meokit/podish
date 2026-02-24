@@ -31,3 +31,5 @@ tests/test_safe_access
 Fiberish.X86/build_native
 *.DotSettings.user
 tests/alpine-rootfs/
+tests/openssl/rootfs/
+tests/openssl/build_podman/
