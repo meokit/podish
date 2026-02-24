@@ -10,11 +10,26 @@ import pytest
 from .harness import EmulatorCase, run_case
 
 
-def run_emulator_openssl(project_root: Path, rootfs: Path, args: list[str]) -> str:
+def run_emulator_openssl(
+    project_root: Path,
+    rootfs: Path,
+    args: list[str],
+    send_eof: bool = False,
+    allow_timeout: bool = False,
+    timeout: int = 60,
+) -> str:
     openssl_bin = rootfs / "bin" / "openssl"
     if not openssl_bin.exists():
         pytest.skip(f"OpenSSL binary not found at {openssl_bin}")
-    case = EmulatorCase(name="dynamic_openssl", binary_name="openssl", args=args, rootfs=rootfs, timeout=60)
+    case = EmulatorCase(
+        name="dynamic_openssl",
+        binary_name="openssl",
+        args=args,
+        rootfs=rootfs,
+        timeout=timeout,
+        send_eof=send_eof,
+        allow_timeout=allow_timeout,
+    )
     return run_case(project_root, rootfs / "bin", case)
 
 @pytest.mark.integration
@@ -160,3 +175,86 @@ def test_openssl_ec_keygen_correctness(project_root: Path):
     
     assert res.returncode == 0
     assert "key valid" in res.stderr.lower() or "key ok" in res.stderr.lower()
+
+@pytest.mark.integration
+def test_openssl_s_client_correctness(project_root: Path):
+    rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
+    if not (rootfs / "bin" / "openssl").exists():
+        pytest.skip("OpenSSL binary missing")
+
+    work_dir = rootfs / "tmp"
+    work_dir.mkdir(exist_ok=True)
+
+    cert_path = work_dir / "server.crt"
+    key_path = work_dir / "server.key"
+
+    # Reuse cert/key when available to keep test fast.
+    if not cert_path.exists() or not key_path.exists():
+        run_emulator_openssl(project_root, rootfs, [
+            "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", "/tmp/server.key", "-out", "/tmp/server.crt",
+            "-days", "1", "-nodes", "-subj", "/CN=localhost"
+        ], timeout=20)
+
+    assert cert_path.exists()
+    assert key_path.exists()
+
+    import ssl
+    import socket
+    import threading
+    import traceback
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+
+    bindsocket = socket.socket()
+    bindsocket.bind(('127.0.0.1', 0))
+    bindsocket.listen(1)
+    port = bindsocket.getsockname()[1]
+
+    success = False
+    close_notify_ok = False
+
+    def serve():
+        nonlocal success, close_notify_ok
+        try:
+            newsocket, peer = bindsocket.accept()
+            print(f"[host-server] accepted peer={peer}", flush=True)
+            newsocket.settimeout(5)
+            try:
+                # Peek raw TCP payload without consuming, useful to verify ClientHello reaches host.
+                peek = newsocket.recv(64, socket.MSG_PEEK)
+                print(f"[host-server] tcp-peek {len(peek)} bytes: {peek[:32].hex()}", flush=True)
+            except Exception as peek_err:
+                print(f"[host-server] tcp-peek error: {peek_err}", flush=True)
+
+            print("[host-server] entering TLS wrap_socket()", flush=True)
+            connstream = context.wrap_socket(newsocket, server_side=True)
+            print(f"[host-server] tls-handshake-ok cipher={connstream.cipher()}", flush=True)
+            connstream.sendall(b"Hello from host TLS server!\n")
+            print("[host-server] sent app data", flush=True)
+            success = True
+            connstream.unwrap()
+            close_notify_ok = True
+            print("[host-server] unwrap done", flush=True)
+            connstream.close()
+        except Exception as e:
+            print("Server error:", e)
+            print(traceback.format_exc(), flush=True)
+        finally:
+            bindsocket.close()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+
+    # Run guest openssl s_client
+    out = run_emulator_openssl(project_root, rootfs, [
+        "s_client", "-connect", f"127.0.0.1:{port}", "-brief", "-no_ign_eof"
+    ], send_eof=True, timeout=15)
+
+    t.join(timeout=5)
+
+    assert success
+    assert close_notify_ok
+    assert "Hello from host TLS server!" in out
+    assert "CONNECTION ESTABLISHED" in out

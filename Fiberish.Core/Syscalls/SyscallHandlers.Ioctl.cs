@@ -1,10 +1,14 @@
+using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private static readonly ILogger IoctlLogger = Logging.CreateLogger<SyscallManager>();
+
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysIoctl(IntPtr state, uint fd, uint request, uint arg, uint a4, uint a5,
         uint a6)
@@ -17,7 +21,14 @@ public partial class SyscallManager
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
         var inode = file.Dentry.Inode;
         if (inode != null)
-            return inode.Ioctl(file, request, arg, sm.Engine);
+        {
+            IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} arg=0x{Arg:X} inode={InodeType}",
+                fd, request, arg, inode.GetType().Name);
+            var ret = inode.Ioctl(file, request, arg, sm.Engine);
+            IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} inode={InodeType} ret={Ret}",
+                fd, request, inode.GetType().Name, ret);
+            return ret;
+        }
 
         return -(int)Errno.ENOTTY;
     }
@@ -50,23 +61,23 @@ public partial class SyscallManager
             _ => -(int)Errno.EINVAL
         };
 
-        static int SetFdFlags(VFS.LinuxFile file, uint arg)
+        static int SetFdFlags(LinuxFile file, uint arg)
         {
             if ((arg & FD_CLOEXEC) != 0) file.Flags |= FileFlags.O_CLOEXEC;
             else file.Flags &= ~FileFlags.O_CLOEXEC;
             return 0;
         }
 
-        static int SetStatusFlags(VFS.LinuxFile file, uint arg)
+        static int SetStatusFlags(LinuxFile file, uint arg)
         {
             // Linux: F_SETFL only updates a subset of status flags.
             var settableMask = FileFlags.O_APPEND | FileFlags.O_NONBLOCK | (FileFlags)O_ASYNC;
-            var newStatusBits = ((FileFlags)(int)arg) & settableMask;
+            var newStatusBits = (FileFlags)(int)arg & settableMask;
             file.Flags = (file.Flags & ~settableMask) | newStatusBits;
             return 0;
         }
 
-        static int DupFdCloexec(SyscallManager sm, VFS.LinuxFile file, int minFd)
+        static int DupFdCloexec(SyscallManager sm, LinuxFile file, int minFd)
         {
             var newFd = sm.DupFD(file, minFd);
             if (newFd < 0) return newFd;

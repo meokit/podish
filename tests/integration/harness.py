@@ -15,6 +15,8 @@ class EmulatorCase:
     rootfs: Path | None = None
     expect_tokens: list[str] = field(default_factory=list)
     timeout: int = 30
+    send_eof: bool = False
+    allow_timeout: bool = False
 
 
 def _dotnet_cmd(
@@ -49,12 +51,23 @@ def run_case(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
         encoding="utf-8",
         timeout=case.timeout,
     )
+    if case.send_eof:
+        child.sendeof()
 
-    child.expect(pexpect.EOF)
+    timed_out = False
+    try:
+        child.expect(pexpect.EOF)
+    except pexpect.exceptions.TIMEOUT:
+        if not case.allow_timeout:
+            raise
+        timed_out = True
     output = child.before or ""
-    child.close()
+    if timed_out:
+        child.close(force=True)
+    else:
+        child.close()
 
-    if child.exitstatus != 0:
+    if not timed_out and child.exitstatus != 0:
         raise AssertionError(
             f"[{case.name}] emulator exited with {child.exitstatus}\nOutput:\n{output}"
         )

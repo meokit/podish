@@ -2,12 +2,17 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
+using Fiberish.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
 internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<SaeaAwaitable>();
+    private static readonly Action CompletedSentinel = () => { };
     private Action? _continuation;
+    private volatile bool _isCompleted;
     private KernelScheduler? _scheduler;
     private FiberTask? _task;
 
@@ -16,20 +21,38 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
         Completed += OnCompletedEvent;
     }
 
-    public bool IsCompleted => false;
+    public bool IsCompleted => _isCompleted;
 
     public void OnCompleted(Action continuation)
     {
         _scheduler = KernelScheduler.Current;
         _task = _scheduler?.CurrentTask;
+        Logger.LogTrace(
+            "[SaeaAwaitable] OnCompleted register: task={TaskId} scheduler={HasScheduler} isCompleted={IsCompleted} bytes={Bytes} error={Error}",
+            _task?.TID, _scheduler != null, _isCompleted, BytesTransferred, SocketError);
 
         if (_task != null && _task.HasUnblockedPendingSignal())
         {
+            Logger.LogTrace("[SaeaAwaitable] OnCompleted immediate schedule due to pending signal: task={TaskId}",
+                _task.TID);
             _scheduler!.Schedule(continuation, _task);
             return;
         }
 
-        _continuation = continuation;
+        var prev = Interlocked.CompareExchange(ref _continuation, continuation, null);
+        if (ReferenceEquals(prev, CompletedSentinel))
+        {
+            Logger.LogTrace(
+                "[SaeaAwaitable] OnCompleted saw CompletedSentinel, scheduling continuation immediately: task={TaskId}",
+                _task?.TID);
+            _scheduler?.Schedule(continuation, _task);
+        }
+        else
+        {
+            Logger.LogTrace(
+                "[SaeaAwaitable] OnCompleted stored continuation: task={TaskId} prevWasNull={PrevNull}",
+                _task?.TID, prev == null);
+        }
     }
 
     public SaeaAwaitable GetAwaiter()
@@ -43,20 +66,33 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
 
     private void OnCompletedEvent(object? sender, SocketAsyncEventArgs e)
     {
-        var c = _continuation;
-        if (c != null)
+        _isCompleted = true;
+        Logger.LogTrace(
+            "[SaeaAwaitable] Completed callback: bytes={Bytes} error={Error} socketFlags=0x{Flags:X} remote={Remote}",
+            BytesTransferred, SocketError, (int)SocketFlags, RemoteEndPoint?.ToString());
+        var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
+        if (c != null && !ReferenceEquals(c, CompletedSentinel))
         {
-            _continuation = null;
             if (_scheduler != null)
             {
                 if (_task != null) _task.WakeReason = WakeReason.IO;
+                Logger.LogTrace(
+                    "[SaeaAwaitable] Completed scheduling continuation: task={TaskId} scheduler={HasScheduler}",
+                    _task?.TID, true);
                 _scheduler.Schedule(c, _task);
             }
+        }
+        else
+        {
+            Logger.LogTrace(
+                "[SaeaAwaitable] Completed without continuation yet (or already consumed): hasContinuation={HasCont}",
+                c != null);
         }
     }
 
     public void ResetState()
     {
+        _isCompleted = false;
         _continuation = null;
         _scheduler = null;
         _task = null;

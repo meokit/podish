@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
@@ -48,6 +47,32 @@ public sealed class HostSocketInode : Inode
 
     public Socket NativeSocket { get; }
 
+    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    {
+        switch (request)
+        {
+            case LinuxConstants.FIONBIO:
+            {
+                Span<byte> valBuf = stackalloc byte[4];
+                if (!engine.CopyFromUser(arg, valBuf)) return -(int)Errno.EFAULT;
+                var val = MemoryMarshal.Read<int>(valBuf);
+                if (val != 0) linuxFile.Flags |= FileFlags.O_NONBLOCK;
+                else linuxFile.Flags &= ~FileFlags.O_NONBLOCK;
+                return 0;
+            }
+            case LinuxConstants.FIONREAD:
+            {
+                var available = NativeSocket.Available;
+                Span<byte> valBuf = stackalloc byte[4];
+                MemoryMarshal.Write(valBuf, in available);
+                if (!engine.CopyToUser(arg, valBuf)) return -(int)Errno.EFAULT;
+                return 0;
+            }
+            default:
+                return -(int)Errno.ENOTTY;
+        }
+    }
+
     public override short Poll(LinuxFile file, short events)
     {
         short revents = 0;
@@ -67,7 +92,6 @@ public sealed class HostSocketInode : Inode
                 revents |= PollEvents.POLLERR;
 
             if (NativeSocket.Connected && canRead && !canWrite)
-            {
                 try
                 {
                     if (NativeSocket.Available == 0) revents |= PollEvents.POLLHUP;
@@ -76,7 +100,6 @@ public sealed class HostSocketInode : Inode
                 {
                     revents |= PollEvents.POLLHUP;
                 }
-            }
         }
         catch (ObjectDisposedException)
         {
@@ -111,28 +134,35 @@ public sealed class HostSocketInode : Inode
         var registered = false;
         var scheduler = KernelScheduler.Current;
         if (scheduler == null) return false;
+        Logger.LogTrace("Host socket RegisterWait ino={Ino} events=0x{Events:X}", Ino, events);
 
         if ((events & PollEvents.POLLIN) != 0)
         {
             var saea = new SocketAsyncEventArgs();
-            saea.SetBuffer(Array.Empty<byte>());
-            saea.UserToken = new RegisterWaitToken(callback, scheduler);
+            // Use 1-byte + PEEK instead of 0-byte receive; 0-byte completion is unreliable on some hosts.
+            var probe = new byte[1];
+            saea.SetBuffer(probe, 0, 1);
+            saea.SocketFlags = SocketFlags.Peek;
+            saea.UserToken = new RegisterWaitToken(callback, scheduler, probe);
             saea.Completed += OnRegisterWaitCompleted;
 
             try
             {
                 if (!NativeSocket.ReceiveAsync(saea))
                 {
+                    Logger.LogTrace("Host socket RegisterWait POLLIN completed synchronously ino={Ino}", Ino);
                     scheduler.Schedule(callback);
                     saea.Dispose();
                 }
                 else
                 {
+                    Logger.LogTrace("Host socket RegisterWait POLLIN armed async ino={Ino}", Ino);
                     registered = true;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.LogTrace(ex, "Host socket RegisterWait POLLIN failed ino={Ino}, scheduling callback", Ino);
                 scheduler.Schedule(callback);
                 saea.Dispose();
             }
@@ -142,23 +172,26 @@ public sealed class HostSocketInode : Inode
         {
             var saea = new SocketAsyncEventArgs();
             saea.SetBuffer(Array.Empty<byte>());
-            saea.UserToken = new RegisterWaitToken(callback, scheduler);
+            saea.UserToken = new RegisterWaitToken(callback, scheduler, Array.Empty<byte>());
             saea.Completed += OnRegisterWaitCompleted;
 
             try
             {
                 if (!NativeSocket.SendAsync(saea))
                 {
+                    Logger.LogTrace("Host socket RegisterWait POLLOUT completed synchronously ino={Ino}", Ino);
                     scheduler.Schedule(callback);
                     saea.Dispose();
                 }
                 else
                 {
+                    Logger.LogTrace("Host socket RegisterWait POLLOUT armed async ino={Ino}", Ino);
                     registered = true;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Logger.LogTrace(ex, "Host socket RegisterWait POLLOUT failed ino={Ino}, scheduling callback", Ino);
                 scheduler.Schedule(callback);
                 saea.Dispose();
             }
@@ -169,19 +202,32 @@ public sealed class HostSocketInode : Inode
 
     private void OnRegisterWaitCompleted(object? sender, SocketAsyncEventArgs e)
     {
+        Logger.LogTrace(
+            "Host socket RegisterWait completed ino={Ino} bytes={Bytes} error={Error} flags=0x{Flags:X}",
+            Ino, e.BytesTransferred, e.SocketError, (int)e.SocketFlags);
         if (e.UserToken is RegisterWaitToken token) token.Scheduler.Schedule(token.Callback);
+        TokenProbeClear(e.UserToken);
         e.Dispose();
+    }
+
+    private static void TokenProbeClear(object? tokenObj)
+    {
+        if (tokenObj is RegisterWaitToken token) token.ProbeBuffer[0] = 0;
     }
 
     // --- Async Operations using SAEA ---
 
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
     {
+        Logger.LogTrace(
+            "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
+            Ino, buffer.Length, flags, (int)file.Flags, NativeSocket.Connected);
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-        {
             try
             {
-                return NativeSocket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
+                var n = NativeSocket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
+                Logger.LogTrace("Host socket recv nonblock done ino={Ino} bytes={Bytes}", Ino, n);
+                return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
@@ -193,16 +239,18 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-        }
 
         _readSaea.ResetState();
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
         _readSaea.SocketFlags = (SocketFlags)flags;
 
+        Logger.LogTrace("Host socket recv async start ino={Ino} len={Len}", Ino, buffer.Length);
         if (!NativeSocket.ReceiveAsync(_readSaea))
         {
             if (_readSaea.SocketError != SocketError.Success)
                 return MapSocketError(_readSaea.SocketError);
+            Logger.LogTrace("Host socket recv completed sync-from-async ino={Ino} bytes={Bytes}", Ino,
+                _readSaea.BytesTransferred);
             return _readSaea.BytesTransferred;
         }
 
@@ -215,6 +263,7 @@ public sealed class HostSocketInode : Inode
         if (_readSaea.SocketError != SocketError.Success)
             return MapSocketError(_readSaea.SocketError);
 
+        Logger.LogTrace("Host socket recv async done ino={Ino} bytes={Bytes}", Ino, _readSaea.BytesTransferred);
         return _readSaea.BytesTransferred;
     }
 
@@ -222,10 +271,9 @@ public sealed class HostSocketInode : Inode
         EndPoint remoteEpTemplate)
     {
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-        {
             try
             {
-                EndPoint remoteEp = remoteEpTemplate;
+                var remoteEp = remoteEpTemplate;
                 var n = NativeSocket.ReceiveFrom(buffer, 0, buffer.Length, (SocketFlags)flags, ref remoteEp);
                 return (n, remoteEp);
             }
@@ -239,7 +287,6 @@ public sealed class HostSocketInode : Inode
             {
                 return (MapSocketError(ex.SocketErrorCode), null);
             }
-        }
 
         _readSaea.ResetState();
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
@@ -268,12 +315,16 @@ public sealed class HostSocketInode : Inode
     public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
     {
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
+        Logger.LogTrace(
+            "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
+            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-        {
             try
             {
-                return NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                Logger.LogTrace("Host socket send nonblock done ino={Ino} bytes={Bytes}", Ino, n);
+                return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
@@ -285,16 +336,18 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-        }
 
         _writeSaea.ResetState();
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
         _writeSaea.SocketFlags = (SocketFlags)flags;
 
+        Logger.LogTrace("Host socket send async start ino={Ino} len={Len}", Ino, segment.Count);
         if (!NativeSocket.SendAsync(_writeSaea))
         {
             if (_writeSaea.SocketError != SocketError.Success)
                 return MapSocketError(_writeSaea.SocketError);
+            Logger.LogTrace("Host socket send completed sync-from-async ino={Ino} bytes={Bytes}", Ino,
+                _writeSaea.BytesTransferred);
             return _writeSaea.BytesTransferred;
         }
 
@@ -307,6 +360,7 @@ public sealed class HostSocketInode : Inode
         if (_writeSaea.SocketError != SocketError.Success)
             return MapSocketError(_writeSaea.SocketError);
 
+        Logger.LogTrace("Host socket send async done ino={Ino} bytes={Bytes}", Ino, _writeSaea.BytesTransferred);
         return _writeSaea.BytesTransferred;
     }
 
@@ -315,7 +369,6 @@ public sealed class HostSocketInode : Inode
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-        {
             try
             {
                 return NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
@@ -330,7 +383,6 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-        }
 
         _writeSaea.ResetState();
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
@@ -359,7 +411,6 @@ public sealed class HostSocketInode : Inode
     public async ValueTask<int> ConnectAsync(LinuxFile file, EndPoint endpoint)
     {
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-        {
             try
             {
                 NativeSocket.Connect(endpoint);
@@ -377,7 +428,6 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-        }
 
         _writeSaea.ResetState();
         _writeSaea.RemoteEndPoint = endpoint;
@@ -529,5 +579,5 @@ public sealed class HostSocketInode : Inode
         return sb.ToString();
     }
 
-    private record RegisterWaitToken(Action Callback, KernelScheduler Scheduler);
+    private record RegisterWaitToken(Action Callback, KernelScheduler Scheduler, byte[] ProbeBuffer);
 }

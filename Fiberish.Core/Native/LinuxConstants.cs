@@ -309,6 +309,7 @@ public static class LinuxConstants
     public const uint TIOCSPGRP = 0x5410;
     public const uint TIOCSCTTY = 0x540E;
     public const uint FIONREAD = 0x541B;
+    public const uint FIONBIO = 0x5421;
 
     // Signal constants
     public const int SIGALRM = 14;

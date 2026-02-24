@@ -185,13 +185,13 @@ public partial class SyscallManager
 
             // Reader
             var rDentry = new Dentry("pipe:[read]", pipe, sm.Root, sm.Root.SuperBlock);
-            var rFile = new VFS.LinuxFile(rDentry, FileFlags.O_RDONLY);
+            var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY);
             var rFd = sm.AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
             var wDentry = new Dentry("pipe:[write]", pipe, sm.Root, sm.Root.SuperBlock);
-            var wFile = new VFS.LinuxFile(wDentry, FileFlags.O_WRONLY);
+            var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY);
             var wFd = sm.AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
@@ -248,7 +248,7 @@ public partial class SyscallManager
 
             var fdFlags = FileFlags.O_RDWR;
             if ((flags & MFD_CLOEXEC) != 0) fdFlags |= FileFlags.O_CLOEXEC;
-            var file = new VFS.LinuxFile(dentry, fdFlags);
+            var file = new LinuxFile(dentry, fdFlags);
             return sm.AllocFD(file);
         }
         catch (Exception ex)
@@ -262,7 +262,7 @@ public partial class SyscallManager
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
         var createdHere = false;
-        var noFollow = (((FileFlags)flags) & FileFlags.O_NOFOLLOW) != 0;
+        var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
         var dentry = sm.PathWalk(path, startAt, !noFollow);
         if (dentry == null)
         {
@@ -318,7 +318,7 @@ public partial class SyscallManager
             var openFlags = createdHere
                 ? flags & ~(uint)(FileFlags.O_CREAT | FileFlags.O_EXCL | FileFlags.O_TRUNC)
                 : flags;
-            var f = new VFS.LinuxFile(dentry, (FileFlags)openFlags);
+            var f = new LinuxFile(dentry, (FileFlags)openFlags);
             return sm.AllocFD(f);
         }
         catch
@@ -518,7 +518,7 @@ public partial class SyscallManager
         var updatePosition = offset == -1;
         var append = (f.Flags & FileFlags.O_APPEND) != 0;
         var currentOffset = updatePosition
-            ? (append ? (long)(f.Dentry.Inode?.Size ?? 0) : f.Position)
+            ? append ? (long)(f.Dentry.Inode?.Size ?? 0) : f.Position
             : offset;
         var totalWritten = 0;
 
@@ -843,11 +843,11 @@ public partial class SyscallManager
     // --- IO Awaiter ---
     public class IOAwaiter : INotifyCompletion
     {
-        private readonly VFS.LinuxFile _file;
+        private readonly LinuxFile _file;
         private readonly bool _forRead;
         private readonly FiberTask _task;
 
-        public IOAwaiter(VFS.LinuxFile file, bool forRead, FiberTask task)
+        public IOAwaiter(LinuxFile file, bool forRead, FiberTask task)
         {
             _file = file;
             _forRead = forRead;
@@ -858,9 +858,12 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
+            Logger.LogTrace("[IOAwaiter] OnCompleted fd wait start forRead={ForRead} flags=0x{Flags:X}", _forRead,
+                (int)_file.Flags);
             if (_task.HasUnblockedPendingSignal())
             {
                 _task.WakeReason = WakeReason.Signal;
+                Logger.LogTrace("[IOAwaiter] Pending signal before wait, scheduling continuation immediately");
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
@@ -870,13 +873,19 @@ public partial class SyscallManager
             var registered = _file.Dentry.Inode!.RegisterWait(_file, () =>
             {
                 _task.WakeReason = WakeReason.IO;
+                Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", _forRead);
                 runOnce.Invoke();
             }, (short)(_forRead ? 0x0001 : 0x0004));
 
             if (!registered)
             {
                 _task.WakeReason = WakeReason.IO;
+                Logger.LogTrace("[IOAwaiter] RegisterWait returned false; invoking continuation now");
                 runOnce.Invoke();
+            }
+            else
+            {
+                Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}", _forRead);
             }
         }
 
@@ -889,6 +898,7 @@ public partial class SyscallManager
             }
 
             _task.WakeReason = WakeReason.None;
+            Logger.LogTrace("[IOAwaiter] Wait completed as IO");
             return AwaitResult.Completed;
         }
 
@@ -904,10 +914,9 @@ public partial class SyscallManager
             public void Invoke()
             {
                 if (Interlocked.Exchange(ref _called, 1) == 0)
-                {
-                    task.Continuation = action;
-                    KernelScheduler.Current?.Schedule(task);
-                }
+                    // Post continuation as a scheduler event to avoid racing with the
+                    // current RunSlice transition to Waiting.
+                    KernelScheduler.Current?.Schedule(action, task);
             }
         }
     }
