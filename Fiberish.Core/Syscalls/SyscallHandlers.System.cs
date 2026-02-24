@@ -15,6 +15,24 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
+    private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
+    private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
+
+    private static long GetVirtualCpuCycles()
+    {
+        var elapsed = Stopwatch.GetTimestamp() - VirtualCpuStartTimestamp;
+        if (elapsed <= 0) return 0;
+        return elapsed * VirtualCpuHz / Stopwatch.Frequency;
+    }
+
+    private static int GetTimesClockTicks()
+    {
+        var cycles = GetVirtualCpuCycles();
+        var ticks = cycles / (VirtualCpuHz / UserHz);
+        return unchecked((int)ticks);
+    }
+
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private static async ValueTask<int> SysTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -26,6 +44,28 @@ public partial class SyscallManager
             if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes((uint)t)))
                 return -(int)Errno.EFAULT;
         return (int)t;
+    }
+
+    private static async ValueTask<int> SysTimes(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var ticks = GetTimesClockTicks();
+
+        // struct tms on i386:
+        // long tms_utime;  long tms_stime;  long tms_cutime;  long tms_cstime;
+        if (a1 != 0)
+        {
+            var tms = new byte[16];
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(0, 4), ticks);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(4, 4), 0);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(8, 4), 0);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(12, 4), 0);
+            if (!sm.Engine.CopyToUser(a1, tms)) return -(int)Errno.EFAULT;
+        }
+
+        return ticks;
     }
 
     private static async ValueTask<int> SysUname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

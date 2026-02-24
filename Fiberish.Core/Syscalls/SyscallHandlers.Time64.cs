@@ -7,6 +7,73 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private const int ITIMER_REAL = 0;
+    private const int USEC_PER_SEC = 1_000_000;
+
+    private static long GetRemainingMs(Fiberish.Core.Timer? timer, KernelScheduler scheduler)
+    {
+        if (timer == null || timer.Canceled) return 0;
+        var remaining = timer.ExpirationTick - scheduler.CurrentTick;
+        return remaining > 0 ? remaining : 0;
+    }
+
+    private static bool TryReadItimerval32(SyscallManager sm, uint ptr, out long intervalMs, out long valueMs)
+    {
+        intervalMs = 0;
+        valueMs = 0;
+
+        var buf = new byte[16];
+        if (!sm.Engine.CopyFromUser(ptr, buf)) return false;
+
+        var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var intervalUsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
+        var valueUsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+
+        if (intervalSec < 0 || valueSec < 0) return false;
+        if ((uint)intervalUsec >= USEC_PER_SEC || (uint)valueUsec >= USEC_PER_SEC) return false;
+
+        intervalMs = intervalSec * 1000L + intervalUsec / 1000L;
+        valueMs = valueSec * 1000L + valueUsec / 1000L;
+        return true;
+    }
+
+    private static bool WriteItimerval32(SyscallManager sm, uint ptr, long intervalMs, long valueMs)
+    {
+        var intervalSec = intervalMs / 1000;
+        var intervalUsec = (intervalMs % 1000) * 1000;
+        var valueSec = valueMs / 1000;
+        var valueUsec = (valueMs % 1000) * 1000;
+
+        var buf = new byte[16];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)intervalSec);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)intervalUsec);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)valueSec);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)valueUsec);
+        return sm.Engine.CopyToUser(ptr, buf);
+    }
+
+    private static void ArmItimerReal(Process proc, KernelScheduler scheduler, long firstMs, long intervalMs)
+    {
+        proc.AlarmTimer?.Cancel();
+        proc.AlarmTimer = null;
+        proc.ItimerRealIntervalMs = intervalMs;
+
+        if (firstMs <= 0) return;
+
+        void Fire()
+        {
+            scheduler.SignalProcess(proc.TGID, LinuxConstants.SIGALRM);
+
+            if (proc.ItimerRealIntervalMs > 0)
+                proc.AlarmTimer = scheduler.ScheduleTimer(proc.ItimerRealIntervalMs, Fire);
+            else
+                proc.AlarmTimer = null;
+        }
+
+        proc.AlarmTimer = scheduler.ScheduleTimer(firstMs, Fire);
+    }
+
 #pragma warning disable CS1998 // Async method lacks await operators
     private static async ValueTask<int> SysAlarm(IntPtr state, uint seconds, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -19,32 +86,68 @@ public partial class SyscallManager
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var remainingSeconds = 0;
-        
-        // Cancel existing alarm
-        if (proc.AlarmTimer != null)
+        var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
+        if (remainingMs > 0)
         {
-            if (!proc.AlarmTimer.Canceled)
-            {
-                var remainingMs = proc.AlarmTimer.ExpirationTick - scheduler.CurrentTick;
-                remainingSeconds = (int)(remainingMs / 1000);
-                if (remainingSeconds == 0 && remainingMs > 0) remainingSeconds = 1; // Round up
-            }
-            proc.AlarmTimer.Cancel();
-            proc.AlarmTimer = null;
+            remainingSeconds = (int)(remainingMs / 1000);
+            if (remainingSeconds == 0) remainingSeconds = 1;
         }
 
-        // Set new alarm
         if (seconds > 0)
         {
             var ms = seconds * 1000L;
-            proc.AlarmTimer = scheduler.ScheduleTimer(ms, () =>
-            {
-                // Send SIGALRM to process
-                scheduler.SignalProcess(proc.TGID, LinuxConstants.SIGALRM);
-            });
+            ArmItimerReal(proc, scheduler, ms, 0);
+        }
+        else
+        {
+            ArmItimerReal(proc, scheduler, 0, 0);
         }
 
         return remainingSeconds;
+    }
+
+    private static async ValueTask<int> SysSetitimer(IntPtr state, uint which, uint newValuePtr, uint oldValuePtr, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = KernelScheduler.Current;
+        if (scheduler == null) return -(int)Errno.ENOSYS;
+
+        if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
+        if (newValuePtr == 0) return -(int)Errno.EFAULT;
+
+        var proc = task.Process;
+        if (oldValuePtr != 0)
+        {
+            var oldRemainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
+            if (!WriteItimerval32(sm, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
+                return -(int)Errno.EFAULT;
+        }
+
+        if (!TryReadItimerval32(sm, newValuePtr, out var newIntervalMs, out var newValueMs))
+            return -(int)Errno.EINVAL;
+
+        ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
+        return 0;
+    }
+
+    private static async ValueTask<int> SysGetitimer(IntPtr state, uint which, uint currValuePtr, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = KernelScheduler.Current;
+        if (scheduler == null) return -(int)Errno.ENOSYS;
+
+        if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
+        if (currValuePtr == 0) return -(int)Errno.EFAULT;
+
+        var proc = task.Process;
+        var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
+        if (!WriteItimerval32(sm, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
+            return -(int)Errno.EFAULT;
+        return 0;
     }
 
     private static async ValueTask<int> SysClockSetTime64(IntPtr state, uint clockId, uint tsPtr, uint a3, uint a4, uint a5, uint a6)

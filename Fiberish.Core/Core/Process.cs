@@ -95,6 +95,7 @@ public class Process
     // Other process state
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
     public Fiberish.Core.Timer? AlarmTimer { get; set; }
+    public long ItimerRealIntervalMs { get; set; }
 
     // POSIX Timers
     public Dictionary<int, PosixTimer> PosixTimers { get; } = [];

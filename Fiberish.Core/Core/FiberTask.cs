@@ -155,7 +155,8 @@ public class FiberTask
 
         // Dump debug info
         var stats = CPU.DumpStats();
-        if (stats != null) Logger.LogInformation("CPU State:\n{Stats}", stats);
+        Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
+        if (!string.IsNullOrEmpty(stats)) Logger.LogInformation("Native Stats:\n{Stats}", stats);
         Process.Mem.LogVMAs();
             
         // Deliver SIGSEGV and yield

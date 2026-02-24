@@ -97,6 +97,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.chdir, SysChdir);
         Register(X86SyscallNumbers.fchdir, SysFchdir);
         Register(X86SyscallNumbers.time, SysTime);
+        Register(X86SyscallNumbers.times, SysTimes);
         Register(X86SyscallNumbers.nice, SysNice);
         Register(X86SyscallNumbers.getpriority, SysGetPriority);
         Register(X86SyscallNumbers.setpriority, SysSetPriority);
@@ -193,6 +194,8 @@ public partial class SyscallManager
 
         // Alarm
         Register(X86SyscallNumbers.alarm, SysAlarm); // alarm
+        Register(X86SyscallNumbers.setitimer, SysSetitimer);
+        Register(X86SyscallNumbers.getitimer, SysGetitimer);
 
         // POSIX Timers 32-bit (Using 64-bit implementations because timespec padding allows identical parsing if careful, or we just direct them to the 64-bit handlers that adapt for missing padding if applicable. For now, we point to the implementations in Time64).
         Register(X86SyscallNumbers.timer_create, SysTimerCreate);
