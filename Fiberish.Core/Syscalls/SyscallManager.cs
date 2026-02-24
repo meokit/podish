@@ -400,9 +400,12 @@ public partial class SyscallManager
         {
             newFds = [];
             foreach (var kv in FDs)
-                // We need to manually clone because File's constructor/Close manage refcounts
-                newFds[kv.Key] = new VFS.LinuxFile(kv.Value.Dentry, kv.Value.Flags)
-                    { Position = kv.Value.Position, PrivateData = kv.Value.PrivateData };
+            {
+                // fork/clone (without CLONE_FILES) should duplicate fd table entries,
+                // but still reference the same open file description.
+                kv.Value.Get();
+                newFds[kv.Key] = kv.Value;
+            }
         }
 
         var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,

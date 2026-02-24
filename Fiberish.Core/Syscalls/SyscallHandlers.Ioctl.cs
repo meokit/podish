@@ -41,7 +41,7 @@ public partial class SyscallManager
 
         return cmd switch
         {
-            F_DUPFD => sm.AllocFD(file, (int)arg),
+            F_DUPFD => sm.DupFD(file, (int)arg),
             F_GETFD => (file.Flags & FileFlags.O_CLOEXEC) != 0 ? (int)FD_CLOEXEC : 0,
             F_SETFD => SetFdFlags(file, arg),
             F_GETFL => (int)file.Flags,
@@ -68,7 +68,7 @@ public partial class SyscallManager
 
         static int DupFdCloexec(SyscallManager sm, VFS.LinuxFile file, int minFd)
         {
-            var newFd = sm.AllocFD(file, minFd);
+            var newFd = sm.DupFD(file, minFd);
             if (newFd < 0) return newFd;
 
             if (sm.FDs.TryGetValue(newFd, out var newFile))

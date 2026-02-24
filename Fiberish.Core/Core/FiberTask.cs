@@ -469,6 +469,39 @@ public class FiberTask
         }
     }
 
+    /// <summary>
+    /// Consume a pending signal and deliver it. Used by HandleAsyncSyscall to
+    /// deliver signals atomically with -ERESTARTSYS processing, mirroring Linux's
+    /// do_signal(). Registers should already be adjusted (EIP rewound, EAX set)
+    /// BEFORE calling this method, so the sigcontext captures the restart-ready state.
+    /// </summary>
+    private void DeliverSignalForRestart(int sig, SigAction action)
+    {
+        var mask = 1UL << (sig - 1);
+        ulong oldMask;
+        SigInfo info;
+
+        lock (this)
+        {
+            oldMask = SignalMask;
+
+            // Dequeue from pending queue (prevents ProcessPendingSignals from re-delivering)
+            var dequeued = DequeueSignalUnsafe(sig);
+            info = dequeued ?? new SigInfo { Signo = sig };
+
+            // Apply handler mask (same logic as ProcessPendingSignals)
+            if (action.Handler > 1)
+            {
+                var handlerMask = action.Mask;
+                if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
+                    handlerMask |= mask;
+                SignalMask |= handlerMask;
+            }
+        }
+
+        DeliverSignal(sig, action, hasAction: true, oldMask, info);
+    }
+
     // Kept for compatibility if called externally (removed HandleSignal method name to avoid confusion, 
     // but KernelScheduler currently calls HandleSignal. We will update KernelScheduler next.)
     // Note: I renamed HandleSignal to DeliverSignal and made it private.
@@ -794,22 +827,9 @@ public class FiberTask
         CommonKernel.CurrentTask = this;
         try
         {
-            // ── Phase 1: Resume a pending async syscall ──────────────────────────────
-            // PendingSyscall MUST be handled BEFORE ProcessPendingSignals.
-            // If a signal interrupted the syscall (ERESTARTSYS + SA_RESTART),
-            // HandleAsyncSyscall rewinds EIP to 'int 0x80'. If we delivered the
-            // signal first, a signal frame would already be on the stack, and the
-            // EIP rewind would clobber the handler pointer, corrupting the stack.
-            if (PendingSyscall != null)
-            {
-                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
-                Status = FiberTaskStatus.Waiting;
-                if (!_handlingAsyncSyscall)
-                    HandleAsyncSyscall();
-                return;
-            }
-
             ProcessPendingSignals();
+
+            // ── Phase 1: Resume a stored continuation ────────────────────────────────
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
             // has completed an async wait and wants the task to advance its syscall
             // state machine by one step. The continuation itself is responsible for
@@ -832,7 +852,24 @@ public class FiberTask
                 return;
             }
 
-            // ── Phase 2: Guard — verify we can actually run guest code ─────────────────
+            // ── Phase 2: Kick off a pending async syscall ─────────────────────────────
+            // PendingSyscall is a Func<ValueTask<int>> installed by the syscall handler
+            // (via Engine.Yield) before the CPU yields. HandleAsyncSyscall() drives the
+            // ValueTask to completion on the scheduler thread, then calls
+            // CommonKernel.Schedule(this). Until that happens the task stays Waiting.
+            //
+            // NOTE: HandleAsyncSyscall handles -ERESTARTSYS + signal delivery internally
+            // (mirroring Linux's do_signal), so there is no race with ProcessPendingSignals.
+            if (PendingSyscall != null)
+            {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                Status = FiberTaskStatus.Waiting;
+                if (!_handlingAsyncSyscall)
+                    HandleAsyncSyscall();
+                return;
+            }
+
+            // ── Phase 3: Guard — verify we can actually run guest code ─────────────────
             if (!TryEnterGuestRun())
             {
                 // TryEnterGuestRun returns false if any of the following holds:
@@ -1114,63 +1151,81 @@ public class FiberTask
                 return;
             }
 
-            // Handle SA_RESTART for interrupted syscalls
+            // Handle -ERESTARTSYS: decide restart vs EINTR, deliver signal if needed.
+            // This mirrors Linux's do_signal(): we adjust registers FIRST, then set up
+            // the signal frame. The sigcontext saves the adjusted state, so sigreturn
+            // naturally does the right thing (restart or return EINTR).
             if (result == -512) // -ERESTARTSYS
             {
                 var sig = InterruptingSignal;
-                InterruptingSignal = null; // Clear after reading
+                InterruptingSignal = null;
                 Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
-                var defaultIgnored = false;
+
                 if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
                 {
                     var hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
                     Logger.LogInformation(
                         "[HandleAsyncSyscall] Signal {Sig} handler flags=0x{Flags:X}, SA_RESTART={HasRestart}",
                         sig.Value, action.Flags, hasRestart);
+
                     if (action.Handler == 1) // SIG_IGN
                     {
-                        defaultIgnored = true;
-                    }
-                    if (hasRestart)
-                    {
-                        // SA_RESTART: rewind EIP to re-execute 'int 0x80' (CD 80)
-                        // SyscallEip was saved before syscall execution.
-                        // NOTE: ProcessPendingSignals must NOT run before this code in RunSlice,
-                        // otherwise a signal frame would be on the stack and this rewind would
-                        // clobber the handler EIP. RunSlice handles this by checking PendingSyscall
-                        // before calling ProcessPendingSignals.
-                        Logger.LogInformation(
-                            "[HandleAsyncSyscall] SA_RESTART enabled: rewinding EIP from 0x{OldEip:X} to 0x{SyscallEip:X}",
-                            CPU.Eip, SyscallEip);
-
+                        // Ignored signal — just restart
                         CPU.Eip = SyscallEip;
-                        // Don't modify EAX - the syscall will be re-executed with original args
                         ExecutionMode = TaskExecutionMode.RunningGuest;
-                        // Reschedule and return
                         CommonKernel.Schedule(this);
                         return;
                     }
+
+                    if (action.Handler > 1) // Real handler
+                    {
+                        // Step 1: Adjust registers BEFORE setting up signal frame.
+                        if (hasRestart)
+                        {
+                            // SA_RESTART: rewind so sigreturn will re-execute syscall
+                            CPU.Eip = SyscallEip;
+                            CPU.RegWrite(Reg.EAX, (uint)SyscallNr);
+                            Logger.LogInformation(
+                                "[HandleAsyncSyscall] SA_RESTART: set EIP=0x{Eip:X}, EAX={Nr} for restart after handler",
+                                SyscallEip, SyscallNr);
+                        }
+                        else
+                        {
+                            // No SA_RESTART: userspace will see -EINTR after handler
+                            CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                            Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: EAX=-EINTR after handler");
+                        }
+
+                        // Step 2: Deliver the signal (sets up frame with adjusted registers)
+                        DeliverSignalForRestart(sig.Value, action);
+
+                        ExecutionMode = TaskExecutionMode.RunningGuest;
+                        CommonKernel.Schedule(this);
+                        return;
+                    }
+
+                    // SIG_DFL handler (handler == 0)
+                    // Fall through — check if default-ignored
                 }
-                else if (sig.HasValue)
-                {
-                    defaultIgnored = sig.Value == (int)Signal.SIGCHLD ||
-                                     sig.Value == (int)Signal.SIGURG ||
-                                     sig.Value == (int)Signal.SIGWINCH;
-                }
+
+                // Check default-ignored signals (no registered action or SIG_DFL)
+                var defaultIgnored = sig.HasValue && (
+                    sig.Value == (int)Signal.SIGCHLD ||
+                    sig.Value == (int)Signal.SIGURG ||
+                    sig.Value == (int)Signal.SIGWINCH);
 
                 if (defaultIgnored)
                 {
                     Logger.LogInformation(
-                        "[HandleAsyncSyscall] Signal {Sig} is ignored by default; restarting syscall",
-                        sig);
+                        "[HandleAsyncSyscall] Signal {Sig} is default-ignored; restarting syscall", sig);
                     CPU.Eip = SyscallEip;
                     ExecutionMode = TaskExecutionMode.RunningGuest;
                     CommonKernel.Schedule(this);
                     return;
                 }
 
-                // No SA_RESTART or no handler: return -EINTR
-                Logger.LogInformation("[HandleAsyncSyscall] No SA_RESTART: returning -EINTR");
+                // No SA_RESTART and no handler: return -EINTR
+                Logger.LogInformation("[HandleAsyncSyscall] No handler, returning -EINTR");
                 result = -(int)Errno.EINTR;
             }
             else

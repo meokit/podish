@@ -397,8 +397,7 @@ public partial class SyscallManager
         var f = sm.GetFD(oldfd);
         if (f == null) return -(int)Errno.EBADF;
 
-        f.Get();
-        return sm.AllocFD(f);
+        return sm.DupFD(f);
     }
 
     private static async ValueTask<int> SysDup2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

@@ -543,8 +543,7 @@ public partial class SyscallManager
 
                 for (var i = 0; i < receivedFds.Count; i++)
                 {
-                    receivedFds[i].Get();
-                    var newFd = sm.AllocFD(receivedFds[i]);
+                    var newFd = sm.DupFD(receivedFds[i]);
                     BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(12 + i * 4, 4), newFd);
                 }
 

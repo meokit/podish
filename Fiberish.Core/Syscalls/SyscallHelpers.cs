@@ -103,6 +103,12 @@ public partial class SyscallManager
         return fd;
     }
 
+    public int DupFD(VFS.LinuxFile linuxFile, int minFd = 3)
+    {
+        linuxFile.Get();
+        return AllocFD(linuxFile, minFd);
+    }
+
     public VFS.LinuxFile? GetFD(int fd)
     {
         return FDs.TryGetValue(fd, out var f) ? f : null;
