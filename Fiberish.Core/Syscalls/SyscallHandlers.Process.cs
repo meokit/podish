@@ -21,6 +21,9 @@ public partial class SyscallManager
         var exitCode = (int)a1;
         if (sm.Engine.Owner is FiberTask task)
         {
+            // vfork: wake parent before exiting
+            task.SignalVforkDone();
+
             task.Exited = true;
             task.ExitStatus = exitCode;
 
@@ -61,6 +64,9 @@ public partial class SyscallManager
         var exitCode = (int)a1;
         if (sm.Engine.Owner is FiberTask task)
         {
+            // vfork: wake parent before exiting
+            task.SignalVforkDone();
+
             task.Exited = true;
             task.ExitStatus = exitCode;
 
@@ -566,6 +572,7 @@ public partial class SyscallManager
                 task.Process.Exec(interpDentry, interpGuestPath, [.. newArgs], [.. origEnvs]);
                 CredentialService.ApplyExecSetIdOnExec(task.Process, interpDentry.Inode!);
                 ProcFsManager.OnProcessExec(sm, task.Process);
+                task.SignalVforkDone(); // vfork: wake parent after exec
                 return 0;
             }
             catch (FileNotFoundException)
@@ -654,6 +661,7 @@ public partial class SyscallManager
             // No namespace/nosuid/no_new_privs yet: apply classic setuid/setgid exec semantics directly.
             CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
             ProcFsManager.OnProcessExec(sm, task.Process);
+            task.SignalVforkDone(); // vfork: wake parent after exec
             return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }
         catch (FileNotFoundException)

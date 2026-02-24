@@ -111,6 +111,11 @@ public class FiberTask
     public int ExitStatus { get; set; }
 
     public uint ChildClearTidPtr { get; set; }
+
+    // vfork support: parent awaits this event; child signals it on exec/exit
+    public AsyncWaitQueue? VforkDoneEvent { get; set; }
+    // vfork support: reference to the parent task that is blocked waiting for us
+    public FiberTask? VforkParent { get; set; }
     
     public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
     public WakeReason WakeReason { get; set; } = WakeReason.None;
@@ -1112,10 +1117,34 @@ public class FiberTask
 
         if (cloneVfork)
         {
-            // TODO: Implement VFORK blocking.
+            // vfork semantics: parent is suspended until child calls exec or exit.
+            // The child shares the parent's address space (CLONE_VM), so the parent
+            // MUST NOT run until the child replaces the memory (exec) or exits.
+            var vforkEvent = new AsyncWaitQueue();
+            child.VforkDoneEvent = vforkEvent;
+            child.VforkParent = this;
+            Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
+                TID, child.TID);
+            await vforkEvent;
+            Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
+                TID, child.TID);
         }
 
         return child;
+    }
+
+
+    // Signals the parent task that a vforked child has completed its exec/exit.
+    public void SignalVforkDone()
+    {
+        if (VforkDoneEvent != null)
+        {
+            Logger.LogInformation("[SignalVforkDone] Child TID={ChildTid} signaling parent TID={ParentTid} that vfork is done",
+                TID, VforkParent?.TID);
+            VforkDoneEvent.Set();
+            VforkDoneEvent = null; // Clear the event after signaling
+            VforkParent = null; // Clear parent reference
+        }
     }
 
     private bool _handlingAsyncSyscall;

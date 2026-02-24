@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
@@ -52,12 +53,30 @@ public sealed class HostSocketInode : Inode
         short revents = 0;
         try
         {
-            if ((events & PollEvents.POLLIN) != 0 && NativeSocket.Poll(0, SelectMode.SelectRead))
+            var canRead = NativeSocket.Poll(0, SelectMode.SelectRead);
+            var canWrite = NativeSocket.Poll(0, SelectMode.SelectWrite);
+            var hasError = NativeSocket.Poll(0, SelectMode.SelectError);
+
+            if ((events & PollEvents.POLLIN) != 0 && canRead)
                 revents |= PollEvents.POLLIN;
-            if ((events & PollEvents.POLLOUT) != 0 && NativeSocket.Poll(0, SelectMode.SelectWrite))
+            if ((events & PollEvents.POLLOUT) != 0 && canWrite)
                 revents |= PollEvents.POLLOUT;
-            if ((events & PollEvents.POLLERR) != 0 && NativeSocket.Poll(0, SelectMode.SelectError))
+
+            // Linux poll semantics: POLLERR/POLLHUP are reported regardless of requested events.
+            if (hasError)
                 revents |= PollEvents.POLLERR;
+
+            if (NativeSocket.Connected && canRead && !canWrite)
+            {
+                try
+                {
+                    if (NativeSocket.Available == 0) revents |= PollEvents.POLLHUP;
+                }
+                catch (SocketException)
+                {
+                    revents |= PollEvents.POLLHUP;
+                }
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -423,6 +442,7 @@ public sealed class HostSocketInode : Inode
         {
             var arr = buffer.ToArray();
             var bytes = NativeSocket.Receive(arr);
+            TraceIo("read", arr.AsSpan(0, bytes), bytes);
             arr.AsSpan(0, bytes).CopyTo(buffer);
             return bytes;
         }
@@ -441,7 +461,10 @@ public sealed class HostSocketInode : Inode
     {
         try
         {
-            return NativeSocket.Send(buffer.ToArray());
+            var data = buffer.ToArray();
+            var bytes = NativeSocket.Send(data);
+            TraceIo("write", data.AsSpan(0, Math.Min(bytes, data.Length)), bytes);
+            return bytes;
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                          ex.SocketErrorCode == SocketError.IOPending)
@@ -483,6 +506,27 @@ public sealed class HostSocketInode : Inode
             SocketError.SocketNotSupported => -(int)Errno.ESOCKTNOSUPPORT,
             _ => -(int)Errno.EIO
         };
+    }
+
+    private void TraceIo(string op, ReadOnlySpan<byte> data, int bytes)
+    {
+        if (bytes <= 0 || !Logger.IsEnabled(LogLevel.Trace)) return;
+        var previewLen = Math.Min(bytes, 64);
+        Logger.LogTrace("Host socket {Op} ino={Ino} bytes={Bytes} preview={Preview}",
+            op, Ino, bytes, HexPreview(data[..previewLen]));
+    }
+
+    private static string HexPreview(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return "";
+        var sb = new StringBuilder(data.Length * 3);
+        for (var i = 0; i < data.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            sb.Append(data[i].ToString("X2"));
+        }
+
+        return sb.ToString();
     }
 
     private record RegisterWaitToken(Action Callback, KernelScheduler Scheduler);

@@ -74,6 +74,7 @@ add_integration_binary("test_jc_nolibc" "tests/src/test_jc_nolibc.c" EXTRA_FLAGS
 add_integration_binary("test_pty_nolibc" "tests/src/test_pty_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
 add_integration_binary("test_low_hanging_nolibc" "tests/src/test_low_hanging_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
 add_integration_binary("test_identity" "tests/src/test_identity.c")
+add_integration_binary("test_vfork" "tests/src/test_vfork.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 

@@ -176,7 +176,15 @@ public partial class SyscallManager
                                 sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2 ? v2 : 0);
                             break;
                         case 4: // SO_ERROR
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, 0);
+                            var soErrorObj = sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                            var soError = soErrorObj switch
+                            {
+                                int i => (SocketError)i,
+                                SocketError se => se,
+                                _ => SocketError.Success
+                            };
+                            var linuxErr = soError == SocketError.Success ? 0 : LinuxToWindowsSocketError(soError);
+                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, linuxErr);
                             break;
                         case 8: // SO_SNDBUF
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.SendBufferSize);
