@@ -291,6 +291,25 @@ public class OverlayInode : Inode
         // Lower? Whiteout for dir?
     }
 
+    public override void Rename(string oldName, Inode newParent, string newName)
+    {
+        if (newParent is not OverlayInode targetParent)
+            throw new InvalidOperationException("Target parent is not overlay inode");
+
+        // Rename mutates directory entries, so parents must exist in upper.
+        if (UpperDentry == null)
+            CopyUpDirectory();
+        if (targetParent.UpperDentry == null)
+            targetParent.CopyUpDirectory();
+
+        if (UpperInode == null || targetParent.UpperInode == null)
+            throw new InvalidOperationException("Upper directory is unavailable for rename");
+
+        // Common apk path: source is newly created temp file in upper already.
+        // For lower-only source entries, full copy-up rename semantics can be added later.
+        UpperInode.Rename(oldName, targetParent.UpperInode, newName);
+    }
+
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // Read from Upper if exists, else Lower.

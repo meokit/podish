@@ -567,6 +567,22 @@ public partial class SyscallManager
             oldParentDentry.Inode!.Rename(oldName, newParentDentry.Inode!, newName);
             return 0;
         }
+        catch (FileNotFoundException)
+        {
+            return -(int)Errno.ENOENT;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return -(int)Errno.ENOENT;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return -(int)Errno.EACCES;
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.EIO;
+        }
         catch
         {
             return -(int)Errno.EACCES;

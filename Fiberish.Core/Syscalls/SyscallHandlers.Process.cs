@@ -460,6 +460,138 @@ public partial class SyscallManager
             return -(int)Errno.ENOENT;
         }
 
+        // ── Shebang (#!) detection ───────────────────────────────────────────────
+        // Linux binfmt_script: if the file starts with "#!", parse interpreter path
+        // and re-execute with the interpreter as the program.
+        var headerBuf = new byte[256];
+        int headerLen = 0;
+        if (dentry.Inode != null)
+        {
+            // Use Inode.Read() so this works for any filesystem, not just HostInode
+            var tmpFile = new Fiberish.VFS.LinuxFile(dentry, FileFlags.O_RDONLY);
+            headerLen = dentry.Inode.Read(tmpFile, headerBuf.AsSpan(), 0);
+            if (headerLen < 0) headerLen = 0;
+        }
+
+        if (headerLen >= 4 && headerBuf[0] == '#' && headerBuf[1] == '!')
+        {
+            // Parse the shebang line: #!<interpreter> [optional-arg]\n
+            var lineEnd = Array.IndexOf(headerBuf, (byte)'\n', 2);
+            if (lineEnd < 0) lineEnd = headerLen;
+            var shebangLine = System.Text.Encoding.UTF8.GetString(headerBuf, 2, lineEnd - 2).Trim();
+
+            string interpPath;
+            string? interpArg = null;
+            var spaceIdx = shebangLine.IndexOf(' ');
+            if (spaceIdx >= 0)
+            {
+                interpPath = shebangLine[..spaceIdx];
+                interpArg = shebangLine[(spaceIdx + 1)..].Trim();
+                if (string.IsNullOrEmpty(interpArg)) interpArg = null;
+            }
+            else
+            {
+                interpPath = shebangLine;
+            }
+
+            Logger.LogInformation("[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
+                interpPath, interpArg ?? "(none)", guestPath);
+
+            // Resolve interpreter
+            var (interpDentry, interpGuestPath) = sm.ResolvePath(interpPath, isHostRelativeDefault: false);
+            if (interpDentry == null)
+            {
+                Logger.LogWarning("[SysExecve] Shebang interpreter '{Interp}' not found", interpPath);
+                return -(int)Errno.ENOENT;
+            }
+
+            // Read original args (must be done BEFORE clearing memory)
+            List<string> origArgs = [];
+            if (a2 != 0)
+            {
+                var curr = a2;
+                var ptrBuf = new byte[4];
+                while (true)
+                {
+                    if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
+                    var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                    if (strPtr == 0) break;
+                    origArgs.Add(sm.ReadString(strPtr));
+                    curr += 4;
+                }
+            }
+
+            // Read original envs
+            List<string> origEnvs = [];
+            if (a3 != 0)
+            {
+                var curr = a3;
+                var ptrBuf = new byte[4];
+                while (true)
+                {
+                    if (!sm.Engine.CopyFromUser(curr, ptrBuf)) break;
+                    var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+                    if (strPtr == 0) break;
+                    origEnvs.Add(sm.ReadString(strPtr));
+                    curr += 4;
+                }
+            }
+
+            // Build new args: [interpreter, interpArg?, scriptPath, origArgs[1:]]
+            List<string> newArgs = [interpPath];
+            if (interpArg != null) newArgs.Add(interpArg);
+            newArgs.Add(guestPath);
+            if (origArgs.Count > 1)
+                newArgs.AddRange(origArgs.Skip(1));
+
+            // Close O_CLOEXEC files
+            var toCloseShebang = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
+            foreach (var fd in toCloseShebang) sm.FreeFD(fd);
+
+            // Reset signals
+            var ignoredShebang = task.Process.SignalActions
+                .Where(kv => kv.Value.Handler == 1)
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            task.Process.SignalActions.Clear();
+            foreach (var kv in ignoredShebang) task.Process.SignalActions[kv.Key] = kv.Value;
+            task.PendingSignals = 0;
+            task.AltStackSp = 0;
+            task.AltStackSize = 0;
+            task.AltStackFlags = 0;
+
+            Logger.LogInformation("[SysExecve] Re-executing as: {Args}", string.Join(" ", newArgs));
+
+            try
+            {
+                task.Process.Exec(interpDentry, interpGuestPath, [.. newArgs], [.. origEnvs]);
+                CredentialService.ApplyExecSetIdOnExec(task.Process, interpDentry.Inode!);
+                ProcFsManager.OnProcessExec(sm, task.Process);
+                return 0;
+            }
+            catch (FileNotFoundException)
+            {
+                return -(int)Errno.ENOENT;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("[SysExecve] Shebang exec failed: {Message}", ex.Message);
+                return -(int)Errno.ENOENT;
+            }
+        }
+
+        // ── ELF magic validation ─────────────────────────────────────────────────
+        // Validate BEFORE clearing memory. If the file isn't a valid ELF,
+        // return -ENOEXEC without destroying the process's address space.
+        if (headerLen < 4 || headerBuf[0] != 0x7F || headerBuf[1] != (byte)'E' ||
+            headerBuf[2] != (byte)'L' || headerBuf[3] != (byte)'F')
+        {
+            Logger.LogWarning("[SysExecve] '{Path}' is not an ELF binary (magic: {M0:X2} {M1:X2} {M2:X2} {M3:X2})",
+                guestPath,
+                headerLen > 0 ? headerBuf[0] : 0, headerLen > 1 ? headerBuf[1] : 0,
+                headerLen > 2 ? headerBuf[2] : 0, headerLen > 3 ? headerBuf[3] : 0);
+            return -(int)Errno.ENOEXEC;
+        }
+
 
         // Read Args (must be done BEFORE clearing memory)
         List<string> args = [];
