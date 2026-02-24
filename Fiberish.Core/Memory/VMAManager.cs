@@ -242,7 +242,7 @@ public class VMAManager
         for (var p = startPage; p < endAddr; p += LinuxConstants.PageSize) HandleFault(p, true, engine);
     }
 
-    private uint FindFreeRegion(uint size)
+    internal uint FindFreeRegion(uint size)
     {
         var baseAddr = LinuxConstants.MinMmapAddr;
         while (true)

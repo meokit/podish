@@ -31,6 +31,10 @@ public class UnixSocketInode : Inode
     private byte[]? _partialBuffer;
     private int _partialOffset;
 
+    // Backpressure: track queued bytes to limit memory usage
+    private const int MaxSendBuffer = 262144; // 256KB
+    private int _queuedBytes;
+
     public UnixSocketInode(ulong ino, SuperBlock sb, SocketType type)
     {
         Ino = ino;
@@ -58,7 +62,9 @@ public class UnixSocketInode : Inode
 
             if ((events & PollEvents.POLLOUT) != 0)
             {
-                if (!_shutDownWrite && _peer != null && !_peer._shutDownRead)
+                if (_shutDownWrite || _peer == null || _peer._shutDownRead)
+                    revents |= PollEvents.POLLERR;
+                else if (_peer._queuedBytes < MaxSendBuffer)
                     revents |= PollEvents.POLLOUT;
             }
 
@@ -88,13 +94,13 @@ public class UnixSocketInode : Inode
         return registered;
     }
 
-    // Called by the Peer
     public void EnqueueMessage(UnixMessage msg)
     {
         lock (_lock)
         {
             if (_shutDownRead) return; // Dropped
             _receiveQueue.Enqueue(msg);
+            _queuedBytes += msg.Data.Length;
         }
         _readWaitQueue.Set(); // Signal that data is available (like PipeInode)
     }
@@ -126,6 +132,8 @@ public class UnixSocketInode : Inode
                         _partialBuffer = null;
                         _partialOffset = 0;
                     }
+                    _queuedBytes -= toCopy;
+                    _writeWaitQueue.Set(); // signal backpressure relief 
                     return (toCopy, null); // FDs only on boundary
                 }
 
@@ -140,13 +148,17 @@ public class UnixSocketInode : Inode
                         _partialOffset = toCopy;
                     }
                     // For Datagram, truncated bytes are discarded.
+                    _queuedBytes -= toCopy;
+                    if (_socketType != SocketType.Stream || toCopy >= msg.Data.Length)
+                        _queuedBytes -= (msg.Data.Length - toCopy); // discard remainder for dgram
 
-                    return (toCopy, msg.Fds); 
+                    return (toCopy, msg.Fds);
                 }
 
                 if (_shutDownRead || _peer == null)
                     return (0, null); // EOF
             }
+            _writeWaitQueue.Set(); // backpressure relief
 
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
 
@@ -159,16 +171,36 @@ public class UnixSocketInode : Inode
         }
     }
 
-    public ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags)
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags)
     {
         UnixSocketInode? peer;
         lock (_lock)
         {
-            if (_shutDownWrite || _peer == null) return new ValueTask<int>(-(int)Errno.EPIPE);
+            if (_shutDownWrite || _peer == null) return -(int)Errno.EPIPE;
             peer = _peer;
         }
 
-        // We assume unbounded queue for now, so no blocking on send
+        // Backpressure: check peer's queued bytes
+        while (true)
+        {
+            lock (peer._lock)
+            {
+                if (peer._queuedBytes < MaxSendBuffer)
+                    break; // Space available
+            }
+
+            if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                return -(int)Errno.EAGAIN;
+
+            await peer._writeWaitQueue.WaitAsync();
+
+            // Re-check connection after wakeup
+            lock (_lock)
+            {
+                if (_shutDownWrite || _peer == null) return -(int)Errno.EPIPE;
+            }
+        }
+
         var clonedData = new byte[data.Length];
         Array.Copy(data, clonedData, data.Length);
 
@@ -181,7 +213,7 @@ public class UnixSocketInode : Inode
         }
 
         peer.EnqueueMessage(msg);
-        return new ValueTask<int>(data.Length);
+        return data.Length;
     }
 
     protected override void Release()
@@ -221,6 +253,8 @@ public class UnixSocketInode : Inode
                 // Reset read wait queue if no more data
                 if (_receiveQueue.Count == 0 && _partialBuffer == null)
                     _readWaitQueue.Reset();
+                _queuedBytes -= toCopy;
+                _writeWaitQueue.Set(); // backpressure relief 
                 return toCopy;
             }
 
@@ -244,7 +278,12 @@ public class UnixSocketInode : Inode
                 if (_receiveQueue.Count == 0 && _partialBuffer == null)
                     _readWaitQueue.Reset();
 
-                return toCopy; 
+                _queuedBytes -= msg.Data.Length;
+                if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
+                    _queuedBytes += (msg.Data.Length - toCopy); // partial still queued
+                _writeWaitQueue.Set(); // backpressure relief
+
+                return toCopy;
             }
 
             if (_shutDownRead || _peer == null)
@@ -261,6 +300,13 @@ public class UnixSocketInode : Inode
         {
             if (_shutDownWrite || _peer == null) return -(int)Errno.EPIPE;
             peer = _peer;
+        }
+
+        // Backpressure check for synchronous write
+        lock (peer._lock)
+        {
+            if (peer._queuedBytes >= MaxSendBuffer)
+                return -(int)Errno.EAGAIN;
         }
 
         var clonedData = buffer.ToArray();

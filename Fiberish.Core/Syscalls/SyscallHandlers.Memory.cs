@@ -182,4 +182,136 @@ public partial class SyscallManager
         foreach (var vma in sm.Mem.FindVMAsInRange(addr, end)) VMAManager.SyncVMA(vma, sm.Engine);
         return 0;
     }
+
+    private static async ValueTask<int> SysMremap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        // void *mremap(void *old_address, size_t old_size, size_t new_size, int flags, ... void *new_address);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var oldAddr = a1;
+        var oldLen = a2;
+        var newLen = a3;
+        var flags = (int)a4;
+        var newAddr = a5;
+
+        const int MREMAP_MAYMOVE = 1;
+        const int MREMAP_FIXED = 2;
+
+        if (newLen == 0) return -(int)Errno.EINVAL;
+        if ((oldAddr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+
+        var mayMove = (flags & MREMAP_MAYMOVE) != 0;
+        var isFixed = (flags & MREMAP_FIXED) != 0;
+
+        if (isFixed && !mayMove) return -(int)Errno.EINVAL;
+        if (isFixed && (newAddr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+
+        // Align sizes to page boundaries
+        var oldLenAligned = (oldLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+        var newLenAligned = (newLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+
+        // Find the existing VMA containing oldAddr
+        var oldVma = sm.Mem.FindVMA(oldAddr);
+        if (oldVma == null) return -(int)Errno.EFAULT;
+
+        // Verify the old range is fully contained within the VMA
+        if (oldAddr + oldLenAligned > oldVma.End) return -(int)Errno.EFAULT;
+
+        // Case 1: Shrinking
+        if (newLenAligned < oldLenAligned)
+        {
+            // Unmap the tail portion
+            if (newLenAligned < oldLenAligned)
+            {
+                var unmapStart = oldAddr + newLenAligned;
+                var unmapLen = oldLenAligned - newLenAligned;
+                sm.Mem.Munmap(unmapStart, unmapLen, sm.Engine);
+            }
+            return (int)oldAddr;
+        }
+
+        // Case 2: Same size
+        if (newLenAligned == oldLenAligned) return (int)oldAddr;
+
+        // Case 3: Growing — try in place first
+        var growLen = newLenAligned - oldLenAligned;
+        var growStart = oldAddr + oldLenAligned;
+
+        // Check if there's free space right after the old region
+        var canGrowInPlace = true;
+        var nextVmas = sm.Mem.FindVMAsInRange(growStart, growStart + growLen);
+        foreach (var v in nextVmas)
+        {
+            if (v != oldVma) // ignore the VMA itself if it extends past oldLen
+            {
+                canGrowInPlace = false;
+                break;
+            }
+        }
+
+        if (canGrowInPlace)
+        {
+            // If oldAddr is at VMA start and the old region covers the whole VMA, extend it
+            if (oldAddr == oldVma.Start && oldAddr + oldLenAligned == oldVma.End)
+            {
+                oldVma.End = oldAddr + newLenAligned;
+                return (int)oldAddr;
+            }
+
+            // Otherwise we need to create a new anonymous VMA for the growth region
+            // and extend via a new mapping
+            try
+            {
+                sm.Mem.Mmap(growStart, growLen, oldVma.Perms,
+                    MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
+                    null, 0, 0, oldVma.Name, sm.Engine);
+                return (int)oldAddr;
+            }
+            catch
+            {
+                // Fall through to move case
+            }
+        }
+
+        // Case 4: Need to move
+        if (!mayMove) return -(int)Errno.ENOMEM;
+
+        // Find or use target address
+        uint targetAddr;
+        if (isFixed)
+        {
+            targetAddr = newAddr;
+            // MREMAP_FIXED acts like MAP_FIXED — unmap anything at the target
+            sm.Mem.Munmap(targetAddr, newLenAligned, sm.Engine);
+        }
+        else
+        {
+            targetAddr = sm.Mem.FindFreeRegion(newLenAligned);
+            if (targetAddr == 0) return -(int)Errno.ENOMEM;
+        }
+
+        try
+        {
+            // Allocate new region
+            sm.Mem.Mmap(targetAddr, newLenAligned, oldVma.Perms,
+                MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
+                null, 0, 0, oldVma.Name, sm.Engine);
+
+            // Copy old content to new location
+            var copyLen = Math.Min(oldLenAligned, newLenAligned);
+            var buf = new byte[copyLen];
+            sm.Engine.CopyFromUser(oldAddr, buf);
+            sm.Engine.CopyToUser(targetAddr, buf);
+
+            // Unmap old region
+            sm.Mem.Munmap(oldAddr, oldLenAligned, sm.Engine);
+
+            return (int)targetAddr;
+        }
+        catch
+        {
+            return -(int)Errno.ENOMEM;
+        }
+    }
 }

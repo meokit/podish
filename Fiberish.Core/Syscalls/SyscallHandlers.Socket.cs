@@ -543,6 +543,7 @@ public partial class SyscallManager
 
                 for (var i = 0; i < receivedFds.Count; i++)
                 {
+                    receivedFds[i].Get();
                     var newFd = sm.AllocFD(receivedFds[i]);
                     BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(12 + i * 4, 4), newFd);
                 }
@@ -574,7 +575,11 @@ public partial class SyscallManager
         if (protocol != 0 && protocol != 1 /* PF_UNIX */) return -(int)Errno.EPROTONOSUPPORT;
 
         var realType = type & 0xf;
-        var sockType = realType == 1 ? SocketType.Stream : SocketType.Dgram;
+        SocketType sockType;
+        if (realType == 1) sockType = SocketType.Stream;       // SOCK_STREAM
+        else if (realType == 2) sockType = SocketType.Dgram;   // SOCK_DGRAM
+        else if (realType == 5) sockType = SocketType.Seqpacket; // SOCK_SEQPACKET
+        else return -(int)Errno.EINVAL;
 
         var fileFlags = FileFlags.O_RDWR;
         if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;

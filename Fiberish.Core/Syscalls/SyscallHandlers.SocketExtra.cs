@@ -470,39 +470,29 @@ public partial class SyscallManager
 
         int bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);
-        int totalTransferred = 0;
 
         try
         {
-            int remaining = len;
-            while (remaining > 0)
+            // tee() is a single-shot operation: peek available data (up to len)
+            // from fd_in without consuming, write it to fd_out, return count.
+            while (true)
             {
-                int toRead = Math.Min(remaining, bufSize);
-                // Peek from fd_in (non-destructive)
-                int bytesRead = pipeIn.Peek(buf.AsSpan(0, toRead));
-                if (bytesRead == 0) break;
+                int bytesRead = pipeIn.Peek(buf.AsSpan(0, bufSize));
+                if (bytesRead == 0) return 0; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
                 {
-                    if (totalTransferred > 0) break;
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
                     await fileIn.Dentry.Inode.WaitForRead(fileIn);
-                    continue;
+                    continue; // retry after data arrives
                 }
                 if (bytesRead < 0) return bytesRead;
 
                 int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
-                if (bytesWritten < 0)
-                {
-                    if (totalTransferred > 0) break;
-                    return bytesWritten;
-                }
+                if (bytesWritten < 0) return bytesWritten;
 
-                totalTransferred += bytesWritten;
-                remaining -= bytesWritten;
+                return bytesWritten;
             }
-
-            return totalTransferred;
         }
         finally
         {

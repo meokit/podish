@@ -397,6 +397,7 @@ public partial class SyscallManager
         var f = sm.GetFD(oldfd);
         if (f == null) return -(int)Errno.EBADF;
 
+        f.Get();
         return sm.AllocFD(f);
     }
 
@@ -419,7 +420,7 @@ public partial class SyscallManager
 
         sm.FreeFD(newfd);
         sm.FDs[newfd] = f;
-        f.Dentry.Inode?.Get();
+        f.Get();
         return newfd;
     }
 

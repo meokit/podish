@@ -80,8 +80,14 @@ public class PipeInode : Inode
     public override void Open(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
-        if (((int)linuxFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
+        var mode = (int)linuxFile.Flags & O_ACCMODE;
+        if (mode == (int)FileFlags.O_RDONLY)
             AddReader();
+        else if (mode == (int)FileFlags.O_RDWR)
+        {
+            AddReader();
+            AddWriter();
+        }
         else
             AddWriter();
     }
@@ -160,6 +166,11 @@ public class PipeInode : Inode
             var space = BufferSize - _count;
             if (space > 0)
             {
+                // Atomic write guarantee: writes <= PIPE_BUF must not be interleaved/partial
+                const int PIPE_BUF = 4096;
+                if (buffer.Length <= PIPE_BUF && space < buffer.Length)
+                    return -(int)Errno.EAGAIN;
+
                 var toWrite = Math.Min(buffer.Length, space);
                 var firstChunk = Math.Min(toWrite, BufferSize - _head);
 
@@ -221,8 +232,8 @@ public class PipeInode : Inode
                 if (_count > 0)
                     revents |= POLLIN;
                 else if (_writersClosed)
-                    // EOF - no writers left, return POLLHUP
-                    revents |= POLLHUP;
+                    // EOF - no writers left. Linux returns POLLIN|POLLHUP so select() readfds detects EOF.
+                    revents |= (short)(POLLIN | POLLHUP);
             }
 
             if ((events & POLLOUT) != 0 && (mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR))
@@ -266,8 +277,14 @@ public class PipeInode : Inode
     public override void Release(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;
-        if (((int)linuxFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY)
+        var mode = (int)linuxFile.Flags & O_ACCMODE;
+        if (mode == (int)FileFlags.O_RDONLY)
             RemoveReader();
+        else if (mode == (int)FileFlags.O_RDWR)
+        {
+            RemoveReader();
+            RemoveWriter();
+        }
         else
             RemoveWriter();
     }

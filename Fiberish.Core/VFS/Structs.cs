@@ -321,7 +321,7 @@ public class Dentry
 
 public class LinuxFile
 {
-    private bool _isClosed;
+    private int _refCount = 1;
 
     public LinuxFile(Dentry dentry, FileFlags flags)
     {
@@ -336,10 +336,17 @@ public class LinuxFile
     public FileFlags Flags { get; set; }
     public object? PrivateData { get; set; }
 
+    /// <summary>
+    ///     Increment the reference count (used by dup, SCM_RIGHTS, etc.).
+    /// </summary>
+    public void Get()
+    {
+        Interlocked.Increment(ref _refCount);
+    }
+
     public virtual void Close()
     {
-        if (_isClosed) return;
-        _isClosed = true;
+        if (Interlocked.Decrement(ref _refCount) > 0) return;
 
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put(); // Decrease reference count

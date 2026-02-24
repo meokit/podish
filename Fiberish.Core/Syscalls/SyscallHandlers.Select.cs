@@ -144,13 +144,13 @@ public partial class SyscallManager
 
             var revents = file.Dentry.Inode!.Poll(file, pollEvents);
 
-            if ((revents & PollEvents.POLLIN) != 0 && checkRead)
+            if ((revents & (PollEvents.POLLIN | PollEvents.POLLHUP | PollEvents.POLLERR)) != 0 && checkRead)
             {
                 resIn[wordIndex] |= mask;
                 ready++;
             }
 
-            if ((revents & PollEvents.POLLOUT) != 0 && checkWrite)
+            if ((revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0 && checkWrite)
             {
                 resOut[wordIndex] |= mask;
                 ready++;
