@@ -110,6 +110,14 @@ struct BasicBlock;
         } flags;                            \
     } meta /* 15    */
 
+namespace prefix {
+constexpr uint8_t LOCK = 1 << 0;
+constexpr uint8_t REP = 1 << 1;
+constexpr uint8_t REPNE = 1 << 2;
+constexpr uint8_t OPSIZE = 1 << 6;
+constexpr uint8_t ADDRSIZE = 1 << 7;
+}  // namespace prefix
+
 struct alignas(16) ShimOp {
     COMMON_OP_FIELDS;
 };

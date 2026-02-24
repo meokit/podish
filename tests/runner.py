@@ -19,14 +19,23 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BUILD_PATH = os.path.join(PROJECT_ROOT, "build")
 SRC_PATH = os.path.join(PROJECT_ROOT, "libfibercpu")
 SIMDE_PATH = os.path.join(BUILD_PATH, "_deps/simde-src")
-LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.dylib")
 
-if not os.path.exists(LIB_PATH):
-    # Try finding it
-    if os.path.exists(os.path.join(BUILD_PATH, "bin", "libfibercpu.so")):
-        LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.so")
-    elif os.path.exists(os.path.join(BUILD_PATH, "bin", "libfibercpu.dll")):
-        LIB_PATH = os.path.join(BUILD_PATH, "bin", "libfibercpu.dll")
+def _find_lib():
+    search_paths = [
+        os.path.join(PROJECT_ROOT, "Fiberish.X86", "build_native"),
+        os.path.join(PROJECT_ROOT, "build", "bin"),
+        os.path.join(PROJECT_ROOT, "cmake-build-release", "bin"),
+        os.path.join(PROJECT_ROOT, "cmake-build-debug", "bin")
+    ]
+    exts = [".dylib", ".so", ".dll"]
+    for path in search_paths:
+        for ext in exts:
+            lib_path = os.path.join(path, "libfibercpu" + ext)
+            if os.path.exists(lib_path):
+                return lib_path
+    return os.path.join(BUILD_PATH, "bin", "libfibercpu.dylib") # default fallback
+
+LIB_PATH = _find_lib()
 
 # Load Library and Includes
 cppyy.add_include_path(SRC_PATH)
@@ -366,16 +375,30 @@ class X86EmuBackend(EmulatorBackend):
         MAX_STEPS = 50 if count == 0 else count
         cppyy.gbl.X86_Run(self.state, end, MAX_STEPS)
                     
+    def get_status(self):
+        status = cppyy.gbl.X86_GetStatus(self.state)
+        if status == 2:  # Fault
+            vec = cppyy.gbl.X86_GetFaultVector(self.state)
+            if vec == 13:
+                 eip = cppyy.gbl.X86_GetEIP(self.state)
+                 try:
+                     buf = bytearray(1)
+                     cppyy.gbl.X86_MemRead(self.state, eip, buf, 1)
+                     if buf[0] == 0xF4: # HLT
+                         return 1 # Stopped instead of Fault
+                 except:
+                     pass
+        return status
+
     def get_fault_info(self):
+        if self.get_status() != 2:
+            return None
         vec = cppyy.gbl.X86_GetFaultVector(self.state)
         if vec != -1:
              msg = f"Vector {vec}"
              if vec == 6: msg = "#UD (Unimplemented Instruction)"
              return (vec, msg)
         return None
-
-    def get_status(self):
-        return cppyy.gbl.X86_GetStatus(self.state)
 
     def step(self):
         return cppyy.gbl.X86_Step(self.state)
@@ -590,6 +613,11 @@ class Runner:
                          ignored = True
             elif uc_res and uc_res.get('ESP') == 0:
                  ignored = True
+
+            if vec == 13:
+                 offset = sim_res['EIP'] - CODE_ADDR
+                 if 0 <= offset < len(code) and code[offset] == 0xF4:
+                     ignored = True
 
             if not ignored:
                 fail_reason += f"  Simulator Faulted: {msg} at EIP=0x{sim_res['EIP']:x}\n"

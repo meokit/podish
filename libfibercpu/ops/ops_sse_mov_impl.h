@@ -160,6 +160,35 @@ FORCE_INLINE LogicFlow OpMovq_Store(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+FORCE_INLINE LogicFlow OpMovq2dq(LogicFuncParams) {
+    // F3 0F D6: MOVQ2DQ xmm, mm
+    uint8_t mm_reg = op->modrm & 7;
+    uint8_t xmm_reg = (op->modrm >> 3) & 7;
+
+    uint64_t mm_val = state->ctx.fpu_regs[mm_reg].signif;
+
+    uint64_t* xmm_ptr = (uint64_t*)&state->ctx.xmm[xmm_reg];
+    xmm_ptr[0] = mm_val;
+    xmm_ptr[1] = 0;  // Zero upper bits
+
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMovdq2q(LogicFuncParams) {
+    // F2 0F D6: MOVDQ2Q mm, xmm
+    uint8_t xmm_reg = op->modrm & 7;
+    uint8_t mm_reg = (op->modrm >> 3) & 7;
+
+    uint64_t xmm_low = ((uint64_t*)&state->ctx.xmm[xmm_reg])[0];
+
+    state->ctx.fpu_regs[mm_reg].signif = xmm_low;
+    // Update FPU state as it's an MMX write
+    state->ctx.fpu_top = 0;
+    state->ctx.fpu_tw &= ~(3 << (mm_reg * 2));
+
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpMovdqa_Load(LogicFuncParams) {
     // 66 0F 6F: MOVDQA xmm, xmm/m128
     auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
