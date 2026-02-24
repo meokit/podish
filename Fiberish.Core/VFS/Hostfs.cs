@@ -2,6 +2,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Fiberish.Native;
+using Microsoft.Win32.SafeHandles;
 
 namespace Fiberish.VFS;
 
@@ -550,9 +551,9 @@ public partial class HostInode : Inode
 
     public override int Flock(LinuxFile linuxFile, int operation)
     {
-        if (linuxFile.PrivateData is FileStream fs)
+        if (linuxFile.PrivateData is SafeFileHandle handle)
         {
-            int fd = fs.SafeFileHandle.DangerousGetHandle().ToInt32();
+            int fd = handle.DangerousGetHandle().ToInt32();
             if (flock(fd, operation) != 0)
             {
                 return -Marshal.GetLastPInvokeError();
@@ -623,38 +624,41 @@ public partial class HostInode : Inode
             else if (hasCreate) mode = FileMode.OpenOrCreate;
             else if (hasTrunc) mode = FileMode.Truncate;
 
-            linuxFile.PrivateData = new FileStream(HostPath, mode, access, share);
+            // Use SafeFileHandle with RandomAccess for thread-safe I/O without locks
+            var handle = File.OpenHandle(HostPath, mode, access, share);
+            linuxFile.PrivateData = handle;
         }
     }
 
     public override void Release(LinuxFile linuxFile)
     {
-        if (linuxFile.PrivateData is FileStream fs)
+        if (linuxFile.PrivateData is SafeFileHandle handle)
         {
-            fs.Dispose();
+            handle.Dispose();
             linuxFile.PrivateData = null;
         }
     }
 
     public override void Sync(LinuxFile linuxFile)
     {
-        if (linuxFile.PrivateData is FileStream fs) fs.Flush(true);
+        if (linuxFile.PrivateData is SafeFileHandle handle)
+            RandomAccess.FlushToDisk(handle);
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
 
-        if (linuxFile?.PrivateData is FileStream fs)
-            lock (fs)
-            {
-                if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
-                return fs.Read(buffer);
-            }
+        if (linuxFile?.PrivateData is SafeFileHandle handle)
+        {
+            // RandomAccess.Read is thread-safe and doesn't require locking
+            // It uses the offset parameter directly instead of shared Position state
+            return RandomAccess.Read(handle, buffer, offset);
+        }
 
-        using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        tempFs.Seek(offset, SeekOrigin.Begin);
-        return tempFs.Read(buffer);
+        // Fallback for unopened files
+        using var tempHandle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
@@ -662,28 +666,48 @@ public partial class HostInode : Inode
         if (Type == InodeType.Directory) return 0;
         var append = (linuxFile.Flags & FileFlags.O_APPEND) != 0;
 
-        if (linuxFile?.PrivateData is FileStream fs)
-            lock (fs)
+        if (linuxFile?.PrivateData is SafeFileHandle handle)
+        {
+            if (append)
             {
-                var writeOffset = append ? fs.Length : offset;
-                if (fs.Position != writeOffset) fs.Seek(writeOffset, SeekOrigin.Begin);
-                fs.Write(buffer);
-                Size = (ulong)fs.Length;
-                return buffer.Length;
+                lock (handle)
+                {
+                    long writeOffset = RandomAccess.GetLength(handle);
+                    RandomAccess.Write(handle, buffer, writeOffset);
+                    Size = (ulong)RandomAccess.GetLength(handle);
+                }
             }
+            else
+            {
+                RandomAccess.Write(handle, buffer, offset);
+                Size = (ulong)RandomAccess.GetLength(handle);
+            }
+            return buffer.Length;
+        }
 
-        using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-        var tempWriteOffset = append ? tempFs.Length : offset;
-        tempFs.Seek(tempWriteOffset, SeekOrigin.Begin);
-        tempFs.Write(buffer);
-        Size = (ulong)tempFs.Length;
+        // Fallback for unopened files
+        using var tempHandle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        if (append)
+        {
+            lock (tempHandle) // Note: locking on a local 'using' handle is less effective across threads, but preserves the logic
+            {
+                var tempWriteOffset = RandomAccess.GetLength(tempHandle);
+                RandomAccess.Write(tempHandle, buffer, tempWriteOffset);
+                Size = (ulong)RandomAccess.GetLength(tempHandle);
+            }
+        }
+        else
+        {
+            RandomAccess.Write(tempHandle, buffer, offset);
+            Size = (ulong)RandomAccess.GetLength(tempHandle);
+        }
         return buffer.Length;
     }
 
     public override int Truncate(long size)
     {
-        using var fs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-        fs.SetLength(size);
+        using var handle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        RandomAccess.SetLength(handle, size);
         Size = (ulong)size;
         return 0;
     }
