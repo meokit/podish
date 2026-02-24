@@ -1,4 +1,5 @@
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -26,26 +27,54 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        // Console.WriteLine($"[DEBUG] fcntl64({fd}, {cmd}, {arg})");
+        if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
 
-        if (!sm.FDs.ContainsKey((int)fd)) return -(int)Errno.EBADF;
+        const uint F_DUPFD = 0;
+        const uint F_GETFD = 1;
+        const uint F_SETFD = 2;
+        const uint F_GETFL = 3;
+        const uint F_SETFL = 4;
+        const uint F_DUPFD_CLOEXEC = 1030;
 
-        // Basic implementation for startup
+        const uint FD_CLOEXEC = 1;
+        const int O_ASYNC = 0x2000;
+
         return cmd switch
         {
-            // F_DUPFD
-            0 => sm.AllocFD(sm.FDs[(int)fd], (int)arg),
-            // F_GETFD
-            1 => 0, // No flags
-            // F_SETFD
-            2 => 0, // Ignore FD_CLOEXEC for now
-            // F_GETFL
-            3 => (int)sm.FDs[(int)fd].Flags,
-            // F_SETFL
-            4 => 0, // Update flags (O_APPEND, O_NONBLOCK, etc)
-            // Filter read-only flags
-            // sm.FDs[(int)fd].Flags = (int)arg; 
-            _ => -(int)Errno.EINVAL // Unimplemented fcntl64 cmd (suppress unless verbose)
+            F_DUPFD => sm.AllocFD(file, (int)arg),
+            F_GETFD => (file.Flags & FileFlags.O_CLOEXEC) != 0 ? (int)FD_CLOEXEC : 0,
+            F_SETFD => SetFdFlags(file, arg),
+            F_GETFL => (int)file.Flags,
+            F_SETFL => SetStatusFlags(file, arg),
+            F_DUPFD_CLOEXEC => DupFdCloexec(sm, file, (int)arg),
+            _ => -(int)Errno.EINVAL
         };
+
+        static int SetFdFlags(VFS.LinuxFile file, uint arg)
+        {
+            if ((arg & FD_CLOEXEC) != 0) file.Flags |= FileFlags.O_CLOEXEC;
+            else file.Flags &= ~FileFlags.O_CLOEXEC;
+            return 0;
+        }
+
+        static int SetStatusFlags(VFS.LinuxFile file, uint arg)
+        {
+            // Linux: F_SETFL only updates a subset of status flags.
+            var settableMask = FileFlags.O_APPEND | FileFlags.O_NONBLOCK | (FileFlags)O_ASYNC;
+            var newStatusBits = ((FileFlags)(int)arg) & settableMask;
+            file.Flags = (file.Flags & ~settableMask) | newStatusBits;
+            return 0;
+        }
+
+        static int DupFdCloexec(SyscallManager sm, VFS.LinuxFile file, int minFd)
+        {
+            var newFd = sm.AllocFD(file, minFd);
+            if (newFd < 0) return newFd;
+
+            if (sm.FDs.TryGetValue(newFd, out var newFile))
+                newFile.Flags |= FileFlags.O_CLOEXEC;
+
+            return newFd;
+        }
     }
 }

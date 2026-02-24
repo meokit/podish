@@ -150,6 +150,71 @@ public partial class SyscallManager
         return await SysAccept4(state, a1, a2, a3, 0, 0, 0);
     }
 
+    private static async ValueTask<int> SysGetSockName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var addrPtr = a2;
+        var addrLenPtr = a3;
+
+        if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
+
+        var file = sm.GetFD(fd);
+        if (file == null) return -(int)Errno.EBADF;
+        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
+
+        EndPoint? ep;
+        try
+        {
+            ep = sockInode.NativeSocket.LocalEndPoint;
+        }
+        catch
+        {
+            ep = null;
+        }
+
+        if (ep == null)
+            ep = sockInode.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+                ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                : new IPEndPoint(IPAddress.Any, 0);
+
+        WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
+        return 0;
+    }
+
+    private static async ValueTask<int> SysGetPeerName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var addrPtr = a2;
+        var addrLenPtr = a3;
+
+        if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
+
+        var file = sm.GetFD(fd);
+        if (file == null) return -(int)Errno.EBADF;
+        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
+
+        EndPoint? ep;
+        try
+        {
+            ep = sockInode.NativeSocket.RemoteEndPoint;
+        }
+        catch
+        {
+            ep = null;
+        }
+
+        if (ep == null) return -(int)Errno.ENOTCONN;
+
+        WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
+        return 0;
+    }
+
     private static async ValueTask<int> SysAccept4(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -559,6 +624,8 @@ public partial class SyscallManager
             3 /* SYS_CONNECT */ => await SysConnect(state, args[0], args[1], args[2], 0, 0, 0),
             4 /* SYS_LISTEN */ => await SysListen(state, args[0], args[1], args[2], 0, 0, 0),
             5 /* SYS_ACCEPT */ => await SysAccept(state, args[0], args[1], args[2], 0, 0, 0),
+            6 /* SYS_GETSOCKNAME */ => await SysGetSockName(state, args[0], args[1], args[2], 0, 0, 0),
+            7 /* SYS_GETPEERNAME */ => await SysGetPeerName(state, args[0], args[1], args[2], 0, 0, 0),
             8 /* SYS_SOCKETPAIR */ => await SysSocketPair(state, args[0], args[1], args[2], args[3], 0, 0),
             9 /* SYS_SEND */ => await SysSend(state, args[0], args[1], args[2], args[3], 0, 0),
             10 /* SYS_RECV */ => await SysRecv(state, args[0], args[1], args[2], args[3], 0, 0),

@@ -178,6 +178,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.connect, SysConnect);
         Register(X86SyscallNumbers.listen, SysListen);
         Register(X86SyscallNumbers.accept4, SysAccept4);
+        Register(X86SyscallNumbers.getsockname, SysGetSockName);
+        Register(X86SyscallNumbers.getpeername, SysGetPeerName);
         Register(X86SyscallNumbers.sendto, SysSendTo);
         Register(X86SyscallNumbers.recvfrom, SysRecvFrom);
         Register(X86SyscallNumbers.socketpair, SysSocketPair);

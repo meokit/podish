@@ -951,6 +951,23 @@ public class FiberTask
         // Actually, hardware faults are serious, so Information level is a good middle ground.
         Logger.LogInformation("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.", 
             faultName, CPU.Eip, sig);
+
+        if (vector == 6)
+        {
+            var ip = CPU.Eip;
+            var bytes = new byte[16];
+            if (CPU.CopyFromUser(ip, bytes))
+            {
+                var hex = BitConverter.ToString(bytes).Replace("-", " ");
+                var vma = Process.Mem.FindVMA(ip);
+                Logger.LogInformation("#UD bytes @0x{EIP:X}: {Bytes} (VMA={Vma}, range=0x{Start:X}-0x{End:X})",
+                    ip, hex, vma?.Name ?? "<unknown>", vma?.Start ?? 0, vma?.End ?? 0);
+            }
+            else
+            {
+                Logger.LogInformation("#UD bytes @0x{EIP:X}: <unreadable>", ip);
+            }
+        }
         
         // Deliver the signal!
         PostSignal((int)sig);

@@ -261,6 +261,7 @@ public partial class SyscallManager
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
+        var createdHere = false;
         var dentry = sm.PathWalk(path, startAt);
         if (dentry == null)
         {
@@ -282,6 +283,12 @@ public partial class SyscallManager
                     dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
                     var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
                     parentDentry.Inode.Create(dentry, finalMode, uid, gid);
+                    createdHere = true;
+                }
+                catch (InvalidOperationException)
+                {
+                    // Hostfs uses InvalidOperationException("Exists") for collisions.
+                    return -(int)Errno.EEXIST;
                 }
                 catch
                 {
@@ -302,7 +309,12 @@ public partial class SyscallManager
 
         try
         {
-            var f = new VFS.LinuxFile(dentry, (FileFlags)flags);
+            // If we already created the inode above, opening with O_CREAT|O_EXCL can
+            // retrigger create semantics in backend Open() and fail spuriously.
+            var openFlags = createdHere
+                ? flags & ~(uint)(FileFlags.O_CREAT | FileFlags.O_EXCL | FileFlags.O_TRUNC)
+                : flags;
+            var f = new VFS.LinuxFile(dentry, (FileFlags)openFlags);
             return sm.AllocFD(f);
         }
         catch
@@ -500,7 +512,10 @@ public partial class SyscallManager
         if (f == null) return -(int)Errno.EBADF;
 
         var updatePosition = offset == -1;
-        var currentOffset = updatePosition ? f.Position : offset;
+        var append = (f.Flags & FileFlags.O_APPEND) != 0;
+        var currentOffset = updatePosition
+            ? (append ? (long)(f.Dentry.Inode?.Size ?? 0) : f.Position)
+            : offset;
         var totalWritten = 0;
 
         for (var i = 0; i < iovCnt; i++)

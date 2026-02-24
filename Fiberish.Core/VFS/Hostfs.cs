@@ -604,9 +604,14 @@ public partial class HostInode : Inode
             if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.Write;
             else if ((linuxFile.Flags & FileFlags.O_RDWR) != 0) access = FileAccess.ReadWrite;
 
-            if ((linuxFile.Flags & FileFlags.O_CREAT) != 0) mode = FileMode.OpenOrCreate;
-            if ((linuxFile.Flags & FileFlags.O_TRUNC) != 0) mode = FileMode.Truncate;
-            if ((linuxFile.Flags & FileFlags.O_APPEND) != 0) mode = FileMode.Append;
+            var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
+            var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
+            var hasTrunc = (linuxFile.Flags & FileFlags.O_TRUNC) != 0;
+
+            if (hasCreate && hasExcl) mode = FileMode.CreateNew;
+            else if (hasCreate && hasTrunc) mode = FileMode.Create;
+            else if (hasCreate) mode = FileMode.OpenOrCreate;
+            else if (hasTrunc) mode = FileMode.Truncate;
 
             linuxFile.PrivateData = new FileStream(HostPath, mode, access, share);
         }
@@ -645,18 +650,21 @@ public partial class HostInode : Inode
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
+        var append = (linuxFile.Flags & FileFlags.O_APPEND) != 0;
 
         if (linuxFile?.PrivateData is FileStream fs)
             lock (fs)
             {
-                if (fs.Position != offset) fs.Seek(offset, SeekOrigin.Begin);
+                var writeOffset = append ? fs.Length : offset;
+                if (fs.Position != writeOffset) fs.Seek(writeOffset, SeekOrigin.Begin);
                 fs.Write(buffer);
                 Size = (ulong)fs.Length;
                 return buffer.Length;
             }
 
         using var tempFs = new FileStream(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-        tempFs.Seek(offset, SeekOrigin.Begin);
+        var tempWriteOffset = append ? tempFs.Length : offset;
+        tempFs.Seek(tempWriteOffset, SeekOrigin.Begin);
         tempFs.Write(buffer);
         Size = (ulong)tempFs.Length;
         return buffer.Length;

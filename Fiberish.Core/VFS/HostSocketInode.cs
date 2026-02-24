@@ -3,13 +3,16 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
+using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
 public sealed class HostSocketInode : Inode
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     private readonly SaeaAwaitable _readSaea;
     private readonly SaeaAwaitable _writeSaea;
 
@@ -155,6 +158,24 @@ public sealed class HostSocketInode : Inode
 
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
     {
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        {
+            try
+            {
+                return NativeSocket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                return -(int)Errno.EAGAIN;
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+        }
+
         _readSaea.ResetState();
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
         _readSaea.SocketFlags = (SocketFlags)flags;
@@ -165,9 +186,6 @@ public sealed class HostSocketInode : Inode
                 return MapSocketError(_readSaea.SocketError);
             return _readSaea.BytesTransferred;
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return -(int)Errno.EAGAIN;
 
         await _readSaea;
 
@@ -184,6 +202,26 @@ public sealed class HostSocketInode : Inode
     public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags,
         EndPoint remoteEpTemplate)
     {
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        {
+            try
+            {
+                EndPoint remoteEp = remoteEpTemplate;
+                var n = NativeSocket.ReceiveFrom(buffer, 0, buffer.Length, (SocketFlags)flags, ref remoteEp);
+                return (n, remoteEp);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                return (-(int)Errno.EAGAIN, null);
+            }
+            catch (SocketException ex)
+            {
+                return (MapSocketError(ex.SocketErrorCode), null);
+            }
+        }
+
         _readSaea.ResetState();
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
         _readSaea.SocketFlags = (SocketFlags)flags;
@@ -195,9 +233,6 @@ public sealed class HostSocketInode : Inode
                 return (MapSocketError(_readSaea.SocketError), null);
             return (_readSaea.BytesTransferred, _readSaea.RemoteEndPoint);
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return (-(int)Errno.EAGAIN, null);
 
         await _readSaea;
 
@@ -215,6 +250,24 @@ public sealed class HostSocketInode : Inode
     {
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
 
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        {
+            try
+            {
+                return NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                return -(int)Errno.EAGAIN;
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+        }
+
         _writeSaea.ResetState();
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
         _writeSaea.SocketFlags = (SocketFlags)flags;
@@ -225,9 +278,6 @@ public sealed class HostSocketInode : Inode
                 return MapSocketError(_writeSaea.SocketError);
             return _writeSaea.BytesTransferred;
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return -(int)Errno.EAGAIN;
 
         await _writeSaea;
 
@@ -245,6 +295,24 @@ public sealed class HostSocketInode : Inode
     {
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
 
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        {
+            try
+            {
+                return NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                return -(int)Errno.EAGAIN;
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+        }
+
         _writeSaea.ResetState();
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
         _writeSaea.SocketFlags = (SocketFlags)flags;
@@ -256,9 +324,6 @@ public sealed class HostSocketInode : Inode
                 return MapSocketError(_writeSaea.SocketError);
             return _writeSaea.BytesTransferred;
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return -(int)Errno.EAGAIN;
 
         await _writeSaea;
 
@@ -274,6 +339,27 @@ public sealed class HostSocketInode : Inode
 
     public async ValueTask<int> ConnectAsync(LinuxFile file, EndPoint endpoint)
     {
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        {
+            try
+            {
+                NativeSocket.Connect(endpoint);
+                return 0;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending ||
+                                             ex.SocketErrorCode == SocketError.InProgress ||
+                                             ex.SocketErrorCode == SocketError.AlreadyInProgress)
+            {
+                Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                return -(int)Errno.EINPROGRESS;
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+        }
+
         _writeSaea.ResetState();
         _writeSaea.RemoteEndPoint = endpoint;
 
@@ -283,9 +369,6 @@ public sealed class HostSocketInode : Inode
                 return MapSocketError(_writeSaea.SocketError);
             return 0;
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return -(int)Errno.EINPROGRESS;
 
         await _writeSaea;
 
@@ -301,6 +384,17 @@ public sealed class HostSocketInode : Inode
 
     public async ValueTask<Socket> AcceptAsync(LinuxFile file, int flags)
     {
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+            try
+            {
+                return NativeSocket.Accept();
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                throw new SocketException((int)SocketError.WouldBlock);
+            }
+
         _readSaea.ResetState();
         _readSaea.AcceptSocket = null;
 
@@ -310,9 +404,6 @@ public sealed class HostSocketInode : Inode
                 throw new SocketException((int)_readSaea.SocketError);
             return _readSaea.AcceptSocket!;
         }
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            throw new SocketException((int)SocketError.WouldBlock);
 
         await _readSaea;
 
