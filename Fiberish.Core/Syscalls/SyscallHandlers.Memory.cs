@@ -137,35 +137,7 @@ public partial class SyscallManager
 
         // Invalidate cache since permissions are changing (e.g. RW -> RX)
         sm.Engine.InvalidateRange(addr, len);
-
-        var end = addr + len;
-        var vmas = sm.Mem.FindVMAsInRange(addr, end);
-        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
-
-        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
-        var cursor = addr;
-        foreach (var vma in vmas)
-        {
-            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
-            if (vma.End > cursor) cursor = vma.End;
-            if (cursor >= end) break;
-        }
-        if (cursor < end) return -(int)Errno.ENOMEM;
-
-        foreach (var vma in vmas)
-        {
-            // Update permissions in VMA manager
-            vma.Perms = prot;
-
-            // Update permissions in native MMU for already mapped pages
-            for (var p = Math.Max(vma.Start, addr); p < Math.Min(vma.End, addr + len); p += 4096)
-                if (sm.Engine.IsDirty(p)) // Check if mapped/present using a proxy
-                    // Actually we need a way to update native perms without re-mapping?
-                    // For now, MemMap will update perms in native MMU
-                    sm.Engine.MemMap(p, 4096, (byte)prot);
-        }
-
-        return 0;
+        return sm.Mem.Mprotect(addr, len, prot, sm.Engine);
     }
 
     private static async ValueTask<int> SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

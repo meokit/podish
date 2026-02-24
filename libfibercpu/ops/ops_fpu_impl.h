@@ -62,12 +62,66 @@ inline mem::MemResult<float80> ReadF64(EmuState* state, ShimOp* op, mem::MicroTL
 namespace op {
 
 FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
-    // D8: FPU Arith m32
+    // D8: FPU arithmetic
     uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t mod = op->modrm >> 6;
+    float80& st0 = FpuTop(state, 0);
+
+    // Register form: D8 C0-FF (operate with ST(i))
+    if (mod == 3) {
+        uint8_t sti_idx = op->modrm & 7;
+        float80& sti = FpuTop(state, sti_idx);
+
+        switch (subop) {
+            case 0:  // FADD ST(0), ST(i)
+                st0 = f80_add(st0, sti);
+                break;
+            case 1:  // FMUL ST(0), ST(i)
+                st0 = f80_mul(st0, sti);
+                break;
+            case 2:  // FCOM ST(i)
+                if (f80_lt(st0, sti))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, sti))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                break;
+            case 3:  // FCOMP ST(i)
+                if (f80_lt(st0, sti))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;
+                else if (f80_eq(st0, sti))
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;
+                else
+                    state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+                FpuPop(state);
+                break;
+            case 4:  // FSUB ST(0), ST(i)
+                st0 = f80_sub(st0, sti);
+                break;
+            case 5:  // FSUBR ST(0), ST(i)
+                st0 = f80_sub(sti, st0);
+                break;
+            case 6:  // FDIV ST(0), ST(i)
+                st0 = f80_div(st0, sti);
+                break;
+            case 7:  // FDIVR ST(0), ST(i)
+                st0 = f80_div(sti, st0);
+                break;
+            default:
+                state->fault_vector = 6;
+                if (!state->hooks.on_invalid_opcode(state)) {
+                    state->status = EmuStatus::Fault;
+                }
+                return LogicFlow::ExitOnCurrentEIP;
+        }
+        return LogicFlow::Continue;
+    }
+
+    // Memory form: D8 /r m32fp
     auto val_res = ReadF32(state, op, utlb);
     if (!val_res) return LogicFlow::ExitOnCurrentEIP;
     float80 val = *val_res;
-    float80& st0 = FpuTop(state, 0);
 
     switch (subop) {
         case 0:

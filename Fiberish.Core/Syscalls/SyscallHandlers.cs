@@ -266,5 +266,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.semget, SysSemGet);
         Register(X86SyscallNumbers.semctl, SysSemCtl);
         Register(X86SyscallNumbers.semop, SysSemOp);
+        
+        // Magic Syscall for debugging
+        Register(888, SysMagicDebug);
     }
 }

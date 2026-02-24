@@ -775,4 +775,18 @@ public partial class SyscallManager
 
         return 0;
     }
+
+    private static ValueTask<int> SysMagicDebug(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return ValueTask.FromResult(-(int)Errno.EPERM);
+
+        Logger.LogWarning($"[MAGIC DEBUG] EIP: {sm.Engine.Eip:X8} ARG1: {a1:X8} ARG2: {a2:X8} ARG3: {a3:X8}");
+        if (sm.Engine.Owner is FiberTask task)
+        {
+            Logger.LogWarning($"[MAGIC DEBUG] CPU State: {task.CPU.ToString()}");
+        }
+
+        return ValueTask.FromResult(0);
+    }
 }

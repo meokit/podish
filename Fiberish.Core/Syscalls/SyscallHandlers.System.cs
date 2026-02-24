@@ -23,7 +23,10 @@ public partial class SyscallManager
     {
         var elapsed = Stopwatch.GetTimestamp() - VirtualCpuStartTimestamp;
         if (elapsed <= 0) return 0;
-        return elapsed * VirtualCpuHz / Stopwatch.Frequency;
+        // Avoid 64-bit overflow: (elapsed * 1e9) can overflow quickly on high-frequency timers.
+        var q = elapsed / Stopwatch.Frequency;
+        var r = elapsed % Stopwatch.Frequency;
+        return q * VirtualCpuHz + (r * VirtualCpuHz) / Stopwatch.Frequency;
     }
 
     private static int GetTimesClockTicks()

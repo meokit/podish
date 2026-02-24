@@ -213,6 +213,155 @@ public class VMAManager
         }
     }
 
+    public int Mprotect(uint addr, uint len, Protection prot, Engine engine)
+    {
+        if (len == 0) return 0;
+
+        var end = addr + len;
+        var vmas = FindVMAsInRange(addr, end);
+        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
+
+        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = addr;
+        foreach (var vma in vmas)
+        {
+            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
+            if (vma.End > cursor) cursor = vma.End;
+            if (cursor >= end) break;
+        }
+
+        if (cursor < end) return -(int)Errno.ENOMEM;
+
+        for (var i = 0; i < _vmas.Count; i++)
+        {
+            var vma = _vmas[i];
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd) continue;
+
+            var oldStart = vma.Start;
+            var oldEnd = vma.End;
+            var oldPerms = vma.Perms;
+            var oldOffset = vma.Offset;
+            var oldFileSz = vma.FileSz;
+            var oldViewPageOffset = vma.ViewPageOffset;
+
+            // Fully covered: just flip perms.
+            if (overlapStart == oldStart && overlapEnd == oldEnd)
+            {
+                vma.Perms = prot;
+                continue;
+            }
+
+            // Prepare middle (the protected slice).
+            var midDiff = (long)overlapStart - oldStart;
+            var mid = new VMA
+            {
+                Start = overlapStart,
+                End = overlapEnd,
+                Perms = prot,
+                Flags = vma.Flags,
+                File = vma.File,
+                Offset = vma.File != null ? oldOffset + midDiff : 0,
+                FileSz = 0,
+                Name = vma.Name,
+                MemoryObject = vma.MemoryObject,
+                ViewPageOffset = oldViewPageOffset + ((uint)midDiff / LinuxConstants.PageSize)
+            };
+            vma.MemoryObject.AddRef();
+            if (vma.File != null)
+            {
+                var remain = oldFileSz - midDiff;
+                if (remain < 0) remain = 0;
+                var midLen = (long)(mid.End - mid.Start);
+                mid.FileSz = Math.Min(remain, midLen);
+            }
+
+            // Left tail stays in the existing VMA.
+            var hasLeft = overlapStart > oldStart;
+            var hasRight = overlapEnd < oldEnd;
+
+            if (hasLeft)
+            {
+                vma.Start = oldStart;
+                vma.End = overlapStart;
+                vma.Perms = oldPerms;
+                if (vma.File != null)
+                {
+                    var leftLen = (long)(vma.End - vma.Start);
+                    vma.FileSz = Math.Min(oldFileSz, leftLen);
+                }
+            }
+
+            // Right tail (if any) keeps old perms.
+            VMA? right = null;
+            if (hasRight)
+            {
+                var rightDiff = (long)overlapEnd - oldStart;
+                right = new VMA
+                {
+                    Start = overlapEnd,
+                    End = oldEnd,
+                    Perms = oldPerms,
+                    Flags = vma.Flags,
+                    File = vma.File,
+                    Offset = vma.File != null ? oldOffset + rightDiff : 0,
+                    FileSz = 0,
+                    Name = vma.Name,
+                    MemoryObject = vma.MemoryObject,
+                    ViewPageOffset = oldViewPageOffset + ((uint)rightDiff / LinuxConstants.PageSize)
+                };
+                vma.MemoryObject.AddRef();
+                if (vma.File != null)
+                {
+                    var remain = oldFileSz - rightDiff;
+                    if (remain < 0) remain = 0;
+                    var rightLen = (long)(right.End - right.Start);
+                    right.FileSz = Math.Min(remain, rightLen);
+                }
+            }
+
+            if (!hasLeft)
+            {
+                // Reuse current slot for middle when there is no left tail.
+                vma.Start = mid.Start;
+                vma.End = mid.End;
+                vma.Perms = mid.Perms;
+                vma.File = mid.File;
+                vma.Offset = mid.Offset;
+                vma.FileSz = mid.FileSz;
+                vma.Name = mid.Name;
+                vma.ViewPageOffset = mid.ViewPageOffset;
+                // Drop the temporary extra ref held by mid.
+                mid.MemoryObject.Release();
+
+                if (right != null)
+                {
+                    _vmas.Insert(i + 1, right);
+                    i++;
+                }
+            }
+            else
+            {
+                // Keep left in current slot; insert middle and optional right.
+                _vmas.Insert(i + 1, mid);
+                if (right != null)
+                    _vmas.Insert(i + 2, right);
+                i += right != null ? 2 : 1;
+            }
+        }
+
+        // Apply native permission changes page-wise for the requested interval.
+        for (var p = addr; p < end; p += LinuxConstants.PageSize)
+            if (engine.IsDirty(p))
+            {
+                var v = FindVMA(p);
+                if (v != null) engine.MemMap(p, LinuxConstants.PageSize, (byte)v.Perms);
+            }
+
+        return 0;
+    }
+
     public void Clear(Engine engine)
     {
         foreach (var vma in _vmas)
