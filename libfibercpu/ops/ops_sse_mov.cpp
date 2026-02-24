@@ -12,11 +12,20 @@ void RegisterSseMovOps() {
     g_Handlers[0x117] = DispatchWrapper<OpGroup_Mov17>;
     g_Handlers[0x150] = DispatchWrapper<OpMovmsk_Unified>;
     g_Handlers[0x12B] = DispatchWrapper<OpMovnt_Sse>;
-    g_Handlers[0x1E7] = DispatchWrapper<OpMovntdq>;
+    // 0F E7 is MOVNTQ (MMX) without prefix; MOVNTDQ is 66-prefixed.
+    RegisterSseOp<OpMovntdq>(0x1E7);
     g_Handlers[0x1C3] = DispatchWrapper<OpMovnti>;
-    g_Handlers[0x1F7] = DispatchWrapper<OpMaskmovdqu>;
-    g_Handlers[0x16E] = DispatchWrapper<OpMovd_Load>;
-    g_Handlers[0x17E] = DispatchWrapper<OpMovd_Store>;
+    // 0F F7 is MASKMOVQ (MMX) without prefix; MASKMOVDQU is 66-prefixed.
+    RegisterSseOp<OpMaskmovdqu>(0x1F7);
+    // 0F 6E / 0F 7E are MMX without prefix, SSE with 66 prefix.
+    // Keep MMX base handlers from RegisterMmxOps and add SSE specializations only.
+    RegisterSseOp<OpMovd_Load>(0x16E);   // 66 0F 6E: MOVD xmm, r/m32
+    RegisterSseOp<OpMovd_Store>(0x17E);  // 66 0F 7E: MOVD r/m32, xmm
+
+    SpecCriteria criteria_7e_f3;
+    criteria_7e_f3.prefix_mask = prefix::REP;
+    criteria_7e_f3.prefix_val = prefix::REP;
+    RegisterSpecializedHandler(0x17E, criteria_7e_f3, (HandlerFunc)DispatchWrapper<OpMovd_Store>);
 
     // 0F 6F: MOVQ (MMX, No Prefix) / MOVDQA (66) / MOVDQU (F3)
     // We register specialized handlers for SSE versions to avoid overwriting MMX

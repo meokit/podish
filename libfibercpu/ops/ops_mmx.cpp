@@ -42,6 +42,8 @@ void RegisterMmxOps() {
     // Multiply
     g_Handlers[0x1D5] = DispatchWrapper<OpPmullw_Mmx>;   // 0F D5: PMULLW
     g_Handlers[0x1E5] = DispatchWrapper<OpPmulhw_Mmx>;   // 0F E5: PMULHW
+    g_Handlers[0x1E4] = DispatchWrapper<OpPmulhuw_Mmx>;  // 0F E4: PMULHUW
+    g_Handlers[0x1F4] = DispatchWrapper<OpPmuludq_Mmx>;  // 0F F4: PMULUDQ
     g_Handlers[0x1F5] = DispatchWrapper<OpPmaddwd_Mmx>;  // 0F F5: PMADDWD
 
     // =========================================================================================
@@ -61,6 +63,10 @@ void RegisterMmxOps() {
     g_Handlers[0x164] = DispatchWrapper<OpPcmpgtb_Mmx>;  // 0F 64: PCMPGTB
     g_Handlers[0x165] = DispatchWrapper<OpPcmpgtw_Mmx>;  // 0F 65: PCMPGTW
     g_Handlers[0x166] = DispatchWrapper<OpPcmpgtd_Mmx>;  // 0F 66: PCMPGTD
+    g_Handlers[0x1DA] = DispatchWrapper<OpPminub_Mmx>;   // 0F DA: PMINUB
+    g_Handlers[0x1DE] = DispatchWrapper<OpPmaxub_Mmx>;   // 0F DE: PMAXUB
+    g_Handlers[0x1EA] = DispatchWrapper<OpPminsw_Mmx>;   // 0F EA: PMINSW
+    g_Handlers[0x1EE] = DispatchWrapper<OpPmaxsw_Mmx>;   // 0F EE: PMAXSW
 
     // =========================================================================================
     // Shift Operations (Register)
@@ -84,6 +90,7 @@ void RegisterMmxOps() {
     // =========================================================================================
     // Pack/Unpack Operations
     // =========================================================================================
+    g_Handlers[0x170] = DispatchWrapper<OpPshufw_Mmx>;     // 0F 70: PSHUFW mm, mm/m64, imm8
     g_Handlers[0x163] = DispatchWrapper<OpPacksswb_Mmx>;   // 0F 63: PACKSSWB
     g_Handlers[0x167] = DispatchWrapper<OpPackuswb_Mmx>;   // 0F 67: PACKUSWB
     g_Handlers[0x16B] = DispatchWrapper<OpPackssdw_Mmx>;   // 0F 6B: PACKSSDW
@@ -93,6 +100,16 @@ void RegisterMmxOps() {
     g_Handlers[0x160] = DispatchWrapper<OpPunpcklbw_Mmx>;  // 0F 60: PUNPCKLBW
     g_Handlers[0x161] = DispatchWrapper<OpPunpcklwd_Mmx>;  // 0F 61: PUNPCKLWD
     g_Handlers[0x162] = DispatchWrapper<OpPunpckldq_Mmx>;  // 0F 62: PUNPCKLDQ
+
+    // MMX extensions
+    g_Handlers[0x1E0] = DispatchWrapper<OpPavgb_Mmx>;     // 0F E0: PAVGB
+    g_Handlers[0x1E3] = DispatchWrapper<OpPavgw_Mmx>;     // 0F E3: PAVGW
+    g_Handlers[0x1F6] = DispatchWrapper<OpPsadbw_Mmx>;    // 0F F6: PSADBW
+    g_Handlers[0x1C4] = DispatchWrapper<OpPinsrw_Mmx>;    // 0F C4: PINSRW
+    g_Handlers[0x1C5] = DispatchWrapper<OpPextrw_Mmx>;    // 0F C5: PEXTRW
+    g_Handlers[0x1D7] = DispatchWrapper<OpPmovmskb_Mmx>;  // 0F D7: PMOVMSKB
+    g_Handlers[0x1E7] = DispatchWrapper<OpMovntq_Mmx>;    // 0F E7: MOVNTQ
+    g_Handlers[0x1F7] = DispatchWrapper<OpMaskmovq_Mmx>;  // 0F F7: MASKMOVQ
 }
 
 }  // namespace fiberish

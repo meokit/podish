@@ -124,6 +124,28 @@ FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, ShimOp* op
     }
 }
 
+// Read 16-bit value (from register or memory)
+template <OpOnTLBMiss Strategy>
+FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+    uint8_t mod = (op->modrm >> 6) & 3;
+    uint8_t rm = op->modrm & 7;
+
+    if (mod == 3) {
+        return static_cast<uint16_t>(GetReg(state, rm) & 0xFFFF);
+    } else {
+        uint32_t addr = ComputeLinearAddress(state, op);
+        if constexpr (Strategy == OpOnTLBMiss::Blocking) {
+            return state->mmu.read<uint16_t, false>(addr, utlb, op);
+        } else {
+            auto value = state->mmu.read<uint16_t, true>(addr, utlb, op);
+            if (!value) {
+                value = state->request_read_and_check_pending<uint16_t>(addr, op->next_eip);
+            }
+            return value;
+        }
+    }
+}
+
 // Write 32-bit value for MOVD (to register or memory)
 template <OpOnTLBMiss Strategy>
 FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, ShimOp* op, uint32_t val, mem::MicroTLB* utlb) {
@@ -486,6 +508,44 @@ FORCE_INLINE LogicFlow OpPmaddwd_Mmx(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+// PMULUDQ - Multiply Packed Unsigned Doubleword
+FORCE_INLINE LogicFlow OpPmuludq_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+
+    // MMX PMULUDQ multiplies low 32-bit unsigned integers and stores 64-bit product.
+    uint64_t prod = static_cast<uint64_t>(dst.u32[0]) * static_cast<uint64_t>(src.u32[0]);
+    simde__m64_private out{};
+    out.u64[0] = prod;
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PMULHUW - Multiply Packed Unsigned Words (High)
+FORCE_INLINE LogicFlow OpPmulhuw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 4; ++i) {
+        uint32_t prod = static_cast<uint32_t>(dst.u16[i]) * static_cast<uint32_t>(src.u16[i]);
+        out.u16[i] = static_cast<uint16_t>((prod >> 16) & 0xFFFF);
+    }
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
 // =========================================================================================
 // Logical Operations
 // =========================================================================================
@@ -631,6 +691,201 @@ FORCE_INLINE LogicFlow OpPcmpgtd_Mmx(LogicFuncParams) {
     simde__m64 result = simde_mm_cmpgt_pi32(dst, *src_res);
     SetMmxReg(state, reg, result);
 
+    return LogicFlow::Continue;
+}
+
+// PMINUB - Packed Minimum Unsigned Byte
+FORCE_INLINE LogicFlow OpPminub_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 8; ++i) out.u8[i] = dst.u8[i] < src.u8[i] ? dst.u8[i] : src.u8[i];
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PMAXUB - Packed Maximum Unsigned Byte
+FORCE_INLINE LogicFlow OpPmaxub_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 8; ++i) out.u8[i] = dst.u8[i] > src.u8[i] ? dst.u8[i] : src.u8[i];
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PMINSW - Packed Minimum Signed Word
+FORCE_INLINE LogicFlow OpPminsw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 4; ++i) out.i16[i] = dst.i16[i] < src.i16[i] ? dst.i16[i] : src.i16[i];
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PMAXSW - Packed Maximum Signed Word
+FORCE_INLINE LogicFlow OpPmaxsw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 4; ++i) out.i16[i] = dst.i16[i] > src.i16[i] ? dst.i16[i] : src.i16[i];
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PAVGB - Average Packed Unsigned Bytes
+FORCE_INLINE LogicFlow OpPavgb_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 8; ++i) {
+        uint16_t sum = static_cast<uint16_t>(dst.u8[i]) + static_cast<uint16_t>(src.u8[i]) + 1;
+        out.u8[i] = static_cast<uint8_t>(sum >> 1);
+    }
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PAVGW - Average Packed Unsigned Words
+FORCE_INLINE LogicFlow OpPavgw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private out{};
+    for (int i = 0; i < 4; ++i) {
+        uint32_t sum = static_cast<uint32_t>(dst.u16[i]) + static_cast<uint32_t>(src.u16[i]) + 1;
+        out.u16[i] = static_cast<uint16_t>(sum >> 1);
+    }
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PSADBW - Sum of Absolute Differences (Packed Unsigned Bytes)
+FORCE_INLINE LogicFlow OpPsadbw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; ++i) {
+        int diff = static_cast<int>(dst.u8[i]) - static_cast<int>(src.u8[i]);
+        sum += static_cast<uint32_t>(diff < 0 ? -diff : diff);
+    }
+    simde__m64_private out{};
+    out.u64[0] = static_cast<uint64_t>(sum);
+    SetMmxReg(state, reg, simde__m64_from_private(out));
+
+    return LogicFlow::Continue;
+}
+
+// PINSRW - Insert Word
+FORCE_INLINE LogicFlow OpPinsrw_Mmx(LogicFuncParams) {
+    uint8_t mm_reg = (op->modrm >> 3) & 7;
+    uint8_t lane = static_cast<uint8_t>(imm) & 0x3;
+
+    auto src_res = ReadWordModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, mm_reg));
+    dst.u16[lane] = *src_res;
+    SetMmxReg(state, mm_reg, simde__m64_from_private(dst));
+
+    return LogicFlow::Continue;
+}
+
+// PEXTRW - Extract Word
+FORCE_INLINE LogicFlow OpPextrw_Mmx(LogicFuncParams) {
+    uint8_t gpr = (op->modrm >> 3) & 7;
+    uint8_t lane = static_cast<uint8_t>(imm) & 0x3;
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    SetReg(state, gpr, static_cast<uint32_t>(src.u16[lane]));
+
+    return LogicFlow::Continue;
+}
+
+// PMOVMSKB - Move Byte Mask
+FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
+    uint8_t gpr = (op->modrm >> 3) & 7;
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    uint32_t mask = 0;
+    for (int i = 0; i < 8; ++i) {
+        mask |= ((src.u8[i] >> 7) & 1u) << i;
+    }
+    SetReg(state, gpr, mask);
+    return LogicFlow::Continue;
+}
+
+// MOVNTQ - Non-Temporal Store Quadword (hint ignored)
+FORCE_INLINE LogicFlow OpMovntq_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    simde__m64 val = GetMmxReg(state, reg);
+    auto res = WriteMmxModRM<OpOnTLBMiss::Retry>(state, op, val, utlb);
+    if (!res) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
+}
+
+// MASKMOVQ - Masked Store Byte
+FORCE_INLINE LogicFlow OpMaskmovq_Mmx(LogicFuncParams) {
+    simde__m64 val = GetMmxReg(state, (op->modrm >> 3) & 7);
+    simde__m64 mask = GetMmxReg(state, op->modrm & 7);
+    uint32_t addr = GetReg(state, fiberish::EDI);
+
+    simde__m64_private vp = simde__m64_to_private(val);
+    simde__m64_private mp = simde__m64_to_private(mask);
+
+    for (int i = 0; i < 8; ++i) {
+        if (mp.u8[i] & 0x80) {
+            if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + i, vp.u8[i], utlb, op)) {
+                return LogicFlow::ExitOnCurrentEIP;
+            }
+        }
+    }
     return LogicFlow::Continue;
 }
 
@@ -885,6 +1140,27 @@ FORCE_INLINE LogicFlow OpGroup_Mmx_Shift_Imm_Q(LogicFuncParams) {
 // =========================================================================================
 // Pack/Unpack Operations
 // =========================================================================================
+
+// PSHUFW - Shuffle Packed Words
+FORCE_INLINE LogicFlow OpPshufw_Mmx(LogicFuncParams) {
+    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t imm8 = static_cast<uint8_t>(imm);
+
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    simde__m64_private src = simde__m64_to_private(*src_res);
+    simde__m64_private dst{};
+
+    // dst.word[i] = src.word[imm8[2*i+1:2*i]]
+    dst.u16[0] = src.u16[(imm8 >> 0) & 0x3];
+    dst.u16[1] = src.u16[(imm8 >> 2) & 0x3];
+    dst.u16[2] = src.u16[(imm8 >> 4) & 0x3];
+    dst.u16[3] = src.u16[(imm8 >> 6) & 0x3];
+
+    SetMmxReg(state, reg, simde__m64_from_private(dst));
+    return LogicFlow::Continue;
+}
 
 // PACKSSWB - Pack Signed Words to Signed Bytes
 FORCE_INLINE LogicFlow OpPacksswb_Mmx(LogicFuncParams) {
