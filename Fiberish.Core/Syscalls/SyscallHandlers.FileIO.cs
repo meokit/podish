@@ -262,7 +262,8 @@ public partial class SyscallManager
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
         var createdHere = false;
-        var dentry = sm.PathWalk(path, startAt);
+        var noFollow = (((FileFlags)flags) & FileFlags.O_NOFOLLOW) != 0;
+        var dentry = sm.PathWalk(path, startAt, !noFollow);
         if (dentry == null)
         {
             if ((flags & (uint)FileFlags.O_CREAT) != 0)
@@ -302,6 +303,9 @@ public partial class SyscallManager
         }
         else
         {
+            if (noFollow && dentry.Inode?.Type == InodeType.Symlink)
+                return -(int)Errno.ELOOP;
+
             // File exists - check for O_EXCL
             if ((flags & (uint)FileFlags.O_CREAT) != 0 && (flags & (uint)FileFlags.O_EXCL) != 0)
                 return -(int)Errno.EEXIST;

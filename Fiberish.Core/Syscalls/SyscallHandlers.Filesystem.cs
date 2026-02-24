@@ -11,6 +11,27 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
+    private static int MapFsExceptionToErrno(Exception ex, Errno fallback = Errno.EIO)
+    {
+        return ex switch
+        {
+            FileNotFoundException => -(int)Errno.ENOENT,
+            DirectoryNotFoundException => -(int)Errno.ENOENT,
+            UnauthorizedAccessException => -(int)Errno.EACCES,
+            PathTooLongException => -(int)Errno.EINVAL,
+            InvalidOperationException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) =>
+                -(int)Errno.EEXIST,
+            InvalidOperationException ioe
+                when ioe.Message.Contains("Not a directory", StringComparison.OrdinalIgnoreCase) =>
+                -(int)Errno.ENOTDIR,
+            InvalidOperationException ioe
+                when ioe.Message.Contains("Is a directory", StringComparison.OrdinalIgnoreCase) =>
+                -(int)Errno.EISDIR,
+            IOException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) => -(int)Errno.EEXIST,
+            _ => -(int)fallback
+        };
+    }
+
     private static async ValueTask<int> SysLink(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -182,7 +203,7 @@ public partial class SyscallManager
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
         // Check if directory exists and is empty
-        var targetDentry = sm.PathWalk(path);
+        var targetDentry = sm.PathWalk(path, followLink: false);
         if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
         if (targetDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
@@ -196,9 +217,9 @@ public partial class SyscallManager
             parentDentry.Children.Remove(name);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.EACCES;
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
         }
     }
 
@@ -249,6 +270,8 @@ public partial class SyscallManager
         var dirfd = (int)a1;
         var path = sm.ReadString(a2);
         var flags = a3;
+        const uint AT_REMOVEDIR = 0x200;
+        if ((flags & ~AT_REMOVEDIR) != 0) return -(int)Errno.EINVAL;
 
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -265,17 +288,25 @@ public partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
         if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
 
-        if ((flags & 0x200) != 0) // AT_REMOVEDIR
+        var targetDentry = sm.PathWalk(path, startAt, followLink: false);
+        if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
+
+        if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
+        {
+            if (targetDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             try
             {
                 parentDentry.Inode.Rmdir(name);
                 parentDentry.Children.Remove(name);
                 return 0;
             }
-            catch
+            catch (Exception ex)
             {
-                return -(int)Errno.EACCES;
+                return MapFsExceptionToErrno(ex, Errno.EACCES);
             }
+        }
+
+        if (targetDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
         try
         {
@@ -283,9 +314,9 @@ public partial class SyscallManager
             parentDentry.Children.Remove(name);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.ENOENT;
+            return MapFsExceptionToErrno(ex, Errno.ENOENT);
         }
     }
 
@@ -365,6 +396,8 @@ public partial class SyscallManager
         var path = sm.ReadString(a2);
         var statAddr = a3;
         var flags = a4;
+        var knownFlags = LinuxConstants.AT_EMPTY_PATH | LinuxConstants.AT_SYMLINK_NOFOLLOW;
+        if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
 
         if (path == "" && (flags & 0x1000) != 0) // AT_EMPTY_PATH
             return await SysFstat64(state, a1, a3, 0, 0, 0, 0);
@@ -377,7 +410,8 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        var dentry = sm.PathWalk(path, startAt);
+        var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
+        var dentry = sm.PathWalk(path, startAt, followLink);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(sm, dentry.Inode);
@@ -408,6 +442,8 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var dirfd = (int)a1;
         var path = sm.ReadString(a2);
+        var flags = a5;
+        if ((flags & ~LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0) return -(int)Errno.EINVAL;
         Dentry? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
@@ -416,7 +452,8 @@ public partial class SyscallManager
             startAt = fdir.Dentry;
         }
 
-        var dentry = sm.PathWalk(path, startAt);
+        var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
+        var dentry = sm.PathWalk(path, startAt, followLink);
         if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
 
         var uid = (int)a3;
@@ -749,8 +786,23 @@ public partial class SyscallManager
 
     private static async ValueTask<int> SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        // Since we don't have symlinks yet, behave like chown
-        return await SysChown(state, a1, a2, a3, a4, a5, a6);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var path = sm.ReadString(a1);
+        var uid = (int)a2;
+        var gid = (int)a3;
+
+        var dentry = sm.PathWalk(path, followLink: false);
+        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        var t = sm.Engine.Owner as FiberTask;
+        if (t == null) return -(int)Errno.EPERM;
+        var allowed = DacPolicy.CanChown(t.Process, dentry.Inode, uid, gid);
+        if (allowed != 0) return allowed;
+
+        return ApplyOwnershipChange(dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -814,15 +866,19 @@ public partial class SyscallManager
         var parentDentry = sm.PathWalk(parentPath);
         if (parentDentry == null) return -(int)Errno.ENOENT;
 
+        var targetDentry = sm.PathWalk(path, followLink: false);
+        if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
+        if (targetDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+
         try
         {
             parentDentry.Inode!.Unlink(name);
             parentDentry.Children.Remove(name);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.ENOENT;
+            return MapFsExceptionToErrno(ex, Errno.ENOENT);
         }
     }
 
@@ -1186,15 +1242,15 @@ public partial class SyscallManager
 
     private static async ValueTask<int> SysStat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return ImplStat64(state, a1, a2);
+        return ImplStat64(state, a1, a2, true);
     }
 
     private static async ValueTask<int> SysLstat64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return ImplStat64(state, a1, a2);
+        return ImplStat64(state, a1, a2, false);
     }
 
-    private static int ImplStat64(IntPtr state, uint ptrPath, uint ptrStat)
+    private static int ImplStat64(IntPtr state, uint ptrPath, uint ptrStat, bool followLink)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -1202,7 +1258,7 @@ public partial class SyscallManager
         if (path == null) return -(int)Errno.EFAULT;
 
         Logger.LogInformation($"[Stat64] Path='{path}'");
-        var dentry = sm.PathWalk(path);
+        var dentry = sm.PathWalk(path, followLink: followLink);
         if (dentry == null || dentry.Inode == null)
         {
             Logger.LogWarning($"[Stat64] PathWalk failed for '{path}'");
@@ -1251,9 +1307,10 @@ public partial class SyscallManager
             parentDentry.Inode.Symlink(dentry, target, uid, gid);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.EACCES;
+            Logger.LogDebug(ex, "symlink(target={Target}, linkpath={LinkPath}) failed", target, linkpath);
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
         }
     }
 
@@ -1338,9 +1395,11 @@ public partial class SyscallManager
             parentDentry.Inode.Symlink(dentry, target, uid, gid);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.EACCES;
+            Logger.LogDebug(ex, "symlinkat(target={Target}, dirfd={Dirfd}, linkpath={LinkPath}) failed", target, dirfd,
+                linkpath);
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
         }
     }
 

@@ -28,6 +28,7 @@ public enum FileFlags
     O_APPEND = 1024,
     O_NONBLOCK = 2048,
     O_DIRECTORY = 65536,
+    O_NOFOLLOW = 131072,
     O_CLOEXEC = 524288
 }
 

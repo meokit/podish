@@ -476,27 +476,35 @@ public partial class HostInode : Inode
     public override void Unlink(string name)
     {
         var subPath = Path.Combine(HostPath, name);
-        if (File.Exists(subPath))
+        var info = new FileInfo(subPath);
+        var sb = (HostSuperBlock)SuperBlock;
+
+        // unlink(2) deletes the directory entry itself and must not follow symlinks.
+        if (info.LinkTarget != null || File.Exists(subPath))
         {
-            var sb = (HostSuperBlock)SuperBlock;
             var dentry = sb.GetDentry(subPath, name, null);
             File.Delete(subPath);
             dentry?.Inode?.Put();
             sb.RemoveDentry(subPath);
+            return;
         }
+
+        if (Directory.Exists(subPath)) throw new InvalidOperationException("Is a directory");
+        throw new FileNotFoundException("Entry not found", subPath);
     }
 
     public override void Rmdir(string name)
     {
         var subPath = Path.Combine(HostPath, name);
-        if (Directory.Exists(subPath))
-        {
-            var sb = (HostSuperBlock)SuperBlock;
-            var dentry = sb.GetDentry(subPath, name, null);
-            Directory.Delete(subPath, true);
-            dentry?.Inode?.Put();
-            sb.RemoveDentry(subPath);
-        }
+        var info = new FileInfo(subPath);
+        if (info.LinkTarget != null) throw new InvalidOperationException("Not a directory");
+        if (!Directory.Exists(subPath)) throw new DirectoryNotFoundException(subPath);
+
+        var sb = (HostSuperBlock)SuperBlock;
+        var dentry = sb.GetDentry(subPath, name, null);
+        Directory.Delete(subPath, false);
+        dentry?.Inode?.Put();
+        sb.RemoveDentry(subPath);
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -580,6 +588,8 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var newPath = Path.Combine(HostPath, dentry.Name);
+        if (File.Exists(newPath) || Directory.Exists(newPath) || new FileInfo(newPath).LinkTarget != null)
+            throw new InvalidOperationException("Exists");
 
         File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
