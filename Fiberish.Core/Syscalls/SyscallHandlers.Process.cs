@@ -1,12 +1,10 @@
 using System.Buffers.Binary;
+using System.Text;
 using Fiberish.Auth.Cred;
 using Fiberish.Core;
-using Fiberish.Loader;
 using Fiberish.Native;
 using Fiberish.VFS;
-using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
-using File = System.IO.File;
 
 namespace Fiberish.Syscalls;
 
@@ -182,23 +180,20 @@ public partial class SyscallManager
                         }
 
                         // Reap only if WNOWAIT is not set
-                        if (!noReap)
-                        {
-                            currentProc.Children.Remove(childPid);
-                            // Also remove from global table? Or let it be garbage collected if no other refs?
-                            // If we remove from global table, PID can be reused properly (if allocator reuses).
-                            // Current allocator is monotonic increment.
-                        }
-
+                        if (!noReap) currentProc.Children.Remove(childPid);
+                        // Also remove from global table? Or let it be garbage collected if no other refs?
+                        // If we remove from global table, PID can be reused properly (if allocator reuses).
+                        // Current allocator is monotonic increment.
                         return childPid;
                     }
-                    
+
                     if (wantStopped && childProc.State == ProcessState.Stopped && childProc.HasWaitableStop)
                     {
                         if (statusPtr != 0)
                         {
                             var stBuf = new byte[4];
-                            BinaryPrimitives.WriteInt32LittleEndian(stBuf, EncodeWaitStoppedStatus(childProc.StopSignal));
+                            BinaryPrimitives.WriteInt32LittleEndian(stBuf,
+                                EncodeWaitStoppedStatus(childProc.StopSignal));
                             if (!sm.Engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
 
@@ -218,7 +213,6 @@ public partial class SyscallManager
                         childProc.HasWaitableContinue = false;
                         return childPid;
                     }
-
                 }
             }
 
@@ -226,7 +220,7 @@ public partial class SyscallManager
 
             if (hang) return 0;
 
-            await new ChildStateAwaitable(currentProc, pidVal);
+            await new ChildStateAwaitable(currentProc, pidVal, wantStopped, wantContinued);
             if (fiberTask.HasUnblockedPendingSignal())
             {
                 // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
@@ -298,7 +292,7 @@ public partial class SyscallManager
 
                         return 0; // Success
                     }
-                    
+
                     if (wstopped && childProc.State == ProcessState.Stopped && childProc.HasWaitableStop)
                     {
                         if (infop != 0)
@@ -334,7 +328,6 @@ public partial class SyscallManager
                         if (!wnowait) childProc.HasWaitableContinue = false;
                         return 0;
                     }
-
                 }
             }
 
@@ -411,7 +404,6 @@ public partial class SyscallManager
     private static SigInfo BuildSigchldInfoForExit(Process childProc)
     {
         if (!childProc.ExitedBySignal)
-        {
             return new SigInfo
             {
                 Signo = (int)Signal.SIGCHLD,
@@ -419,7 +411,6 @@ public partial class SyscallManager
                 Status = childProc.ExitStatus,
                 Code = 1 // CLD_EXITED
             };
-        }
 
         return new SigInfo
         {
@@ -457,7 +448,7 @@ public partial class SyscallManager
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
 
         // Resolve path via VFS/Host
-        var (dentry, guestPath) = sm.ResolvePath(filename, isHostRelativeDefault: false);
+        var (dentry, guestPath) = sm.ResolvePath(filename, false);
 
         if (dentry == null)
         {
@@ -470,11 +461,11 @@ public partial class SyscallManager
         // Linux binfmt_script: if the file starts with "#!", parse interpreter path
         // and re-execute with the interpreter as the program.
         var headerBuf = new byte[256];
-        int headerLen = 0;
+        var headerLen = 0;
         if (dentry.Inode != null)
         {
             // Use Inode.Read() so this works for any filesystem, not just HostInode
-            var tmpFile = new Fiberish.VFS.LinuxFile(dentry, FileFlags.O_RDONLY);
+            var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
             headerLen = dentry.Inode.Read(tmpFile, headerBuf.AsSpan(), 0);
             if (headerLen < 0) headerLen = 0;
         }
@@ -484,7 +475,7 @@ public partial class SyscallManager
             // Parse the shebang line: #!<interpreter> [optional-arg]\n
             var lineEnd = Array.IndexOf(headerBuf, (byte)'\n', 2);
             if (lineEnd < 0) lineEnd = headerLen;
-            var shebangLine = System.Text.Encoding.UTF8.GetString(headerBuf, 2, lineEnd - 2).Trim();
+            var shebangLine = Encoding.UTF8.GetString(headerBuf, 2, lineEnd - 2).Trim();
 
             string interpPath;
             string? interpArg = null;
@@ -500,11 +491,12 @@ public partial class SyscallManager
                 interpPath = shebangLine;
             }
 
-            Logger.LogInformation("[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
+            Logger.LogInformation(
+                "[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
                 interpPath, interpArg ?? "(none)", guestPath);
 
             // Resolve interpreter
-            var (interpDentry, interpGuestPath) = sm.ResolvePath(interpPath, isHostRelativeDefault: false);
+            var (interpDentry, interpGuestPath) = sm.ResolvePath(interpPath);
             if (interpDentry == null)
             {
                 Logger.LogWarning("[SysExecve] Shebang interpreter '{Interp}' not found", interpPath);
@@ -551,7 +543,8 @@ public partial class SyscallManager
                 newArgs.AddRange(origArgs.Skip(1));
 
             // Close O_CLOEXEC files
-            var toCloseShebang = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
+            var toCloseShebang = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key)
+                .ToList();
             foreach (var fd in toCloseShebang) sm.FreeFD(fd);
 
             // Reset signals
@@ -651,10 +644,11 @@ public partial class SyscallManager
         task.AltStackFlags = 0;
 
         // Load new ELF via Process.Exec (Handles memory clearing + vDSO setup + ELF loading)
-        Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec", guestPath, args.Count,
+        Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",
+            guestPath, args.Count,
             envs.Count);
         foreach (var arg in args) Logger.LogDebug("  arg: {Arg}", arg);
-        
+
         try
         {
             task.Process.Exec(dentry, guestPath, [.. args], [.. envs]);
@@ -672,7 +666,7 @@ public partial class SyscallManager
         {
             Logger.LogWarning("Execve failed: {Message}", ex.Message);
             return -(int)Errno.ENOENT;
-        } 
+        }
     }
 
     private static async ValueTask<int> SysSetSid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -760,10 +754,7 @@ public partial class SyscallManager
         var newLimitPtr = a3;
         var oldLimitPtr = a4;
 
-        if (pid != 0 && (sm.GetTID == null || pid != sm.GetTID(sm.Engine)))
-        {
-            return -(int)Errno.EPERM;
-        }
+        if (pid != 0 && (sm.GetTID == null || pid != sm.GetTID(sm.Engine))) return -(int)Errno.EPERM;
 
         if (oldLimitPtr != 0)
         {
@@ -782,10 +773,7 @@ public partial class SyscallManager
         if (sm == null) return ValueTask.FromResult(-(int)Errno.EPERM);
 
         Logger.LogWarning($"[MAGIC DEBUG] EIP: {sm.Engine.Eip:X8} ARG1: {a1:X8} ARG2: {a2:X8} ARG3: {a3:X8}");
-        if (sm.Engine.Owner is FiberTask task)
-        {
-            Logger.LogWarning($"[MAGIC DEBUG] CPU State: {task.CPU.ToString()}");
-        }
+        if (sm.Engine.Owner is FiberTask task) Logger.LogWarning($"[MAGIC DEBUG] CPU State: {task.CPU}");
 
         return ValueTask.FromResult(0);
     }

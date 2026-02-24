@@ -166,7 +166,7 @@ public class TtyDiscipline
 
     public int Read(Span<byte> buffer, FileFlags flags)
     {
-        var bgCheck = CheckBackgroundJob(isRead: true);
+        var bgCheck = CheckBackgroundJob(true);
         if (bgCheck < 0) return bgCheck;
 
         _logger.LogInformation(
@@ -194,7 +194,7 @@ public class TtyDiscipline
 
     public int Write(ReadOnlySpan<byte> buffer)
     {
-        var bgCheck = CheckBackgroundJob(isRead: false);
+        var bgCheck = CheckBackgroundJob(false);
         if (bgCheck < 0) return bgCheck;
 
         return OutputProcess(TtyEndpointKind.Stdout, buffer);
@@ -219,20 +219,17 @@ public class TtyDiscipline
                     _broadcaster.SignalProcessGroup(process.PGID, 21);
                     return -(int)Errno.ERESTARTSYS; // Wait for signal to be handled
                 }
+
                 return -(int)Errno.EIO; // If ignored/blocked and orphaned, usually EIO
             }
-            else
-            {
-                // Background write: send SIGTTOU only if TOSTOP is set
-                if ((_lflag & TOSTOP) != 0)
+
+            // Background write: send SIGTTOU only if TOSTOP is set
+            if ((_lflag & TOSTOP) != 0)
+                if (!task.IsSignalIgnoredOrBlocked(22)) // SIGTTOU = 22
                 {
-                    if (!task.IsSignalIgnoredOrBlocked(22)) // SIGTTOU = 22
-                    {
-                        _broadcaster.SignalProcessGroup(process.PGID, 22);
-                        return -(int)Errno.ERESTARTSYS;
-                    }
+                    _broadcaster.SignalProcessGroup(process.PGID, 22);
+                    return -(int)Errno.ERESTARTSYS;
                 }
-            }
         }
 
         return 0; // Allowed
@@ -423,6 +420,16 @@ public class TtyDiscipline
     public void Input(byte[] input)
     {
         Device.EnqueueInput(input);
+    }
+
+    /// <summary>
+    ///     Inject terminal-generated response bytes (e.g. CSI queries) with priority.
+    ///     This bypasses the hardware queue to avoid races against concurrently typed input.
+    /// </summary>
+    public void InjectTerminalResponse(byte[] input)
+    {
+        if (input.Length == 0) return;
+        _inq.WriteFront(input);
     }
 
     /// <summary>
@@ -1009,6 +1016,25 @@ internal sealed class TtyInputQueue
             }
 
             if (canonicalReady) _hasCanonicalLine = true;
+        }
+
+        DataAvailable.Set();
+    }
+
+    public void WriteFront(IEnumerable<byte> bytes)
+    {
+        lock (_lock)
+        {
+            var existing = new List<byte>(_queue.Count);
+            while (_queue.Count > 0) existing.Add(_queue.Dequeue());
+
+            foreach (var b in bytes)
+            {
+                _queue.Enqueue(b);
+                if (b == 10) _hasCanonicalLine = true;
+            }
+
+            foreach (var b in existing) _queue.Enqueue(b);
         }
 
         DataAvailable.Set();

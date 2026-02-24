@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
@@ -66,7 +67,7 @@ internal class Program
             argsArgument
         };
 
-        rootCommand.SetHandler(async (context) =>
+        rootCommand.SetHandler(async context =>
         {
             var rootfs = context.ParseResult.GetValueForOption(rootOption)!;
             var verbose = context.ParseResult.GetValueForOption(verboseOption);
@@ -96,10 +97,7 @@ internal class Program
         // Initialize Logging
         Logging.LoggerFactory = LoggerFactory.Create(builder =>
         {
-            if (verbose || trace)
-            {
-                builder.AddSimpleFile("emulator.log");
-            }
+            if (verbose || trace) builder.AddSimpleFile("emulator.log");
             builder.SetMinimumLevel(trace ? LogLevel.Trace : verbose ? LogLevel.Information : LogLevel.Warning);
         });
         Logger = Logging.CreateLogger<Program>();
@@ -132,6 +130,7 @@ internal class Program
             var driver = new ConsoleTtyDriver();
             var broadcaster = new SchedulerSignalBroadcaster(scheduler);
             tty = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
+            driver.BindTty(tty);
 
             // Set TTY on scheduler so it can check for pending input
             scheduler.Tty = tty;
@@ -155,31 +154,26 @@ internal class Program
 
             // Register SIGWINCH handler (Unix only)
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
                 try
                 {
                     // Initial size update
                     try
                     {
                         if (!Console.IsOutputRedirected)
-                        {
                             tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
-                        }
                     }
                     catch
                     {
                         // Ignore
                     }
 
-                    sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, (context) =>
+                    sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, context =>
                     {
                         context.Cancel = true;
                         try
                         {
                             if (!Console.IsOutputRedirected)
-                            {
                                 tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
-                            }
                         }
                         catch
                         {
@@ -191,7 +185,6 @@ internal class Program
                 {
                     // Ignore platform not supported etc.
                 }
-            }
         }
 
         try
@@ -200,12 +193,9 @@ internal class Program
             var runtime = KernelRuntime.Bootstrap(rootfs, trace, overlay, tty);
 
             // Resolve exe path for the initial process
-            var (dentry, guestPath) = runtime.Syscalls.ResolvePath(exe, isHostRelativeDefault: true);
+            var (dentry, guestPath) = runtime.Syscalls.ResolvePath(exe, true);
 
-            if (dentry == null)
-            {
-                throw new FileNotFoundException($"Could not find executable in VFS: {exe}");
-            }
+            if (dentry == null) throw new FileNotFoundException($"Could not find executable in VFS: {exe}");
 
             var mainTask = ProcessFactory.CreateInitProcess(runtime, dentry, guestPath, fullArgs, envs, scheduler, tty);
 
@@ -261,10 +251,11 @@ internal class Program
             {
                 // We use ReadAsync but Console Stream on some platforms might block even with cancellation?
                 // On .NET 8 it should be better.
-                int read = await stdin.ReadAsync(buffer, token);
+                var read = await stdin.ReadAsync(buffer, token);
                 if (read == 0) break; // EOF
-                
-                Logger.LogDebug("[InputLoop] Received {Count} bytes: {Bytes}", read, BitConverter.ToString(buffer, 0, read));
+
+                Logger.LogDebug("[InputLoop] Received {Count} bytes: {Bytes}", read,
+                    BitConverter.ToString(buffer, 0, read));
                 tty.Input(buffer.AsSpan(0, read).ToArray());
             }
         }
@@ -281,11 +272,30 @@ internal class Program
 
     private class ConsoleTtyDriver : ITtyDriver
     {
+        private static readonly ILogger TtyWriteLogger = Logging.CreateLogger<ConsoleTtyDriver>();
         private readonly Stream _stderr = Console.OpenStandardError();
         private readonly Stream _stdout = Console.OpenStandardOutput();
+        private TtyDiscipline? _tty;
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {
+            // Diagnose terminal query stalls: many shells issue CSI 6n and wait for a response.
+            if (buffer.Length >= 4 && buffer[0] == 0x1B && buffer[1] == (byte)'[')
+            {
+                var isDsrCursorQuery = buffer.Length == 4 && buffer[2] == (byte)'6' && buffer[3] == (byte)'n';
+                if (isDsrCursorQuery)
+                {
+                    TtyWriteLogger.LogInformation("[ConsoleTtyDriver] OUT CSI 6n (cursor position query)");
+                    RespondCursorPosition();
+                }
+                else
+                {
+                    var seq = Encoding.ASCII.GetString(buffer.ToArray());
+                    TtyWriteLogger.LogDebug("[ConsoleTtyDriver] OUT ESC sequence: {Seq}",
+                        seq.Replace("\u001b", "<ESC>"));
+                }
+            }
+
             var stream = kind == TtyEndpointKind.Stderr ? _stderr : _stdout;
             stream.Write(buffer);
             stream.Flush(); // Flush immediately for TTY behavior
@@ -296,6 +306,42 @@ internal class Program
         {
             _stdout.Flush();
             _stderr.Flush();
+        }
+
+        public void BindTty(TtyDiscipline tty)
+        {
+            _tty = tty;
+        }
+
+        private void RespondCursorPosition()
+        {
+            var tty = _tty;
+            if (tty == null) return;
+
+            var (row, col, isReal) = TryGetCursorPosition();
+            var response = Encoding.ASCII.GetBytes($"\u001b[{row};{col}R");
+            tty.InjectTerminalResponse(response);
+
+            if (isReal)
+                TtyWriteLogger.LogInformation("[ConsoleTtyDriver] IN CSI {Row};{Col}R (real cursor position)", row,
+                    col);
+            else
+                TtyWriteLogger.LogInformation("[ConsoleTtyDriver] IN CSI {Row};{Col}R (fallback cursor position)", row,
+                    col);
+        }
+
+        private static (int Row, int Col, bool IsReal) TryGetCursorPosition()
+        {
+            try
+            {
+                if (Console.IsOutputRedirected) return (1, 1, false);
+                var pos = Console.GetCursorPosition();
+                return (Math.Max(1, pos.Top + 1), Math.Max(1, pos.Left + 1), true);
+            }
+            catch
+            {
+                return (1, 1, false);
+            }
         }
     }
 

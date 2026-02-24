@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using Fiberish.Auth.Cred;
 using Fiberish.Core;
@@ -9,7 +10,6 @@ using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 using Process = System.Diagnostics.Process;
-using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -26,7 +26,7 @@ public partial class SyscallManager
         // Avoid 64-bit overflow: (elapsed * 1e9) can overflow quickly on high-frequency timers.
         var q = elapsed / Stopwatch.Frequency;
         var r = elapsed % Stopwatch.Frequency;
-        return q * VirtualCpuHz + (r * VirtualCpuHz) / Stopwatch.Frequency;
+        return q * VirtualCpuHz + r * VirtualCpuHz / Stopwatch.Frequency;
     }
 
     private static int GetTimesClockTicks()
@@ -264,10 +264,14 @@ public partial class SyscallManager
                 _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
+
             return AwaitResult.Completed;
         }
 
-        public PauseAwaiter GetAwaiter() => this;
+        public PauseAwaiter GetAwaiter()
+        {
+            return this;
+        }
     }
 
     private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -376,7 +380,11 @@ public partial class SyscallManager
         if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         var nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
-        
+
+        if (sm.Engine.Owner is FiberTask ownerTask)
+            Logger.LogInformation("[SysNanosleep] pid={Pid} tid={Tid} req={{sec={Sec}, nsec={Nsec}}}",
+                ownerTask.Process.TGID, ownerTask.TID, sec, nsec);
+
         var totalMs = sec * 1000L + nsec / 1000000L;
         if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1; // Minimum 1ms tick if requested
         if (totalMs < 0) return 0;
@@ -391,7 +399,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysClockNanosleepTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockNanosleepTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -446,7 +455,7 @@ public partial class SyscallManager
 
             var scheduler = KernelScheduler.Current!;
             _task.Continuation = continuation;
-            
+
             var timer = scheduler.ScheduleTimer(_totalMs, () =>
             {
                 if (_task.WakeReason == WakeReason.None)
@@ -476,11 +485,15 @@ public partial class SyscallManager
                 _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
+
             _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
 
-        public NanosleepAwaiter GetAwaiter() => this;
+        public NanosleepAwaiter GetAwaiter()
+        {
+            return this;
+        }
     }
 
     private static async ValueTask<int> SysNice(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -489,19 +502,22 @@ public partial class SyscallManager
         return 0; // Success
     }
 
-    private static async ValueTask<int> SysGetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // Simple stub: return default priority (20)
         return 20;
     }
 
-    private static async ValueTask<int> SysSetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // Simple stub: success
         return 0;
     }
 
-    private static async ValueTask<int> SysPersonality(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysPersonality(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // personality(0xffffffff) returns current, otherwise sets.
         // For now, always return PER_LINUX (0)
@@ -517,16 +533,12 @@ public partial class SyscallManager
         var nodePtr = a2;
 
         if (cpuPtr != 0)
-        {
             if (!sm.Engine.CopyToUser(cpuPtr, BitConverter.GetBytes(0u)))
                 return -(int)Errno.EFAULT;
-        }
 
         if (nodePtr != 0)
-        {
             if (!sm.Engine.CopyToUser(nodePtr, BitConverter.GetBytes(0u)))
                 return -(int)Errno.EFAULT;
-        }
 
         return 0;
     }
@@ -548,6 +560,7 @@ public partial class SyscallManager
                     task.Process.Name = name;
                     return 0;
                 }
+
                 return -(int)Errno.EFAULT;
 
             case LinuxConstants.PR_GET_NAME:
@@ -564,7 +577,8 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> SysGetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -574,13 +588,13 @@ public partial class SyscallManager
         if (!sm.Engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
 
         // var entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
-        
+
         // Return whatever was previously set via SetThreadArea
         // We simplified set_thread_area to just set GS base, so we don't track entry indices properly.
         // Just return current GS base as base_addr.
         var baseAddr = sm.Engine.GetSegBase(Seg.GS);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), baseAddr);
-        
+
         if (!sm.Engine.CopyToUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
         return 0;
     }
@@ -692,7 +706,7 @@ public partial class SyscallManager
         // We act as if we are urandom/random always ready (except strict GRND_RANDOM might block, but we simulate non-blocking behavior for now).
 
         var buffer = new byte[count];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+        RandomNumberGenerator.Fill(buffer);
 
         if (!sm.Engine.CopyToUser(bufAddr, buffer)) return -(int)Errno.EFAULT;
 

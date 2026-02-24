@@ -85,7 +85,9 @@ public class AsyncWaitQueue
                 scheduler?.Schedule(continuation, context);
             }
             else
+            {
                 _waiters.Add((continuation, context, scheduler!));
+            }
         }
     }
 
@@ -125,11 +127,15 @@ public readonly struct WaitQueueAwaiter(AsyncWaitQueue queue) : INotifyCompletio
             task.WakeReason = WakeReason.None;
             return AwaitResult.Interrupted;
         }
+
         if (task != null) task.WakeReason = WakeReason.None;
         return AwaitResult.Completed;
     }
 
-    public WaitQueueAwaiter GetAwaiter() => this;
+    public WaitQueueAwaiter GetAwaiter()
+    {
+        return this;
+    }
 }
 
 public static class SchedulerUtils
@@ -183,6 +189,7 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
             task.WakeReason = WakeReason.None;
             return AwaitResult.Interrupted;
         }
+
         if (task != null) task.WakeReason = WakeReason.None;
         return AwaitResult.Completed;
     }
@@ -197,6 +204,7 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
         }
     }
 }
+
 /// <summary>
 ///     Awaitable for waiting on child process state changes.
 ///     Used by wait4() to avoid busy-polling.
@@ -205,33 +213,42 @@ public readonly struct ChildStateAwaitable
 {
     private readonly Process _parent;
     private readonly int _targetPid; // -1=any, 0=same pgid, >0=specific, <-1=pgid
+    private readonly bool _wantStopped;
+    private readonly bool _wantContinued;
     private readonly KernelScheduler _scheduler;
     private readonly FiberTask _task;
 
-    public ChildStateAwaitable(Process parent, int targetPid)
+    public ChildStateAwaitable(Process parent, int targetPid, bool wantStopped = true, bool wantContinued = true)
     {
         _parent = parent;
         _targetPid = targetPid;
+        _wantStopped = wantStopped;
+        _wantContinued = wantContinued;
         _scheduler = KernelScheduler.Current ?? throw new InvalidOperationException("No active KernelScheduler");
         _task = _scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
     }
 
     public ChildStateAwaiter GetAwaiter()
     {
-        return new ChildStateAwaiter(_parent, _targetPid, _scheduler, _task);
+        return new ChildStateAwaiter(_parent, _targetPid, _wantStopped, _wantContinued, _scheduler, _task);
     }
 
     public readonly struct ChildStateAwaiter : INotifyCompletion
     {
         private readonly Process _parent;
         private readonly int _targetPid;
+        private readonly bool _wantStopped;
+        private readonly bool _wantContinued;
         private readonly KernelScheduler _scheduler;
         private readonly FiberTask _task;
 
-        public ChildStateAwaiter(Process parent, int targetPid, KernelScheduler scheduler, FiberTask task)
+        public ChildStateAwaiter(Process parent, int targetPid, bool wantStopped, bool wantContinued,
+            KernelScheduler scheduler, FiberTask task)
         {
             _parent = parent;
             _targetPid = targetPid;
+            _wantStopped = wantStopped;
+            _wantContinued = wantContinued;
             _scheduler = scheduler;
             _task = task;
         }
@@ -247,10 +264,11 @@ public readonly struct ChildStateAwaitable
                     if (childProc == null) continue;
                     if (!MatchesTarget(childPid, childProc)) continue;
                     if (childProc.State == ProcessState.Zombie ||
-                        childProc.State == ProcessState.Stopped ||
-                        childProc.HasWaitableContinue)
+                        (_wantStopped && childProc.HasWaitableStop) ||
+                        (_wantContinued && childProc.HasWaitableContinue))
                         return true;
                 }
+
                 return false;
             }
         }
@@ -298,6 +316,7 @@ public readonly struct ChildStateAwaitable
                 _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
+
             _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
