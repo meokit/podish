@@ -266,7 +266,12 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.semget, SysSemGet);
         Register(X86SyscallNumbers.semctl, SysSemCtl);
         Register(X86SyscallNumbers.semop, SysSemOp);
-        
+
+        // New Mount API
+        Register(X86SyscallNumbers.open_tree, SysOpenTree);
+        Register(X86SyscallNumbers.move_mount, SysMoveMount);
+        Register(X86SyscallNumbers.mount_setattr, SysMountSetattr);
+
         // Magic Syscall for debugging
         Register(888, SysMagicDebug);
     }

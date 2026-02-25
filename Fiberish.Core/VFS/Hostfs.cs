@@ -389,38 +389,57 @@ public partial class HostInode : Inode
         Type = type;
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
-
-        if (type == InodeType.Symlink)
-        {
-            Size = 0; // Readlink will compute it if needed
-            // Fill stat if possible
-            try
-            {
-                var sinfo = new FileInfo(hostPath);
-                MTime = sinfo.LastWriteTime;
-                ATime = sinfo.LastAccessTime;
-                CTime = sinfo.CreationTime;
-            }
-            catch
-            {
-                /* ignore */
-            }
-
-            return;
-        }
-
-        var info = isDir ? (FileSystemInfo)new DirectoryInfo(hostPath) : new FileInfo(hostPath);
-        if (info.Exists)
-        {
-            // Fill stat
-            if (!isDir) Size = (ulong)((FileInfo)info).Length;
-            MTime = info.LastWriteTime;
-            ATime = info.LastAccessTime;
-            CTime = info.CreationTime;
-        }
     }
 
     public string HostPath { get; set; }
+
+    public override ulong Size
+    {
+        get
+        {
+            if (Type == InodeType.Directory) return 4096;
+            if (Type == InodeType.Symlink) return 0;
+            try
+            {
+                return (ulong)new FileInfo(HostPath).Length;
+            }
+            catch
+            {
+                return base.Size;
+            }
+        }
+        set => base.Size = value;
+    }
+
+    public override DateTime MTime
+    {
+        get
+        {
+            try { return File.GetLastWriteTime(HostPath); }
+            catch { return base.MTime; }
+        }
+        set => base.MTime = value;
+    }
+
+    public override DateTime ATime
+    {
+        get
+        {
+            try { return File.GetLastAccessTime(HostPath); }
+            catch { return base.ATime; }
+        }
+        set => base.ATime = value;
+    }
+
+    public override DateTime CTime
+    {
+        get
+        {
+            try { return File.GetCreationTime(HostPath); }
+            catch { return base.CTime; }
+        }
+        set => base.CTime = value;
+    }
 
     public void RefreshProjectedMetadata(int queryUid, int queryGid)
     {

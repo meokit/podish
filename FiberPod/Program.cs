@@ -201,14 +201,14 @@ internal class Program
         PosixSignalRegistration? sigwinch = null;
         var isInteractive = useTty && !Console.IsInputRedirected;
 
+        var driver = new ConsoleTtyDriver();
+        var broadcaster = new SchedulerSignalBroadcaster(scheduler);
+        ttyDiag = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
+        driver.BindTty(ttyDiag);
+        scheduler.Tty = ttyDiag;
+
         if (isInteractive)
         {
-            var driver = new ConsoleTtyDriver();
-            var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-            ttyDiag = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
-            driver.BindTty(ttyDiag);
-            scheduler.Tty = ttyDiag;
-
             stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
             
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -306,6 +306,11 @@ internal class Program
         }
         finally
         {
+            // Give pending I/O tasks a little time to flush, especially in non-interactive tests
+            try { Task.Delay(50).Wait(); } catch { }
+            Console.Out.Flush();
+            Console.Error.Flush();
+
             stdinStream?.Dispose();
             
             if (inputCts != null)

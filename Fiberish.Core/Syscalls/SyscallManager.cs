@@ -65,6 +65,17 @@ public partial class SyscallManager
             var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", options);
 
             Root = overlaySb.Root;
+
+            // Create root mount
+            RootMount = new Mount(overlaySb, Root, null, null)
+            {
+                Source = "overlay",
+                FsType = "overlay",
+                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
+            };
+            Root.Mount = RootMount;
+            Mounts.Add(RootMount);
+
             MountList.Add(new MountInfo
             {
                 Source = "overlay", Target = "/", FsType = "overlay",
@@ -74,6 +85,17 @@ public partial class SyscallManager
         else
         {
             Root = lowerSb.Root;
+
+            // Create root mount
+            RootMount = new Mount(lowerSb, Root, null, null)
+            {
+                Source = hostRoot,
+                FsType = "hostfs",
+                Options = "rw,relatime"
+            };
+            Root.Mount = RootMount;
+            Mounts.Add(RootMount);
+
             MountList.Add(new MountInfo
             {
                 Source = hostRoot, Target = "/", FsType = "hostfs",
@@ -212,6 +234,16 @@ public partial class SyscallManager
     public bool Strace { get; set; }
     public List<MountInfo> MountList { get; } = [];
 
+    /// <summary>
+    /// List of Mount objects for the new Mount API.
+    /// </summary>
+    public List<Mount> Mounts { get; } = [];
+
+    /// <summary>
+    /// The root mount (for the filesystem namespace).
+    /// </summary>
+    public Mount? RootMount { get; private set; }
+
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
 
@@ -245,17 +277,41 @@ public partial class SyscallManager
             SigReturnAddr, RtSigReturnAddr);
     }
 
-    private static void EnsureDirectory(Dentry parent, string name)
+    private static Dentry EnsureDirectory(Dentry parent, string name)
     {
+        if (parent.Children.TryGetValue(name, out var cached)) return cached;
+
         var dentry = parent.Inode!.Lookup(name);
         if (dentry == null)
         {
             dentry = new Dentry(name, null, parent, parent.SuperBlock);
-            parent.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
+            try
+            {
+                parent.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("Failed to create directory {Name}: {Error}", name, ex.Message);
+                throw;
+            }
         }
         else if (dentry.Inode?.Type != InodeType.Directory)
         {
             throw new Exception($"Path /{name} exists but is not a directory");
+        }
+
+        parent.Children[name] = dentry;
+        return dentry;
+    }
+
+    private class PlaceholderInode : Inode
+    {
+        public PlaceholderInode(SuperBlock sb)
+        {
+            SuperBlock = sb;
+            Type = InodeType.File;
+            Mode = 0;
+            MTime = ATime = CTime = DateTime.Now;
         }
     }
 
@@ -267,27 +323,49 @@ public partial class SyscallManager
         var current = Root;
         for (int i = 0; i < parts.Length - 1; i++)
         {
-            EnsureDirectory(current, parts[i]);
-            current = current.Inode!.Lookup(parts[i])!;
+            current = EnsureDirectory(current, parts[i]);
         }
 
         var name = parts[^1];
-        // Create the mount point (file or directory) based on hostPath type
-        if (Directory.Exists(hostPath))
+        var isFile = File.Exists(hostPath);
+        var isDir = Directory.Exists(hostPath);
+
+        // Create the mount point if it doesn't exist
+        Dentry? finalDentry = null;
+        if (isDir)
         {
-            EnsureDirectory(current, name);
+            finalDentry = EnsureDirectory(current, name);
         }
-        else if (File.Exists(hostPath))
+        else if (isFile)
         {
-            var dentry = current.Inode!.Lookup(name);
-            if (dentry == null)
+            // For file mounts, create an empty file as mount point if it doesn't exist
+            if (current.Children.TryGetValue(name, out var cachedDentry))
             {
-                dentry = new Dentry(name, null, current, current.SuperBlock);
-                current.Inode.Create(dentry, 0x1FF, 0, 0); // 777
+                finalDentry = cachedDentry;
+                if (finalDentry.Inode?.Type != InodeType.File) throw new Exception($"Path /{name} exists but is not a file");
             }
-            else if (dentry.Inode?.Type != InodeType.File)
+            else
             {
-                throw new Exception($"Path /{name} exists but is not a file");
+                finalDentry = current.Inode!.Lookup(name);
+                if (finalDentry == null)
+                {
+                    finalDentry = new Dentry(name, null, current, current.SuperBlock);
+                    try
+                    {
+                        current.Inode.Create(finalDentry, 0x1FF, 0, 0); // 777
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning("Failed to create file mount point {Name}: {Error}", name, ex.Message);
+                        // If Create fails, try using the dentry anyway - the mount will provide the content
+                        finalDentry.Instantiate(new PlaceholderInode(current.SuperBlock));
+                    }
+                }
+                else if (finalDentry.Inode?.Type != InodeType.File)
+                {
+                    throw new Exception($"Path /{name} exists but is not a file");
+                }
+                current.Children[name] = finalDentry;
             }
         }
         else
@@ -322,14 +400,75 @@ public partial class SyscallManager
             parent.Children[name] = dentry; // Cache it so PathWalk finds the mounted dentry
         }
 
-        // Mount it
+        // Determine parent mount
+        var parentMount = dentry.Mount ?? RootMount;
+
+        // Create new Mount object
+        var mount = new Mount(sb, sb.Root, dentry, parentMount)
+        {
+            Source = source,
+            FsType = fstype,
+            Options = options
+        };
+
+        // Mount it (update dentry)
         dentry.IsMounted = true;
         dentry.MountRoot = sb.Root;
+        dentry.Mount = mount;
         sb.Root.MountedAt = dentry;
 
         // Track mount
+        Mounts.Add(mount);
         var targetPath = targetOverride ?? BuildPath(dentry);
         AddMountInfo(source, targetPath, fstype, options);
+    }
+
+    /// <summary>
+    /// Attach a detached Mount (from open_tree/move_mount) to a dentry.
+    /// </summary>
+    public int AttachMount(Mount mount, Dentry mountPoint)
+    {
+        if (mount.IsAttached)
+            return -(int)Errno.EBUSY;
+
+        // Check if mount point is already mounted
+        if (mountPoint.IsMounted)
+            return -(int)Errno.EBUSY;
+
+        // Determine parent mount
+        var parentMount = mountPoint.Mount ?? RootMount;
+
+        // Attach the mount
+        mount.Attach(mountPoint, parentMount);
+        Mounts.Add(mount);
+        mount.Get(); // Increase ref count for the attached mount
+
+        // Track mount info
+        var targetPath = BuildPath(mountPoint);
+        AddMountInfo(mount.Source, targetPath, mount.FsType, mount.Options);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Find the mount at a given path.
+    /// </summary>
+    public Mount? FindMount(Dentry dentry)
+    {
+        // Walk up the tree to find the mount
+        Dentry? current = dentry;
+        while (current != null)
+        {
+            if (current.Mount != null)
+                return current.Mount;
+            if (current.IsMounted && current.MountRoot != null)
+            {
+                // Legacy: find mount by MountRoot
+                return Mounts.FirstOrDefault(m => m.Root == current.MountRoot);
+            }
+            current = current.Parent;
+        }
+        return RootMount;
     }
 
     internal void AddMountInfo(string source, string target, string fsType, string options)

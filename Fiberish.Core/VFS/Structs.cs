@@ -282,6 +282,7 @@ public struct DirectoryEntry
 public class Dentry
 {
     private static long _nextId;
+    private int _refCount = 1;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
@@ -310,6 +311,25 @@ public class Dentry
 
     // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
     public Dentry? MountedAt { get; set; }
+
+    // Reference to the Mount object (for new Mount API)
+    public Mount? Mount { get; set; }
+
+    /// <summary>
+    /// Increment reference count.
+    /// </summary>
+    public void Get()
+    {
+        Interlocked.Increment(ref _refCount);
+    }
+
+    /// <summary>
+    /// Decrement reference count.
+    /// </summary>
+    public void Put()
+    {
+        Interlocked.Decrement(ref _refCount);
+    }
 
     public void Instantiate(Inode inode)
     {

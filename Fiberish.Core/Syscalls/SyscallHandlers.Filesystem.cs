@@ -1423,79 +1423,86 @@ public partial class SyscallManager
         if (targetDentry.MountedAt != null)
             targetDentry = targetDentry.MountedAt;
 
-        SuperBlock? newSb = null;
-
-        // Handle MS_BIND (Bind Mount)
+        // Handle MS_BIND (Bind Mount) - New implementation using Mount object
         if ((flags & LinuxConstants.MS_BIND) != 0)
         {
             var srcDentry = sm.PathWalk(source);
+            if (srcDentry == null || srcDentry.Inode == null)
+                return -(int)Errno.ENOENT;
 
-            // If binding a host path, we might need a Hostfs SB?
-            // Bind mount usually just attaching the existing dentry tree to a new location.
-            // But our VFS 'mount' logic expects a SuperBlock root.
-            // If we bind a directory, we effectively mount the SB of that directory?
-            // Or we treat it as a new "BindFS"?
-            // Existing logic created a new Hostfs SB rooted at source.
-            // We'll preserve that behavior for HostFS compatibility.
+            // Check if target is already mounted
+            if (targetDentry.IsMounted)
+                return -(int)Errno.EBUSY;
 
-            if (srcDentry != null && srcDentry.Inode is HostInode hi)
+            // Create a bind mount - reuse the source dentry directly
+            // No need to create a new SuperBlock
+            var bindParentMount = sm.FindMount(targetDentry) ?? sm.RootMount;
+
+            var bindMount = new Mount(srcDentry.SuperBlock, srcDentry, targetDentry, bindParentMount)
             {
-                var hostRoot = hi.HostPath;
-                var fsType = FileSystemRegistry.Get("hostfs");
-                if (fsType != null)
-                    try
-                    {
-                        newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, hostRoot, dataString);
-                    }
-                    catch
-                    {
-                    }
-            }
-            // For internal bind mounts (Tmpfs -> Tmpfs), we might need a different approach (BindDentry?), 
-            // strictly following VFS struct, MountRoot points to a SB Root. 
-            // We can't easily "bind" a subdirectory as a Root of a new SB without a "BindFileSystem" wrapper.
-            // Fallback: only support Hostfs bind for now as before.
-        }
-        else
-        {
-            var fsType = FileSystemRegistry.Get(fstype);
-            if (fsType != null)
-            {
-                // Special handling for Overlay Options parsing could go here if we support dynamic overlay mounts
-                object? dataObj = dataString;
+                Source = source,
+                FsType = "none", // bind mounts show as "none" in /proc/mounts
+                Flags = flags & LinuxConstants.MS_RDONLY // Store RDONLY flag
+            };
+            bindMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
 
-                try
-                {
-                    newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, dataObj);
-                }
-                catch (Exception e)
-                {
-                    Logger.LogWarning($"Mount failed for {fstype}: {e.Message}");
-                    return -(int)Errno.EINVAL;
-                }
-            }
-            else
-            {
-                return -(int)Errno.ENODEV;
-            }
-        }
-
-
-        if (newSb != null)
-        {
-            var targetPath = BuildPath(targetDentry);
+            // Update dentry mount info
             targetDentry.IsMounted = true;
-            targetDentry.MountRoot = newSb.Root;
-            newSb.Root.MountedAt = targetDentry;
+            targetDentry.MountRoot = srcDentry;
+            targetDentry.Mount = bindMount;
+            srcDentry.MountedAt = targetDentry;
 
-            var src = string.IsNullOrEmpty(source) ? fstype : source;
-            var opts = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
-            if (!string.IsNullOrWhiteSpace(dataString)) opts = $"{opts},{dataString}";
-            sm.AddMountInfo(src, targetPath, fstype, opts);
+            // Track mount
+            sm.Mounts.Add(bindMount);
+            var targetPath = BuildPath(targetDentry);
+            sm.AddMountInfo(source, targetPath, "none", bindMount.Options);
+
             return 0;
         }
 
-        return -22; // EINVAL
+        // Regular mount (non-bind)
+        var fsType = FileSystemRegistry.Get(fstype);
+        if (fsType == null)
+            return -(int)Errno.ENODEV;
+
+        object? dataObj = dataString;
+        SuperBlock? newSb;
+
+        try
+        {
+            newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, dataObj);
+        }
+        catch (Exception e)
+        {
+            Logger.LogWarning($"Mount failed for {fstype}: {e.Message}");
+            return -(int)Errno.EINVAL;
+        }
+
+        if (newSb == null)
+            return -(int)Errno.EINVAL;
+
+        // Use the new Mount-based mounting
+        var parentMount = sm.FindMount(targetDentry) ?? sm.RootMount;
+        var newMount = new Mount(newSb, newSb.Root, targetDentry, parentMount)
+        {
+            Source = string.IsNullOrEmpty(source) ? fstype : source,
+            FsType = fstype,
+            Flags = flags & LinuxConstants.MS_RDONLY
+        };
+        newMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
+        if (!string.IsNullOrWhiteSpace(dataString))
+            newMount.Options += $",{dataString}";
+
+        targetDentry.IsMounted = true;
+        targetDentry.MountRoot = newSb.Root;
+        targetDentry.Mount = newMount;
+        newSb.Root.MountedAt = targetDentry;
+
+        sm.Mounts.Add(newMount);
+        var targetPath2 = BuildPath(targetDentry);
+        sm.AddMountInfo(newMount.Source, targetPath2, fstype, newMount.Options);
+
+        return 0;
     }
 
     private static async ValueTask<int> SysUmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1642,4 +1649,225 @@ public partial class SyscallManager
 
         return f.Dentry.Inode.Flock(f, op);
     }
+
+    #region New Mount API (open_tree, move_mount, mount_setattr)
+
+    // open_tree flags
+    private const uint OPEN_TREE_CLONE = 1;
+    private const uint OPEN_TREE_CLOEXEC = (uint)FileFlags.O_CLOEXEC;
+    private const uint AT_EMPTY_PATH = 0x1000;
+    private const uint AT_SYMLINK_NOFOLLOW = 0x100;
+
+    // move_mount flags
+    private const uint MOVE_MOUNT_F_SYMLINKS = 0x00000001;
+    private const uint MOVE_MOUNT_F_AUTOMOUNTS = 0x00000002;
+    private const uint MOVE_MOUNT_F_EMPTY_PATH = 0x00000004;
+    private const uint MOVE_MOUNT_T_SYMLINKS = 0x00000010;
+    private const uint MOVE_MOUNT_T_AUTOMOUNTS = 0x00000020;
+    private const uint MOVE_MOUNT_T_EMPTY_PATH = 0x00000040;
+
+    // mount_setattr flags
+    private const uint MOUNT_ATTR_RDONLY = 0x00000001;
+    private const uint MOUNT_ATTR_NOSUID = 0x00000002;
+    private const uint MOUNT_ATTR_NODEV = 0x00000004;
+    private const uint MOUNT_ATTR_NOEXEC = 0x00000008;
+    private const uint MOUNT_ATTR_ATIME = 0x00000010;
+    private const uint MOUNT_ATTR_NOATIME = 0x00000020;
+    private const uint MOUNT_ATTR_STRICTATIME = 0x00000040;
+    private const uint MOUNT_ATTR_NODIRATIME = 0x00000080;
+    private const uint MOUNT_ATTR_IDMAP = 0x00100000;
+
+    /// <summary>
+    /// open_tree(2) - Get a file descriptor for a mount point
+    /// syscall number 428 on x86
+    /// </summary>
+    private static async ValueTask<int> SysOpenTree(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var dfd = (int)a1;          // dirfd
+        var pathname = a2;          // path string address
+        var flags = a3;             // flags (OPEN_TREE_CLONE, etc.)
+
+        // Resolve path
+        Dentry? dentry;
+        if ((flags & AT_EMPTY_PATH) != 0 && pathname == 0)
+        {
+            // Use dfd directly
+            var f = sm.GetFD(dfd);
+            if (f == null) return -(int)Errno.EBADF;
+            dentry = f.Dentry;
+        }
+        else
+        {
+            var path = sm.ReadString(pathname);
+            var followSymlinks = (flags & AT_SYMLINK_NOFOLLOW) == 0;
+            dentry = sm.PathWalk(path, null, followSymlinks);
+        }
+
+        if (dentry == null) return -(int)Errno.ENOENT;
+        if (dentry.Inode == null) return -(int)Errno.ENOENT;
+
+        // Find the mount at this location
+        var mount = sm.FindMount(dentry);
+        if (mount == null) return -(int)Errno.ENOENT;
+
+        MountFile mountFile;
+        if ((flags & OPEN_TREE_CLONE) != 0)
+        {
+            // Clone the mount (detached)
+            var clonedMount = mount.Clone();
+            mountFile = new MountFile(clonedMount);
+        }
+        else
+        {
+            // Return a file descriptor for the mount point (not cloning)
+            mountFile = new MountFile(mount);
+            mount.Get(); // Increase ref count
+        }
+
+        // Allocate FD
+        var newFd = sm.AllocFD(mountFile);
+        return newFd;
+    }
+
+    /// <summary>
+    /// move_mount(2) - Move a mount from one place to another
+    /// syscall number 429 on x86
+    /// </summary>
+    private static async ValueTask<int> SysMoveMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fromDfd = (int)a1;      // source dirfd
+        var fromPath = a2;          // source path
+        var toDfd = (int)a3;        // target dirfd
+        var toPath = a4;            // target path
+        var flags = a5;             // flags
+
+        // Get source mount from fromDfd (must be a MountFile from open_tree)
+        var fromFile = sm.GetFD(fromDfd);
+        if (fromFile == null) return -(int)Errno.EBADF;
+        if (fromFile is not MountFile mountFile) return -(int)Errno.EINVAL;
+
+        var mount = mountFile.Mount;
+        if (mount == null) return -(int)Errno.EINVAL;
+
+        // Resolve target path
+        Dentry? toDentry;
+        if ((flags & MOVE_MOUNT_T_EMPTY_PATH) != 0 && toPath == 0)
+        {
+            var f = sm.GetFD(toDfd);
+            if (f == null) return -(int)Errno.EBADF;
+            toDentry = f.Dentry;
+        }
+        else
+        {
+            var path = sm.ReadString(toPath);
+            toDentry = sm.PathWalk(path);
+        }
+
+        if (toDentry == null) return -(int)Errno.ENOENT;
+        if (toDentry.Inode == null) return -(int)Errno.ENOENT;
+        
+        // Ensure types match (directory to directory, or file to file)
+        var isTargetDir = toDentry.Inode.Type == InodeType.Directory;
+        var isSourceDir = mount.Root.Inode?.Type == InodeType.Directory;
+        if (isTargetDir && !isSourceDir) return -(int)Errno.ENOTDIR;
+        if (!isTargetDir && isSourceDir) return -(int)Errno.ENOTDIR;
+
+        // Attach the mount
+        var result = sm.AttachMount(mount, toDentry);
+        if (result == 0)
+        {
+            // Success - close the MountFile fd (the mount is now attached)
+            // The caller should close the fd after move_mount
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// mount_setattr(2) - Set attributes on a mount
+    /// syscall number 442 on x86
+    /// </summary>
+    private static async ValueTask<int> SysMountSetattr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var dfd = (int)a1;          // dirfd
+        var pathAddr = a2;          // path
+        var flags = a3;             // flags (AT_RECURSIVE, etc.)
+        var uattr = a4;             // struct mount_attr pointer
+        var usize = (int)a5;        // size of mount_attr
+
+        // Resolve path
+        Dentry? dentry;
+        if ((flags & AT_EMPTY_PATH) != 0 && pathAddr == 0)
+        {
+            var f = sm.GetFD(dfd);
+            if (f == null) return -(int)Errno.EBADF;
+            dentry = f.Dentry;
+        }
+        else
+        {
+            var pathStr = sm.ReadString(pathAddr);
+            dentry = sm.PathWalk(pathStr);
+        }
+
+        if (dentry == null) return -(int)Errno.ENOENT;
+
+        // Find the mount
+        var mount = sm.FindMount(dentry);
+        if (mount == null) return -(int)Errno.ENOENT;
+
+        // Read mount_attr structure from guest memory
+        // struct mount_attr {
+        //     __u64 attr_set;     /* Mount properties to set */
+        //     __u64 attr_clr;     /* Mount properties to clear */
+        //     __u64 propagation;  /* Mount propagation type */
+        //     __u64 userns_fd;    /* User namespace file descriptor */
+        // };
+        if (uattr == 0 || usize < 32) return -(int)Errno.EINVAL;
+
+        var buf = new byte[32];
+        if (!sm.Engine.CopyFromUser(uattr, buf))
+            return -(int)Errno.EFAULT;
+
+        var attrSet = BitConverter.ToUInt64(buf, 0);
+        var attrClr = BitConverter.ToUInt64(buf, 8);
+
+        // Apply attributes
+        uint newFlags = mount.Flags;
+
+        // Clear attributes
+        if ((attrClr & MOUNT_ATTR_RDONLY) != 0) newFlags &= ~LinuxConstants.MS_RDONLY;
+        if ((attrClr & MOUNT_ATTR_NOSUID) != 0) newFlags &= ~LinuxConstants.MS_NOSUID;
+        if ((attrClr & MOUNT_ATTR_NODEV) != 0) newFlags &= ~LinuxConstants.MS_NODEV;
+        if ((attrClr & MOUNT_ATTR_NOEXEC) != 0) newFlags &= ~LinuxConstants.MS_NOEXEC;
+
+        // Set attributes
+        if ((attrSet & MOUNT_ATTR_RDONLY) != 0) newFlags |= LinuxConstants.MS_RDONLY;
+        if ((attrSet & MOUNT_ATTR_NOSUID) != 0) newFlags |= LinuxConstants.MS_NOSUID;
+        if ((attrSet & MOUNT_ATTR_NODEV) != 0) newFlags |= LinuxConstants.MS_NODEV;
+        if ((attrSet & MOUNT_ATTR_NOEXEC) != 0) newFlags |= LinuxConstants.MS_NOEXEC;
+
+        mount.Flags = newFlags;
+
+        // Update mount info options string
+        var opts = new List<string> { (newFlags & LinuxConstants.MS_RDONLY) != 0 ? "ro" : "rw" };
+        if ((newFlags & LinuxConstants.MS_NOSUID) != 0) opts.Add("nosuid");
+        if ((newFlags & LinuxConstants.MS_NODEV) != 0) opts.Add("nodev");
+        if ((newFlags & LinuxConstants.MS_NOEXEC) != 0) opts.Add("noexec");
+        opts.Add("relatime");
+
+        mount.Options = string.Join(",", opts);
+
+        return 0;
+    }
+
+    #endregion
 }

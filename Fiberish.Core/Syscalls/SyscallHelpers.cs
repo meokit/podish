@@ -52,8 +52,8 @@ public partial class SyscallManager
                 if (current == ProcessRoot) continue;
 
                 if (current == current.SuperBlock.Root)
-                    if (current.MountedAt != null)
-                        current = current.MountedAt;
+                    if (current.Mount != null) // Changed from current.MountedAt
+                        current = current.Mount.MountPoint; // Changed from current.MountedAt
 
                 if (current.Parent != null) current = current.Parent;
                 continue;
@@ -61,7 +61,7 @@ public partial class SyscallManager
 
             // Down
             // If current is a mount point, traverse into it
-            if (current.IsMounted && current.MountRoot != null) current = current.MountRoot;
+            if (current.IsMounted && current.Mount != null) current = current.Mount.Root; // Changed from current.MountRoot
 
             Dentry? nextDentry;
             if (current.Children.TryGetValue(part, out var cached))
@@ -90,7 +90,7 @@ public partial class SyscallManager
             }
         }
 
-        if (current.IsMounted && current.MountRoot != null) current = current.MountRoot;
+        if (current.IsMounted && current.Mount != null) current = current.Mount.Root; // Changed from current.MountRoot
 
         return current;
     }
