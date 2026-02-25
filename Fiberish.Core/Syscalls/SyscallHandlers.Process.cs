@@ -36,6 +36,8 @@ public partial class SyscallManager
             // If main thread exits, entire process group becomes zombie
             if (task.TID == task.Process.TGID)
             {
+                sm.Close(); // Close all file descriptors
+                
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
                 sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
                 task.Process.State = ProcessState.Zombie;
@@ -76,6 +78,8 @@ public partial class SyscallManager
                 parentTask?.PostSignal(17); // SIGCHLD = 17
             }
 
+            sm.Close(); // Close all file descriptors
+            
             ProcFsManager.OnProcessExit(sm, task.Process.TGID);
             sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
             task.Process.State = ProcessState.Zombie;

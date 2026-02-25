@@ -369,17 +369,8 @@ public partial class SyscallManager
     private void InitStdio(SuperBlock devSb, TtyDiscipline? tty)
     {
         // 0: Stdin, 1: Stdout, 2: Stderr
-        // In devtmpfs, we should create /dev/console, /dev/null, /dev/tty etc.
-        // For simple Stdio, we just create virtual inodes or reuse what we had.
-
-        var nullNode = new ConsoleInode(devSb, true); // reusing ConsoleInode logic for now
-        // Ideally we create nodes in devSb using mknod if we had it, or manual instantiation.
-
-        // We need Dentry for these to support Fstat correctly if they are fully virtual.
-        // Or we use the manually created ones.
-
         var stdinInode = new ConsoleInode(devSb, true, tty);
-        var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb); // Parent should be /dev root really
+        var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb);
         FDs[0] = new VFS.LinuxFile(stdinDentry, FileFlags.O_RDONLY);
 
         var stdoutInode = new ConsoleInode(devSb, false, tty);
@@ -389,23 +380,35 @@ public partial class SyscallManager
 
         // Resolve the mounted /dev dentry (goes through OverlayFS -> mount -> devtmpfs root)
         var devRoot = PathWalk("/dev") ?? devSb.Root;
+        var devRootInode = devRoot.Inode as TmpfsInode;
+
+        // Helper to register a device entry properly
+        void RegisterDev(string name, Dentry dentry)
+        {
+            if (devRootInode != null)
+                devRootInode.RegisterChild(devRoot, name, dentry);
+            else
+                devRoot.Children[name] = dentry;
+        }
+
+        // Create /dev/null
+        var nullInode = new ConsoleInode(devSb, true); // sink/source
+        nullInode.Rdev = 0x0103; // Major 1, Minor 3
+        var nullDentry = new Dentry("null", nullInode, devRoot, devSb);
+        RegisterDev("null", nullDentry);
 
         // Create /dev/ptmx (PTY multiplexer)
         var signalBroadcaster = new SignalBroadcasterImpl(this);
         var ptmxInode = new PtmxInode(devSb, PtyManager, signalBroadcaster, Logger);
         ptmxInode.Rdev = PtyManager.GetPtmxRdev();
         var ptmxDentry = new Dentry("ptmx", ptmxInode, devRoot, devSb);
-        devRoot.Children["ptmx"] = ptmxDentry;
-        if (devSb is TmpfsSuperBlock tmpDevSb)
-            tmpDevSb.Dentries[new DCacheKey(devRoot.Id, "ptmx")] = ptmxDentry;
+        RegisterDev("ptmx", ptmxDentry);
 
         // Create /dev/tty (controlling terminal)
         var ttyInode = new ConsoleInode(devSb, true, tty);
         ttyInode.Rdev = 0x0500; // TTY major 5, minor 0
         var ttyDentry = new Dentry("tty", ttyInode, devRoot, devSb);
-        devRoot.Children["tty"] = ttyDentry;
-        if (devSb is TmpfsSuperBlock tmpDevSb2)
-            tmpDevSb2.Dentries[new DCacheKey(devRoot.Id, "tty")] = ttyDentry;
+        RegisterDev("tty", ttyDentry);
 
         // Create /dev/pts directory and mount devpts
         EnsureDirectory(devRoot, "pts");
@@ -417,16 +420,10 @@ public partial class SyscallManager
         var randomInode = new RandomInode(devSb);
         randomInode.Rdev = 0x0109; // Major 1, Minor 9 (urandom)
         var urandomDentry = new Dentry("urandom", randomInode, devRoot, devSb);
-        devRoot.Children["urandom"] = urandomDentry;
-        
-        var randomDentry = new Dentry("random", randomInode, devRoot, devSb); // Reuse inode
-        devRoot.Children["random"] = randomDentry;
+        RegisterDev("urandom", urandomDentry);
 
-        if (devSb is TmpfsSuperBlock tmpDevSb3)
-        {
-            tmpDevSb3.Dentries[new DCacheKey(devRoot.Id, "urandom")] = urandomDentry;
-            tmpDevSb3.Dentries[new DCacheKey(devRoot.Id, "random")] = randomDentry;
-        }
+        var randomDentry = new Dentry("random", randomInode, devRoot, devSb); // Reuse inode
+        RegisterDev("random", randomDentry);
     }
 
     public void RegisterEngine(Engine engine)

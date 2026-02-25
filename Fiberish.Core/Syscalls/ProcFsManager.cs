@@ -10,14 +10,8 @@ public static class ProcFsManager
     {
         try
         {
-            var procDentry = sm.Root.Inode!.Lookup("proc");
-            if (procDentry == null) return;
-
-            // Should be a mount point
-            if (procDentry.IsMounted && procDentry.MountRoot != null)
-                procDentry = procDentry.MountRoot;
-
-            if (procDentry.Inode == null) return;
+            var procDentry = sm.PathWalk("/proc");
+            if (procDentry == null || procDentry.Inode == null) return;
 
             var pidStr = process.TGID.ToString();
             var pidDentry = procDentry.Inode.Lookup(pidStr);
@@ -46,13 +40,8 @@ public static class ProcFsManager
     {
         try
         {
-            var procDentry = sm.Root.Inode!.Lookup("proc");
-            if (procDentry == null) return;
-
-            if (procDentry.IsMounted && procDentry.MountRoot != null)
-                procDentry = procDentry.MountRoot;
-
-            if (procDentry.Inode == null) return;
+            var procDentry = sm.PathWalk("/proc");
+            if (procDentry == null || procDentry.Inode == null) return;
 
             // Rmdir recursively? Tmpfs.Rmdir assumes empty.
             // We need to unlink children first.
@@ -170,13 +159,8 @@ public static class ProcFsManager
 
     public static void Init(SyscallManager sm)
     {
-        var procDentry = sm.Root.Inode!.Lookup("proc");
-        if (procDentry == null) return;
-
-        if (procDentry.IsMounted && procDentry.MountRoot != null)
-            procDentry = procDentry.MountRoot;
-
-        if (procDentry.Inode == null) return;
+        var procDentry = sm.PathWalk("/proc");
+        if (procDentry == null || procDentry.Inode == null) return;
 
         CreateOrUpdateProcFile(procDentry, "mounts", () => GenerateMounts(sm));
         CreateOrUpdateProcFile(procDentry, "cpuinfo", GenerateCpuInfo);

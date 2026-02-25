@@ -96,9 +96,9 @@ public abstract class Inode
     public virtual int Uid { get; set; }
     public virtual int Gid { get; set; }
     public virtual ulong Size { get; set; }
-    public virtual DateTime MTime { get; set; }
-    public virtual DateTime ATime { get; set; }
-    public virtual DateTime CTime { get; set; }
+    public virtual DateTime MTime { get; set; } = DateTime.Now;
+    public virtual DateTime ATime { get; set; } = DateTime.Now;
+    public virtual DateTime CTime { get; set; } = DateTime.Now;
 
     /// <summary>
     ///     Device number (rdev) for character/block devices.

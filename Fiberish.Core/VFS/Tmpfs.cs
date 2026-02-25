@@ -75,6 +75,26 @@ public class TmpfsInode : Inode
         MTime = ATime = CTime = DateTime.Now;
     }
 
+    /// <summary>
+    ///     Register an externally-created dentry as a child of this directory inode.
+    ///     This updates _childNames AND the TmpfsSuperBlock.Dentries DCache so that
+    ///     the entry is visible via both Lookup() and GetEntries().
+    /// </summary>
+    public void RegisterChild(Dentry parentDentry, string name, Dentry childDentry)
+    {
+        lock (Lock)
+        {
+            var sb = (TmpfsSuperBlock)SuperBlock;
+            var key = new DCacheKey(parentDentry.Id, name);
+            lock (sb.Lock)
+            {
+                sb.Dentries[key] = childDentry;
+            }
+            parentDentry.Children[name] = childDentry;
+            _childNames.Add(name);
+        }
+    }
+
     public override Dentry? Lookup(string name)
     {
         lock (Lock)
@@ -454,5 +474,13 @@ public class TmpfsInode : Inode
         // Clean up tmpfs inode resources
         _data = null;
         _childNames.Clear();
+    }
+
+    public override void Release(LinuxFile linuxFile)
+    {
+        // Drop any locks held by this file description
+        Flock(linuxFile, LinuxConstants.LOCK_UN);
+        
+        base.Release(linuxFile);
     }
 }

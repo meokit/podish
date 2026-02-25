@@ -634,6 +634,7 @@ public partial class HostInode : Inode
     {
         if (linuxFile.PrivateData is SafeFileHandle handle)
         {
+            Flock(linuxFile, LinuxConstants.LOCK_UN);
             handle.Dispose();
             linuxFile.PrivateData = null;
         }
