@@ -259,6 +259,54 @@ public partial class SyscallManager
         }
     }
 
+    public void MountHostfs(string hostPath, string guestPath, bool readOnly = false)
+    {
+        var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
+
+        var current = Root;
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            EnsureDirectory(current, parts[i]);
+            current = current.Inode!.Lookup(parts[i])!;
+        }
+
+        var name = parts[^1];
+        // Create the mount point (file or directory) based on hostPath type
+        if (Directory.Exists(hostPath))
+        {
+            EnsureDirectory(current, name);
+        }
+        else if (File.Exists(hostPath))
+        {
+            var dentry = current.Inode!.Lookup(name);
+            if (dentry == null)
+            {
+                dentry = new Dentry(name, null, current, current.SuperBlock);
+                current.Inode.Create(dentry, 0x1FF, 0, 0); // 777
+            }
+            else if (dentry.Inode?.Type != InodeType.File)
+            {
+                throw new Exception($"Path /{name} exists but is not a file");
+            }
+        }
+        else
+        {
+            throw new FileNotFoundException("Host path not found", hostPath);
+        }
+
+        var fsType = FileSystemRegistry.Get("hostfs") ?? throw new Exception("hostfs not registered");
+        var optionsText = readOnly ? "ro" : "rw";
+        var options = HostfsMountOptions.Parse(optionsText);
+        var sb = new HostSuperBlock(fsType, hostPath, options);
+        var rootDentry = sb.GetDentry(hostPath, "/", null) ??
+                         throw new FileNotFoundException("Root path not found", hostPath);
+        sb.Root = rootDentry;
+        sb.Root.Parent = sb.Root;
+
+        Mount(current, name, sb, hostPath, "hostfs", optionsText, guestPath);
+    }
+
     private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options,
         string? targetOverride = null)
     {

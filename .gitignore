@@ -10,6 +10,7 @@ analyze/
 *.a
 .vscode/
 .idea/
+.fiberpod/
 cmake-build-debug/
 __pycache__/
 *.pyc
