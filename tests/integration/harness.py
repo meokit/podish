@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import pexpect
 
@@ -13,15 +13,17 @@ class EmulatorCase:
     binary_name: str
     args: list[str] = field(default_factory=list)
     rootfs: Path | None = None
+    image: str | None = None  # OCI image name (for FiberPod mode)
     expect_tokens: list[str] = field(default_factory=list)
     timeout: int = 30
     send_eof: bool = False
     allow_timeout: bool = False
 
 
-def _dotnet_cmd(
+def _legacy_cmd(
     project_root: Path, test_bin: Path, rootfs: Path | None, args: Iterable[str]
 ) -> tuple[str, list[str]]:
+    """Build command for Fiberish.Cli (legacy mode)."""
     cli_project = project_root / "Fiberish.Cli" / "Fiberish.Cli.csproj"
     cmd = [
         "run",
@@ -38,12 +40,74 @@ def _dotnet_cmd(
     return "dotnet", cmd
 
 
-def run_case(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
+def _fiberpod_cmd(
+    fiberpod_dll: str,
+    image_or_rootfs: str,
+    command: str,
+    args: Iterable[str],
+    use_tty: bool = False,
+    volumes: list[tuple[str, str]] | None = None,
+) -> tuple[str, list[str]]:
+    """Build command for FiberPod."""
+    cmd = [
+        fiberpod_dll,
+        "run",
+    ]
+
+    # Add volumes if specified
+    if volumes:
+        for host_path, guest_path in volumes:
+            cmd.extend(["-v", f"{host_path}:{guest_path}"])
+
+    # Add TTY flags for interactive tests
+    if use_tty:
+        cmd.extend(["-i", "-t"])
+
+    # Add image/rootfs
+    cmd.append(image_or_rootfs)
+
+    # Add command and args
+    if command:
+        cmd.append(command)
+    cmd.extend(args)
+
+    return "dotnet", cmd
+
+
+def run_case(
+    project_root: Path,
+    assets_dir: Path,
+    case: EmulatorCase,
+    run_mode: Literal["fiberpod", "legacy"] = "legacy",
+    fiberpod_dll: str | None = None,
+) -> str:
+    """
+    Run an emulator test case.
+
+    Args:
+        project_root: Repository root path
+        assets_dir: Directory containing test binaries
+        case: Test case configuration
+        run_mode: 'fiberpod' for FiberPod CLI, 'legacy' for Fiberish.Cli
+        fiberpod_dll: Path to FiberPod.dll (required for fiberpod mode)
+
+    Returns:
+        The output from the emulator
+    """
+    if run_mode == "fiberpod":
+        return _run_case_fiberpod(project_root, case, fiberpod_dll, assets_dir)
+    else:
+        return _run_case_legacy(project_root, assets_dir, case)
+
+
+def _run_case_legacy(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
+    """Run a test case using Fiberish.Cli (legacy mode)."""
     test_bin = assets_dir / case.binary_name
     if not test_bin.exists():
         raise AssertionError(f"Missing integration binary: {test_bin}")
 
-    dotnet, args = _dotnet_cmd(project_root, test_bin, case.rootfs, case.args)
+    dotnet, args = _legacy_cmd(project_root, test_bin, case.rootfs, case.args)
+
     child = pexpect.spawn(
         dotnet,
         args,
@@ -51,6 +115,61 @@ def run_case(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
         encoding="utf-8",
         timeout=case.timeout,
     )
+
+    return _wait_and_validate(child, case)
+
+
+def _run_case_fiberpod(
+    project_root: Path,
+    case: EmulatorCase,
+    fiberpod_dll: str | None,
+    assets_dir: Path | None = None,
+) -> str:
+    """Run a test case using FiberPod."""
+    if fiberpod_dll is None:
+        raise ValueError("fiberpod_dll is required for fiberpod mode")
+
+    # Determine image or rootfs to use
+    if case.image:
+        # OCI image mode - binary is in /tests/
+        image_or_rootfs = case.image
+        command = f"/tests/{case.binary_name}"
+        volumes = None
+    elif case.rootfs:
+        # Rootfs mode - mount entire assets directory into container
+        image_or_rootfs = str(case.rootfs)
+        if assets_dir is None:
+            raise ValueError("assets_dir is required for rootfs mode")
+        if not assets_dir.exists():
+            raise AssertionError(f"Assets directory not found: {assets_dir}")
+        # Mount the assets directory to /tests in the container
+        volumes = [(str(assets_dir), "/tests")]
+        command = f"/tests/{case.binary_name}"
+    else:
+        raise ValueError("Either case.image or case.rootfs must be set for FiberPod mode")
+
+    dotnet, args = _fiberpod_cmd(
+        fiberpod_dll=fiberpod_dll,
+        image_or_rootfs=image_or_rootfs,
+        command=command,
+        args=case.args,
+        use_tty=False,
+        volumes=volumes,
+    )
+
+    child = pexpect.spawn(
+        dotnet,
+        args,
+        cwd=str(project_root),
+        encoding="utf-8",
+        timeout=case.timeout,
+    )
+
+    return _wait_and_validate(child, case)
+
+
+def _wait_and_validate(child: pexpect.spawn, case: EmulatorCase) -> str:
+    """Wait for child process and validate output."""
     if case.send_eof:
         child.sendeof()
 
@@ -61,7 +180,9 @@ def run_case(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
         if not case.allow_timeout:
             raise
         timed_out = True
+
     output = child.before or ""
+
     if timed_out:
         child.close(force=True)
     else:
@@ -79,3 +200,60 @@ def run_case(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
             )
 
     return output
+
+
+def run_interactive_case(
+    project_root: Path,
+    rootfs_or_image: str,
+    command: str,
+    fiberpod_dll: str,
+    expect_prompt: str = r"# ",
+    test_commands: list[tuple[str, str]] | None = None,
+    timeout: int = 30,
+) -> str:
+    """
+    Run an interactive test case with FiberPod.
+
+    Args:
+        project_root: Repository root path
+        rootfs_or_image: Rootfs path or OCI image name
+        command: Command to run in the container
+        fiberpod_dll: Path to FiberPod.dll
+        expect_prompt: Prompt pattern to expect
+        test_commands: List of (command, expected_output) tuples
+        timeout: Timeout in seconds
+
+    Returns:
+        The output from the emulator
+    """
+    dotnet, args = _fiberpod_cmd(
+        fiberpod_dll=fiberpod_dll,
+        image_or_rootfs=rootfs_or_image,
+        command=command,
+        args=[],
+        use_tty=True,
+    )
+
+    child = pexpect.spawn(
+        dotnet,
+        args,
+        cwd=str(project_root),
+        encoding="utf-8",
+        timeout=timeout,
+    )
+
+    try:
+        child.expect(expect_prompt)
+        output = child.before or ""
+
+        if test_commands:
+            for cmd, expected in test_commands:
+                child.sendline(cmd)
+                if expected:
+                    child.expect(expected)
+                    output += child.before or ""
+
+        return output
+    finally:
+        if child.isalive():
+            child.terminate(force=True)
