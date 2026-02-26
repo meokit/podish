@@ -4,6 +4,27 @@ using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
+/// <summary>
+///     Represents a location in the VFS: dentry + mount.
+///     In Linux kernel, this is equivalent to struct path (dentry + vfsmount).
+/// </summary>
+public struct PathLocation
+{
+    public Dentry? Dentry { get; }
+    public Mount? Mount { get; }
+
+    public PathLocation(Dentry? dentry, Mount? mount)
+    {
+        Dentry = dentry;
+        Mount = mount;
+    }
+
+    public static PathLocation None => new(null, null);
+
+    public bool IsValid => Dentry != null && Mount != null;
+    public bool IsNull => Dentry == null;
+}
+
 public partial class SyscallManager
 {
     // Callbacks for Task interaction
@@ -11,6 +32,14 @@ public partial class SyscallManager
     public Action<Engine, int, bool>? ExitHandler { get; set; }
     public Func<Engine, int>? GetTID { get; set; }
     public Func<Engine, int>? GetTGID { get; set; }
+
+    // Lazy-initialized PathWalker instance
+    private PathWalker? _pathWalker;
+
+    /// <summary>
+    ///     Gets the PathWalker instance for advanced path resolution.
+    /// </summary>
+    public PathWalker PathWalker => _pathWalker ??= new PathWalker(this);
 
     public string ReadString(uint addr)
     {
@@ -30,72 +59,68 @@ public partial class SyscallManager
         return sb.ToString();
     }
 
-    public Dentry? PathWalk(string path, Dentry? startAt = null, bool followLink = true, int recursion = 0)
+    /// <summary>
+    ///     Walk a path and return both dentry and mount information.
+    ///     This is the core path resolution function, similar to Linux's path_lookup().
+    ///     Uses the new PathWalker implementation with NameData pattern.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="startAt">Optional starting location (default for cwd)</param>
+    /// <param name="followLink">Whether to follow symlinks on final component</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalk(string path, PathLocation? startAt = null, bool followLink = true)
     {
-        if (string.IsNullOrEmpty(path)) return null;
-        if (recursion > 40) return null; // ELOOP
-
-        // Console.WriteLine($"PathWalk: {path}");
-        Dentry current;
-        if (path.StartsWith("/"))
-            current = ProcessRoot;
-        else
-            current = startAt ?? CurrentWorkingDirectory;
-
-        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (var i = 0; i < parts.Length; i++)
-        {
-            var part = parts[i];
-            if (part == ".") continue;
-            if (part == "..")
-            {
-                if (current == ProcessRoot) continue;
-
-                if (current == current.SuperBlock.Root)
-                    if (current.Mount != null) // Changed from current.MountedAt
-                        current = current.Mount.MountPoint; // Changed from current.MountedAt
-
-                if (current.Parent != null) current = current.Parent;
-                continue;
-            }
-
-            // Down
-            // If current is a mount point, traverse into it
-            if (current.IsMounted && current.Mount != null) current = current.Mount.Root; // Changed from current.MountRoot
-
-            Dentry? nextDentry;
-            if (current.Children.TryGetValue(part, out var cached))
-            {
-                nextDentry = cached;
-            }
-            else
-            {
-                nextDentry = current.Inode!.Lookup(part);
-                if (nextDentry == null) return null;
-
-                current.Children[part] = nextDentry;
-            }
-
-            // Handle Symlink
-            if (nextDentry.Inode!.Type == InodeType.Symlink && (followLink || i < parts.Length - 1))
-            {
-                var target = nextDentry.Inode.Readlink();
-                var resolved = PathWalk(target, current, followLink, recursion + 1);
-                if (resolved == null) return null;
-                current = resolved;
-            }
-            else
-            {
-                current = nextDentry;
-            }
-        }
-
-        if (current.IsMounted && current.Mount != null) current = current.Mount.Root; // Changed from current.MountRoot
-
-        return current;
+        // Use the new PathWalker implementation
+        return PathWalker.PathWalk(path, startAt, followLink);
     }
 
-    public int AllocFD(VFS.LinuxFile linuxFile, int minFd = 3)
+    /// <summary>
+    ///     Walk a path with explicit LookupFlags.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalkWithFlags(string path, LookupFlags flags)
+    {
+        return PathWalker.PathWalk(path, flags);
+    }
+
+    /// <summary>
+    ///     Walk a path with explicit starting location and flags.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="startAt">Starting path location</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalkWithFlags(string path, PathLocation startAt, LookupFlags flags)
+    {
+        return PathWalker.PathWalk(path, startAt, flags);
+    }
+
+    /// <summary>
+    ///     Walk a path and return full NameData with resolution state.
+    ///     Useful for create operations where you need the final component name.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>NameData with full resolution state</returns>
+    public NameData PathWalkWithData(string path, LookupFlags flags = LookupFlags.FollowSymlink)
+    {
+        return PathWalker.PathWalkWithData(path, flags);
+    }
+
+    /// <summary>
+    ///     Prepare for a create operation - resolve parent directory and extract name.
+    /// </summary>
+    /// <param name="path">Path where file will be created</param>
+    /// <param name="startAt">Optional starting location</param>
+    /// <returns>Tuple of (parent location, filename, error code)</returns>
+    public (PathLocation parent, string name, int error) PathWalkForCreate(string path, PathLocation? startAt = null)
+    {
+        return PathWalker.PathWalkForCreate(path, startAt);
+    }
+
+    public int AllocFD(LinuxFile linuxFile, int minFd = 3)
     {
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
@@ -103,13 +128,13 @@ public partial class SyscallManager
         return fd;
     }
 
-    public int DupFD(VFS.LinuxFile linuxFile, int minFd = 3)
+    public int DupFD(LinuxFile linuxFile, int minFd = 3)
     {
         linuxFile.Get();
         return AllocFD(linuxFile, minFd);
     }
 
-    public VFS.LinuxFile? GetFD(int fd)
+    public LinuxFile? GetFD(int fd)
     {
         return FDs.TryGetValue(fd, out var f) ? f : null;
     }
@@ -119,19 +144,19 @@ public partial class SyscallManager
         if (FDs.Remove(fd, out var f)) f.Close();
     }
 
-    public (Dentry? dentry, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)
+    public (PathLocation loc, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)
     {
         string guestPath;
-        Dentry? dentry;
+        PathLocation loc;
 
         if (path.StartsWith("/") || !isHostRelativeDefault)
         {
             // Absolute guest path OR relative guest path (not defaulting to host)
-            dentry = PathWalk(path);
-            if (dentry != null || !isHostRelativeDefault)
+            loc = PathWalk(path);
+            if (loc.IsValid || !isHostRelativeDefault)
             {
                 guestPath = path;
-                return (dentry, guestPath);
+                return (loc, guestPath);
             }
         }
 
@@ -139,19 +164,19 @@ public partial class SyscallManager
         var hostPath = Path.GetFullPath(path);
 
         // Try to find if it fits in VFS
-        dentry = null;
+        loc = PathLocation.None;
         guestPath = path; // Default guest path to the input if not internal
 
         // Find host root
         string? hostRoot = null;
         HostSuperBlock? hsb = null;
 
-        if (Root.SuperBlock is HostSuperBlock h)
+        if (Root.Mount!.SB is HostSuperBlock h)
         {
             hsb = h;
             hostRoot = h.HostRoot;
         }
-        else if (Root.SuperBlock is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
+        else if (Root.Mount.SB is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
         {
             hsb = lh;
             hostRoot = lh.HostRoot;
@@ -168,22 +193,25 @@ public partial class SyscallManager
                     vfsLookupPath = "/" + vfsLookupPath;
                 vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
 
-                dentry = PathWalk(vfsLookupPath);
-                if (dentry != null) guestPath = vfsLookupPath;
+                loc = PathWalk(vfsLookupPath);
+                if (loc.IsValid) guestPath = vfsLookupPath;
             }
         }
 
-        if (dentry == null && hsb != null && File.Exists(hostPath))
+        if (!loc.IsValid && hsb != null && File.Exists(hostPath))
             try
             {
-                dentry = hsb.GetDentry(hostPath, Path.GetFileName(hostPath), null);
+                var dentry = hsb.GetDentry(hostPath, Path.GetFileName(hostPath), null);
+                // For hostfs bootstrap, we might not have a proper mount yet, but 
+                // typically this is used when Root is already set up.
+                loc = new PathLocation(dentry, Root.Mount);
             }
             catch
             {
                 /* ignore */
             }
 
-        return (dentry, guestPath);
+        return (loc, guestPath);
     }
 }
 

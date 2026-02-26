@@ -37,7 +37,7 @@ public partial class SyscallManager
             if (task.TID == task.Process.TGID)
             {
                 sm.Close(); // Close all file descriptors
-                
+
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
                 sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
                 task.Process.State = ProcessState.Zombie;
@@ -79,7 +79,7 @@ public partial class SyscallManager
             }
 
             sm.Close(); // Close all file descriptors
-            
+
             ProcFsManager.OnProcessExit(sm, task.Process.TGID);
             sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
             task.Process.State = ProcessState.Zombie;
@@ -452,14 +452,17 @@ public partial class SyscallManager
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
 
         // Resolve path via VFS/Host
-        var (dentry, guestPath) = sm.ResolvePath(filename, false);
+        var (loc, guestPath) = sm.ResolvePath(filename, false);
 
-        if (dentry == null)
+        if (!loc.IsValid)
         {
             Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' to a valid Dentry (Guest: {GuestPath})",
                 filename, guestPath);
             return -(int)Errno.ENOENT;
         }
+
+        var dentry = loc.Dentry!;
+        var mount = loc.Mount!;
 
         // ── Shebang (#!) detection ───────────────────────────────────────────────
         // Linux binfmt_script: if the file starts with "#!", parse interpreter path
@@ -469,13 +472,14 @@ public partial class SyscallManager
         if (dentry.Inode != null)
         {
             // Use Inode.Read() so this works for any filesystem, not just HostInode
-            var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
+            var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
             headerLen = dentry.Inode.Read(tmpFile, headerBuf.AsSpan(), 0);
             if (headerLen < 0) headerLen = 0;
         }
 
         if (headerLen >= 4 && headerBuf[0] == '#' && headerBuf[1] == '!')
         {
+            // ...
             // Parse the shebang line: #!<interpreter> [optional-arg]\n
             var lineEnd = Array.IndexOf(headerBuf, (byte)'\n', 2);
             if (lineEnd < 0) lineEnd = headerLen;
@@ -500,12 +504,15 @@ public partial class SyscallManager
                 interpPath, interpArg ?? "(none)", guestPath);
 
             // Resolve interpreter
-            var (interpDentry, interpGuestPath) = sm.ResolvePath(interpPath);
-            if (interpDentry == null)
+            var (interpLoc, interpGuestPath) = sm.ResolvePath(interpPath);
+            if (!interpLoc.IsValid)
             {
                 Logger.LogWarning("[SysExecve] Shebang interpreter '{Interp}' not found", interpPath);
                 return -(int)Errno.ENOENT;
             }
+
+            var interpDentry = interpLoc.Dentry!;
+            var interpMount = interpLoc.Mount!;
 
             // Read original args (must be done BEFORE clearing memory)
             List<string> origArgs = [];
@@ -566,8 +573,8 @@ public partial class SyscallManager
 
             try
             {
-                task.Process.Exec(interpDentry, interpGuestPath, [.. newArgs], [.. origEnvs]);
-                CredentialService.ApplyExecSetIdOnExec(task.Process, interpDentry.Inode!);
+                task.Process.Exec(interpLoc.Dentry!, interpGuestPath, [.. newArgs], [.. origEnvs], interpLoc.Mount!);
+                CredentialService.ApplyExecSetIdOnExec(task.Process, interpLoc.Dentry!.Inode!);
                 ProcFsManager.OnProcessExec(sm, task.Process);
                 task.SignalVforkDone(); // vfork: wake parent after exec
                 return 0;
@@ -655,7 +662,7 @@ public partial class SyscallManager
 
         try
         {
-            task.Process.Exec(dentry, guestPath, [.. args], [.. envs]);
+            task.Process.Exec(dentry, guestPath, [.. args], [.. envs], mount);
             // No namespace/nosuid/no_new_privs yet: apply classic setuid/setgid exec semantics directly.
             CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
             ProcFsManager.OnProcessExec(sm, task.Process);

@@ -235,7 +235,6 @@ public abstract class Inode
     }
 
 
-
     /// <summary>
     ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.
     /// </summary>
@@ -307,16 +306,9 @@ public class Dentry
 
     // Mount point support
     public bool IsMounted { get; set; }
-    public Dentry? MountRoot { get; set; }
-
-    // Back pointer for mount traversal (points to the Dentry in parent FS where this root is mounted)
-    public Dentry? MountedAt { get; set; }
-
-    // Reference to the Mount object (for new Mount API)
-    public Mount? Mount { get; set; }
 
     /// <summary>
-    /// Increment reference count.
+    ///     Increment reference count.
     /// </summary>
     public void Get()
     {
@@ -324,7 +316,7 @@ public class Dentry
     }
 
     /// <summary>
-    /// Decrement reference count.
+    ///     Decrement reference count.
     /// </summary>
     public void Put()
     {
@@ -344,18 +336,39 @@ public class LinuxFile
 {
     private int _refCount = 1;
 
-    public LinuxFile(Dentry dentry, FileFlags flags)
+    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount)
     {
         Dentry = dentry;
         Flags = flags;
+        Mount = mount; // The mount this file was opened through
         dentry.Inode?.Get(); // Increase reference count
         dentry.Inode?.Open(this);
+        // Note: Mount reference is managed by caller if provided
     }
 
     public Dentry Dentry { get; set; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
+    public Mount Mount { get; set; }
     public object? PrivateData { get; set; }
+
+    /// <summary>
+    ///     Check if write operation is allowed (mount read-only check).
+    ///     Similar to Linux kernel's mnt_want_write().
+    /// </summary>
+    public int WantWrite()
+    {
+        // Check file flags first
+        var accessMode = (int)Flags & 3; // O_ACCMODE
+        if (accessMode == 0) // O_RDONLY
+            return -(int)Errno.EBADF;
+
+        // Check mount read-only
+        if (Mount != null && Mount.IsReadOnly)
+            return -(int)Errno.EROFS;
+
+        return 0;
+    }
 
     /// <summary>
     ///     Increment the reference count (used by dup, SCM_RIGHTS, etc.).
@@ -371,6 +384,8 @@ public class LinuxFile
 
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put(); // Decrease reference count
+        // Note: Mount reference is not released here as it's typically
+        // managed by the filesystem/superblock lifecycle
     }
 }
 

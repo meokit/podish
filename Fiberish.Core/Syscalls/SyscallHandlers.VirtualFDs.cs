@@ -1,19 +1,20 @@
-using Fiberish.Native;
-using Fiberish.Core;
-using Fiberish.VFS;
 using System.Buffers.Binary;
+using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators
-    private static async ValueTask<int> SysEventFd(IntPtr state, uint initval, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysEventFd(IntPtr state, uint initval, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         return await SysEventFd2(state, initval, 0, a3, a4, a5, a6);
     }
 
-    private static async ValueTask<int> SysEventFd2(IntPtr state, uint initval, uint flags, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysEventFd2(IntPtr state, uint initval, uint flags, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -25,7 +26,7 @@ public partial class SyscallManager
 
         var inode = new EventFdInode(0, sm.MemfdSuperBlock, initval, eflags);
         var dentry = new Dentry("anon_inode:[eventfd]", inode, null, sm.MemfdSuperBlock);
-        var file = new Fiberish.VFS.LinuxFile(dentry, eflags);
+        var file = new LinuxFile(dentry, eflags, sm.AnonMount);
 
         var fd = sm.AllocFD(file);
         if (fd < 0) return fd;
@@ -33,7 +34,8 @@ public partial class SyscallManager
         return fd;
     }
 
-    private static async ValueTask<int> SysTimerFdCreate(IntPtr state, uint clockId, uint flags, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerFdCreate(IntPtr state, uint clockId, uint flags, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -47,7 +49,7 @@ public partial class SyscallManager
 
         var inode = new TimerFdInode(0, sm.MemfdSuperBlock);
         var dentry = new Dentry("anon_inode:[timerfd]", inode, null, sm.MemfdSuperBlock);
-        var file = new Fiberish.VFS.LinuxFile(dentry, eflags);
+        var file = new LinuxFile(dentry, eflags, sm.AnonMount);
 
         var fd = sm.AllocFD(file);
         if (fd < 0) return fd;
@@ -55,7 +57,8 @@ public partial class SyscallManager
         return fd;
     }
 
-    private static async ValueTask<int> SysTimerFdSetTime(IntPtr state, uint fd, uint flags, uint newValuePtr, uint oldValuePtr, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerFdSetTime(IntPtr state, uint fd, uint flags, uint newValuePtr,
+        uint oldValuePtr, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -73,22 +76,20 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
         var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
 
-        if (oldValuePtr != 0)
-        {
-            await SysTimerFdGetTime(state, fd, oldValuePtr, 0, 0, 0, 0);
-        }
+        if (oldValuePtr != 0) await SysTimerFdGetTime(state, fd, oldValuePtr, 0, 0, 0, 0);
 
         var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
 
-        ulong intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
-        ulong valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
+        var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
+        var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
         timerFd.SetTime((long)intervalMs, (long)valueMs, isAbsolute);
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerFdGetTime(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerFdGetTime(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -98,26 +99,28 @@ public partial class SyscallManager
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
-        timerFd.GetTime(out long intervalMs, out long valueMs);
+        timerFd.GetTime(out var intervalMs, out var valueMs);
 
         var buf = new byte[16];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(intervalMs / 1000));
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)((intervalMs % 1000) * 1000000));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)(intervalMs % 1000 * 1000000));
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)(valueMs / 1000));
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)((valueMs % 1000) * 1000000));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)(valueMs % 1000 * 1000000));
 
         if (!sm.Engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
-        return 0; 
+        return 0;
     }
 
-    private static async ValueTask<int> SysSignalFd(IntPtr state, uint fd, uint maskPtr, uint size, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSignalFd(IntPtr state, uint fd, uint maskPtr, uint size, uint a4, uint a5,
+        uint a6)
     {
         // For sys_signalfd, flags are 0
         return await SysSignalFd4(state, fd, maskPtr, size, 0, a5, a6);
     }
 
-    private static async ValueTask<int> SysSignalFd4(IntPtr state, uint fd, uint maskPtr, uint size, uint flags, uint a5, uint a6)
+    private static async ValueTask<int> SysSignalFd4(IntPtr state, uint fd, uint maskPtr, uint size, uint flags,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -138,7 +141,7 @@ public partial class SyscallManager
 
             var inode = new SignalFdInode(0, sm.MemfdSuperBlock, mask);
             var dentry = new Dentry("anon_inode:[signalfd]", inode, null, sm.MemfdSuperBlock);
-            var file = new Fiberish.VFS.LinuxFile(dentry, eflags);
+            var file = new LinuxFile(dentry, eflags, sm.AnonMount);
 
             var newFd = sm.AllocFD(file);
             return newFd;

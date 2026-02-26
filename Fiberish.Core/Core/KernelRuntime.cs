@@ -5,7 +5,7 @@ using Fiberish.Syscalls;
 namespace Fiberish.Core;
 
 /// <summary>
-/// Global runtime objects that should be initialized once for the first process.
+///     Global runtime objects that should be initialized once for the first process.
 /// </summary>
 public sealed class KernelRuntime
 {
@@ -25,12 +25,27 @@ public sealed class KernelRuntime
         var engine = new Engine();
         var mm = new VMAManager();
 
-        var sys = new SyscallManager(engine, mm, 0, rootRes, useOverlay, tty)
+        var sys = new SyscallManager(engine, mm, 0, tty)
         {
             Strace = strace
         };
 
-        ProcFsManager.Init(sys);
+        if (useOverlay)
+        {
+            sys.MountRootOverlay(rootRes);
+            sys.MountStandardDev(tty);
+            sys.MountStandardProc();
+            sys.MountStandardShm();
+            sys.CreateStandardTmp();
+        }
+        else
+        {
+            sys.MountRootHostfs(rootRes);
+            sys.MountStandardDev(tty);
+            sys.MountStandardProc();
+            sys.MountStandardShm();
+        }
+
         return new KernelRuntime(engine, mm, sys);
     }
 }

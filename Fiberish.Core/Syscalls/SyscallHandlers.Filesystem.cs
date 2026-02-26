@@ -27,7 +27,8 @@ public partial class SyscallManager
             InvalidOperationException ioe
                 when ioe.Message.Contains("Is a directory", StringComparison.OrdinalIgnoreCase) =>
                 -(int)Errno.EISDIR,
-            IOException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) => -(int)Errno.EEXIST,
+            IOException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) => -(int)Errno
+                .EEXIST,
             _ => -(int)fallback
         };
     }
@@ -40,23 +41,23 @@ public partial class SyscallManager
         var oldPath = sm.ReadString(a1);
         var newPath = sm.ReadString(a2);
 
-        var oldDentry = sm.PathWalk(oldPath);
-        if (oldDentry == null || oldDentry.Inode == null) return -(int)Errno.ENOENT;
-        if (oldDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EPERM;
+        var oldLoc = sm.PathWalkWithFlags(oldPath, LookupFlags.FollowSymlink);
+        if (!oldLoc.IsValid) return -(int)Errno.ENOENT;
+        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
-        var lastSlash = newPath.LastIndexOf('/');
-        var dirPath = lastSlash == -1 ? "." : newPath[..lastSlash];
-        if (dirPath == "") dirPath = "/";
-        var name = lastSlash == -1 ? newPath : newPath[(lastSlash + 1)..];
+        var (dirLoc, name, err) = sm.PathWalkForCreate(newPath);
+        if (err != 0) return err;
+        if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        var dirDentry = sm.PathWalk(dirPath);
-        if (dirDentry == null || dirDentry.Inode == null) return -(int)Errno.ENOENT;
-        if (dirDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount))
+        {
+            return -(int)Errno.EXDEV;
+        }
 
         try
         {
-            var newDentry = new Dentry(name, null, dirDentry, dirDentry.SuperBlock);
-            dirDentry.Inode.Link(newDentry, oldDentry.Inode);
+            var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
+            dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
             return 0;
         }
         catch (Exception)
@@ -71,14 +72,14 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
-        if (dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         var oldCwd = sm.CurrentWorkingDirectory;
-        sm.CurrentWorkingDirectory = dentry;
-        dentry.Inode!.Get();
-        oldCwd?.Inode?.Put();
+        sm.CurrentWorkingDirectory = loc;
+        loc.Dentry.Inode!.Get();
+        oldCwd.Dentry?.Inode?.Put();
         return 0;
     }
 
@@ -93,9 +94,9 @@ public partial class SyscallManager
         if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         var oldCwd = sm.CurrentWorkingDirectory;
-        sm.CurrentWorkingDirectory = f.Dentry;
+        sm.CurrentWorkingDirectory = new PathLocation(f.Dentry, f.Mount);
         f.Dentry.Inode!.Get();
-        oldCwd?.Inode?.Put();
+        oldCwd.Dentry?.Inode?.Put();
         return 0;
     }
 
@@ -106,12 +107,8 @@ public partial class SyscallManager
         var path = sm.ReadString(a1);
         var mode = a2;
 
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
-
-        var parentDentry = sm.PathWalk(parentPath);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path);
+        if (err != 0) return err;
 
         var t = sm.Engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
@@ -119,9 +116,9 @@ public partial class SyscallManager
 
         try
         {
-            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
             var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-            parentDentry.Inode.Mkdir(dentry, finalMode, uid, gid);
+            parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
         catch
@@ -135,7 +132,8 @@ public partial class SyscallManager
         return await DoTruncate(state, a1, a2);
     }
 
-    private static async ValueTask<int> SysTruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         // 32-bit truncate64 has padding if we use 64-bit length. a2 and a3 are the split 64 bit integer
         var length = (long)(((ulong)a3 << 32) | a2);
@@ -148,17 +146,15 @@ public partial class SyscallManager
         if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
         var path = sm.ReadString(pathPtr);
 
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
-        if (dentry.Inode.Type == InodeType.Directory) return new ValueTask<int>(-(int)Errno.EISDIR);
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
 
-        var t = sm.Engine.Owner as FiberTask;
-        if (t != null && t.Process.EUID != 0 && t.Process.EUID != dentry.Inode.Uid)
-        {
-            // Usually need write permission to truncate, simplified check for now
-        }
+        // Check mount read-only
+        if (loc.Mount!.IsReadOnly) return new ValueTask<int>(-(int)Errno.EROFS);
 
-        return new ValueTask<int>(dentry.Inode.Truncate(length));
+        // TODO: Permission Check
+
+        return new ValueTask<int>(loc.Dentry.Inode.Truncate(length));
     }
 
     private static async ValueTask<int> SysFtruncate(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -175,7 +171,8 @@ public partial class SyscallManager
         return f.Dentry.Inode.Truncate(length);
     }
 
-    private static async ValueTask<int> SysFtruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFtruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -195,26 +192,22 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a1);
 
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
-
-        var parentDentry = sm.PathWalk(parentPath);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path);
+        if (err != 0) return err;
 
         // Check if directory exists and is empty
-        var targetDentry = sm.PathWalk(path, followLink: false);
-        if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
-        if (targetDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        var targetLoc = sm.PathWalkWithFlags(path, LookupFlags.None);
+        if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         // Check if empty (only . and .. entries)
-        var entries = targetDentry.Inode.GetEntries();
+        var entries = targetLoc.Dentry.Inode.GetEntries();
         if (entries.Count > 2) return -(int)Errno.ENOTEMPTY; // Has more than . and ..
 
         try
         {
-            parentDentry.Inode!.Rmdir(name);
-            parentDentry.Children.Remove(name);
+            parentLoc.Dentry!.Inode!.Rmdir(name);
+            parentLoc.Dentry.Children.Remove(name);
             return 0;
         }
         catch (Exception ex)
@@ -231,20 +224,16 @@ public partial class SyscallManager
         var path = sm.ReadString(a2);
         var mode = a3;
 
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
-
-        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
+        if (err != 0) return err;
 
         var t = sm.Engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
@@ -252,9 +241,9 @@ public partial class SyscallManager
 
         try
         {
-            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
             var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-            parentDentry.Inode.Mkdir(dentry, finalMode, uid, gid);
+            parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
         catch
@@ -273,31 +262,28 @@ public partial class SyscallManager
         const uint AT_REMOVEDIR = 0x200;
         if ((flags & ~AT_REMOVEDIR) != 0) return -(int)Errno.EINVAL;
 
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
+        if (err != 0) return err;
 
-        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
-
-        var targetDentry = sm.PathWalk(path, startAt, followLink: false);
-        if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
+        var targetLoc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            LookupFlags.None);
+        if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
         {
-            if (targetDentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+            if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             try
             {
-                parentDentry.Inode.Rmdir(name);
-                parentDentry.Children.Remove(name);
+                parentLoc.Dentry!.Inode!.Rmdir(name);
+                parentLoc.Dentry.Children.Remove(name);
                 return 0;
             }
             catch (Exception ex)
@@ -306,12 +292,12 @@ public partial class SyscallManager
             }
         }
 
-        if (targetDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
         try
         {
-            parentDentry.Inode.Unlink(name);
-            parentDentry.Children.Remove(name);
+            parentLoc.Dentry!.Inode!.Unlink(name);
+            parentLoc.Dentry.Children.Remove(name);
             return 0;
         }
         catch (Exception ex)
@@ -402,20 +388,21 @@ public partial class SyscallManager
         if (path == "" && (flags & 0x1000) != 0) // AT_EMPTY_PATH
             return await SysFstat64(state, a1, a3, 0, 0, 0, 0);
 
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var dentry = sm.PathWalk(path, startAt, followLink);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        WriteStat64(sm, statAddr, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        WriteStat64(sm, statAddr, loc.Dentry.Inode);
         return 0;
     }
 
@@ -425,14 +412,14 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a2);
         var timesAddr = a3;
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         if (timesAddr == 0)
-            dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
+            loc.Dentry.Inode.ATime = loc.Dentry.Inode.MTime = DateTime.Now;
         else
             // TODO: Read timespec from memory
-            dentry.Inode.ATime = dentry.Inode.MTime = DateTime.Now;
+            loc.Dentry.Inode.ATime = loc.Dentry.Inode.MTime = DateTime.Now;
         return 0;
     }
 
@@ -444,26 +431,27 @@ public partial class SyscallManager
         var path = sm.ReadString(a2);
         var flags = a5;
         if ((flags & ~LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0) return -(int)Errno.EINVAL;
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var dentry = sm.PathWalk(path, startAt, followLink);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var uid = (int)a3;
         var gid = (int)a4;
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        var allowed = DacPolicy.CanChown(task.Process, dentry.Inode, uid, gid);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        var allowed = DacPolicy.CanChown(task.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
-        return ApplyOwnershipChange(dentry.Inode, uid, gid);
+        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysFchmodAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -472,24 +460,25 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var dirfd = (int)a1;
         var path = sm.ReadString(a2);
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var dentry = sm.PathWalk(path, startAt);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var mode = a3;
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        var allowed = DacPolicy.CanChmod(task.Process, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        var allowed = DacPolicy.CanChmod(task.Process, loc.Dentry.Inode);
         if (allowed != 0) return allowed;
-        return ApplyModeChange(dentry.Inode, (int)mode, task.Process);
+        return ApplyModeChange(loc.Dentry.Inode, (int)mode, task.Process);
     }
 
     private static async ValueTask<int> SysFaccessAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -498,20 +487,21 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var dirfd = (int)a1;
         var path = sm.ReadString(a2);
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
         const uint AT_EACCESS = 0x200;
         var knownFlags = AT_EACCESS | LinuxConstants.AT_SYMLINK_NOFOLLOW;
         if ((a4 & ~knownFlags) != 0) return -(int)Errno.EINVAL;
         var followLink = (a4 & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var dentry = sm.PathWalk(path, startAt, followLink);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var mode = (int)a3;
         if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
@@ -519,14 +509,14 @@ public partial class SyscallManager
 
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
 
         var req = AccessMode.None;
         if ((mode & 4) != 0) req |= AccessMode.MayRead;
         if ((mode & 2) != 0) req |= AccessMode.MayWrite;
         if ((mode & 1) != 0) req |= AccessMode.MayExec;
         var useEffectiveIds = (a4 & AT_EACCESS) != 0;
-        return DacPolicy.CheckPathAccess(task.Process, dentry.Inode, req, useEffectiveIds);
+        return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, useEffectiveIds);
     }
 
     private static async ValueTask<int> SysFaccessAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -570,38 +560,31 @@ public partial class SyscallManager
     private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath,
         uint flags)
     {
-        Dentry? oldStart = null;
+        PathLocation? oldStart = null;
         if (oldDirFd != -100 && !oldPath.StartsWith("/"))
         {
             var f = sm.GetFD(oldDirFd);
             if (f == null) return -(int)Errno.EBADF;
-            oldStart = f.Dentry;
+            oldStart = new PathLocation(f.Dentry, f.Mount);
         }
 
-        Dentry? newStart = null;
+        PathLocation? newStart = null;
         if (newDirFd != -100 && !newPath.StartsWith("/"))
         {
             var f = sm.GetFD(newDirFd);
             if (f == null) return -(int)Errno.EBADF;
-            newStart = f.Dentry;
+            newStart = new PathLocation(f.Dentry, f.Mount);
         }
 
-        var lastSlashOld = oldPath.LastIndexOf('/');
-        var oldParentPath = lastSlashOld == -1 ? "" : oldPath[..lastSlashOld];
-        var oldName = lastSlashOld == -1 ? oldPath : oldPath[(lastSlashOld + 1)..];
+        var (oldParentLoc, oldName, oldErr) = sm.PathWalkForCreate(oldPath, oldStart);
+        if (oldErr != 0) return oldErr;
 
-        var lastSlashNew = newPath.LastIndexOf('/');
-        var newParentPath = lastSlashNew == -1 ? "" : newPath[..lastSlashNew];
-        var newName = lastSlashNew == -1 ? newPath : newPath[(lastSlashNew + 1)..];
-
-        var oldParentDentry = sm.PathWalk(oldParentPath == "" ? "." : oldParentPath, oldStart);
-        var newParentDentry = sm.PathWalk(newParentPath == "" ? "." : newParentPath, newStart);
-
-        if (oldParentDentry == null || newParentDentry == null) return -(int)Errno.ENOENT;
+        var (newParentLoc, newName, newErr) = sm.PathWalkForCreate(newPath, newStart);
+        if (newErr != 0) return newErr;
 
         try
         {
-            oldParentDentry.Inode!.Rename(oldName, newParentDentry.Inode!, newName);
+            oldParentLoc.Dentry!.Inode!.Rename(oldName, newParentLoc.Dentry!.Inode!, newName);
             return 0;
         }
         catch (FileNotFoundException)
@@ -631,11 +614,11 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        WriteStat(sm, a2, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        WriteStat(sm, a2, loc.Dentry.Inode);
         return 0;
     }
 
@@ -644,11 +627,11 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path, followLink: false);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        WriteStat(sm, a2, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        WriteStat(sm, a2, loc.Dentry.Inode);
         return 0;
     }
 
@@ -685,20 +668,21 @@ public partial class SyscallManager
             return 0;
         }
 
-        Dentry? startAt = null;
+        PathLocation startLoc = default;
         if (dirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var dentry = sm.PathWalk(path, startAt, followLink);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, startLoc.IsValid ? startLoc : sm.CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        WriteStatx(sm, statxAddr, dentry.Inode, mask);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        WriteStatx(sm, statxAddr, loc.Dentry.Inode, mask);
         return 0;
     }
 
@@ -710,16 +694,16 @@ public partial class SyscallManager
         var path = sm.ReadString(a1);
         var mode = a2;
 
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -2; // ENOENT
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -2; // ENOENT
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChmod(t.Process, dentry.Inode);
+        var allowed = DacPolicy.CanChmod(t.Process, loc.Dentry.Inode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(dentry.Inode, (int)mode, t.Process);
+        return ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
     }
 
     private static async ValueTask<int> SysFchmod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -751,16 +735,16 @@ public partial class SyscallManager
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -2; // ENOENT
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -2; // ENOENT
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChown(t.Process, dentry.Inode, uid, gid);
+        var allowed = DacPolicy.CanChown(t.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(dentry.Inode, uid, gid);
+        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysFchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -793,16 +777,16 @@ public partial class SyscallManager
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var dentry = sm.PathWalk(path, followLink: false);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChown(t.Process, dentry.Inode, uid, gid);
+        var allowed = DacPolicy.CanChown(t.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(dentry.Inode, uid, gid);
+        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
     }
 
     private static async ValueTask<int> SysGetCwd(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -812,18 +796,7 @@ public partial class SyscallManager
         var bufAddr = a1;
         var size = a2;
 
-        var parts = new List<string>();
-        var current = sm.CurrentWorkingDirectory;
-        while (current != sm.ProcessRoot && current != sm.Root)
-        {
-            parts.Insert(0, current.Name);
-            var next = current.Parent;
-            if (current == current.SuperBlock.Root && current.MountedAt != null) next = current.MountedAt.Parent;
-            if (next == null || next == current) break;
-            current = next;
-        }
-
-        var cwd = "/" + string.Join("/", parts);
+        var cwd = sm.GetAbsolutePath(sm.CurrentWorkingDirectory);
         if (cwd.Length + 1 > size) return -(int)Errno.ERANGE;
 
         if (!sm.Engine.CopyToUser(bufAddr, Encoding.ASCII.GetBytes(cwd + "\0"))) return -(int)Errno.EFAULT;
@@ -859,21 +832,17 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var path = sm.ReadString(a1);
 
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "." : lastSlash == 0 ? "/" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path);
+        if (err != 0) return err;
 
-        var parentDentry = sm.PathWalk(parentPath);
-        if (parentDentry == null) return -(int)Errno.ENOENT;
-
-        var targetDentry = sm.PathWalk(path, followLink: false);
-        if (targetDentry == null || targetDentry.Inode == null) return -(int)Errno.ENOENT;
-        if (targetDentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        var targetLoc = sm.PathWalkWithFlags(path, LookupFlags.None);
+        if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
         try
         {
-            parentDentry.Inode!.Unlink(name);
-            parentDentry.Children.Remove(name);
+            parentLoc.Dentry!.Inode!.Unlink(name);
+            parentLoc.Dentry.Children.Remove(name);
             return 0;
         }
         catch (Exception ex)
@@ -889,19 +858,19 @@ public partial class SyscallManager
         var path = sm.ReadString(a1);
         var mode = (int)a2;
         if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
-        var dentry = sm.PathWalk(path);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (mode == 0) return 0; // F_OK
 
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
 
         var req = AccessMode.None;
         if ((mode & 4) != 0) req |= AccessMode.MayRead;
         if ((mode & 2) != 0) req |= AccessMode.MayWrite;
         if ((mode & 1) != 0) req |= AccessMode.MayExec;
-        return DacPolicy.CheckPathAccess(task.Process, dentry.Inode, req, useEffectiveIds: false);
+        return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, useEffectiveIds: false);
     }
 
     private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -1183,11 +1152,11 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path);
-        if (dentry?.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
         if (!sm.Engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
-        WriteStatfs32(sm, a2, dentry);
+        WriteStatfs32(sm, a2, loc.Dentry);
         return 0;
     }
 
@@ -1214,11 +1183,11 @@ public partial class SyscallManager
         if (size < 84) return -(int)Errno.EINVAL;
 
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path);
-        if (dentry?.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
         if (!sm.Engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
-        WriteStatfs64(sm, a3, dentry);
+        WriteStatfs64(sm, a3, loc.Dentry);
         return 0;
     }
 
@@ -1258,15 +1227,15 @@ public partial class SyscallManager
         if (path == null) return -(int)Errno.EFAULT;
 
         Logger.LogInformation($"[Stat64] Path='{path}'");
-        var dentry = sm.PathWalk(path, followLink: followLink);
-        if (dentry == null || dentry.Inode == null)
+        var loc = sm.PathWalkWithFlags(path, followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null)
         {
             Logger.LogWarning($"[Stat64] PathWalk failed for '{path}'");
             return -(int)Errno.ENOENT;
         }
 
-        RefreshHostfsProjectionForCaller(sm, dentry.Inode);
-        WriteStat64(sm, ptrStat, dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
+        WriteStat64(sm, ptrStat, loc.Dentry.Inode);
         return 0;
     }
 
@@ -1290,12 +1259,8 @@ public partial class SyscallManager
         var target = sm.ReadString(a1);
         var linkpath = sm.ReadString(a2);
 
-        var lastSlash = linkpath.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
-        var name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
-
-        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        var (parentLoc, name, err) = sm.PathWalkForCreate(linkpath);
+        if (err != 0) return err;
 
         var t = sm.Engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
@@ -1303,8 +1268,8 @@ public partial class SyscallManager
 
         try
         {
-            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            parentDentry.Inode.Symlink(dentry, target, uid, gid);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+            parentLoc.Dentry.Inode!.Symlink(dentry, target, uid, gid);
             return 0;
         }
         catch (Exception ex)
@@ -1322,11 +1287,11 @@ public partial class SyscallManager
         var bufAddr = a2;
         var bufSize = (int)a3;
 
-        var dentry = sm.PathWalk(path, followLink: false);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
-        if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        var target = dentry.Inode.Readlink();
+        var target = loc.Dentry.Inode.Readlink();
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
@@ -1343,19 +1308,19 @@ public partial class SyscallManager
         var bufAddr = a3;
         var bufSize = (int)a4;
 
-        Dentry? startAt = null;
+        PathLocation? startAt = null;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var dentry = sm.PathWalk(path, startAt, false);
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
-        if (dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
+        var loc = sm.PathWalkWithFlags(path, startAt ?? sm.CurrentWorkingDirectory, LookupFlags.None);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        var target = dentry.Inode.Readlink();
+        var target = loc.Dentry.Inode.Readlink();
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!sm.Engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
@@ -1370,20 +1335,16 @@ public partial class SyscallManager
         var dirfd = (int)a2;
         var linkpath = sm.ReadString(a3);
 
-        Dentry? startAt = null;
+        PathLocation? startAt = null;
         if (dirfd != -100 && !linkpath.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var lastSlash = linkpath.LastIndexOf('/');
-        var parentPath = lastSlash == -1 ? "" : linkpath[..lastSlash];
-        var name = lastSlash == -1 ? linkpath : linkpath[(lastSlash + 1)..];
-
-        var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
-        if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+        var (parentLoc, name, err) = sm.PathWalkForCreate(linkpath, startAt);
+        if (err != 0) return err;
 
         var t = sm.Engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
@@ -1391,8 +1352,8 @@ public partial class SyscallManager
 
         try
         {
-            var dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            parentDentry.Inode.Symlink(dentry, target, uid, gid);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+            parentLoc.Dentry.Inode!.Symlink(dentry, target, uid, gid);
             return 0;
         }
         catch (Exception ex)
@@ -1416,46 +1377,78 @@ public partial class SyscallManager
         string? dataString = null;
         if (dataAddr != 0) dataString = sm.ReadString(dataAddr);
 
-        var targetDentry = sm.PathWalk(target);
-        if (targetDentry == null) return -(int)Errno.ENOENT;
+        var targetLoc = sm.PathWalkWithFlags(target, LookupFlags.None);
+        if (!targetLoc.IsValid) return -(int)Errno.ENOENT;
 
-        // mount(2) operates on the mountpoint itself, not on a followed mount root.
-        if (targetDentry.MountedAt != null)
-            targetDentry = targetDentry.MountedAt;
+        var targetDentry = targetLoc.Dentry!;
+        var targetMount = targetLoc.Mount!;
 
-        // Handle MS_BIND (Bind Mount) - New implementation using Mount object
+        // Handle MS_REMOUNT - change flags on existing mount
+        if ((flags & LinuxConstants.MS_REMOUNT) != 0)
+        {
+            if (targetMount == null) return -(int)Errno.EINVAL;
+
+            // Update flags
+            if ((flags & LinuxConstants.MS_RDONLY) != 0)
+                targetMount.Flags |= LinuxConstants.MS_RDONLY;
+            else
+                targetMount.Flags &= ~LinuxConstants.MS_RDONLY;
+
+            if ((flags & LinuxConstants.MS_NOSUID) != 0)
+                targetMount.Flags |= LinuxConstants.MS_NOSUID;
+            else
+                targetMount.Flags &= ~LinuxConstants.MS_NOSUID;
+
+            if ((flags & LinuxConstants.MS_NODEV) != 0)
+                targetMount.Flags |= LinuxConstants.MS_NODEV;
+            else
+                targetMount.Flags &= ~LinuxConstants.MS_NODEV;
+
+            if ((flags & LinuxConstants.MS_NOEXEC) != 0)
+                targetMount.Flags |= LinuxConstants.MS_NOEXEC;
+            else
+                targetMount.Flags &= ~LinuxConstants.MS_NOEXEC;
+
+            // Update options string
+            var opts = new List<string> { (targetMount.Flags & LinuxConstants.MS_RDONLY) != 0 ? "ro" : "rw" };
+            if ((targetMount.Flags & LinuxConstants.MS_NOSUID) != 0) opts.Add("nosuid");
+            if ((targetMount.Flags & LinuxConstants.MS_NODEV) != 0) opts.Add("nodev");
+            if ((targetMount.Flags & LinuxConstants.MS_NOEXEC) != 0) opts.Add("noexec");
+            opts.Add("relatime");
+            targetMount.Options = string.Join(",", opts);
+
+            // Update MountList
+            var targetPath = sm.GetAbsolutePath(targetLoc);
+
+            return 0;
+        }
+
+        // Check if target is already a mount point
+        if (targetDentry.IsMounted)
+            return -(int)Errno.EBUSY;
+
+        // Handle MS_BIND (Bind Mount)
         if ((flags & LinuxConstants.MS_BIND) != 0)
         {
-            var srcDentry = sm.PathWalk(source);
-            if (srcDentry == null || srcDentry.Inode == null)
+            var srcLoc = sm.PathWalkWithFlags(source, LookupFlags.FollowSymlink);
+            if (!srcLoc.IsValid || srcLoc.Dentry!.Inode == null)
                 return -(int)Errno.ENOENT;
 
-            // Check if target is already mounted
-            if (targetDentry.IsMounted)
-                return -(int)Errno.EBUSY;
+            var srcDentry = srcLoc.Dentry;
+            var srcMount = srcLoc.Mount!;
 
-            // Create a bind mount - reuse the source dentry directly
-            // No need to create a new SuperBlock
-            var bindParentMount = sm.FindMount(targetDentry) ?? sm.RootMount;
-
-            var bindMount = new Mount(srcDentry.SuperBlock, srcDentry, targetDentry, bindParentMount)
-            {
-                Source = source,
-                FsType = "none", // bind mounts show as "none" in /proc/mounts
-                Flags = flags & LinuxConstants.MS_RDONLY // Store RDONLY flag
-            };
+            // Create a bind mount - clone the source mount with the specific dentry as root
+            var bindMount = srcMount.Clone(srcDentry);
+            bindMount.Source = source;
+            bindMount.FsType = "none"; // bind mounts show as "none" in /proc/mounts
+            bindMount.Flags = flags & (LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV |
+                                       LinuxConstants.MS_NOEXEC);
             bindMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
 
-            // Update dentry mount info
-            targetDentry.IsMounted = true;
-            targetDentry.MountRoot = srcDentry;
-            targetDentry.Mount = bindMount;
-            srcDentry.MountedAt = targetDentry;
+            // Attach to target
+            sm.RegisterMount(bindMount, targetMount, targetDentry);
 
-            // Track mount
-            sm.Mounts.Add(bindMount);
-            var targetPath = BuildPath(targetDentry);
-            sm.AddMountInfo(source, targetPath, "none", bindMount.Options);
+            var targetPath = sm.GetAbsolutePath(targetLoc);
 
             return 0;
         }
@@ -1478,29 +1471,25 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
         }
 
-        if (newSb == null)
+        if (newSb == null!)
             return -(int)Errno.EINVAL;
 
-        // Use the new Mount-based mounting
-        var parentMount = sm.FindMount(targetDentry) ?? sm.RootMount;
-        var newMount = new Mount(newSb, newSb.Root, targetDentry, parentMount)
+        // Create new mount
+        var newMount = new Mount(newSb, newSb.Root)
         {
             Source = string.IsNullOrEmpty(source) ? fstype : source,
             FsType = fstype,
-            Flags = flags & LinuxConstants.MS_RDONLY
+            Flags = flags & (LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV |
+                             LinuxConstants.MS_NOEXEC)
         };
         newMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
         if (!string.IsNullOrWhiteSpace(dataString))
             newMount.Options += $",{dataString}";
 
-        targetDentry.IsMounted = true;
-        targetDentry.MountRoot = newSb.Root;
-        targetDentry.Mount = newMount;
-        newSb.Root.MountedAt = targetDentry;
+        // Attach to target
+        sm.RegisterMount(newMount, targetMount, targetDentry);
 
-        sm.Mounts.Add(newMount);
-        var targetPath2 = BuildPath(targetDentry);
-        sm.AddMountInfo(newMount.Source, targetPath2, fstype, newMount.Options);
+        var targetPath2 = sm.GetAbsolutePath(targetLoc);
 
         return 0;
     }
@@ -1511,53 +1500,28 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         var target = sm.ReadString(a1);
-        var targetDentry = sm.PathWalk(target);
+        var targetLoc = sm.PathWalkWithFlags(target, LookupFlags.FollowSymlink);
 
-        // PathWalk follows mounts, so we need to check MountedAt to find the actual mount point
-        if (targetDentry != null && targetDentry.MountedAt != null)
-        {
-            // This dentry is a mount root, find the mount point
-            var mountPoint = targetDentry.MountedAt;
-            var mountRoot = mountPoint.MountRoot;
-            var targetPath = BuildPath(mountPoint);
+        if (!targetLoc.IsValid || targetLoc.Mount == null) return -22; // EINVAL
 
-            if (mountRoot == null) return -(int)Errno.EINVAL;
+        var mount = targetLoc.Mount;
 
-            // Check if filesystem is busy (has active inodes)
-            if (mountRoot.SuperBlock.HasActiveInodes()) return -16; // EBUSY
+        // If the path is not the root of the mount, it's not a mount point
+        if (targetLoc.Dentry != mount.Root) return -22; // EINVAL
 
-            // Detach mount
-            mountPoint.IsMounted = false;
-            mountPoint.MountRoot = null;
-            targetDentry.MountedAt = null;
-            sm.RemoveMountInfo(targetPath);
+        if (mount == sm.Root.Mount) return -22; // EINVAL // Cannot unmount root
 
-            // Release SuperBlock reference
-            mountRoot.SuperBlock.Put();
-            return 0;
-        }
+        // Check if filesystem is busy (has active inodes)
+        if (mount.SB.HasActiveInodes()) return -16; // EBUSY
 
-        if (targetDentry != null && targetDentry.IsMounted)
-        {
-            // This is the mount point itself
-            var mountRoot = targetDentry.MountRoot;
-            var targetPath = BuildPath(targetDentry);
+        var targetPath = sm.GetAbsolutePath(targetLoc);
 
-            if (mountRoot != null && mountRoot.SuperBlock.HasActiveInodes()) return -16; // EBUSY
+        // Detach mount
+        sm.UnregisterMount(mount);
 
-            targetDentry.IsMounted = false;
-            if (targetDentry.MountRoot != null)
-            {
-                targetDentry.MountRoot.MountedAt = null;
-                targetDentry.MountRoot.SuperBlock.Put();
-            }
-
-            targetDentry.MountRoot = null;
-            sm.RemoveMountInfo(targetPath);
-            return 0;
-        }
-
-        return -22; // EINVAL
+        // Release SuperBlock reference
+        mount.SB.Put();
+        return 0;
     }
 
     private static async ValueTask<int> SysUmount2(IntPtr state, uint a1, uint flags, uint a3, uint a4, uint a5,
@@ -1567,53 +1531,34 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
 
         var target = sm.ReadString(a1);
-        var targetDentry = sm.PathWalk(target);
+        var targetLoc = sm.PathWalkWithFlags(target, LookupFlags.FollowSymlink);
+
+        if (!targetLoc.IsValid || targetLoc.Mount == null) return -22; // EINVAL
+
+        var mount = targetLoc.Mount;
+
+        if (targetLoc.Dentry != mount.Root) return -22; // EINVAL
+        if (mount == sm.Root.Mount) return -22; // EINVAL // Cannot unmount root
 
         const uint MNT_FORCE = 1;
         const uint MNT_DETACH = 2;
-        Dentry? mountPoint;
-        Dentry? mountRoot;
-        if (targetDentry != null && targetDentry.MountedAt != null)
-        {
-            mountPoint = targetDentry.MountedAt;
-            mountRoot = mountPoint.MountRoot;
-        }
-        else if (targetDentry != null && targetDentry.IsMounted)
-        {
-            mountPoint = targetDentry;
-            mountRoot = targetDentry.MountRoot;
-        }
-        else
-        {
-            return -22; // EINVAL
-        }
 
-        if (mountRoot == null) return -22; // EINVAL
-
-        var targetPath = BuildPath(mountPoint);
+        var targetPath = sm.GetAbsolutePath(targetLoc);
 
         if ((flags & MNT_DETACH) != 0)
         {
             // Lazy unmount: detach immediately but allow active references to continue
-            mountPoint.IsMounted = false;
-            mountPoint.MountRoot = null;
-            if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
-            else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
-            sm.RemoveMountInfo(targetPath);
+            sm.UnregisterMount(mount);
             // Don't call sb.Put() - let reference counting naturally decrease when files close
             return 0;
         }
 
         // Normal umount with optional force
-        if (mountRoot.SuperBlock.HasActiveInodes() && (flags & MNT_FORCE) == 0) return -16; // EBUSY
+        if (mount.SB.HasActiveInodes() && (flags & MNT_FORCE) == 0) return -16; // EBUSY
 
         // Force unmount or no active inodes
-        mountPoint.IsMounted = false;
-        mountPoint.MountRoot = null;
-        if (targetDentry?.MountedAt != null) targetDentry.MountedAt = null;
-        else if (mountRoot.MountedAt != null) mountRoot.MountedAt = null;
-        sm.RemoveMountInfo(targetPath);
-        mountRoot.SuperBlock.Put();
+        sm.UnregisterMount(mount);
+        mount.SB.Put();
 
         return 0;
     }
@@ -1628,12 +1573,12 @@ public partial class SyscallManager
         if (allowed != 0) return allowed;
 
         var path = sm.ReadString(a1);
-        var dentry = sm.PathWalk(path);
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
 
-        if (dentry == null || dentry.Inode == null) return -(int)Errno.ENOENT;
-        if (dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR; // ENOTDIR
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR; // ENOTDIR
 
-        sm.ProcessRoot = dentry;
+        sm.ProcessRoot = loc;
         return 0;
     }
 
@@ -1686,38 +1631,36 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var dfd = (int)a1;          // dirfd
-        var pathname = a2;          // path string address
-        var flags = a3;             // flags (OPEN_TREE_CLONE, etc.)
+        var dfd = (int)a1; // dirfd
+        var pathname = a2; // path string address
+        var flags = a3; // flags (OPEN_TREE_CLONE, etc.)
 
         // Resolve path
-        Dentry? dentry;
+        PathLocation loc;
         if ((flags & AT_EMPTY_PATH) != 0 && pathname == 0)
         {
             // Use dfd directly
             var f = sm.GetFD(dfd);
             if (f == null) return -(int)Errno.EBADF;
-            dentry = f.Dentry;
+            loc = new PathLocation(f.Dentry, f.Mount);
         }
         else
         {
             var path = sm.ReadString(pathname);
             var followSymlinks = (flags & AT_SYMLINK_NOFOLLOW) == 0;
-            dentry = sm.PathWalk(path, null, followSymlinks);
+            loc = sm.PathWalkWithFlags(path, followSymlinks ? LookupFlags.FollowSymlink : LookupFlags.None);
         }
 
-        if (dentry == null) return -(int)Errno.ENOENT;
-        if (dentry.Inode == null) return -(int)Errno.ENOENT;
+        if (!loc.IsValid) return -(int)Errno.ENOENT;
+        if (loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        // Find the mount at this location
-        var mount = sm.FindMount(dentry);
-        if (mount == null) return -(int)Errno.ENOENT;
+        var mount = loc.Mount!;
 
         MountFile mountFile;
         if ((flags & OPEN_TREE_CLONE) != 0)
         {
-            // Clone the mount (detached)
-            var clonedMount = mount.Clone();
+            // Clone the mount with the specific dentry as root (for bind mounts)
+            var clonedMount = mount.Clone(loc.Dentry);
             mountFile = new MountFile(clonedMount);
         }
         else
@@ -1741,11 +1684,11 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var fromDfd = (int)a1;      // source dirfd
-        var fromPath = a2;          // source path
-        var toDfd = (int)a3;        // target dirfd
-        var toPath = a4;            // target path
-        var flags = a5;             // flags
+        var fromDfd = (int)a1; // source dirfd
+        var fromPath = a2; // source path
+        var toDfd = (int)a3; // target dirfd
+        var toPath = a4; // target path
+        var flags = a5; // flags
 
         // Get source mount from fromDfd (must be a MountFile from open_tree)
         var fromFile = sm.GetFD(fromDfd);
@@ -1756,22 +1699,25 @@ public partial class SyscallManager
         if (mount == null) return -(int)Errno.EINVAL;
 
         // Resolve target path
-        Dentry? toDentry;
+        PathLocation toLoc;
         if ((flags & MOVE_MOUNT_T_EMPTY_PATH) != 0 && toPath == 0)
         {
             var f = sm.GetFD(toDfd);
             if (f == null) return -(int)Errno.EBADF;
-            toDentry = f.Dentry;
+            toLoc = new PathLocation(f.Dentry, f.Mount);
         }
         else
         {
             var path = sm.ReadString(toPath);
-            toDentry = sm.PathWalk(path);
+            toLoc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
         }
 
-        if (toDentry == null) return -(int)Errno.ENOENT;
-        if (toDentry.Inode == null) return -(int)Errno.ENOENT;
-        
+        if (!toLoc.IsValid) return -(int)Errno.ENOENT;
+        if (toLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+
+        var toDentry = toLoc.Dentry;
+        var toMount = toLoc.Mount!;
+
         // Ensure types match (directory to directory, or file to file)
         var isTargetDir = toDentry.Inode.Type == InodeType.Directory;
         var isSourceDir = mount.Root.Inode?.Type == InodeType.Directory;
@@ -1779,49 +1725,46 @@ public partial class SyscallManager
         if (!isTargetDir && isSourceDir) return -(int)Errno.ENOTDIR;
 
         // Attach the mount
-        var result = sm.AttachMount(mount, toDentry);
-        if (result == 0)
-        {
-            // Success - close the MountFile fd (the mount is now attached)
-            // The caller should close the fd after move_mount
-        }
+        sm.RegisterMount(mount, toMount, toDentry);
 
-        return result;
+        var targetPathStr = sm.GetAbsolutePath(toLoc);
+
+        return 0;
     }
 
     /// <summary>
     /// mount_setattr(2) - Set attributes on a mount
     /// syscall number 442 on x86
     /// </summary>
-    private static async ValueTask<int> SysMountSetattr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysMountSetattr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        var dfd = (int)a1;          // dirfd
-        var pathAddr = a2;          // path
-        var flags = a3;             // flags (AT_RECURSIVE, etc.)
-        var uattr = a4;             // struct mount_attr pointer
-        var usize = (int)a5;        // size of mount_attr
+        var dfd = (int)a1; // dirfd
+        var pathAddr = a2; // path
+        var flags = a3; // flags (AT_RECURSIVE, etc.)
+        var uattr = a4; // struct mount_attr pointer
+        var usize = (int)a5; // size of mount_attr
 
         // Resolve path
-        Dentry? dentry;
+        PathLocation loc;
         if ((flags & AT_EMPTY_PATH) != 0 && pathAddr == 0)
         {
             var f = sm.GetFD(dfd);
             if (f == null) return -(int)Errno.EBADF;
-            dentry = f.Dentry;
+            loc = new PathLocation(f.Dentry, f.Mount);
         }
         else
         {
             var pathStr = sm.ReadString(pathAddr);
-            dentry = sm.PathWalk(pathStr);
+            loc = sm.PathWalkWithFlags(pathStr, LookupFlags.FollowSymlink);
         }
 
-        if (dentry == null) return -(int)Errno.ENOENT;
+        if (!loc.IsValid) return -(int)Errno.ENOENT;
 
-        // Find the mount
-        var mount = sm.FindMount(dentry);
+        var mount = loc.Mount!;
         if (mount == null) return -(int)Errno.ENOENT;
 
         // Read mount_attr structure from guest memory

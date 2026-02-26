@@ -53,7 +53,7 @@ public partial class SyscallManager
             if ((type & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
             var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, sm.MemfdSuperBlock);
-            var file = new VFS.LinuxFile(dentry, fileFlags);
+            var file = new LinuxFile(dentry, fileFlags, sm.AnonMount);
 
             return sm.AllocFD(file);
         }
@@ -150,7 +150,8 @@ public partial class SyscallManager
         return await SysAccept4(state, a1, a2, a3, 0, 0, 0);
     }
 
-    private static async ValueTask<int> SysGetSockName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetSockName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -184,7 +185,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysGetPeerName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetPeerName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -241,7 +243,7 @@ public partial class SyscallManager
             if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
             var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
-            var newFile = new VFS.LinuxFile(dentry, fileFlags);
+            var newFile = new LinuxFile(dentry, fileFlags, sm.AnonMount);
 
             if (addrPtr != 0 && addrLenPtr != 0) WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
 
@@ -406,7 +408,7 @@ public partial class SyscallManager
                 offset += iov.Len;
             }
 
-        var fds = new List<VFS.LinuxFile>();
+        var fds = new List<LinuxFile>();
         if (controlPtr != 0 && controlLen > 0)
         {
             var cmsgRaw = new byte[controlLen];
@@ -489,7 +491,7 @@ public partial class SyscallManager
 
         var buffer = new byte[totalBytes];
         var bytesRead = 0;
-        List<VFS.LinuxFile>? receivedFds = null;
+        List<LinuxFile>? receivedFds = null;
 
         var namePtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(0, 4));
         var nameLenPtr = msgPtr + 4; // msg_namelen is at offset 4
@@ -575,8 +577,8 @@ public partial class SyscallManager
 
         var realType = type & 0xf;
         SocketType sockType;
-        if (realType == 1) sockType = SocketType.Stream;       // SOCK_STREAM
-        else if (realType == 2) sockType = SocketType.Dgram;   // SOCK_DGRAM
+        if (realType == 1) sockType = SocketType.Stream; // SOCK_STREAM
+        else if (realType == 2) sockType = SocketType.Dgram; // SOCK_DGRAM
         else if (realType == 5) sockType = SocketType.Seqpacket; // SOCK_SEQPACKET
         else return -(int)Errno.EINVAL;
 
@@ -589,10 +591,10 @@ public partial class SyscallManager
         inode1.ConnectPair(inode2);
         inode2.ConnectPair(inode1);
 
-        var file1 = new VFS.LinuxFile(new Dentry($"socket:[{inode1.Ino}]", inode1, null, sm.MemfdSuperBlock),
-            fileFlags);
-        var file2 = new VFS.LinuxFile(new Dentry($"socket:[{inode2.Ino}]", inode2, null, sm.MemfdSuperBlock),
-            fileFlags);
+        var file1 = new LinuxFile(new Dentry($"socket:[{inode1.Ino}]", inode1, null, sm.MemfdSuperBlock),
+            fileFlags, sm.AnonMount);
+        var file2 = new LinuxFile(new Dentry($"socket:[{inode2.Ino}]", inode2, null, sm.MemfdSuperBlock),
+            fileFlags, sm.AnonMount);
 
         var fd1 = sm.AllocFD(file1);
         var fd2 = sm.AllocFD(file2);

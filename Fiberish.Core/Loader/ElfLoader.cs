@@ -43,51 +43,54 @@ public class ElfLoader
         public string? InterpPath { get; set; }
     }
 
-    public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args, string[] envs)
+    public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args,
+        string[] envs, Mount mount)
     {
         var mm = sys.Mem;
         var engine = sys.Engine;
 
         // Open the main ELF via VFS
-        var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
+        var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
         using var stream = new VfsStream(mainFile);
         var elf = ElfFile.Read(stream);
 
-        uint loadBase = 0;
-        if (elf.FileType == ElfFileType.Dynamic) loadBase = 0x08000000; // PIE base for main binary
-        Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", guestPath, elf.FileType, loadBase);
+        var loadBase = (uint)(elf.FileType == ElfFileType.Executable ? 0 : 0x40000000);
+        Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", guestPath,
+            elf.FileType, loadBase);
 
         // Load main binary's segments
-        var mainInfo = LoadSegments(elf, loadBase, mm, engine, dentry, guestPath, stream);
+        var mainInfo = LoadSegments(elf, loadBase, mm, engine, dentry, guestPath, stream, mount);
 
         // Check for PT_INTERP (dynamic linker)
         uint interpBase = 0;
-        uint interpEntry = 0;
+        uint interpEntry = mainInfo.EntryPoint;
+
         if (mainInfo.InterpPath != null)
         {
-            Logger.LogInformation("ElfLoader: PT_INTERP detected, interpreter={InterpPath}", mainInfo.InterpPath);
-
-            // Resolve the interpreter file through VFS
-            var (interpDentry, _) = sys.ResolvePath(mainInfo.InterpPath);
-
-            if (interpDentry == null)
+            // Resolve interpreter
+            var (interpLoc, _) = sys.ResolvePath(mainInfo.InterpPath);
+            if (!interpLoc.IsValid)
                 throw new FileNotFoundException($"Interpreter not found in VFS: {mainInfo.InterpPath}");
 
-            var interpFile = new LinuxFile(interpDentry, FileFlags.O_RDONLY);
+            var interpDentry = interpLoc.Dentry!;
+            var interpMount = interpLoc.Mount!;
+
+            var interpFile = new LinuxFile(interpDentry, FileFlags.O_RDONLY, interpMount);
             using var interpStream = new VfsStream(interpFile);
             var interpElf = ElfFile.Read(interpStream);
 
-            // Choose a base address that won't collide with the main binary
-            // Place interpreter at a high address to avoid conflicts
-            interpBase = 0x40000000;
-            if (interpElf.FileType == ElfFileType.Executable)
+            if (interpElf.FileType == ElfFileType.Dynamic)
             {
-                // Static interpreter (rare), use its own addresses
-                interpBase = 0;
+                interpBase = 0x56555000; // Load ld.so at a distinct base
+            }
+            else
+            {
+                throw new NotSupportedException($"Unsupported interpreter type: {interpElf.FileType}");
             }
 
             Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
-            var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPath, interpStream);
+            var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPath,
+                interpStream, interpMount);
             interpEntry = interpInfo.EntryPoint;
         }
 
@@ -178,7 +181,8 @@ public class ElfLoader
             InitialStack = stackData.AsSpan((int)(sp - stackStart)).ToArray(),
             BrkAddr = mainInfo.BrkAddr
         };
-        Logger.LogInformation("ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
+        Logger.LogInformation(
+            "ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
             res.Entry, res.SP, res.BrkAddr, res.InitialStack.Length, interpBase);
         return res;
     }
@@ -188,7 +192,7 @@ public class ElfLoader
     /// Also detects PT_INTERP and PT_PHDR.
     /// </summary>
     private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
-        Dentry? dentry, string fileDesc, Stream elfStream)
+        Dentry? dentry, string fileDesc, Stream elfStream, Mount? mount = null)
     {
         var info = new ElfLoadInfo
         {
@@ -231,7 +235,7 @@ public class ElfLoader
                         throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {fileDesc}");
 
                     var fileSzLimit = diff + (long)segment.Size;
-                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY);
+                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount!);
                     mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
                         fileSzLimit, "ELF_LOAD", engine);
                 }
@@ -268,7 +272,8 @@ public class ElfLoader
 
         info.FirstLoadVaddr = firstLoadVaddr + loadBase;
 
-        Logger.LogDebug("ElfLoader: [{FileDesc}] loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={PhNum} entry=0x{Entry:x} brk=0x{Brk:x}",
+        Logger.LogDebug(
+            "ElfLoader: [{FileDesc}] loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={PhNum} entry=0x{Entry:x} brk=0x{Brk:x}",
             fileDesc, loadBase, info.PhdrAddr, info.PhNum, info.EntryPoint, info.BrkAddr);
 
         return info;

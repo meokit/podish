@@ -10,21 +10,21 @@ public static class ProcFsManager
     {
         try
         {
-            var procDentry = sm.PathWalk("/proc");
-            if (procDentry == null || procDentry.Inode == null) return;
+            var loc = sm.PathWalk("/proc");
+            if (!loc.IsValid) return;
 
             var pidStr = process.TGID.ToString();
-            var pidDentry = procDentry.Inode.Lookup(pidStr);
+            var pidDentry = loc.Dentry!.Inode!.Lookup(pidStr);
             if (pidDentry == null)
             {
-                pidDentry = new Dentry(pidStr, null, procDentry, procDentry.SuperBlock);
-                procDentry.Inode.Mkdir(pidDentry, 0x1ED, 0, 0); // 555
+                pidDentry = new Dentry(pidStr, null, loc.Dentry, loc.Dentry.SuperBlock);
+                loc.Dentry.Inode.Mkdir(pidDentry, 0x1ED, 0, 0); // 555
             }
 
             // Create status file
-            CreateOrUpdateProcFile(pidDentry, "status", () => GenerateStatus(process));
-            CreateOrUpdateProcFile(pidDentry, "cmdline", () => GenerateCmdline(process));
-            CreateOrUpdateProcFile(pidDentry, "stat", () => GenerateStat(process));
+            CreateOrUpdateProcFile(sm, loc, "status", () => GenerateStatus(process));
+            CreateOrUpdateProcFile(sm, loc, "cmdline", () => GenerateCmdline(process));
+            CreateOrUpdateProcFile(sm, loc, "stat", () => GenerateStat(process));
         }
         catch
         {
@@ -40,13 +40,13 @@ public static class ProcFsManager
     {
         try
         {
-            var procDentry = sm.PathWalk("/proc");
-            if (procDentry == null || procDentry.Inode == null) return;
+            var loc = sm.PathWalk("/proc");
+            if (!loc.IsValid) return;
 
             // Rmdir recursively? Tmpfs.Rmdir assumes empty.
             // We need to unlink children first.
             var pidStr = pid.ToString();
-            var pidDentry = procDentry.Inode.Lookup(pidStr);
+            var pidDentry = loc.Dentry.Inode!.Lookup(pidStr);
             if (pidDentry != null && pidDentry.Inode != null)
             {
                 // Unlink children manually as Tmpfs doesn't support recursive delete
@@ -57,7 +57,7 @@ public static class ProcFsManager
                     pidDentry.Inode.Unlink(child.Name);
                 }
 
-                procDentry.Inode.Rmdir(pidStr);
+                loc.Dentry.Inode.Rmdir(pidStr);
             }
         }
         catch
@@ -65,28 +65,21 @@ public static class ProcFsManager
         }
     }
 
-    private static void CreateOrUpdateProcFile(Dentry parent, string name, Func<string> contentGen)
+    private static void CreateOrUpdateProcFile(SyscallManager sm, PathLocation parent, string name,
+        Func<string> contentGen)
     {
-        var dentry = parent.Inode!.Lookup(name);
+        var dentry = parent.Dentry!.Inode!.Lookup(name);
         if (dentry == null)
         {
-            dentry = new Dentry(name, null, parent, parent.SuperBlock);
-            parent.Inode.Create(dentry, 0x124, 0, 0); // 444
+            dentry = new Dentry(name, null, parent.Dentry, parent.Mount!.SB);
+            parent.Dentry.Inode.Create(dentry, 0x124, 0, 0); // 444
         }
 
         dentry.Inode!.Truncate(0);
 
-        // Write content?
-        // Since Tmpfs is static, we write it once at start.
-        // For dynamic content, we'd need a specialized ProcInode.
-        // For busybox simple ps, static snapshot at fork might be enough?
-        // "ps" shows running processes. If status changes, it won't reflect.
-        // But pid/ppid/name are mostly static.
-        // Let's write initial content.
-
         var content = contentGen();
         var bytes = Encoding.UTF8.GetBytes(content);
-        var f = new VFS.LinuxFile(dentry, FileFlags.O_WRONLY);
+        var f = new LinuxFile(dentry, FileFlags.O_WRONLY, parent.Mount!);
         try
         {
             dentry.Inode!.Write(f, bytes, 0);
@@ -130,7 +123,7 @@ public static class ProcFsManager
     {
         // Minimal stat for ps
         // pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy
-        
+
         var stateChar = process.State switch
         {
             ProcessState.Running => 'R',
@@ -149,7 +142,7 @@ public static class ProcFsManager
             // Try to assign a device number. Standard /dev/ttyx is typically major 4. Let's just mock one or use 0x8800 for pty
             // Realistically busybox ps checks if ttyNr > 0 to display it.
             // Let's use 34816 (0x8800) which is commonly used for /dev/pts/0 or similar.
-            ttyNr = 34816; 
+            ttyNr = 34816;
             tpgid = process.ControllingTty.ForegroundPgrp;
         }
 
@@ -159,21 +152,22 @@ public static class ProcFsManager
 
     public static void Init(SyscallManager sm)
     {
-        var procDentry = sm.PathWalk("/proc");
-        if (procDentry == null || procDentry.Inode == null) return;
+        var loc = sm.PathWalk("/proc");
+        if (!loc.IsValid) return;
 
-        CreateOrUpdateProcFile(procDentry, "mounts", () => GenerateMounts(sm));
-        CreateOrUpdateProcFile(procDentry, "cpuinfo", GenerateCpuInfo);
-        CreateOrUpdateProcFile(procDentry, "meminfo", GenerateMemInfo);
-        CreateOrUpdateProcFile(procDentry, "version",
+        CreateOrUpdateProcFile(sm, loc, "mounts", () => GenerateMounts(sm));
+        CreateOrUpdateProcFile(sm, loc, "cpuinfo", GenerateCpuInfo);
+        CreateOrUpdateProcFile(sm, loc, "meminfo", GenerateMemInfo);
+        CreateOrUpdateProcFile(sm, loc, "version",
             () =>
-                "Linux version 6.1.0-x86emu (jiangyiheng@antigravity) (gcc version 12.2.0 (Debian 12.2.0-14)) #1 SMP PREEMPT\n");
+                "Linux version 6.1.0-fiberish (builder@bot) (gcc version 12.2.0 (Debian 12.2.0-14)) #1 SMP PREEMPT\n");
     }
 
     private static string GenerateMounts(SyscallManager sm)
     {
         var sb = new StringBuilder();
-        foreach (var m in sm.MountList) sb.Append($"{m.Source} {m.Target} {m.FsType} {m.Options} 0 0\n");
+        foreach (var (source, target, fsType, options) in sm.MountInfos)
+            sb.Append($"{source} {target} {fsType} {options} 0 0\n");
         return sb.ToString();
     }
 

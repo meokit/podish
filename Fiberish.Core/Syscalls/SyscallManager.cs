@@ -19,8 +19,7 @@ public partial class SyscallManager
     private static readonly object _registryLock = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, string hostRoot, bool useOverlay,
-        TtyDiscipline? tty = null)
+    public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
         Engine = engine;
         Mem = mem;
@@ -34,149 +33,42 @@ public partial class SyscallManager
         RegisterEngine(engine);
         RegisterHandlers();
 
-        // 1. Initialize Registry and Register Filesystems
+        // Register default filesystems
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() });
 
-        // Initialize PTY manager and devpts filesystem
         PtyManager = new PtyManager(Logger);
         var signalBroadcaster = new SignalBroadcasterImpl(this);
         FileSystemRegistry.TryRegister(new FileSystemType
             { Name = "devpts", FileSystem = new DevPtsFileSystem(PtyManager, signalBroadcaster, Logger) });
 
-        // 2. Setup Rootfs (OverlayFS: Lower=Hostfs, Upper=Tmpfs)
-        var hostFsType = FileSystemRegistry.Get("hostfs")!;
+        // Default memfd superblock
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        var overlayFsType = FileSystemRegistry.Get("overlay")!;
-
-        // Lower: Hostfs (Read-Only access to hostRoot)
-        var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
-
-        if (useOverlay)
-        {
-            // Upper: Tmpfs (Read-Write layer)
-            var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "overlay_upper", null);
-
-            // Overlay: Combine them
-            var options = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-            var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", options);
-
-            Root = overlaySb.Root;
-
-            // Create root mount
-            RootMount = new Mount(overlaySb, Root, null, null)
-            {
-                Source = "overlay",
-                FsType = "overlay",
-                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
-            };
-            Root.Mount = RootMount;
-            Mounts.Add(RootMount);
-
-            MountList.Add(new MountInfo
-            {
-                Source = "overlay", Target = "/", FsType = "overlay",
-                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
-            });
-        }
-        else
-        {
-            Root = lowerSb.Root;
-
-            // Create root mount
-            RootMount = new Mount(lowerSb, Root, null, null)
-            {
-                Source = hostRoot,
-                FsType = "hostfs",
-                Options = "rw,relatime"
-            };
-            Root.Mount = RootMount;
-            Mounts.Add(RootMount);
-
-            MountList.Add(new MountInfo
-            {
-                Source = hostRoot, Target = "/", FsType = "hostfs",
-                Options = "rw,relatime"
-            });
-        }
-
-        ProcessRoot = Root;
-        CurrentWorkingDirectory = Root;
-
-        Root.Inode!.Get();
-        ProcessRoot.Inode!.Get();
-        CurrentWorkingDirectory.Inode!.Get();
-
-        // 3. Mount /dev and /proc
-        if (useOverlay)
-        {
-            // Ensure /dev and /proc exist in the overlay (will be created in Upper if missing)
-            EnsureDirectory(Root, "dev");
-            EnsureDirectory(Root, "proc");
-            EnsureDirectory(Root, "tmp");
-        }
-
-        // 3. Setup devtmpfs and stdio FDs (always needed)
-        var devFsType = FileSystemRegistry.Get("devtmpfs")!;
-        var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
-
-        // Mount devtmpfs to /dev if it exists
-        var devDentry = Root.Inode.Lookup("dev");
-        if (devDentry != null && devDentry.Inode?.Type == InodeType.Directory)
-        {
-            Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
-        }
-        else
-        {
-            Logger.LogWarning("/dev not found in rootfs, skipping devtmpfs mount.");
-        }
-
-        // Add console FDs (uses devSb which might or might not be mounted)
-        InitStdio(devSb, tty);
-
-        // 4. Mount procfs to /proc if it exists
-        var procDentry = Root.Inode.Lookup("proc");
-        if (procDentry != null && procDentry.Inode?.Type == InodeType.Directory)
-        {
-            var procFsType = FileSystemRegistry.Get("proc")!;
-            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
-            Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
-        }
-        else
-        {
-            Logger.LogWarning("/proc not found in rootfs, skipping procfs mount.");
-        }
-
-        // 5. Mount tmpfs to /dev/shm for POSIX shm_open userspace ABI.
-        // Resolve through the mounted /dev dentry to avoid creating shm under a detached devtmpfs root.
-        var devRoot = PathWalk("/dev") ?? devSb.Root;
-        if (useOverlay)
-        {
-            EnsureDirectory(devRoot, "shm");
-        }
-
-        var shmDentry = devRoot.Inode!.Lookup("shm");
-        if (shmDentry != null && shmDentry.Inode?.Type == InodeType.Directory)
-        {
-            var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
-            Mount(devRoot, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
-            DevShmRoot = shmSb.Root;
-        }
-
-        // Separate tmpfs namespace for memfd_create (unnamed file descriptors).
         MemfdSuperBlock = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "memfd", null);
+
+        // Anonymous inode mount (like Linux's anon_inodefs)
+        // Used for timerfd, eventfd, epoll, socket, etc.
+        AnonMount = new Mount(MemfdSuperBlock, MemfdSuperBlock.Root)
+        {
+            Source = "none",
+            FsType = "anon_inodefs",
+            Options = "rw"
+        };
 
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, VFS.LinuxFile> fds, FutexManager futex,
+    private SyscallManager(VMAManager mem, Dictionary<int, LinuxFile> fds, FutexManager futex,
         SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
         bool strace,
-        Dentry root, Dentry cwd, Dentry procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock, TtyDiscipline? tty)
+        PathLocation root, PathLocation cwd, PathLocation procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock,
+        TtyDiscipline? tty,
+        PtyManager ptyManager,
+        MountNamespace mountNamespace)
     {
         Mem = mem;
         FDs = fds;
@@ -186,16 +78,20 @@ public partial class SyscallManager
         BrkAddr = brk;
         BrkBase = brkBase;
         Strace = strace;
-        Root = root; // Global root (shared)
+        Root = root;
         CurrentWorkingDirectory = cwd;
         ProcessRoot = procRoot;
         DevShmRoot = devShmRoot;
         MemfdSuperBlock = memfdSuperBlock;
         Tty = tty;
+        PtyManager = ptyManager;
 
-        Root.Inode!.Get();
-        CurrentWorkingDirectory.Inode!.Get();
-        ProcessRoot.Inode!.Get();
+        // Share mount namespace
+        _mountNamespace = mountNamespace;
+
+        Root.Dentry!.Inode!.Get();
+        CurrentWorkingDirectory.Dentry!.Inode!.Get();
+        ProcessRoot.Dentry!.Inode!.Get();
 
         RegisterHandlers();
     }
@@ -212,40 +108,181 @@ public partial class SyscallManager
 
     public PosixTimerManager PosixTimers { get; } = new();
 
-    public Dentry Root { get; set; } = null!;
-    public Dentry CurrentWorkingDirectory { get; set; } = null!; // Renamed to avoid confusion with string Cwd
+    public PathLocation Root { get; set; } = PathLocation.None;
+    public PathLocation CurrentWorkingDirectory { get; set; } = PathLocation.None;
 
-    // For chroot tracking, we keep a Dentry pointer to the process root
-    public Dentry ProcessRoot { get; set; } = null!;
+    // For chroot tracking, we keep a PathLocation to the process root
+    public PathLocation ProcessRoot { get; set; } = PathLocation.None;
     public Dentry DevShmRoot { get; set; } = null!;
     public SuperBlock MemfdSuperBlock { get; set; } = null!;
+
+    /// <summary>
+    ///     Mount for anonymous inode files (timerfd, eventfd, epoll, socket, etc.).
+    ///     Similar to Linux's anon_inodefs.
+    /// </summary>
+    public Mount AnonMount { get; } = null!;
 
     // System V Shared Memory (Global IPC namespace)
     public SysVShmManager SysVShm { get; }
     public SysVSemManager SysVSem { get; }
 
     // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, VFS.LinuxFile> FDs { get; } = [];
+    public Dictionary<int, LinuxFile> FDs { get; } = [];
 
     public FutexManager Futex { get; }
 
     public uint BrkAddr { get; set; }
     public uint BrkBase { get; }
     public bool Strace { get; set; }
-    public List<MountInfo> MountList { get; } = [];
 
     /// <summary>
-    /// List of Mount objects for the new Mount API.
+    ///     Mount namespace containing all mounts and lookup hash.
     /// </summary>
-    public List<Mount> Mounts { get; } = [];
+    private readonly MountNamespace _mountNamespace = new();
 
     /// <summary>
-    /// The root mount (for the filesystem namespace).
+    ///     Gets mount information for /proc/mounts.
+    ///     Dynamically generated from the current mount namespace state.
     /// </summary>
-    public Mount? RootMount { get; private set; }
+    public IEnumerable<(string Source, string Target, string FsType, string Options)> MountInfos =>
+        _mountNamespace.GetMountInfos();
+
+    /// <summary>
+    ///     The root mount (for the filesystem namespace).
+    /// </summary>
+    public Mount? RootMount
+    {
+        get => _mountNamespace.RootMount;
+        private set => _mountNamespace.RootMount = value;
+    }
 
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
+
+    public void InitializeRoot(Dentry root, Mount rootMount)
+    {
+        Root = new PathLocation(root, rootMount);
+        RootMount = rootMount;
+        ProcessRoot = Root;
+        CurrentWorkingDirectory = Root;
+
+        Root.Dentry!.Inode!.Get();
+        ProcessRoot.Dentry!.Inode!.Get();
+        CurrentWorkingDirectory.Dentry!.Inode!.Get();
+
+        RegisterMount(RootMount, null, root);
+    }
+
+    public void MountRootHostfs(string hostPath, string options = "rw,relatime")
+    {
+        var hostFsType = FileSystemRegistry.Get("hostfs")!;
+        var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostPath, null);
+        var mount = new Mount(sb, sb.Root)
+        {
+            Source = hostPath,
+            FsType = "hostfs",
+            Options = options
+        };
+        InitializeRoot(sb.Root, mount);
+    }
+
+    public void MountRootOverlay(string hostRoot, string upperName = "overlay_upper",
+        string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
+    {
+        var hostFsType = FileSystemRegistry.Get("hostfs")!;
+        var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
+        var overlayFsType = FileSystemRegistry.Get("overlay")!;
+
+        var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
+        var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, upperName, null);
+
+        var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
+        var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
+
+        var mount = new Mount(overlaySb, overlaySb.Root)
+        {
+            Source = "overlay",
+            FsType = "overlay",
+            Options = options
+        };
+        InitializeRoot(overlaySb.Root, mount);
+    }
+
+    public void MountStandardDev(TtyDiscipline? tty = null, bool ensureMountPoint = true)
+    {
+        if (ensureMountPoint) EnsureDirectory(Root, "dev");
+
+        var devFsType = FileSystemRegistry.Get("devtmpfs")!;
+        var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
+
+        var devDentry = Root.Dentry!.Inode?.Lookup("dev");
+        if (devDentry != null && devDentry.Inode?.Type == InodeType.Directory)
+            Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
+        else
+            Logger.LogWarning("/dev not found in rootfs, skipping devtmpfs mount.");
+
+        // Initialize stdio FDs (uses devSb which might or might not be mounted)
+        InitStdio(devSb, tty ?? Tty);
+
+        // Mount devpts through the mounted /dev to avoid creating pts under a detached devtmpfs root.
+        var devLoc = PathWalk("/dev");
+        if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
+        {
+            EnsureDirectory(devLoc, "pts");
+            var devptsFsType = FileSystemRegistry.Get("devpts")!;
+            var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
+            Mount(devLoc, "pts", devptsSb, "devpts", "devpts", "rw,relatime,gid=5,mode=620", "/dev/pts");
+        }
+        else
+        {
+            Logger.LogWarning("/dev not mounted, skipping /dev/pts mount.");
+        }
+    }
+
+    public void MountStandardProc(bool ensureMountPoint = true)
+    {
+        if (ensureMountPoint) EnsureDirectory(Root, "proc");
+
+        var procDentry = Root.Dentry!.Inode?.Lookup("proc");
+        if (procDentry != null && procDentry.Inode?.Type == InodeType.Directory)
+        {
+            var procFsType = FileSystemRegistry.Get("proc")!;
+            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
+            Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
+
+            // Initialize ProcFsManager static files
+            ProcFsManager.Init(this);
+        }
+        else
+        {
+            Logger.LogWarning("/proc not found in rootfs, skipping procfs mount.");
+        }
+    }
+
+    public void MountStandardShm()
+    {
+        var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
+        var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
+
+        // Resolve through the mounted /dev to avoid creating shm under a detached devtmpfs root.
+        var devLoc = PathWalk("/dev");
+        if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
+        {
+            EnsureDirectory(devLoc, "shm");
+            Mount(devLoc, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
+        }
+        else
+        {
+            Logger.LogWarning("/dev not mounted, skipping /dev/shm mount.");
+        }
+
+        DevShmRoot = shmSb.Root; // Always init DevShmRoot
+    }
+
+    public void CreateStandardTmp(bool ensureMountPoint = true)
+    {
+        if (ensureMountPoint) EnsureDirectory(Root, "tmp");
+    }
 
     internal void SetupVDSO()
     {
@@ -277,17 +314,19 @@ public partial class SyscallManager
             SigReturnAddr, RtSigReturnAddr);
     }
 
-    private static Dentry EnsureDirectory(Dentry parent, string name)
+    private static PathLocation EnsureDirectory(PathLocation parent, string name)
     {
-        if (parent.Children.TryGetValue(name, out var cached)) return cached;
+        var parentDentry = parent.Dentry!;
 
-        var dentry = parent.Inode!.Lookup(name);
+        if (parentDentry.Children.TryGetValue(name, out var cached)) return new PathLocation(cached, parent.Mount);
+
+        var dentry = parentDentry.Inode!.Lookup(name);
         if (dentry == null)
         {
-            dentry = new Dentry(name, null, parent, parent.SuperBlock);
+            dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
             try
             {
-                parent.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
+                parentDentry.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
             }
             catch (Exception ex)
             {
@@ -300,19 +339,8 @@ public partial class SyscallManager
             throw new Exception($"Path /{name} exists but is not a directory");
         }
 
-        parent.Children[name] = dentry;
-        return dentry;
-    }
-
-    private class PlaceholderInode : Inode
-    {
-        public PlaceholderInode(SuperBlock sb)
-        {
-            SuperBlock = sb;
-            Type = InodeType.File;
-            Mode = 0;
-            MTime = ATime = CTime = DateTime.Now;
-        }
+        parentDentry.Children[name] = dentry;
+        return new PathLocation(dentry, parent.Mount);
     }
 
     public void MountHostfs(string hostPath, string guestPath, bool readOnly = false)
@@ -321,7 +349,7 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
 
         var current = Root;
-        for (int i = 0; i < parts.Length - 1; i++)
+        for (var i = 0; i < parts.Length - 1; i++)
         {
             current = EnsureDirectory(current, parts[i]);
         }
@@ -334,38 +362,40 @@ public partial class SyscallManager
         Dentry? finalDentry = null;
         if (isDir)
         {
-            finalDentry = EnsureDirectory(current, name);
+            finalDentry = EnsureDirectory(current, name).Dentry;
         }
         else if (isFile)
         {
             // For file mounts, create an empty file as mount point if it doesn't exist
-            if (current.Children.TryGetValue(name, out var cachedDentry))
+            if (current.Dentry!.Children.TryGetValue(name, out var cachedDentry))
             {
                 finalDentry = cachedDentry;
-                if (finalDentry.Inode?.Type != InodeType.File) throw new Exception($"Path /{name} exists but is not a file");
+                if (finalDentry.Inode?.Type != InodeType.File)
+                    throw new Exception($"Path /{name} exists but is not a file");
             }
             else
             {
-                finalDentry = current.Inode!.Lookup(name);
+                finalDentry = current.Dentry.Inode!.Lookup(name);
                 if (finalDentry == null)
                 {
-                    finalDentry = new Dentry(name, null, current, current.SuperBlock);
+                    finalDentry = new Dentry(name, null, current.Dentry!, current.Dentry!.SuperBlock);
                     try
                     {
-                        current.Inode.Create(finalDentry, 0x1FF, 0, 0); // 777
+                        current.Dentry!.Inode.Create(finalDentry, 0x1FF, 0, 0); // 777
                     }
                     catch (Exception ex)
                     {
                         Logger.LogWarning("Failed to create file mount point {Name}: {Error}", name, ex.Message);
                         // If Create fails, try using the dentry anyway - the mount will provide the content
-                        finalDentry.Instantiate(new PlaceholderInode(current.SuperBlock));
+                        finalDentry.Instantiate(new PlaceholderInode(current.Dentry!.SuperBlock));
                     }
                 }
                 else if (finalDentry.Inode?.Type != InodeType.File)
                 {
                     throw new Exception($"Path /{name} exists but is not a file");
                 }
-                current.Children[name] = finalDentry;
+
+                current.Dentry!.Children[name] = finalDentry;
             }
         }
         else
@@ -385,101 +415,87 @@ public partial class SyscallManager
         Mount(current, name, sb, hostPath, "hostfs", optionsText, guestPath);
     }
 
-    private void Mount(Dentry parent, string name, SuperBlock sb, string source, string fstype, string options,
+    private void Mount(PathLocation parent, string name, SuperBlock sb, string source, string fstype, string options,
         string? targetOverride = null)
     {
         // Use cached dentry if available (PathWalk checks Children first, so we must mount on the same object)
         Dentry dentry;
-        if (parent.Children.TryGetValue(name, out var cached))
+        if (parent.Dentry!.Children.TryGetValue(name, out var cached))
         {
             dentry = cached;
         }
         else
         {
-            dentry = parent.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
-            parent.Children[name] = dentry; // Cache it so PathWalk finds the mounted dentry
+            dentry = parent.Dentry.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
+            parent.Dentry.Children[name] = dentry; // Cache it so PathWalk finds the mounted dentry
         }
 
         // Determine parent mount
-        var parentMount = dentry.Mount ?? RootMount;
+        var parentMount = parent.Mount;
 
-        // Create new Mount object
-        var mount = new Mount(sb, sb.Root, dentry, parentMount)
+        // Create new Mount object and attach it
+        var mount = new Mount(sb, sb.Root)
         {
             Source = source,
             FsType = fstype,
             Options = options
         };
 
-        // Mount it (update dentry)
-        dentry.IsMounted = true;
-        dentry.MountRoot = sb.Root;
-        dentry.Mount = mount;
-        sb.Root.MountedAt = dentry;
+        RegisterMount(mount, parentMount, dentry);
 
-        // Track mount
-        Mounts.Add(mount);
         var targetPath = targetOverride ?? BuildPath(dentry);
-        AddMountInfo(source, targetPath, fstype, options);
     }
 
     /// <summary>
-    /// Attach a detached Mount (from open_tree/move_mount) to a dentry.
+    ///     Registers a mount in the system and attaches it to a mount point.
     /// </summary>
-    public int AttachMount(Mount mount, Dentry mountPoint)
+    public void RegisterMount(Mount mount, Mount? parent, Dentry mountPoint)
     {
-        if (mount.IsAttached)
-            return -(int)Errno.EBUSY;
-
-        // Check if mount point is already mounted
-        if (mountPoint.IsMounted)
-            return -(int)Errno.EBUSY;
-
-        // Determine parent mount
-        var parentMount = mountPoint.Mount ?? RootMount;
-
-        // Attach the mount
-        mount.Attach(mountPoint, parentMount);
-        Mounts.Add(mount);
-        mount.Get(); // Increase ref count for the attached mount
-
-        // Track mount info
-        var targetPath = BuildPath(mountPoint);
-        AddMountInfo(mount.Source, targetPath, mount.FsType, mount.Options);
-
-        return 0;
+        _mountNamespace.RegisterMount(mount, parent, mountPoint);
     }
 
     /// <summary>
-    /// Find the mount at a given path.
+    ///     Unregisters a mount from the system and detaches it.
     /// </summary>
-    public Mount? FindMount(Dentry dentry)
+    public void UnregisterMount(Mount mount)
     {
-        // Walk up the tree to find the mount
-        Dentry? current = dentry;
+        _mountNamespace.UnregisterMount(mount);
+    }
+
+    /// <summary>
+    ///     Find a child mount at the given dentry in the parent mount.
+    /// </summary>
+    public Mount? FindMount(Mount? parent, Dentry dentry)
+    {
+        return _mountNamespace.FindMount(parent, dentry);
+    }
+
+    public string GetAbsolutePath(PathLocation loc)
+    {
+        var parts = new List<string>();
+        var current = loc.Dentry;
+        var currentMount = loc.Mount;
+
         while (current != null)
         {
-            if (current.Mount != null)
-                return current.Mount;
-            if (current.IsMounted && current.MountRoot != null)
+            if (current == ProcessRoot.Dentry && (currentMount == null || currentMount == ProcessRoot.Mount))
+                break;
+
+            if (currentMount != null && current == currentMount.Root && currentMount.Parent != null)
             {
-                // Legacy: find mount by MountRoot
-                return Mounts.FirstOrDefault(m => m.Root == current.MountRoot);
+                current = currentMount.MountPoint!;
+                currentMount = currentMount.Parent;
+                continue;
             }
+
+            if (current.Name != "/") parts.Add(current.Name);
+
+            if (current.Parent == null || current.Parent == current) break;
             current = current.Parent;
         }
-        return RootMount;
-    }
 
-    internal void AddMountInfo(string source, string target, string fsType, string options)
-    {
-        MountList.RemoveAll(m => m.Target == target);
-        MountList.Add(new MountInfo { Source = source, Target = target, FsType = fsType, Options = options });
-    }
-
-    internal void RemoveMountInfo(string target)
-    {
-        MountList.RemoveAll(m => m.Target == target);
+        parts.Reverse();
+        return "/" + string.Join("/", parts);
     }
 
     private static string BuildPath(Dentry dentry)
@@ -489,13 +505,6 @@ public partial class SyscallManager
         while (cur != null)
         {
             if (cur.Name != "/") parts.Add(cur.Name);
-
-            // Root of a mounted filesystem: continue from mountpoint in parent namespace.
-            if (cur.MountedAt != null)
-            {
-                cur = cur.MountedAt;
-                continue;
-            }
 
             if (cur.Parent == null || cur.Parent == cur) break;
             cur = cur.Parent;
@@ -508,17 +517,18 @@ public partial class SyscallManager
     private void InitStdio(SuperBlock devSb, TtyDiscipline? tty)
     {
         // 0: Stdin, 1: Stdout, 2: Stderr
+        // Use AnonMount for console devices (they are not backed by a real filesystem)
         var stdinInode = new ConsoleInode(devSb, true, tty);
         var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb);
-        FDs[0] = new VFS.LinuxFile(stdinDentry, FileFlags.O_RDONLY);
+        FDs[0] = new LinuxFile(stdinDentry, FileFlags.O_RDONLY, AnonMount);
 
         var stdoutInode = new ConsoleInode(devSb, false, tty);
         var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
-        FDs[1] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
-        FDs[2] = new VFS.LinuxFile(stdoutDentry, FileFlags.O_WRONLY);
+        FDs[1] = new LinuxFile(stdoutDentry, FileFlags.O_WRONLY, AnonMount);
+        FDs[2] = new LinuxFile(stdoutDentry, FileFlags.O_WRONLY, AnonMount);
 
         // Resolve the mounted /dev dentry (goes through OverlayFS -> mount -> devtmpfs root)
-        var devRoot = PathWalk("/dev") ?? devSb.Root;
+        var devRoot = devSb.Root;
         var devRootInode = devRoot.Inode as TmpfsInode;
 
         // Helper to register a device entry properly
@@ -549,12 +559,6 @@ public partial class SyscallManager
         var ttyDentry = new Dentry("tty", ttyInode, devRoot, devSb);
         RegisterDev("tty", ttyDentry);
 
-        // Create /dev/pts directory and mount devpts
-        EnsureDirectory(devRoot, "pts");
-        var devptsFsType = FileSystemRegistry.Get("devpts")!;
-        var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
-        Mount(devRoot, "pts", devptsSb, "devpts", "devpts", "rw,relatime,gid=5,mode=620", "/dev/pts");
-
         // Create /dev/urandom and /dev/random
         var randomInode = new RandomInode(devSb);
         randomInode.Rdev = 0x0109; // Major 1, Minor 9 (urandom)
@@ -575,7 +579,7 @@ public partial class SyscallManager
 
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
     {
-        Dictionary<int, VFS.LinuxFile> newFds;
+        Dictionary<int, LinuxFile> newFds;
         if (shareFiles)
         {
             newFds = FDs;
@@ -592,9 +596,13 @@ public partial class SyscallManager
             }
         }
 
+        // Share the mount namespace (mounts are shared across fork/clone by default)
+        var sharedNamespace = _mountNamespace.Share();
+
         var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
-            ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty)
+            ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty, PtyManager,
+            sharedNamespace)
         {
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,
@@ -743,9 +751,9 @@ public partial class SyscallManager
                 _registry.Remove(Engine.State);
         }
 
-        Root?.Inode?.Put();
-        CurrentWorkingDirectory?.Inode?.Put();
-        ProcessRoot?.Inode?.Put();
+        Root.Dentry?.Inode?.Put();
+        CurrentWorkingDirectory.Dentry?.Inode?.Put();
+        ProcessRoot.Dentry?.Inode?.Put();
 
         foreach (var fd in FDs.Values)
             // Note: If shareFiles is true, this might be dangerous if multiple tasks close the same FDs
@@ -754,12 +762,15 @@ public partial class SyscallManager
         FDs.Clear();
     }
 
-    public class MountInfo
+    private class PlaceholderInode : Inode
     {
-        public string Source { get; set; } = "none";
-        public string Target { get; set; } = "/";
-        public string FsType { get; set; } = "unknown";
-        public string Options { get; set; } = "";
+        public PlaceholderInode(SuperBlock sb)
+        {
+            SuperBlock = sb;
+            Type = InodeType.File;
+            Mode = 0;
+            MTime = ATime = CTime = DateTime.Now;
+        }
     }
 }
 

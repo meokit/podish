@@ -34,14 +34,13 @@ class TestBindMount:
         case: EmulatorCase,
         run_mode: str,
         fiberpod_dll: str | None,
-        static_tests_image: str | None,
+        alpine_image: str | None,
     ) -> None:
         """Run bind mount test cases."""
         if run_mode == "fiberpod":
             if case.rootfs is not None:
                 case.rootfs = (project_root / case.rootfs).resolve()
-            else:
-                case.image = static_tests_image
+            # Otherwise, alpine_image + volume mount is used automatically
         else:
             if case.rootfs is not None:
                 case.rootfs = (project_root / case.rootfs).resolve()
@@ -57,6 +56,7 @@ class TestBindMount:
             case,
             run_mode=run_mode,
             fiberpod_dll=fiberpod_dll,
+            alpine_image=alpine_image,
         )
 
 
@@ -152,14 +152,13 @@ class TestMountApi:
         case: EmulatorCase,
         run_mode: str,
         fiberpod_dll: str | None,
-        static_tests_image: str | None,
+        alpine_image: str | None,
     ) -> None:
         """Run mount API test cases."""
         if run_mode == "fiberpod":
             if case.rootfs is not None:
                 case.rootfs = (project_root / case.rootfs).resolve()
-            else:
-                case.image = static_tests_image
+            # Otherwise, alpine_image + volume mount is used automatically
         else:
             if case.rootfs is not None:
                 case.rootfs = (project_root / case.rootfs).resolve()
@@ -175,4 +174,5 @@ class TestMountApi:
             case,
             run_mode=run_mode,
             fiberpod_dll=fiberpod_dll,
+            alpine_image=alpine_image,
         )

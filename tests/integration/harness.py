@@ -13,7 +13,6 @@ class EmulatorCase:
     binary_name: str
     args: list[str] = field(default_factory=list)
     rootfs: Path | None = None
-    image: str | None = None  # OCI image name (for FiberPod mode)
     expect_tokens: list[str] = field(default_factory=list)
     timeout: int = 30
     send_eof: bool = False
@@ -80,6 +79,7 @@ def run_case(
     case: EmulatorCase,
     run_mode: Literal["fiberpod", "legacy"] = "legacy",
     fiberpod_dll: str | None = None,
+    alpine_image: str | None = None,
 ) -> str:
     """
     Run an emulator test case.
@@ -90,12 +90,13 @@ def run_case(
         case: Test case configuration
         run_mode: 'fiberpod' for FiberPod CLI, 'legacy' for Fiberish.Cli
         fiberpod_dll: Path to FiberPod.dll (required for fiberpod mode)
+        alpine_image: Alpine image name (required for fiberpod mode without rootfs)
 
     Returns:
         The output from the emulator
     """
     if run_mode == "fiberpod":
-        return _run_case_fiberpod(project_root, case, fiberpod_dll, assets_dir)
+        return _run_case_fiberpod(project_root, case, fiberpod_dll, assets_dir, alpine_image)
     else:
         return _run_case_legacy(project_root, assets_dir, case)
 
@@ -123,30 +124,30 @@ def _run_case_fiberpod(
     project_root: Path,
     case: EmulatorCase,
     fiberpod_dll: str | None,
-    assets_dir: Path | None = None,
+    assets_dir: Path | None,
+    alpine_image: str | None,
 ) -> str:
     """Run a test case using FiberPod."""
     if fiberpod_dll is None:
         raise ValueError("fiberpod_dll is required for fiberpod mode")
+    if assets_dir is None:
+        raise ValueError("assets_dir is required for fiberpod mode")
+    if not assets_dir.exists():
+        raise AssertionError(f"Assets directory not found: {assets_dir}")
 
     # Determine image or rootfs to use
-    if case.image:
-        # OCI image mode - binary is in /tests/
-        image_or_rootfs = case.image
-        command = f"/tests/{case.binary_name}"
-        volumes = None
-    elif case.rootfs:
-        # Rootfs mode - mount entire assets directory into container
+    if case.rootfs:
+        # Rootfs mode - use custom rootfs
         image_or_rootfs = str(case.rootfs)
-        if assets_dir is None:
-            raise ValueError("assets_dir is required for rootfs mode")
-        if not assets_dir.exists():
-            raise AssertionError(f"Assets directory not found: {assets_dir}")
-        # Mount the assets directory to /tests in the container
-        volumes = [(str(assets_dir), "/tests")]
-        command = f"/tests/{case.binary_name}"
+    elif alpine_image:
+        # Alpine image mode - tests are mounted via -v
+        image_or_rootfs = alpine_image
     else:
-        raise ValueError("Either case.image or case.rootfs must be set for FiberPod mode")
+        raise ValueError("Either alpine_image or case.rootfs must be set for FiberPod mode")
+
+    # Always mount assets directory to /tests
+    volumes = [(str(assets_dir), "/tests")]
+    command = f"/tests/{case.binary_name}"
 
     dotnet, args = _fiberpod_cmd(
         fiberpod_dll=fiberpod_dll,

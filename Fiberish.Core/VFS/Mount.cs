@@ -1,11 +1,10 @@
-using Fiberish.Core;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
 /// <summary>
-/// Represents an instance of a filesystem attached at a specific location
-/// or stored as a detached tree (for open_tree/move_mount support).
+///     Represents an instance of a filesystem attached at a specific location
+///     or stored as a detached tree (for open_tree/move_mount support).
 /// </summary>
 public class Mount
 {
@@ -24,64 +23,76 @@ public class Mount
     }
 
     /// <summary>
-    /// Unique identifier for this mount instance.
+    ///     Unique identifier for this mount instance.
     /// </summary>
     public long Id { get; }
 
     /// <summary>
-    /// The mounted filesystem's superblock.
+    ///     The mounted filesystem's superblock.
     /// </summary>
     public SuperBlock SB { get; }
 
     /// <summary>
-    /// The root dentry of this mount (usually SB.Root, but can be a subtree for bind mounts).
+    ///     The root dentry of this mount (usually SB.Root, but can be a subtree for bind mounts).
     /// </summary>
     public Dentry Root { get; }
 
     /// <summary>
-    /// The dentry in the parent filesystem where this mount is attached.
-    /// Null if this is a detached mount (created by open_tree with OPEN_TREE_CLONE).
+    ///     The dentry in the parent filesystem where this mount is attached.
+    ///     Null if this is a detached mount (created by open_tree with OPEN_TREE_CLONE).
     /// </summary>
     public Dentry? MountPoint { get; private set; }
 
     /// <summary>
-    /// The parent mount (for path resolution traversal).
-    /// Null for the root mount.
+    ///     The parent mount (for path resolution traversal).
+    ///     Null for the root mount.
     /// </summary>
     public Mount? Parent { get; private set; }
 
     /// <summary>
-    /// Mount-specific flags (e.g., MS_RDONLY).
+    ///     Mount-specific flags (e.g., MS_RDONLY).
     /// </summary>
     public uint Flags { get; set; }
 
     /// <summary>
-    /// Source path for this mount (e.g., device name or "none").
+    ///     Source path for this mount (e.g., device name or "none").
     /// </summary>
     public string Source { get; set; } = "none";
 
     /// <summary>
-    /// Filesystem type name.
+    ///     Filesystem type name.
     /// </summary>
     public string FsType { get; set; } = "none";
 
     /// <summary>
-    /// Mount options string.
+    ///     Mount options string.
     /// </summary>
     public string Options { get; set; } = "";
 
     /// <summary>
-    /// Whether this mount is currently attached to the directory tree.
+    ///     Whether this mount is currently attached to the directory tree.
     /// </summary>
     public bool IsAttached => MountPoint != null;
 
     /// <summary>
-    /// Whether this mount is read-only.
+    ///     Whether this mount is read-only.
     /// </summary>
     public bool IsReadOnly => (Flags & LinuxConstants.MS_RDONLY) != 0;
 
     /// <summary>
-    /// Attach this mount to a dentry in the parent filesystem.
+    ///     Check if write operation is allowed on this mount.
+    ///     Similar to Linux kernel's mnt_want_write().
+    /// </summary>
+    /// <returns>0 if allowed, -EROFS if read-only</returns>
+    public int WantWrite()
+    {
+        if (IsReadOnly)
+            return -(int)Errno.EROFS;
+        return 0;
+    }
+
+    /// <summary>
+    ///     Attach this mount to a dentry in the parent filesystem.
     /// </summary>
     public void Attach(Dentry mountPoint, Mount? parent)
     {
@@ -93,15 +104,10 @@ public class Mount
 
         // Update dentry mount info
         mountPoint.IsMounted = true;
-        mountPoint.MountRoot = Root;
-        Root.MountedAt = mountPoint;
-
-        // Set the mount reference on the dentry
-        mountPoint.Mount = this;
     }
 
     /// <summary>
-    /// Detach this mount from the directory tree.
+    ///     Detach this mount from the directory tree.
     /// </summary>
     public void Detach()
     {
@@ -111,17 +117,14 @@ public class Mount
         if (MountPoint != null)
         {
             MountPoint.IsMounted = false;
-            MountPoint.MountRoot = null;
-            MountPoint.Mount = null;
         }
 
-        Root.MountedAt = null;
         MountPoint = null;
         Parent = null;
     }
 
     /// <summary>
-    /// Increment reference count.
+    ///     Increment reference count.
     /// </summary>
     public void Get()
     {
@@ -129,7 +132,7 @@ public class Mount
     }
 
     /// <summary>
-    /// Decrement reference count and release resources if zero.
+    ///     Decrement reference count and release resources if zero.
     /// </summary>
     public void Put()
     {
@@ -143,11 +146,13 @@ public class Mount
     }
 
     /// <summary>
-    /// Create a clone of this mount for OPEN_TREE_CLONE.
+    ///     Create a clone of this mount for OPEN_TREE_CLONE.
+    ///     If subtree is provided, creates a bind mount with that subtree as root.
     /// </summary>
-    public Mount Clone()
+    public Mount Clone(Dentry? subtree = null)
     {
-        var clone = new Mount(SB, Root, null, null)
+        var root = subtree ?? Root;
+        var clone = new Mount(SB, root)
         {
             Flags = Flags,
             Source = Source,
@@ -155,7 +160,7 @@ public class Mount
             Options = Options
         };
         SB.Get();
-        Root.Get();
+        root.Get();
         return clone;
     }
 

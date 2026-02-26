@@ -22,7 +22,7 @@ public class VirtualFDsTests
         {
             Scheduler = new KernelScheduler();
             KernelScheduler.Current = Scheduler;
-            
+
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
 
@@ -30,7 +30,7 @@ public class VirtualFDsTests
             var engine = new Engine();
             Process = new Process(100, vma, null!);
             Task = new FiberTask(100, Process, engine, Scheduler);
-            
+
             typeof(KernelScheduler).GetProperty("CurrentTask")!.SetValue(Scheduler, Task);
         }
 
@@ -45,7 +45,8 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, FileFlags.O_RDWR);
-        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR);
+        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
 
         // Read initial value 5
         var buf = new byte[8];
@@ -74,7 +75,8 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, (FileFlags)LinuxConstants.EFD_SEMAPHORE);
-        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), (FileFlags)LinuxConstants.EFD_SEMAPHORE);
+        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock),
+            (FileFlags)LinuxConstants.EFD_SEMAPHORE, null!);
 
         var buf = new byte[8];
         // Read should return 1 and decrement counter
@@ -95,7 +97,8 @@ public class VirtualFDsTests
         inode.Write(efd, buf, 0);
 
         // Poll should show POLLIN
-        Assert.Equal(LinuxConstants.POLLIN | LinuxConstants.POLLOUT, inode.Poll(efd, LinuxConstants.POLLIN | LinuxConstants.POLLOUT));
+        Assert.Equal(LinuxConstants.POLLIN | LinuxConstants.POLLOUT,
+            inode.Poll(efd, LinuxConstants.POLLIN | LinuxConstants.POLLOUT));
     }
 
     [Fact]
@@ -103,7 +106,8 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR);
+        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
 
         inode.SetTime(2000, 5000, false);
         inode.GetTime(out var interval, out var value);
@@ -117,11 +121,13 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_NONBLOCK);
+        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
+            FileFlags.O_NONBLOCK, null!);
 
         // Manually invoke the callback to simulate expiration
-        var method = typeof(TimerFdInode).GetMethod("TimerCallback", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
+        var method = typeof(TimerFdInode).GetMethod("TimerCallback",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
         method!.Invoke(inode, null);
         method.Invoke(inode, null);
 
@@ -141,7 +147,8 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock), FileFlags.O_NONBLOCK);
+        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+            FileFlags.O_NONBLOCK, null!);
 
         // Queue a signal
         env.Task.PostSignalInfo(new SigInfo
@@ -152,7 +159,7 @@ public class VirtualFDsTests
             Uid = 1000,
             Value = 42
         });
-        
+
         // Reading should return siginfo
         var buf = new byte[128];
         var readLen = inode.Read(sfd, buf, 0);

@@ -51,17 +51,14 @@ def test_linux_smoke_cases(
     case: EmulatorCase,
     run_mode: str,
     fiberpod_dll: str | None,
-    static_tests_image: str | None,
+    alpine_image: str | None,
 ) -> None:
     """Run static linking smoke tests."""
     if run_mode == "fiberpod":
-        # In FiberPod mode, use OCI image for static tests
+        # In FiberPod mode, resolve rootfs path if needed
         if case.rootfs is not None:
-            # Tests that need rootfs use direct rootfs path
             case.rootfs = (project_root / case.rootfs).resolve()
-        else:
-            # Pure static tests use the static tests image
-            case.image = static_tests_image
+        # Otherwise, alpine_image + volume mount is used automatically
     else:
         # Legacy mode: resolve rootfs path
         if case.rootfs is not None:
@@ -73,6 +70,7 @@ def test_linux_smoke_cases(
         case,
         run_mode=run_mode,
         fiberpod_dll=fiberpod_dll,
+        alpine_image=alpine_image,
     )
 
 

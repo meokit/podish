@@ -90,6 +90,7 @@ public class TmpfsInode : Inode
             {
                 sb.Dentries[key] = childDentry;
             }
+
             parentDentry.Children[name] = childDentry;
             _childNames.Add(name);
         }
@@ -106,7 +107,7 @@ public class TmpfsInode : Inode
             var key = new DCacheKey(primaryDentry.Id, name);
             if (sb.Dentries.TryGetValue(key, out var dentry))
             {
-                if (primaryDentry.Children != null) primaryDentry.Children[name] = dentry;
+                primaryDentry.Children[name] = dentry;
                 return dentry;
             }
 
@@ -398,7 +399,8 @@ public class TmpfsInode : Inode
                     // Can acquire exclusive lock if (no one has ANY lock) OR (WE are the only one holding locks)
                     if (_lockType == 0) canAcquire = true;
                     else if (_exclusiveHolder == linuxFile) canAcquire = true;
-                    else if (_sharedHolders.Count == 1 && _sharedHolders.Contains(linuxFile) && _exclusiveHolder == null)
+                    else if (_sharedHolders.Count == 1 && _sharedHolders.Contains(linuxFile) &&
+                             _exclusiveHolder == null)
                         canAcquire = true;
                 }
 
@@ -480,7 +482,7 @@ public class TmpfsInode : Inode
     {
         // Drop any locks held by this file description
         Flock(linuxFile, LinuxConstants.LOCK_UN);
-        
+
         base.Release(linuxFile);
     }
 }

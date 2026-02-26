@@ -75,6 +75,10 @@ add_integration_binary("test_pty_nolibc" "tests/src/test_pty_nolibc.c" EXTRA_FLA
 add_integration_binary("test_low_hanging_nolibc" "tests/src/test_low_hanging_nolibc.c" EXTRA_FLAGS "-nostdlib -fno-stack-protector")
 add_integration_binary("test_identity" "tests/src/test_identity.c")
 add_integration_binary("test_vfork" "tests/src/test_vfork.c")
+add_integration_binary("test_bind_mount" "tests/src/test_bind_mount.c")
+add_integration_binary("test_open_tree" "tests/src/test_open_tree.c")
+add_integration_binary("test_move_mount" "tests/src/test_move_mount.c")
+add_integration_binary("test_bind_mount_ro" "tests/src/test_bind_mount_ro.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 

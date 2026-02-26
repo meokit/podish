@@ -184,14 +184,14 @@ public partial class SyscallManager
             var pipe = new PipeInode();
 
             // Reader
-            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root, sm.Root.SuperBlock);
-            var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY);
+            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root.Dentry, sm.Root.Dentry!.SuperBlock);
+            var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, sm.AnonMount);
             var rFd = sm.AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
-            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root, sm.Root.SuperBlock);
-            var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY);
+            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root.Dentry, sm.Root.Dentry.SuperBlock);
+            var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, sm.AnonMount);
             var wFd = sm.AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
@@ -248,7 +248,7 @@ public partial class SyscallManager
 
             var fdFlags = FileFlags.O_RDWR;
             if ((flags & MFD_CLOEXEC) != 0) fdFlags |= FileFlags.O_CLOEXEC;
-            var file = new LinuxFile(dentry, fdFlags);
+            var file = new LinuxFile(dentry, fdFlags, sm.AnonMount);
             return sm.AllocFD(file);
         }
         catch (Exception ex)
@@ -258,12 +258,17 @@ public partial class SyscallManager
         }
     }
 
-    private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, Dentry? startAt = null)
+    private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, PathLocation startLoc = default)
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
         var createdHere = false;
         var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
-        var dentry = sm.PathWalk(path, startAt, !noFollow);
+
+        // Use PathWalkWithMount to track mount information
+        var loc = sm.PathWalk(path, startLoc.IsValid ? startLoc : null, !noFollow);
+        var dentry = loc.Dentry;
+        var mount = loc.Mount;
+
         if (dentry == null)
         {
             if ((flags & (uint)FileFlags.O_CREAT) != 0)
@@ -272,8 +277,14 @@ public partial class SyscallManager
                 var parentPath = lastSlash == -1 ? "" : lastSlash == 0 ? "/" : path[..lastSlash];
                 var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
 
-                var parentDentry = sm.PathWalk(parentPath == "" ? "." : parentPath, startAt);
+                var parentLoc = sm.PathWalk(parentPath == "" ? "." : parentPath, startLoc.IsValid ? startLoc : null);
+                var parentDentry = parentLoc.Dentry;
+                var parentMount = parentLoc.Mount;
+
                 if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+
+                // Check if parent mount is read-only (for create operation)
+                if (parentMount != null && parentMount.IsReadOnly) return -(int)Errno.EROFS;
 
                 var t = sm.Engine.Owner as FiberTask;
                 var uid = t?.Process.EUID ?? 0;
@@ -285,6 +296,7 @@ public partial class SyscallManager
                     var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
                     parentDentry.Inode.Create(dentry, finalMode, uid, gid);
                     createdHere = true;
+                    mount = parentMount;
                 }
                 catch (InvalidOperationException)
                 {
@@ -309,6 +321,12 @@ public partial class SyscallManager
             // File exists - check for O_EXCL
             if ((flags & (uint)FileFlags.O_CREAT) != 0 && (flags & (uint)FileFlags.O_EXCL) != 0)
                 return -(int)Errno.EEXIST;
+
+            // Check mount read-only for write operations on existing file
+            var accessMode = (int)flags & 3; // O_ACCMODE
+            if (accessMode != 0 || (flags & (uint)FileFlags.O_TRUNC) != 0) // O_WRONLY or O_RDWR or O_TRUNC
+                if (mount != null && mount.IsReadOnly)
+                    return -(int)Errno.EROFS;
         }
 
         try
@@ -318,7 +336,7 @@ public partial class SyscallManager
             var openFlags = createdHere
                 ? flags & ~(uint)(FileFlags.O_CREAT | FileFlags.O_EXCL | FileFlags.O_TRUNC)
                 : flags;
-            var f = new LinuxFile(dentry, (FileFlags)openFlags);
+            var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
             return sm.AllocFD(f);
         }
         catch
@@ -341,24 +359,25 @@ public partial class SyscallManager
     private static async ValueTask<int> SysOpenAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
+        if (sm == null) return -1;
 
-        var dirfd = (int)a1;
+        var dfd = (int)a1;
         var path = sm.Engine.ReadStringSafe(a2);
         if (path == null) return -(int)Errno.EFAULT;
 
-        var flags = a3;
-        var mode = a4;
-
-        Dentry? startAt = null;
-        if (dirfd != -100 && !path.StartsWith("/"))
+        var startLoc = PathLocation.None;
+        if (dfd == -100) // AT_FDCWD
         {
-            var fdir = sm.GetFD(dirfd);
-            if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startLoc = sm.CurrentWorkingDirectory;
+        }
+        else
+        {
+            var f = sm.GetFD(dfd);
+            if (f != null) startLoc = new PathLocation(f.Dentry, f.Mount);
+            else return -(int)Errno.EBADF;
         }
 
-        return ImplOpen(sm, path, flags, mode, startAt);
+        return ImplOpen(sm, path, a3, a4, startLoc);
     }
 
     private static async ValueTask<int> SysOpenAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -381,12 +400,12 @@ public partial class SyscallManager
         var flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
         var mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
 
-        Dentry? startAt = null;
+        PathLocation startAt = default;
         if (dirfd != -100 && !path.StartsWith("/"))
         {
             var fdir = sm.GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.Dentry;
+            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
         return ImplOpen(sm, path, (uint)flags, (uint)mode, startAt);
@@ -514,6 +533,10 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+
+        // Check mount read-only status (like Linux mnt_want_write)
+        var wantWrite = f.WantWrite();
+        if (wantWrite < 0) return wantWrite;
 
         var updatePosition = offset == -1;
         var append = (f.Flags & FileFlags.O_APPEND) != 0;

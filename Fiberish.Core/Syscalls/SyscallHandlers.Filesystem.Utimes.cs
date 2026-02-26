@@ -16,8 +16,11 @@ public partial class SyscallManager
         var path = sm.ReadString(a1);
         var timesPtr = a2;
 
-        var dentry = sm.PathWalk(path);
-        if (dentry?.Inode == null) return -(int)Errno.ENOENT;
+        var loc = sm.PathWalk(path);
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+
+        // Check mount read-only
+        if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         if (timesPtr != 0)
         {
@@ -30,16 +33,16 @@ public partial class SyscallManager
             var msec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
             var musec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
 
-            dentry.Inode.ATime = DateTimeOffset.FromUnixTimeSeconds(asec).AddTicks(ausec * 10).DateTime;
-            dentry.Inode.MTime = DateTimeOffset.FromUnixTimeSeconds(msec).AddTicks(musec * 10).DateTime;
+            loc.Dentry.Inode.ATime = DateTimeOffset.FromUnixTimeSeconds(asec).AddTicks(ausec * 10).DateTime;
+            loc.Dentry.Inode.MTime = DateTimeOffset.FromUnixTimeSeconds(msec).AddTicks(musec * 10).DateTime;
         }
         else
         {
-            dentry.Inode.ATime = DateTime.Now;
-            dentry.Inode.MTime = DateTime.Now;
+            loc.Dentry.Inode.ATime = DateTime.Now;
+            loc.Dentry.Inode.MTime = DateTime.Now;
         }
 
-        dentry.Inode.CTime = DateTime.Now;
+        loc.Dentry.Inode.CTime = DateTime.Now;
         return 0;
     }
 }

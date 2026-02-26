@@ -33,7 +33,7 @@ internal class Program
 
         // --- Run Command ---
         var runCommand = new Command("run", "Run a command in a new container");
-        
+
         var volumeOption = new Option<string[]>(
             new[] { "--volume", "-v" },
             "Bind mount a volume (e.g. /host/path:/guest/path)")
@@ -47,7 +47,8 @@ internal class Program
             new[] { "--tty", "-t" },
             "Allocate a pseudo-TTY");
         var imageArgument = new Argument<string>("image", "Image name (or path to rootfs)");
-        var exeArgument = new Argument<string>("command", () => "", "Command to execute (optional if image has entrypoint)");
+        var exeArgument =
+            new Argument<string>("command", () => "", "Command to execute (optional if image has entrypoint)");
         var exeArgsArgument = new Argument<string[]>("args", () => Array.Empty<string>(), "Command arguments");
 
         runCommand.AddOption(volumeOption);
@@ -81,6 +82,7 @@ internal class Program
             {
                 logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
             }
+
             SetupLogging(logLevel, logFile);
 
             var rootfsPath = image;
@@ -140,6 +142,7 @@ internal class Program
             {
                 logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
             }
+
             SetupLogging(logLevel, logFile);
 
             var pullService = new OciPullService(Logger);
@@ -174,15 +177,18 @@ internal class Program
                 // Write to file
                 builder.AddProvider(new FileLoggerProvider(logFile));
             }
+
             // Write to Console Error (stderr) ALWAYS
-            builder.AddConsole(options => {
+            builder.AddConsole(options =>
+            {
                 options.LogToStandardErrorThreshold = LogLevel.Trace; // All logs to stderr
             });
         });
         Logger = Logging.CreateLogger<Program>();
     }
 
-    private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes, bool useTty)
+    private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
+        bool useTty)
     {
         await Task.CompletedTask; // TODO: remove async?
 
@@ -210,7 +216,7 @@ internal class Program
         if (isInteractive)
         {
             stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
-            
+
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 var res = Fiberish.Core.VFS.TTY.MacOSTermios.EnableRawMode(0);
@@ -235,10 +241,14 @@ internal class Program
                             if (!Console.IsOutputRedirected)
                                 ttyDiag.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
                         }
-                        catch { }
+                        catch
+                        {
+                        }
                     });
                 }
-                catch { }
+                catch
+                {
+                }
             }
         }
 
@@ -262,17 +272,19 @@ internal class Program
                     Logger.LogWarning("Invalid volume format: {Volume}. Expected /host/path:/guest/path[:ro]", vol);
                     continue;
                 }
+
                 var hostPath = parts[0];
                 var guestPath = parts[1];
                 var readOnly = parts.Length > 2 && parts[2] == "ro";
-                
+
                 if (!Directory.Exists(hostPath) && !File.Exists(hostPath))
                 {
                     Logger.LogWarning("Host path does not exist, skipping mount: {HostPath}", hostPath);
                     continue;
                 }
 
-                Logger.LogInformation("Mounting {HostPath} at {GuestPath} (ro: {ReadOnly})", hostPath, guestPath, readOnly);
+                Logger.LogInformation("Mounting {HostPath} at {GuestPath} (ro: {ReadOnly})", hostPath, guestPath,
+                    readOnly);
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
 
@@ -286,16 +298,17 @@ internal class Program
                 "USER=root"
             };
 
-            var (dentry, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
-            if (dentry == null) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
+            var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
+            if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
 
-            var mainTask = ProcessFactory.CreateInitProcess(runtime, dentry, guestPathResolved, fullArgs, envs, scheduler, ttyDiag);
+            var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs, envs,
+                scheduler, ttyDiag, loc.Mount!);
 
             // 5. Run Scheduler
             scheduler.Run();
 
             // Cleanup temp rootfs happens in the loop above
-            
+
             return mainTask.ExitStatus;
         }
         catch (Exception ex)
@@ -307,23 +320,38 @@ internal class Program
         finally
         {
             // Give pending I/O tasks a little time to flush, especially in non-interactive tests
-            try { Task.Delay(50).Wait(); } catch { }
+            try
+            {
+                Task.Delay(50).Wait();
+            }
+            catch
+            {
+            }
+
             Console.Out.Flush();
             Console.Error.Flush();
 
             stdinStream?.Dispose();
-            
+
             if (inputCts != null)
             {
                 inputCts.Cancel();
                 if (inputTask != null)
                 {
-                    try { Task.WhenAny(inputTask, Task.Delay(100)).Wait(); } catch { }
+                    try
+                    {
+                        Task.WhenAny(inputTask, Task.Delay(100)).Wait();
+                    }
+                    catch
+                    {
+                    }
                 }
+
                 inputCts.Dispose();
             }
+
             sigwinch?.Dispose();
-            
+
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);
@@ -389,7 +417,9 @@ internal class Program
                 tty.Input(buffer.AsSpan(0, read).ToArray());
             }
         }
-        catch { }
+        catch
+        {
+        }
     }
 
     private class ConsoleTtyDriver : ITtyDriver
@@ -397,6 +427,7 @@ internal class Program
         private readonly Stream _stderr = Console.OpenStandardError();
         private readonly Stream _stdout = Console.OpenStandardOutput();
         private TtyDiscipline? _tty;
+
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {
             var stream = kind == TtyEndpointKind.Stderr ? _stderr : _stdout;
@@ -404,7 +435,13 @@ internal class Program
             stream.Flush();
             return buffer.Length;
         }
-        public void Flush() { _stdout.Flush(); _stderr.Flush(); }
+
+        public void Flush()
+        {
+            _stdout.Flush();
+            _stderr.Flush();
+        }
+
         public void BindTty(TtyDiscipline tty) => _tty = tty;
     }
 
@@ -413,7 +450,10 @@ internal class Program
         private readonly KernelScheduler _scheduler;
         public SchedulerSignalBroadcaster(KernelScheduler scheduler) => _scheduler = scheduler;
         public void SignalProcessGroup(int pgid, int signal) => _scheduler.SignalProcessGroup(pgid, signal);
-        public void SignalForegroundTask(int signal) { }
+
+        public void SignalForegroundTask(int signal)
+        {
+        }
     }
 }
 

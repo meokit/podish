@@ -116,7 +116,12 @@ public class Process
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
     public string Comm { get; private set; } = "process";
-    public string Name { get => Comm; set => Comm = value; }
+
+    public string Name
+    {
+        get => Comm;
+        set => Comm = value;
+    }
 
     // Event signaled when process state changes (exit, stop, continue)
     // Used by parent's wait4() to avoid busy-polling
@@ -124,11 +129,11 @@ public class Process
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 
-    public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs)
+    public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
         UpdateProcessImage(guestPath, args);
 
-        var res = ElfLoader.Load(dentry, guestPath, Syscalls, args, envs);
+        var res = ElfLoader.Load(dentry, guestPath, Syscalls, args, envs, mount);
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
@@ -150,7 +155,7 @@ public class Process
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
     }
 
-    internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs)
+    internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
         // 1. Replace memory with a fresh VMAManager.
         // This is critical for vfork+execve: the child may share the parent's VMAManager
@@ -174,7 +179,7 @@ public class Process
 
         // 3. Load Executable
         // LoadExecutable handles ELF loading, stack setup and CPU state reset
-        LoadExecutable(dentry, guestPath, args, envs);
+        LoadExecutable(dentry, guestPath, args, envs, mount);
     }
 
     private void ResetSignalDispositionsForExec()
