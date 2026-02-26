@@ -7,6 +7,7 @@
 #include <cstring>
 #include <optional>
 
+#include <cmath>
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
@@ -180,8 +181,8 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
         // Map 0xD9C0 -> index
         uint8_t op_byte = op->modrm;
 
-        if (op_byte == 0xC0) {  // FLD ST(0) (DUP) -> D9 C0
-            float80 t = FpuTop(state, 0);
+        if ((op_byte & 0xF8) == 0xC0) {  // FLD ST(i) (DUP) -> D9 C0
+            float80 t = FpuTop(state, op_byte & 7);
             FpuPush(state, &t);
         } else if (op_byte == 0xC9) {  // FXCH ST(1)
             float80 t = FpuTop(state, 0);
@@ -243,14 +244,51 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
         } else if (op_byte == 0xEE) {  // FLDZ
             float80 t = ConstF80_Zero();
             FpuPush(state, &t);
+        } else if (op_byte == 0xF0) {  // F2XM1
+            float80& st0 = FpuTop(state, 0);
+            st0 = f80_from_double(std::pow(2.0, f80_to_double(st0)) - 1.0);
         } else if (op_byte == 0xF1) {  // FYL2X: ST(1) = ST(1) * log2(ST(0)); Pop ST(0)
             float80 x = FpuPop(state);
             float80& y = FpuTop(state, 0);
             y = f80_mul(y, f80_log2(x));
+        } else if (op_byte == 0xF2) {  // FPTAN
+            float80& st0 = FpuTop(state, 0);
+            st0 = f80_from_double(std::tan(f80_to_double(st0)));
+            float80 t = ConstF80_One();
+            FpuPush(state, &t);
+        } else if (op_byte == 0xF3) {  // FPATAN
+            double y = f80_to_double(FpuTop(state, 1));
+            double x = f80_to_double(FpuPop(state));
+            FpuTop(state, 0) = f80_from_double(std::atan2(y, x));
+        } else if (op_byte == 0xF4) {  // FXTRACT
+            double v = f80_to_double(FpuTop(state, 0));
+            int exp;
+            double sig = std::frexp(v, &exp);
+            if (v != 0.0) {
+                sig *= 2.0;
+                exp -= 1;
+            }
+            FpuTop(state, 0) = f80_from_double(exp);
+            float80 t = f80_from_double(sig);
+            FpuPush(state, &t);
+        } else if (op_byte == 0xF5) {  // FPREM1
+            float80& st0 = FpuTop(state, 0);
+            float80 st1 = FpuTop(state, 1);
+            st0 = f80_from_double(std::remainder(f80_to_double(st0), f80_to_double(st1)));
+        } else if (op_byte == 0xF6) {  // FDECSTP
+            state->ctx.fpu_top = (state->ctx.fpu_top - 1) & 7;
+            UpdateFSW(state);
+        } else if (op_byte == 0xF7) {  // FINCSTP
+            state->ctx.fpu_top = (state->ctx.fpu_top + 1) & 7;
+            UpdateFSW(state);
         } else if (op_byte == 0xF8) {  // FPREM
             float80& st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
             st0 = f80_rem(st0, st1);
+        } else if (op_byte == 0xF9) {  // FYL2XP1
+            double y = f80_to_double(FpuTop(state, 1));
+            double x = f80_to_double(FpuPop(state));
+            FpuTop(state, 0) = f80_from_double(y * std::log2(x + 1.0));
         } else if (op_byte == 0xFA) {  // FSQRT
             FpuTop(state, 0) = f80_sqrt(FpuTop(state, 0));
         } else if (op_byte == 0xFB) {  // FSINCOS
@@ -349,27 +387,43 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
     // DA: Int Arith m32
     if ((op->modrm >> 6) == 3) {
-        // DA C0-C7: FCMOVB
-        // DA C8-CF: FCMOVE
-        // DA D0-D7: FCMOVBE
-        // DA D8-DF: FCMOVU
-        int idx = op->modrm & 7;
-        bool pass = false;
-        switch ((op->modrm >> 3) & 7) {
-            case 0:
-                pass = (state->ctx.eflags & fiberish::CF_MASK);
-                break;  // FCMOVB
-            case 1:
-                pass = (state->ctx.eflags & fiberish::ZF_MASK);
-                break;  // FCMOVE
-            case 2:
-                pass = (state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
-                break;  // FCMOVBE
-            case 3:
-                pass = (state->ctx.eflags & fiberish::PF_MASK);
-                break;  // FCMOVU
+        if (op->modrm == 0xE9) {  // FUCOMPP
+            float80 st0 = FpuTop(state, 0);
+            float80 st1 = FpuTop(state, 1);
+            if (f80_uncomparable(st0, st1)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4500;  // C3=1, C2=1, C0=1
+            } else if (f80_eq(st0, st1)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;  // C3=1
+            } else if (f80_lt(st0, st1)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;  // C0=1
+            } else {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+            }
+            FpuPop(state);
+            FpuPop(state);
+        } else {
+            // DA C0-C7: FCMOVB
+            // DA C8-CF: FCMOVE
+            // DA D0-D7: FCMOVBE
+            // DA D8-DF: FCMOVU
+            int idx = op->modrm & 7;
+            bool pass = false;
+            switch ((op->modrm >> 3) & 7) {
+                case 0:
+                    pass = (state->ctx.eflags & fiberish::CF_MASK);
+                    break;  // FCMOVB
+                case 1:
+                    pass = (state->ctx.eflags & fiberish::ZF_MASK);
+                    break;  // FCMOVE
+                case 2:
+                    pass = (state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
+                    break;  // FCMOVBE
+                case 3:
+                    pass = (state->ctx.eflags & fiberish::PF_MASK);
+                    break;  // FCMOVU
+            }
+            if (pass) FpuTop(state, 0) = FpuTop(state, idx);
         }
-        if (pass) FpuTop(state, 0) = FpuTop(state, idx);
     } else {
         uint8_t subop = (op->modrm >> 3) & 7;
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -454,7 +508,9 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
-        } else if (op->modrm == 0xE3) {  // FINIT
+        } else if (op->modrm == 0xE2) {               // FCLEX
+            state->ctx.fpu_sw &= ~(0x00FF | 0x8000);  // Clear exception flags and busy flag
+        } else if (op->modrm == 0xE3) {               // FINIT
             state->ctx.fpu_cw = 0x037F;
             state->ctx.fpu_sw = 0;
             state->ctx.fpu_tw = 0xFFFF;
@@ -579,17 +635,17 @@ FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
                 dest = f80_mul(dest, src);
                 break;  // FMUL
             case 4:
-                dest = f80_sub(dest, src);
-                break;  // FSUB (dest - src)
-            case 5:
                 dest = f80_sub(src, dest);
-                break;  // FSUBR (src - dest)
+                break;  // FSUBR ST(i), ST0
+            case 5:
+                dest = f80_sub(dest, src);
+                break;  // FSUB ST(i), ST0
             case 6:
-                dest = f80_div(dest, src);
-                break;  // FDIV
-            case 7:
                 dest = f80_div(src, dest);
-                break;  // FDIVR
+                break;  // FDIVR ST(i), ST0
+            case 7:
+                dest = f80_div(dest, src);
+                break;  // FDIV ST(i), ST0
             default:
                 state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
@@ -654,13 +710,33 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
+        // DD C0+i: FFREE ST(i)
         // DD D0+i: FST ST(i) (Store ST0 to STi)
         // DD D8+i: FSTP ST(i)
-        if (subop == 2) {  // FST ST(i)
+        // DD E0+i: FUCOM ST(i)
+        // DD E8+i: FUCOMP ST(i)
+        if (subop == 0) {  // FFREE ST(i)
+            // Just mark as empty (Tag word = 11 for this register)
+            state->ctx.fpu_tw |= (3 << ((state->ctx.fpu_top + (op->modrm & 7)) & 7) * 2);
+        } else if (subop == 2) {  // FST ST(i)
             FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
         } else if (subop == 3) {  // FSTP ST(i)
             FpuTop(state, op->modrm & 7) = FpuTop(state, 0);
             FpuPop(state);
+        } else if (subop == 4 || subop == 5) {  // FUCOM / FUCOMP ST(i)
+            int idx = op->modrm & 7;
+            float80 st0 = FpuTop(state, 0);
+            float80 sti = FpuTop(state, idx);
+            if (f80_uncomparable(st0, sti)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4500;  // C3=1, C2=1, C0=1
+            } else if (f80_eq(st0, sti)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4000;  // C3=1
+            } else if (f80_lt(st0, sti)) {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x0100;  // C0=1
+            } else {
+                state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500);
+            }
+            if (subop == 5) FpuPop(state);  // FUCOMP
         } else {
             state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {

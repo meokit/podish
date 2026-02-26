@@ -274,28 +274,57 @@ FORCE_INLINE LogicFlow OpCli(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpCpuid(LogicFuncParams) {
     // 0F A2: CPUID
     uint32_t leaf = GetReg(state, EAX);
-    // uint32_t ecx_in = GetReg(state, ECX);
+    uint32_t ecx_in = GetReg(state, ECX);
 
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
 
-    if (leaf == 0) {
-        eax = 1;  // Max Leaf
-        // "Genu" "ineI" "ntel"
-        ebx = 0x756E6547;
-        edx = 0x49656E69;
-        ecx = 0x6C65746E;
-    } else if (leaf == 1) {
-        eax = 0x00000680;  // Pentium III approx
-        ebx = 0;
-        ecx = 0;
-        edx = 0x00008000;  // Minimal features
-        // Add SSE/SSE2 flags if needed:
-        // EDX: Bit 25 (SSE), Bit 26 (SSE2)
-        edx |= (1 << 25) | (1 << 26);
-        // Bit 0 (FPU)
-        edx |= 1;
-        // Bit 4 (TSC)
-        edx |= (1 << 4);
+    switch (leaf) {
+        case 0x00000000:
+            // Vendor: "GenuineIntel". Advertise leaves up to 7.
+            eax = 0x00000007;
+            ebx = 0x756E6547;  // "Genu"
+            edx = 0x49656E69;  // "ineI"
+            ecx = 0x6C65746E;  // "ntel"
+            break;
+        case 0x00000001:
+            // Family 6 model-style id (legacy i686-like baseline).
+            // Keep capabilities conservative and aligned to implemented instruction families.
+            eax = 0x00000680;
+            ebx = 0;
+            ecx = 0;
+            edx = 0;
+            // EDX bits
+            edx |= (1u << 0);   // FPU
+            edx |= (1u << 4);   // TSC
+            edx |= (1u << 8);   // CMPXCHG8B
+            edx |= (1u << 15);  // CMOV
+            edx |= (1u << 19);  // CLFLUSH (supported as no-op in 0F AE /7)
+            edx |= (1u << 23);  // MMX
+            edx |= (1u << 25);  // SSE
+            edx |= (1u << 26);  // SSE2
+            break;
+        case 0x00000007:
+            // Structured extended features. We currently expose no additional feature bits.
+            if (ecx_in == 0) {
+                eax = 0;
+                ebx = 0;
+                ecx = 0;
+                edx = 0;
+            }
+            break;
+        case 0x80000000:
+            eax = 0x80000001;
+            break;
+        case 0x80000001:
+            // No extra extended features advertised.
+            eax = 0;
+            ebx = 0;
+            ecx = 0;
+            edx = 0;
+            break;
+        default:
+            // Unknown leaf -> zeros
+            break;
     }
 
     SetReg(state, EAX, eax);
