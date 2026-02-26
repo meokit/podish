@@ -9,7 +9,7 @@ from .harness import EmulatorCase, run_case
 
 
 @pytest.mark.integration
-def test_tty_background_read_sigttin(project_root: Path) -> None:
+def test_tty_background_read_sigttin(project_root: Path, fiberpod_dll: str, alpine_image: str) -> None:
     # Use the compiled test binary from earlier
     case = EmulatorCase(
         name="job_control",
@@ -21,4 +21,4 @@ def test_tty_background_read_sigttin(project_root: Path) -> None:
     )
     
     # Run the case directly
-    run_case(project_root, project_root / "tests/bin", case)
+    run_case(project_root, project_root / "tests/bin", case, fiberpod_dll, alpine_image)

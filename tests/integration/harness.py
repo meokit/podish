@@ -19,26 +19,6 @@ class EmulatorCase:
     allow_timeout: bool = False
 
 
-def _legacy_cmd(
-    project_root: Path, test_bin: Path, rootfs: Path | None, args: Iterable[str]
-) -> tuple[str, list[str]]:
-    """Build command for Fiberish.Cli (legacy mode)."""
-    cli_project = project_root / "Fiberish.Cli" / "Fiberish.Cli.csproj"
-    cmd = [
-        "run",
-        "--project",
-        str(cli_project),
-        "--no-build",
-        "--",
-    ]
-    if rootfs:
-        cmd.extend(["--rootfs", str(rootfs)])
-    cmd.append("--")
-    cmd.append(str(test_bin))
-    cmd.extend(args)
-    return "dotnet", cmd
-
-
 def _fiberpod_cmd(
     fiberpod_dll: str,
     image_or_rootfs: str,
@@ -77,7 +57,6 @@ def run_case(
     project_root: Path,
     assets_dir: Path,
     case: EmulatorCase,
-    run_mode: Literal["fiberpod", "legacy"] = "legacy",
     fiberpod_dll: str | None = None,
     alpine_image: str | None = None,
 ) -> str:
@@ -88,36 +67,13 @@ def run_case(
         project_root: Repository root path
         assets_dir: Directory containing test binaries
         case: Test case configuration
-        run_mode: 'fiberpod' for FiberPod CLI, 'legacy' for Fiberish.Cli
         fiberpod_dll: Path to FiberPod.dll (required for fiberpod mode)
         alpine_image: Alpine image name (required for fiberpod mode without rootfs)
 
     Returns:
         The output from the emulator
     """
-    if run_mode == "fiberpod":
-        return _run_case_fiberpod(project_root, case, fiberpod_dll, assets_dir, alpine_image)
-    else:
-        return _run_case_legacy(project_root, assets_dir, case)
-
-
-def _run_case_legacy(project_root: Path, assets_dir: Path, case: EmulatorCase) -> str:
-    """Run a test case using Fiberish.Cli (legacy mode)."""
-    test_bin = assets_dir / case.binary_name
-    if not test_bin.exists():
-        raise AssertionError(f"Missing integration binary: {test_bin}")
-
-    dotnet, args = _legacy_cmd(project_root, test_bin, case.rootfs, case.args)
-
-    child = pexpect.spawn(
-        dotnet,
-        args,
-        cwd=str(project_root),
-        encoding="utf-8",
-        timeout=case.timeout,
-    )
-
-    return _wait_and_validate(child, case)
+    return _run_case_fiberpod(project_root, case, fiberpod_dll, assets_dir, alpine_image)
 
 
 def _run_case_fiberpod(
@@ -158,6 +114,7 @@ def _run_case_fiberpod(
         volumes=volumes,
     )
 
+    print(f"\n[Harness] Running case '{case.name}' with command: {' '.join(args)}")
     child = pexpect.spawn(
         dotnet,
         args,

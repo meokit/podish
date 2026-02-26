@@ -2,7 +2,7 @@
 Fixtures for tests/integration/.
 
 Session-scoped fixtures `project_root`, `build_cli`, `cli_dll`,
-`build_fiberpod`, `fiberpod_dll`, `run_mode`, and `podman_available` are
+`build_fiberpod`, `fiberpod_dll`, and `podman_available` are
 inherited from tests/conftest.py — no need to redefine them here.
 """
 
@@ -63,12 +63,9 @@ def integration_assets_dir(project_root) -> Path:
 
 
 @pytest.fixture(scope="session")
-def alpine_image(run_mode: str) -> str | None:
+def alpine_image() -> str | None:
     """
-    Return the Alpine i386 image name for FiberPod mode.
-    Returns None for legacy mode.
+    Return the Alpine i386 image name for FiberPod tests.
     FiberPod will auto-pull the image on first run if needed.
     """
-    if run_mode != "fiberpod":
-        return None
     return ALPINE_I386_IMAGE

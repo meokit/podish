@@ -5,7 +5,7 @@ import pytest
 from .harness import EmulatorCase, run_case
 
 @pytest.mark.integration
-def test_identity_syscalls(project_root: Path) -> None:
+def test_identity_syscalls(project_root: Path, fiberpod_dll: str, alpine_image: str) -> None:
     # This test runs both as root (default for emulator usually) or user.
     # The output differs slightly.
     # Since we don't easily control if the emulator runs as root or not from here (it depends on host user usually, 
@@ -32,4 +32,4 @@ def test_identity_syscalls(project_root: Path) -> None:
         ],
     )
     
-    run_case(project_root, project_root / "build/integration-assets/assets", case)
+    run_case(project_root, project_root / "build/integration-assets/assets", case, fiberpod_dll, alpine_image)

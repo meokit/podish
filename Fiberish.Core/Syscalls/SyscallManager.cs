@@ -38,7 +38,7 @@ public partial class SyscallManager
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new ProcFileSystem() });
 
         PtyManager = new PtyManager(Logger);
         var signalBroadcaster = new SignalBroadcasterImpl(this);
@@ -147,6 +147,9 @@ public partial class SyscallManager
     public IEnumerable<(string Source, string Target, string FsType, string Options)> MountInfos =>
         _mountNamespace.GetMountInfos();
 
+    public IEnumerable<MountNamespace.MountInfoEntry> MountInfoEntries =>
+        _mountNamespace.GetMountInfoEntries();
+
     /// <summary>
     ///     The root mount (for the filesystem namespace).
     /// </summary>
@@ -247,11 +250,8 @@ public partial class SyscallManager
         if (procDentry != null && procDentry.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
-            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", null);
+            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", this);
             Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
-
-            // Initialize ProcFsManager static files
-            ProcFsManager.Init(this);
         }
         else
         {

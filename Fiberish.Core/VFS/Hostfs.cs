@@ -631,8 +631,8 @@ public partial class HostInode : Inode
             var access = FileAccess.Read;
             var share = FileShare.ReadWrite;
 
-            if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.Write;
-            else if ((linuxFile.Flags & FileFlags.O_RDWR) != 0) access = FileAccess.ReadWrite;
+            if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.ReadWrite;
+            else access = FileAccess.ReadWrite; // Default to ReadWrite at host level to support CopyUp, even if guest asked for ReadOnly
 
             var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
             var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
@@ -665,7 +665,7 @@ public partial class HostInode : Inode
             RandomAccess.FlushToDisk(handle);
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override int Read(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
 
@@ -681,10 +681,10 @@ public partial class HostInode : Inode
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
-        var append = (linuxFile.Flags & FileFlags.O_APPEND) != 0;
+        var append = (linuxFile?.Flags ?? 0 & FileFlags.O_APPEND) != 0;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)
         {

@@ -32,18 +32,12 @@ class TestBindMount:
         project_root: Path,
         integration_assets_dir: Path,
         case: EmulatorCase,
-        run_mode: str,
         fiberpod_dll: str | None,
         alpine_image: str | None,
     ) -> None:
         """Run bind mount test cases."""
-        if run_mode == "fiberpod":
-            if case.rootfs is not None:
-                case.rootfs = (project_root / case.rootfs).resolve()
-            # Otherwise, alpine_image + volume mount is used automatically
-        else:
-            if case.rootfs is not None:
-                case.rootfs = (project_root / case.rootfs).resolve()
+        if case.rootfs is not None:
+            case.rootfs = (project_root / case.rootfs).resolve()
 
         # Skip if test binary doesn't exist
         test_bin = integration_assets_dir / case.binary_name
@@ -54,7 +48,6 @@ class TestBindMount:
             project_root,
             integration_assets_dir,
             case,
-            run_mode=run_mode,
             fiberpod_dll=fiberpod_dll,
             alpine_image=alpine_image,
         )
@@ -67,13 +60,9 @@ class TestFileBindMount:
     def test_file_bind_mount_fiberpod(
         self,
         project_root: Path,
-        run_mode: str,
         fiberpod_dll: str | None,
     ) -> None:
         """Test binding a single file into the container."""
-        if run_mode != "fiberpod":
-            pytest.skip("File bind mount test only runs in fiberpod mode")
-
         import pexpect
         import tempfile
 
@@ -150,18 +139,12 @@ class TestMountApi:
         project_root: Path,
         integration_assets_dir: Path,
         case: EmulatorCase,
-        run_mode: str,
         fiberpod_dll: str | None,
         alpine_image: str | None,
     ) -> None:
         """Run mount API test cases."""
-        if run_mode == "fiberpod":
-            if case.rootfs is not None:
-                case.rootfs = (project_root / case.rootfs).resolve()
-            # Otherwise, alpine_image + volume mount is used automatically
-        else:
-            if case.rootfs is not None:
-                case.rootfs = (project_root / case.rootfs).resolve()
+        if case.rootfs is not None:
+            case.rootfs = (project_root / case.rootfs).resolve()
 
         # Skip if test binary doesn't exist
         test_bin = integration_assets_dir / case.binary_name
@@ -172,7 +155,6 @@ class TestMountApi:
             project_root,
             integration_assets_dir,
             case,
-            run_mode=run_mode,
             fiberpod_dll=fiberpod_dll,
             alpine_image=alpine_image,
         )

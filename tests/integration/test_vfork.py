@@ -20,5 +20,5 @@ from .harness import EmulatorCase, run_case
         ),
     ],
 )
-def test_vfork(project_root: Path, integration_assets_dir: Path, case: EmulatorCase) -> None:
-    run_case(project_root, integration_assets_dir, case)
+def test_vfork(project_root: Path, integration_assets_dir: Path, case: EmulatorCase, fiberpod_dll: str, alpine_image: str) -> None:
+    run_case(project_root, integration_assets_dir, case, fiberpod_dll, alpine_image)

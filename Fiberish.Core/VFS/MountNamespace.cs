@@ -7,6 +7,14 @@ namespace Fiberish.VFS;
 /// </summary>
 public class MountNamespace
 {
+    public readonly record struct MountInfoEntry(
+        long Id,
+        long ParentId,
+        string Source,
+        string Target,
+        string FsType,
+        string Options);
+
     /// <summary>
     ///     List of all Mount objects in this namespace.
     /// </summary>
@@ -150,6 +158,22 @@ public class MountNamespace
         {
             var target = BuildMountPath(mount);
             yield return (mount.Source ?? "none", target, mount.FsType ?? "unknown", mount.Options ?? "rw");
+        }
+    }
+
+    public IEnumerable<MountInfoEntry> GetMountInfoEntries()
+    {
+        foreach (var mount in _mounts)
+        {
+            var target = BuildMountPath(mount);
+            var parentId = mount.Parent?.Id ?? 0;
+            yield return new MountInfoEntry(
+                mount.Id,
+                parentId,
+                mount.Source ?? "none",
+                target,
+                mount.FsType ?? "unknown",
+                mount.Options ?? "rw");
         }
     }
 }

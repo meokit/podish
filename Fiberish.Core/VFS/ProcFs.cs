@@ -1,0 +1,720 @@
+using System.Text;
+using Fiberish.Core;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+
+namespace Fiberish.VFS;
+
+public class ProcFileSystem : FileSystem
+{
+    public ProcFileSystem()
+    {
+        Name = "proc";
+    }
+
+    public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
+    {
+        var fallbackSm = data as SyscallManager;
+        return new ProcSuperBlock(fsType, fallbackSm);
+    }
+}
+
+public class ProcSuperBlock : SuperBlock
+{
+    private ulong _nextIno = 1;
+    public SyscallManager? FallbackSyscallManager { get; }
+
+    public ProcSuperBlock(FileSystemType type, SyscallManager? fallbackSm)
+    {
+        Type = type;
+        FallbackSyscallManager = fallbackSm;
+
+        var rootInode = new ProcRootInode(this);
+        Root = new Dentry("/", rootInode, null, this);
+        Root.Parent = Root;
+    }
+
+    public override Inode AllocInode()
+    {
+        throw new NotSupportedException();
+    }
+
+    public ulong AllocateIno()
+    {
+        lock (Lock)
+        {
+            return _nextIno++;
+        }
+    }
+}
+
+file static class ProcContext
+{
+    public static ProcOpenContext Capture(ProcSuperBlock sb)
+    {
+        var scheduler = KernelScheduler.Current;
+        var task = scheduler?.CurrentTask;
+        return new ProcOpenContext(
+            scheduler,
+            task,
+            task?.Process,
+            task?.Process.Syscalls ?? sb.FallbackSyscallManager);
+    }
+
+    public static Process? ResolveProcessByPid(int pid)
+    {
+        return KernelScheduler.Current?.GetProcess(pid);
+    }
+}
+
+file sealed class ProcOpenContext
+{
+    public ProcOpenContext(KernelScheduler? scheduler, FiberTask? task, Process? process, SyscallManager? syscallManager)
+    {
+        Scheduler = scheduler;
+        Task = task;
+        Process = process;
+        SyscallManager = syscallManager;
+    }
+
+    public KernelScheduler? Scheduler { get; }
+    public FiberTask? Task { get; }
+    public Process? Process { get; }
+    public SyscallManager? SyscallManager { get; }
+}
+
+file sealed class ProcOpenData
+{
+    public ProcOpenData(ProcOpenContext context, byte[] content)
+    {
+        Context = context;
+        Content = content;
+    }
+
+    public ProcOpenContext Context { get; }
+    public byte[] Content { get; }
+}
+
+file sealed class ProcRootInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+
+    public ProcRootInode(ProcSuperBlock sb)
+    {
+        _sb = sb;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (Dentries.Count == 0) return null;
+        var root = Dentries[0];
+
+        if (root.Children.TryGetValue(name, out var cached))
+        {
+            if (int.TryParse(name, out var cachedPid) && ProcContext.ResolveProcessByPid(cachedPid) == null)
+            {
+                root.Children.Remove(name);
+            }
+            else
+            {
+                return cached;
+            }
+        }
+
+        Dentry? created = name switch
+        {
+            "mounts" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
+            "mountinfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
+            "cpuinfo" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateCpuInfo()),
+            "meminfo" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateMemInfo()),
+            "version" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateVersion()),
+            "stat" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler)),
+            "uptime" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler)),
+            "loadavg" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler)),
+            "sys" => CreateSysDirectory(root, name),
+            "self" => CreateSelfSymlink(root, name),
+            _ => null
+        };
+
+        if (created != null)
+        {
+            root.Children[name] = created;
+            return created;
+        }
+
+        if (!int.TryParse(name, out var pid)) return null;
+        if (ProcContext.ResolveProcessByPid(pid) == null) return null;
+
+        created = CreatePidDirectory(root, pid);
+        root.Children[name] = created;
+        return created;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        entries.Add(new DirectoryEntry { Name = "mounts", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "cpuinfo", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "meminfo", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "uptime", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "loadavg", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink });
+
+        var scheduler = KernelScheduler.Current;
+        if (scheduler != null)
+        {
+            var processes = scheduler.GetProcessesSnapshot();
+            foreach (var process in processes)
+                entries.Add(new DirectoryEntry
+                    { Name = process.TGID.ToString(), Ino = 0, Type = InodeType.Directory });
+        }
+
+        return entries;
+    }
+
+    private Dentry CreatePidDirectory(Dentry parent, int pid)
+    {
+        var inode = new ProcPidDirectoryInode(_sb, pid);
+        return new Dentry(pid.ToString(), inode, parent, _sb);
+    }
+
+    private Dentry CreateSelfSymlink(Dentry parent, string name)
+    {
+        var inode = new ProcSelfSymlinkInode(_sb);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateSysDirectory(Dentry parent, string name)
+    {
+        var inode = new ProcSysRootInode(_sb);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateFile(Dentry parent, string name, int mode, Func<ProcOpenContext, string> contentFactory)
+    {
+        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
+        return new Dentry(name, inode, parent, _sb);
+    }
+}
+
+file sealed class ProcPidDirectoryInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+
+    public ProcPidDirectoryInode(ProcSuperBlock sb, int pid)
+    {
+        _sb = sb;
+        _pid = pid;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (Dentries.Count == 0) return null;
+        if (ProcContext.ResolveProcessByPid(_pid) == null) return null;
+
+        var dir = Dentries[0];
+        if (dir.Children.TryGetValue(name, out var cached))
+            return cached;
+
+        Dentry? created = name switch
+        {
+            "status" => CreateFile(dir, name, 0x124, _ =>
+            {
+                var p = ProcContext.ResolveProcessByPid(_pid);
+                return p == null ? string.Empty : ProcFsManager.GenerateStatus(p);
+            }),
+            "cmdline" => CreateFile(dir, name, 0x124, _ =>
+            {
+                var p = ProcContext.ResolveProcessByPid(_pid);
+                return p == null ? string.Empty : ProcFsManager.GenerateCmdline(p);
+            }),
+            "stat" => CreateFile(dir, name, 0x124, _ =>
+            {
+                var p = ProcContext.ResolveProcessByPid(_pid);
+                return p == null ? string.Empty : ProcFsManager.GenerateStat(p);
+            }),
+            "mountinfo" => CreateFile(dir, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
+            "fd" => CreateFdDir(dir, name),
+            "fdinfo" => CreateFdInfoDir(dir, name),
+            "exe" => CreateSymlink(dir, name, p => p.ExecutablePath),
+            "cwd" => CreateSymlink(dir, name, p =>
+            {
+                var proc = p.Syscalls;
+                return proc.GetAbsolutePath(proc.CurrentWorkingDirectory);
+            }),
+            "root" => CreateSymlink(dir, name, p =>
+            {
+                var proc = p.Syscalls;
+                return proc.GetAbsolutePath(proc.ProcessRoot);
+            }),
+            _ => null
+        };
+
+        if (created != null)
+            dir.Children[name] = created;
+
+        return created;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        if (ProcContext.ResolveProcessByPid(_pid) == null)
+            return entries;
+
+        entries.Add(new DirectoryEntry { Name = "status", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "cmdline", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = "fd", Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = "fdinfo", Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = "exe", Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = "cwd", Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = "root", Ino = 0, Type = InodeType.Symlink });
+        return entries;
+    }
+
+    private Dentry CreateFile(Dentry parent, string name, int mode, Func<ProcOpenContext, string> contentFactory)
+    {
+        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateFdDir(Dentry parent, string name)
+    {
+        var inode = new ProcPidFdDirectoryInode(_sb, _pid);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateFdInfoDir(Dentry parent, string name)
+    {
+        var inode = new ProcPidFdInfoDirectoryInode(_sb, _pid);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateSymlink(Dentry parent, string name, Func<Process, string> resolver)
+    {
+        var inode = new ProcPidSymlinkInode(_sb, _pid, resolver);
+        return new Dentry(name, inode, parent, _sb);
+    }
+}
+
+file sealed class ProcPidSymlinkInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+    private readonly Func<Process, string> _targetResolver;
+
+    public ProcPidSymlinkInode(ProcSuperBlock sb, int pid, Func<Process, string> targetResolver)
+    {
+        _sb = sb;
+        _pid = pid;
+        _targetResolver = targetResolver;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Symlink;
+        Mode = 0x1FF; // 0777
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override string Readlink()
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return string.Empty;
+
+        var target = _targetResolver(process);
+        if (string.IsNullOrEmpty(target))
+            return string.Empty;
+        return target;
+    }
+}
+
+file sealed class ProcPidFdDirectoryInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+
+    public ProcPidFdDirectoryInode(ProcSuperBlock sb, int pid)
+    {
+        _sb = sb;
+        _pid = pid;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (Dentries.Count == 0) return null;
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return null;
+        if (!int.TryParse(name, out var fd)) return null;
+        if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
+
+        var dir = Dentries[0];
+        if (dir.Children.TryGetValue(name, out var cached))
+            return cached;
+
+        var inode = new ProcPidFdSymlinkInode(_sb, _pid, fd);
+        var dentry = new Dentry(name, inode, dir, _sb);
+        dir.Children[name] = dentry;
+        return dentry;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return entries;
+
+        foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
+            entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.Symlink });
+        return entries;
+    }
+}
+
+file sealed class ProcPidFdInfoDirectoryInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+
+    public ProcPidFdInfoDirectoryInode(ProcSuperBlock sb, int pid)
+    {
+        _sb = sb;
+        _pid = pid;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (Dentries.Count == 0) return null;
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return null;
+        if (!int.TryParse(name, out var fd)) return null;
+        if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
+
+        var dir = Dentries[0];
+        if (dir.Children.TryGetValue(name, out var cached))
+            return cached;
+
+        var inode = new ProcPidFdInfoFileInode(_sb, _pid, fd);
+        var dentry = new Dentry(name, inode, dir, _sb);
+        dir.Children[name] = dentry;
+        return dentry;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return entries;
+
+        foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
+            entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.File });
+        return entries;
+    }
+}
+
+file sealed class ProcPidFdSymlinkInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+    private readonly int _fd;
+
+    public ProcPidFdSymlinkInode(ProcSuperBlock sb, int pid, int fd)
+    {
+        _sb = sb;
+        _pid = pid;
+        _fd = fd;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Symlink;
+        Mode = 0x1FF; // 0777
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override string Readlink()
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        if (process == null) return string.Empty;
+        if (!process.Syscalls.FDs.TryGetValue(_fd, out var file)) return string.Empty;
+
+        if (file.Mount?.FsType == "anon_inodefs")
+            return $"anon_inode:{file.Dentry.Name}";
+
+        var loc = new PathLocation(file.Dentry, file.Mount);
+        return process.Syscalls.GetAbsolutePath(loc);
+    }
+}
+
+file sealed class ProcPidFdInfoFileInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly int _pid;
+    private readonly int _fd;
+
+    public ProcPidFdInfoFileInode(ProcSuperBlock sb, int pid, int fd)
+    {
+        _sb = sb;
+        _pid = pid;
+        _fd = fd;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.File;
+        Mode = 0x124; // 0444
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override void Open(LinuxFile linuxFile)
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid);
+        string text;
+        if (process == null || !process.Syscalls.FDs.TryGetValue(_fd, out var file))
+        {
+            text = string.Empty;
+        }
+        else
+        {
+            var flags = Convert.ToString((int)file.Flags, 8) ?? "0";
+            var mntId = file.Mount?.Id ?? 0;
+            text = $"pos:\t{file.Position}\nflags:\t0{flags}\nmnt_id:\t{mntId}\n";
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(text);
+        linuxFile.PrivateData = bytes;
+        Size = (ulong)bytes.Length;
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        var data = linuxFile.PrivateData as byte[] ?? [];
+        if (offset < 0) return -(int)Errno.EINVAL;
+        if (offset >= data.Length) return 0;
+
+        var count = Math.Min(buffer.Length, data.Length - (int)offset);
+        data.AsSpan((int)offset, count).CopyTo(buffer);
+        return count;
+    }
+}
+
+file enum ProcSysKind
+{
+    Root,
+    Kernel,
+    Vm
+}
+
+file sealed class ProcSysRootInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+    private readonly ProcSysKind _kind;
+
+    public ProcSysRootInode(ProcSuperBlock sb, ProcSysKind kind = ProcSysKind.Root)
+    {
+        _sb = sb;
+        _kind = kind;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (Dentries.Count == 0) return null;
+        var dir = Dentries[0];
+
+        if (dir.Children.TryGetValue(name, out var cached))
+            return cached;
+
+        Dentry? created = (_kind, name) switch
+        {
+            (ProcSysKind.Root, "kernel") => CreateDir(dir, name, ProcSysKind.Kernel),
+            (ProcSysKind.Root, "vm") => CreateDir(dir, name, ProcSysKind.Vm),
+
+            (ProcSysKind.Kernel, "hostname") => CreateFile(dir, name,
+                ctx => ProcFsManager.GenerateSysKernelHostname(ctx.Process)),
+            (ProcSysKind.Kernel, "osrelease") => CreateFile(dir, name,
+                ctx => ProcFsManager.GenerateSysKernelOsRelease(ctx.Process)),
+            (ProcSysKind.Kernel, "ostype") => CreateFile(dir, name,
+                ctx => ProcFsManager.GenerateSysKernelOstype(ctx.Process)),
+            (ProcSysKind.Kernel, "version") => CreateFile(dir, name,
+                ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process)),
+
+            (ProcSysKind.Vm, "overcommit_memory") => CreateFile(dir, name,
+                _ => ProcFsManager.GenerateSysVmOvercommitMemory()),
+            (ProcSysKind.Vm, "swappiness") => CreateFile(dir, name, _ => ProcFsManager.GenerateSysVmSwappiness()),
+            _ => null
+        };
+
+        if (created != null)
+            dir.Children[name] = created;
+
+        return created;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        switch (_kind)
+        {
+            case ProcSysKind.Root:
+                entries.Add(new DirectoryEntry { Name = "kernel", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "vm", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.Kernel:
+                entries.Add(new DirectoryEntry { Name = "hostname", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "osrelease", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "ostype", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File });
+                break;
+            case ProcSysKind.Vm:
+                entries.Add(new DirectoryEntry { Name = "overcommit_memory", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "swappiness", Ino = 0, Type = InodeType.File });
+                break;
+        }
+
+        return entries;
+    }
+
+    private Dentry CreateDir(Dentry parent, string name, ProcSysKind kind)
+    {
+        var inode = new ProcSysRootInode(_sb, kind);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory)
+    {
+        var inode = new ProcDynamicFileInode(_sb, 0x124, contentFactory);
+        return new Dentry(name, inode, parent, _sb);
+    }
+}
+
+file sealed class ProcSelfSymlinkInode : Inode
+{
+    private readonly ProcSuperBlock _sb;
+
+    public ProcSelfSymlinkInode(ProcSuperBlock sb)
+    {
+        _sb = sb;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Symlink;
+        Mode = 0x1FF; // 0777
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override string Readlink()
+    {
+        var proc = ProcContext.Capture(_sb).Process;
+        return (proc?.TGID ?? 0).ToString();
+    }
+
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return -(int)Errno.EPERM;
+    }
+}
+
+file sealed class ProcDynamicFileInode : Inode
+{
+    private readonly Func<ProcOpenContext, string> _contentFactory;
+
+    public ProcDynamicFileInode(ProcSuperBlock sb, int mode, Func<ProcOpenContext, string> contentFactory)
+    {
+        _contentFactory = contentFactory;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.File;
+        Mode = mode;
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override void Open(LinuxFile linuxFile)
+    {
+        var ctx = ProcContext.Capture((ProcSuperBlock)SuperBlock);
+        var content = _contentFactory(ctx);
+        var bytes = Encoding.UTF8.GetBytes(content);
+        linuxFile.PrivateData = new ProcOpenData(ctx, bytes);
+        Size = (ulong)bytes.Length;
+        ATime = DateTime.UtcNow;
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        var openData = linuxFile.PrivateData as ProcOpenData;
+        if (openData == null)
+        {
+            var ctx = ProcContext.Capture((ProcSuperBlock)SuperBlock);
+            var content = _contentFactory(ctx);
+            openData = new ProcOpenData(ctx, Encoding.UTF8.GetBytes(content));
+            linuxFile.PrivateData = openData;
+            Size = (ulong)openData.Content.Length;
+        }
+
+        if (offset < 0) return -(int)Errno.EINVAL;
+        if (offset >= openData.Content.Length) return 0;
+
+        var count = Math.Min(buffer.Length, openData.Content.Length - (int)offset);
+        openData.Content.AsSpan((int)offset, count).CopyTo(buffer);
+        ATime = DateTime.UtcNow;
+        return count;
+    }
+
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return -(int)Errno.EPERM;
+    }
+
+    public override int Truncate(long length)
+    {
+        return -(int)Errno.EPERM;
+    }
+}

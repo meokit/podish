@@ -7,7 +7,7 @@ import pytest
 from .harness import EmulatorCase, run_case
 
 @pytest.mark.integration
-def test_sysv_semaphores(project_root: Path) -> None:
+def test_sysv_semaphores(project_root: Path, fiberpod_dll: str, alpine_image: str) -> None:
     case = EmulatorCase(
         name="sysv_semaphores",
         binary_name="test_sysv_sem",
@@ -26,4 +26,4 @@ def test_sysv_semaphores(project_root: Path) -> None:
         ],
     )
     
-    run_case(project_root, project_root / "build/integration-assets/assets", case)
+    run_case(project_root, project_root / "build/integration-assets/assets", case, fiberpod_dll, alpine_image)

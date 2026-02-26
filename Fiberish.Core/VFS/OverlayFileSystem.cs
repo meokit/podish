@@ -1,4 +1,5 @@
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 // needed for SyscallManager Access if required, but maybe not directly here yet
 
 namespace Fiberish.VFS;
@@ -98,58 +99,91 @@ public class OverlayInode : Inode
     public Inode? LowerInode => LowerDentry?.Inode;
     public Inode? UpperInode => UpperDentry?.Inode;
 
-    public void CopyUp(LinuxFile linuxFile)
+    public int CopyUp(LinuxFile? linuxFile)
     {
-        if (UpperDentry != null) return;
+        if (UpperDentry != null) return 0;
+        if (LowerDentry == null) throw new InvalidOperationException("No lower dentry to copy up");
 
-        // Copy Up File!
-        var parentOverlayDentry =
-            linuxFile.Dentry.Parent ?? throw new InvalidOperationException("Cannot copy-up root?");
-        var parentOverlayInode = parentOverlayDentry.Inode as OverlayInode ??
-                                 throw new InvalidOperationException("Parent is not overlay inode");
-        if (parentOverlayInode.UpperDentry == null)
-            throw new InvalidOperationException(
-                "Parent directory is lower-only. Recursive directory copy-up not implemented yet.");
+        // 1. Ensure parent directories exist in upper FS
+        var upperParent = EnsureParentUpper(LowerDentry);
 
-        // 2. Create the file in Upper Parent
-        var upperParentDentry = parentOverlayInode.UpperDentry;
+        var osb = (OverlaySuperBlock)SuperBlock;
+        var upperDentry = new Dentry(LowerDentry.Name, null, upperParent, osb.UpperSB);
 
-        // We need a unique Dentry for the upper creation attached to the Upper Parent
-        var upperDentry =
-            new Dentry(linuxFile.Dentry.Name, null, upperParentDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
-
-        // Replicate mode/uid/gid from Lower
-        parentOverlayInode.UpperInode!.Create(upperDentry, Mode, Uid, Gid);
-
-        // 3. Copy data
-        if (LowerInode != null)
+        if (Type == InodeType.Directory)
         {
-            // We are reading from Lower, which uses file.PrivateData (FileStream) if Hostfs.
-            // We are writing to Upper (Tmpfs), which ignores file.PrivateData.
+            upperParent.Inode!.Mkdir(upperDentry, Mode, Uid, Gid);
+            UpperDentry = upperDentry;
+            return 0;
+        }
+        else
+        {
+            upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
 
-            var buf = new byte[4096];
-            long pos = 0;
-            while (true)
+            // 3. Copy data
+            if (LowerInode != null)
             {
-                var n = LowerInode.Read(linuxFile, buf, pos);
-                if (n <= 0) break;
-                upperDentry.Inode!.Write(linuxFile, buf.AsSpan(0, n), pos);
-                pos += n;
+                try
+                {
+                    var buf = new byte[4096];
+                    long pos = 0;
+                    while (true)
+                    {
+                        // Use null to trigger host-internal read without dependency on user's open mode
+                        var n = LowerInode.Read(null!, buf, pos);
+                        if (n <= 0) break;
+                        upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
+                        pos += n;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Fiberish.Diagnostics.Logging.CreateLogger<OverlayInode>().LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
+                    // Cleanup failed upper dentry if needed? For now just return error.
+                    return -(int)Errno.EACCES;
+                }
             }
 
-            // IMPORTANT: Close Lower resource now that we are done with it.
-            // We are switching "file" to be backed by Upper.
-            LowerInode.Release(linuxFile);
+            UpperDentry = upperDentry;
+
+            // 4. Redirect handle if provided
+            if (linuxFile != null)
+            {
+                LowerInode!.Release(linuxFile);
+                linuxFile.PrivateData = null; // Ensure clean state
+                UpperInode!.Open(linuxFile);
+            }
+
+            return 0;
         }
+    }
 
-        UpperDentry = upperDentry;
+    private Dentry EnsureParentUpper(Dentry lowerDentry)
+    {
+        var osb = (OverlaySuperBlock)SuperBlock;
+        var parentLower = lowerDentry.Parent;
 
-        // Open Upper (to set up PrivateData if needed by Upper FS)
-        UpperInode!.Open(linuxFile);
+        if (parentLower == null || parentLower == lowerDentry || parentLower.Name == "/")
+            return osb.UpperSB.Root;
+
+        // Recursively ensure parent's parent
+        var upperParentOfParent = EnsureParentUpper(parentLower);
+
+        // Does the parent exist in the upper parent?
+        var existing = upperParentOfParent.Inode!.Lookup(parentLower.Name);
+        if (existing != null) return existing;
+
+        // Must create parent directory in upper
+        var newUpperParent = new Dentry(parentLower.Name, null, upperParentOfParent, osb.UpperSB);
+        upperParentOfParent.Inode!.Mkdir(newUpperParent, parentLower.Inode!.Mode, parentLower.Inode.Uid, parentLower.Inode.Gid);
+        return newUpperParent;
     }
 
     public override Dentry? Lookup(string name)
     {
+        if (name == "..") return null; // Handled by VFS
+        if (name == ".") return null; // Handled by VFS
+
         // 1. Lookup in Upper
         var upperDentry = UpperInode?.Lookup(name);
 
@@ -206,54 +240,22 @@ public class OverlayInode : Inode
         if (LowerDentry == null)
             throw new InvalidOperationException("Cannot copy-up: no lower dentry");
 
-        // We need to find the upper FS parent. Walk up overlay dentries to find/create
-        // the upper parent directory.
+        UpperDentry = EnsureUpperDir(LowerDentry);
+    }
+
+    private Dentry EnsureUpperDir(Dentry lowerDentry)
+    {
         var osb = (OverlaySuperBlock)SuperBlock;
+        if (lowerDentry.Parent == null || lowerDentry.Parent == lowerDentry)
+            return osb.UpperSB.Root;
 
-        // If this is the overlay root, create a root directory in upper
-        // (this shouldn't normally happen since the overlay root should always have upper)
-        if (LowerDentry.Parent == null || LowerDentry.Parent == LowerDentry)
-        {
-            // Root — create directly in upper root
-            UpperDentry = osb.UpperSB.Root;
-            return;
-        }
+        var upperParent = EnsureParentUpper(lowerDentry);
+        var existing = upperParent.Inode!.Lookup(lowerDentry.Name);
+        if (existing != null) return existing;
 
-        // Find the overlay dentry for our parent to get/ensure its upper dentry
-        // We need to use the overlay's Root and walk down, or trust the parent overlay inode.
-        // For simplicity: create in the upper SB root's matching path.
-        // Recursion: ensure parent overlay inode has upper dentry too.
-
-        // Build the path from lower dentry to root
-        var pathParts = new List<string>();
-        var current = LowerDentry;
-        while (current != null && current.Parent != null && current.Parent != current)
-        {
-            pathParts.Add(current.Name);
-            current = current.Parent;
-        }
-        pathParts.Reverse();
-
-        // Walk/create in upper FS
-        var upperParent = osb.UpperSB.Root;
-        for (int i = 0; i < pathParts.Count; i++)
-        {
-            var name = pathParts[i];
-            var existing = upperParent.Inode?.Lookup(name);
-            if (existing != null)
-            {
-                upperParent = existing;
-            }
-            else
-            {
-                // Create the intermediate directory
-                var newDir = new Dentry(name, null, upperParent, osb.UpperSB);
-                upperParent.Inode!.Mkdir(newDir, LowerInode?.Mode ?? 0x1ED, LowerInode?.Uid ?? 0, LowerInode?.Gid ?? 0);
-                upperParent = newDir;
-            }
-        }
-
-        UpperDentry = upperParent;
+        var newUpper = new Dentry(lowerDentry.Name, null, upperParent, osb.UpperSB);
+        upperParent.Inode!.Mkdir(newUpper, lowerDentry.Inode!.Mode, lowerDentry.Inode.Uid, lowerDentry.Inode.Gid);
+        return newUpper;
     }
 
     public override int Flock(LinuxFile linuxFile, int operation)
@@ -321,7 +323,11 @@ public class OverlayInode : Inode
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         // Write to Upper.
-        if (UpperInode == null) CopyUp(linuxFile);
+        if (UpperInode == null)
+        {
+            var res = CopyUp(linuxFile);
+            if (res < 0) return res;
+        }
 
         return UpperInode!.Write(linuxFile, buffer, offset);
     }
@@ -341,7 +347,11 @@ public class OverlayInode : Inode
     public override int Truncate(long size)
     {
         if (UpperInode != null) return UpperInode.Truncate(size);
-        return -(int)Errno.EROFS;
+        if (LowerInode == null) return -(int)Errno.EROFS;
+
+        var res = CopyUp(null);
+        if (res < 0) return res;
+        return UpperInode!.Truncate(size);
     }
 
     public override List<DirectoryEntry> GetEntries()

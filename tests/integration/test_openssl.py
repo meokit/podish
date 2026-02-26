@@ -17,6 +17,8 @@ def run_emulator_openssl(
     send_eof: bool = False,
     allow_timeout: bool = False,
     timeout: int = 60,
+    fiberpod_dll: str | None = None,
+    alpine_image: str | None = None,
 ) -> str:
     openssl_bin = rootfs / "bin" / "openssl"
     if not openssl_bin.exists():
@@ -30,10 +32,10 @@ def run_emulator_openssl(
         send_eof=send_eof,
         allow_timeout=allow_timeout,
     )
-    return run_case(project_root, rootfs / "bin", case)
+    return run_case(project_root, rootfs / "bin", case, fiberpod_dll, alpine_image)
 
 @pytest.mark.integration
-def test_openssl_md5_correctness(project_root: Path):
+def test_openssl_md5_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     target_file = rootfs / "bin" / "openssl"
     if not target_file.exists():
@@ -43,11 +45,11 @@ def test_openssl_md5_correctness(project_root: Path):
         data = f.read()
         expected_md5 = hashlib.md5(data).hexdigest()
     
-    out = run_emulator_openssl(project_root, rootfs, ["dgst", "-md5", "/bin/openssl"])
+    out = run_emulator_openssl(project_root, rootfs, ["dgst", "-md5", "/bin/openssl"], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     assert expected_md5 in out.lower()
 
 @pytest.mark.integration
-def test_openssl_sha256_correctness(project_root: Path):
+def test_openssl_sha256_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     target_file = rootfs / "bin" / "openssl"
     if not target_file.exists():
@@ -57,11 +59,11 @@ def test_openssl_sha256_correctness(project_root: Path):
         data = f.read()
         expected_sha256 = hashlib.sha256(data).hexdigest()
     
-    out = run_emulator_openssl(project_root, rootfs, ["dgst", "-sha256", "/bin/openssl"])
+    out = run_emulator_openssl(project_root, rootfs, ["dgst", "-sha256", "/bin/openssl"], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     assert expected_sha256 in out.lower()
 
 @pytest.mark.integration
-def test_openssl_aes_128_cbc_correctness(project_root: Path):
+def test_openssl_aes_128_cbc_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     if not (rootfs / "bin" / "openssl").exists():
         pytest.skip("OpenSSL binary missing")
@@ -74,9 +76,9 @@ def test_openssl_aes_128_cbc_correctness(project_root: Path):
     
     # Encrypt using emulator OpenSSL
     run_emulator_openssl(project_root, rootfs, [
-        "enc", "-aes-128-cbc", "-in", "/tmp/plaintext.txt", "-out", "/tmp/encrypted.bin", 
+        "enc", "-e", "-aes-128-cbc", "-in", "/tmp/plaintext.txt", "-out", "/tmp/encrypted.bin",
         "-pass", "pass:secret", "-pbkdf2"
-    ])
+    ], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     
     enc_file_host = work_dir / "encrypted.bin"
     assert enc_file_host.exists()
@@ -85,14 +87,14 @@ def test_openssl_aes_128_cbc_correctness(project_root: Path):
     # Decrypt using host OpenSSL
     dec_file_host = work_dir / "decrypted.txt"
     subprocess.run([
-        "openssl", "enc", "-d", "-aes-128-cbc", "-in", str(enc_file_host), 
+        "openssl", "enc", "-d", "-aes-128-cbc", "-in", str(enc_file_host),
         "-out", str(dec_file_host), "-pass", "pass:secret", "-pbkdf2"
     ], check=True)
     
     assert dec_file_host.read_text() == "Hello, this is a secret message for AES-128-CBC!\n"
 
 @pytest.mark.integration
-def test_openssl_rsa_keygen_correctness(project_root: Path):
+def test_openssl_rsa_keygen_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     if not (rootfs / "bin" / "openssl").exists():
         pytest.skip("OpenSSL binary missing")
@@ -105,7 +107,7 @@ def test_openssl_rsa_keygen_correctness(project_root: Path):
         key_file_host.unlink()
         
     # Generate RSA key in emulator
-    run_emulator_openssl(project_root, rootfs, ["genrsa", "-out", "/tmp/test_rsa.pem", "1024"])
+    run_emulator_openssl(project_root, rootfs, ["genrsa", "-out", "/tmp/test_rsa.pem", "1024"], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     
     assert key_file_host.exists()
     assert key_file_host.stat().st_size > 0
@@ -119,7 +121,7 @@ def test_openssl_rsa_keygen_correctness(project_root: Path):
     assert "RSA key ok" in res.stdout
 
 @pytest.mark.integration
-def test_openssl_chacha20_correctness(project_root: Path):
+def test_openssl_chacha20_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     if not (rootfs / "bin" / "openssl").exists():
         pytest.skip("OpenSSL binary missing")
@@ -132,9 +134,9 @@ def test_openssl_chacha20_correctness(project_root: Path):
     
     # Encrypt using emulator OpenSSL
     run_emulator_openssl(project_root, rootfs, [
-        "enc", "-chacha20", "-in", "/tmp/plaintext_chacha20.txt", "-out", "/tmp/encrypted_chacha20.bin", 
+        "enc", "-e", "-chacha20", "-in", "/tmp/plaintext_chacha20.txt", "-out", "/tmp/encrypted_chacha20.bin",
         "-pass", "pass:secret", "-pbkdf2"
-    ])
+    ], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     
     enc_file_host = work_dir / "encrypted_chacha20.bin"
     assert enc_file_host.exists()
@@ -143,14 +145,14 @@ def test_openssl_chacha20_correctness(project_root: Path):
     # Decrypt using host OpenSSL
     dec_file_host = work_dir / "decrypted_chacha20.txt"
     subprocess.run([
-        "openssl", "enc", "-d", "-chacha20", "-in", str(enc_file_host), 
+        "openssl", "enc", "-d", "-chacha20", "-in", str(enc_file_host),
         "-out", str(dec_file_host), "-pass", "pass:secret", "-pbkdf2"
     ], check=True)
     
     assert dec_file_host.read_text() == "Hello, this is a secret message for ChaCha20!\n"
 
 @pytest.mark.integration
-def test_openssl_ec_keygen_correctness(project_root: Path):
+def test_openssl_ec_keygen_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     if not (rootfs / "bin" / "openssl").exists():
         pytest.skip("OpenSSL binary missing")
@@ -163,7 +165,7 @@ def test_openssl_ec_keygen_correctness(project_root: Path):
         key_file_host.unlink()
         
     # Generate EC key in emulator
-    run_emulator_openssl(project_root, rootfs, ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "/tmp/test_ec.pem"])
+    run_emulator_openssl(project_root, rootfs, ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "/tmp/test_ec.pem"], fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
     
     assert key_file_host.exists()
     assert key_file_host.stat().st_size > 0
@@ -177,7 +179,7 @@ def test_openssl_ec_keygen_correctness(project_root: Path):
     assert "key valid" in res.stderr.lower() or "key ok" in res.stderr.lower()
 
 @pytest.mark.integration
-def test_openssl_s_client_correctness(project_root: Path):
+def test_openssl_s_client_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str):
     rootfs = (project_root / "tests" / "openssl" / "rootfs").resolve()
     if not (rootfs / "bin" / "openssl").exists():
         pytest.skip("OpenSSL binary missing")
@@ -194,7 +196,7 @@ def test_openssl_s_client_correctness(project_root: Path):
             "req", "-x509", "-newkey", "rsa:2048",
             "-keyout", "/tmp/server.key", "-out", "/tmp/server.crt",
             "-days", "1", "-nodes", "-subj", "/CN=localhost"
-        ], timeout=20)
+        ], timeout=20, fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
 
     assert cert_path.exists()
     assert key_path.exists()
@@ -250,7 +252,7 @@ def test_openssl_s_client_correctness(project_root: Path):
     # Run guest openssl s_client
     out = run_emulator_openssl(project_root, rootfs, [
         "s_client", "-connect", f"127.0.0.1:{port}", "-brief", "-no_ign_eof"
-    ], send_eof=True, timeout=15)
+    ], send_eof=True, timeout=15, fiberpod_dll=fiberpod_dll, alpine_image=alpine_image)
 
     t.join(timeout=5)
 

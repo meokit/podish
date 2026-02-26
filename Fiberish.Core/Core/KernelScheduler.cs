@@ -94,6 +94,22 @@ public class KernelScheduler
         }
     }
 
+    public List<Process> GetProcessesSnapshot()
+    {
+        lock (_processes)
+        {
+            return _processes.Values.ToList();
+        }
+    }
+
+    public bool UnregisterProcess(int pid)
+    {
+        lock (_processes)
+        {
+            return _processes.Remove(pid);
+        }
+    }
+
     public FiberTask? GetTask(int tid)
     {
         lock (_tasks)

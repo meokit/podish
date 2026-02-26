@@ -3,7 +3,7 @@ from pathlib import Path
 from .harness import EmulatorCase, run_case
 
 @pytest.mark.integration
-def test_posix_timers(project_root: Path) -> None:
+def test_posix_timers(project_root: Path, fiberpod_dll: str, alpine_image: str) -> None:
     case = EmulatorCase(
         name="posix_timers",
         binary_name="test_posix_timers",
@@ -17,4 +17,4 @@ def test_posix_timers(project_root: Path) -> None:
         ],
     )
 
-    run_case(project_root, project_root / "build/integration-assets/assets", case)
+    run_case(project_root, project_root / "build/integration-assets/assets", case, fiberpod_dll, alpine_image)

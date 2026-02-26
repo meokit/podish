@@ -184,7 +184,12 @@ public partial class SyscallManager
                         }
 
                         // Reap only if WNOWAIT is not set
-                        if (!noReap) currentProc.Children.Remove(childPid);
+                        if (!noReap)
+                        {
+                            currentProc.Children.Remove(childPid);
+                            childProc.State = ProcessState.Dead;
+                            kernel.UnregisterProcess(childPid);
+                        }
                         // Also remove from global table? Or let it be garbage collected if no other refs?
                         // If we remove from global table, PID can be reused properly (if allocator reuses).
                         // Current allocator is monotonic increment.
@@ -289,10 +294,14 @@ public partial class SyscallManager
                         }
 
                         if (!wnowait)
+                        {
                             lock (currentProc.Children)
                             {
                                 currentProc.Children.Remove(childPid);
                             }
+                            childProc.State = ProcessState.Dead;
+                            kernel.UnregisterProcess(childPid);
+                        }
 
                         return 0; // Success
                     }
