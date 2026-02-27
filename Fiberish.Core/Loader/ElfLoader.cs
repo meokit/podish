@@ -129,9 +129,25 @@ public class ElfLoader
 
         var platPtr = PushString("i686");
         var execFnPtr = PushString(guestPath);
-        var randPtr = PushBytes(new byte[16]);
+        
+        var randBytes = new byte[16];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(randBytes);
+        var randPtr = PushBytes(randBytes);
+        Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr, BitConverter.ToString(randBytes));
 
-        sp &= ~0xFu;
+        // ABI: Stack pointer should be 16-byte aligned at process entry (where argc is).
+        // To achieve this, we count the number of words we're about to push:
+        // argc (1) + argv (ArgCount + 1) + envp (EnvCount + 1) + auxv ((AuxCount + 1) * 2)
+        // Note: each auxv entry is 2 words (key, value).
+        int auxCount = 13; // We push 12 entries + AT_NULL
+        int totalWords = 1 + (args.Length + 1) + (envs.Length + 1) + (auxCount * 2);
+        int totalSize = totalWords * 4;
+        
+        // We want (sp - totalSize) % 16 == 0.
+        // So sp % 16 should be totalSize % 16.
+        uint targetSp = sp - (uint)totalSize;
+        uint alignedTargetSp = targetSp & ~0xFu;
+        sp = alignedTargetSp + (uint)totalSize;
 
         void PushAux(uint k, uint v)
         {
@@ -157,7 +173,9 @@ public class ElfLoader
         // AT_BASE is the interpreter's load base (0 if no interpreter)
         PushAux(LinuxConstants.AT_BASE, interpBase);
         PushAux(LinuxConstants.AT_FLAGS, 0);
-        PushAux(LinuxConstants.AT_HWCAP, 0);
+        // i386 baseline from native Alpine container (podman) for better libc/OpenSSL feature probing.
+        PushAux(LinuxConstants.AT_HWCAP, 0x0fcbfbfd);
+        PushAux(LinuxConstants.AT_HWCAP2, 0);
         PushAux(LinuxConstants.AT_CLKTCK, 100);
 
         PushUint32(0);

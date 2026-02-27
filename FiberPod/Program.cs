@@ -46,6 +46,18 @@ internal class Program
         var ttyOption = new Option<bool>(
             new[] { "--tty", "-t" },
             "Allocate a pseudo-TTY");
+        var straceOption = new Option<bool>(
+            new[] { "--strace", "-s" },
+            "Enable syscall tracing (strace-like logs)");
+        var noOverlayOption = new Option<bool>(
+            new[] { "--no-overlay" },
+            "Disable OverlayFS and run directly on hostfs root");
+        var envOption = new Option<string[]>(
+            new[] { "--env", "-e" },
+            "Set environment variables (e.g. -e KEY=VALUE)")
+        {
+            AllowMultipleArgumentsPerToken = false
+        };
         var imageArgument = new Argument<string>("image", "Image name (or path to rootfs)");
         var exeArgument =
             new Argument<string>("command", () => "", "Command to execute (optional if image has entrypoint)");
@@ -54,6 +66,9 @@ internal class Program
         runCommand.AddOption(volumeOption);
         runCommand.AddOption(interactiveOption);
         runCommand.AddOption(ttyOption);
+        runCommand.AddOption(straceOption);
+        runCommand.AddOption(noOverlayOption);
+        runCommand.AddOption(envOption);
         runCommand.AddArgument(imageArgument);
         runCommand.AddArgument(exeArgument);
         runCommand.AddArgument(exeArgsArgument);
@@ -63,6 +78,9 @@ internal class Program
             var volumes = context.ParseResult.GetValueForOption(volumeOption) ?? Array.Empty<string>();
             var interactive = context.ParseResult.GetValueForOption(interactiveOption);
             var tty = context.ParseResult.GetValueForOption(ttyOption);
+            var strace = context.ParseResult.GetValueForOption(straceOption);
+            var noOverlay = context.ParseResult.GetValueForOption(noOverlayOption);
+            var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var image = context.ParseResult.GetValueForArgument(imageArgument);
             var exe = context.ParseResult.GetValueForArgument(exeArgument);
             var exeArgs = context.ParseResult.GetValueForArgument(exeArgsArgument) ?? Array.Empty<string>();
@@ -116,9 +134,10 @@ internal class Program
             if (!string.IsNullOrEmpty(exe))
             {
                 Logger.LogInformation("Executing: {Exe} {Args}", exe, string.Join(" ", exeArgs));
+                Logger.LogInformation("Env: {Envs}", string.Join(", ", guestEnvs));
             }
 
-            var exitCode = await RunContainer(rootfsPath, exe, exeArgs, volumes, interactive && tty);
+            var exitCode = await RunContainer(rootfsPath, exe, exeArgs, volumes, guestEnvs, interactive && tty, strace, !noOverlay);
             context.ExitCode = exitCode;
         });
 
@@ -188,7 +207,7 @@ internal class Program
     }
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        bool useTty)
+        string[] guestEnvs, bool useTty, bool strace, bool useOverlay)
     {
         await Task.CompletedTask; // TODO: remove async?
 
@@ -261,7 +280,7 @@ internal class Program
             }
 
             // 3. Bootstrap runtime with OverlayFS enabled
-            var runtime = KernelRuntime.Bootstrap(flattenedRootfsPath, false, true, ttyDiag);
+            var runtime = KernelRuntime.Bootstrap(flattenedRootfsPath, strace, useOverlay, ttyDiag);
 
             // 4. Mount Volumes
             foreach (var vol in volumes)
@@ -272,7 +291,6 @@ internal class Program
                     Logger.LogWarning("Invalid volume format: {Volume}. Expected /host/path:/guest/path[:ro]", vol);
                     continue;
                 }
-
                 var hostPath = parts[0];
                 var guestPath = parts[1];
                 var readOnly = parts.Length > 2 && parts[2] == "ro";
@@ -283,6 +301,18 @@ internal class Program
                     continue;
                 }
 
+                // Follow symlinks on host (e.g. /var -> /private/var on macOS)
+                // Otherwise guest processes might fail to resolve host paths correctly.
+                var hostInfo = new DirectoryInfo(hostPath);
+                if (hostInfo.LinkTarget != null)
+                {
+                    var resolved = hostInfo.ResolveLinkTarget(true);
+                    if (resolved != null)
+                    {
+                        hostPath = resolved.FullName;
+                    }
+                }
+
                 Logger.LogInformation("Mounting {HostPath} at {GuestPath} (ro: {ReadOnly})", hostPath, guestPath,
                     readOnly);
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
@@ -290,18 +320,26 @@ internal class Program
 
             var actualExe = string.IsNullOrEmpty(exe) ? "/bin/sh" : exe;
             var fullArgs = new[] { actualExe }.Concat(exeArgs).ToArray();
-            var envs = new[]
+            
+            // Build strictly isolated environment
+            var finalEnvs = new List<string>
             {
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "HOME=/root",
                 "TERM=xterm",
                 "USER=root"
             };
+            
+            // Add user provided envs. This replaces duplicates if any.
+            foreach (var env in guestEnvs)
+            {
+                finalEnvs.Add(env);
+            }
 
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
             if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
 
-            var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs, envs,
+            var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs, finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!);
 
             // 5. Run Scheduler

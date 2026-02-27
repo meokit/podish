@@ -541,7 +541,7 @@ public partial class SyscallManager
         }
 
         // Create /dev/null
-        var nullInode = new ConsoleInode(devSb, true); // sink/source
+        var nullInode = new NullInode(devSb);
         nullInode.Rdev = 0x0103; // Major 1, Minor 3
         var nullDentry = new Dentry("null", nullInode, devRoot, devSb);
         RegisterDev("null", nullDentry);

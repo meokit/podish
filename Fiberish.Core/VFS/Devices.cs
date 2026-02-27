@@ -1,6 +1,8 @@
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Diagnostics;
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
@@ -179,11 +181,74 @@ public class RandomInode : Inode
         return buffer.Length;
     }
 
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        return base.Poll(linuxFile, events);
+    }
+
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         // Writing to /dev/urandom updates the entropy pool. 
         // We can just ignore it or count it as success.
         return buffer.Length;
+    }
+
+    public override int Truncate(long size)
+    {
+        return 0;
+    }
+}
+
+public class NullInode : Inode
+{
+    public NullInode(SuperBlock sb)
+    {
+        SuperBlock = sb;
+        Type = InodeType.CharDev;
+        Mode = 0x1B6; // 666
+        Ino = 1; // Dummy
+    }
+
+    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot create in /dev/null");
+    }
+
+    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot mkdir in /dev/null");
+    }
+
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        throw new InvalidOperationException("Cannot symlink in /dev/null");
+    }
+
+    public override Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        throw new InvalidOperationException("Cannot link in /dev/null");
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        // /dev/null always returns EOF.
+        return 0;
+    }
+
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        // /dev/null discards all bytes and reports success.
+        return buffer.Length;
+    }
+
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        short revents = 0;
+        if ((events & POLLIN) != 0) revents |= POLLIN;
+        if ((events & POLLOUT) != 0) revents |= POLLOUT;
+        return revents;
     }
 
     public override int Truncate(long size)
