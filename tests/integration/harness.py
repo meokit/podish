@@ -131,11 +131,13 @@ def _run_case_fiberpod(
         volumes=volumes,
     )
 
+    # Keep the host's PATH so pexpect can find 'dotnet', but strip out
+    # things like OPENSSL_CONF that would poison the guest.
     # Use host's HOME for dotnet CLI (to avoid read-only /root in guest),
     # but guest's HOME will be set separately inside the emulated environment.
     clean_env = {
         "TERM": os.environ.get("TERM", "xterm"),
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "DOTNET_CLI_HOME": os.path.expanduser("~"),
         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "true",
         "DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
@@ -268,28 +270,13 @@ def run_fiberpod_command(
         volumes=volumes,
     )
 
-    # Keep the host's PATH so pexpect can find 'dotnet', but strip out
-    # things like OPENSSL_CONF that would poison the guest.
-    # Use host's HOME for dotnet CLI (to avoid read-only /root in guest),
-    # but guest's HOME will be set inside the emulated environment.
-    clean_env = {
-        "TERM": os.environ.get("TERM", "xterm"),
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        # Use host's HOME for dotnet CLI config, guest HOME is set separately
-        "DOTNET_CLI_HOME": os.path.expanduser("~"),
-        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "true",
-        "DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
-        "DOTNET_NOLOGO": "true",
-    }
-
     print(f"\n[Harness] Running command: {' '.join(cmd)}")
     child = pexpect.spawn(
-        "dotnet",
+        dotnet,
         cmd,
         cwd=str(project_root),
         encoding="utf-8",
         timeout=timeout,
-        env=clean_env,
     )
 
     case_pseudo = EmulatorCase(

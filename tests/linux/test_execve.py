@@ -3,12 +3,12 @@ import pexpect
 import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-CLI_PROJECT = os.path.join(PROJECT_ROOT, "Fiberish.Cli")
-CLI_DLL = os.path.join(CLI_PROJECT, "bin", "Debug", "net8.0", "Fiberish.Cli.dll")
+LINUX_ROOTFS = os.path.join(PROJECT_ROOT, "tests/linux/rootfs")
+LINUX_ASSETS = os.path.join(PROJECT_ROOT, "tests/linux/assets")
 TEST_ASSET = os.path.join(PROJECT_ROOT, "tests/linux/assets/test_execve_vdso")
 
 
-def test_execve_vdso_persistence(build_cli):
+def test_execve_vdso_persistence(fiberpod_dll):
     """
     Verifies that SysExecve properly re-maps vDSO and maintains signal capabilities.
     The `build_cli` fixture (from conftest.py) ensures the project is built once
@@ -17,13 +17,18 @@ def test_execve_vdso_persistence(build_cli):
     if not os.path.exists(TEST_ASSET):
         pytest.skip(f"Test asset {TEST_ASSET} not found. Did you run 'zig cc ...'?")
 
-    # Use the pre-built DLL directly instead of `dotnet run --project` to avoid
-    # a redundant build check on every test invocation.
-    cmd = f"dotnet {CLI_DLL} {TEST_ASSET} arg1 arg2"
-
-    print(f"\nRunning: {cmd}")
-
-    child = pexpect.spawn(cmd, encoding='utf-8', timeout=10)
+    args = [
+        fiberpod_dll,
+        "run",
+        "-v", f"{LINUX_ASSETS}:/tests",
+        LINUX_ROOTFS,
+        "--",
+        "/tests/test_execve_vdso",
+        "arg1",
+        "arg2",
+    ]
+    print(f"\nRunning: dotnet {' '.join(args)}")
+    child = pexpect.spawn("dotnet", args, encoding='utf-8', timeout=10, cwd=PROJECT_ROOT)
 
     try:
         # 1. First run

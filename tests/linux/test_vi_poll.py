@@ -3,14 +3,12 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-CLI_PROJECT = os.path.join(PROJECT_ROOT, "Fiberish.Cli")
-CLI_DLL = os.path.join(CLI_PROJECT, "bin", "Debug", "net8.0", "Fiberish.Cli.dll")
 EMULATOR_LOG = os.path.join(PROJECT_ROOT, "emulator.log")
 ROOTFS = os.path.join(PROJECT_ROOT, "tests/linux/rootfs")
 VI_BIN = os.path.join(ROOTFS, "bin/busybox")
 
 
-def test_vi_poll_spam(build_cli):
+def test_vi_poll_spam(fiberpod_dll):
     """
     Runs busybox vi under the emulator with --trace, then checks the log for
     excessive poll busy-wait messages.
@@ -26,11 +24,20 @@ def test_vi_poll_spam(build_cli):
         import pytest
         pytest.skip(f"busybox binary not found at {VI_BIN}")
 
-    # Use pre-built DLL; --trace writes the log we want to inspect afterward.
-    cmd = f"dotnet {CLI_DLL} --trace --rootfs {ROOTFS} {VI_BIN} vi"
-    print(f"\nRunning: {cmd}")
-
-    child = pexpect.spawn(cmd, encoding='utf-8', timeout=20)
+    args = [
+        fiberpod_dll,
+        "--log-level", "Trace",
+        "--log-file", EMULATOR_LOG,
+        "run",
+        "-i",
+        "-t",
+        ROOTFS,
+        "--",
+        "/bin/busybox",
+        "vi",
+    ]
+    print(f"\nRunning: dotnet {' '.join(args)}")
+    child = pexpect.spawn("dotnet", args, encoding='utf-8', timeout=20, cwd=PROJECT_ROOT)
 
     try:
         # Wait for vi to show its first screen character ('~' marks empty lines).
@@ -75,4 +82,4 @@ def test_vi_poll_spam(build_cli):
 
 
 if __name__ == "__main__":
-    test_vi_poll_spam(build_cli=None)
+    test_vi_poll_spam(fiberpod_dll="")
