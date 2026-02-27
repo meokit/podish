@@ -130,8 +130,16 @@ public class ElfLoader
         var platPtr = PushString("i686");
         var execFnPtr = PushString(guestPath);
         
+        var salt = "fiberish-salt-2024"u8;
+        var guestPathBytes = Encoding.ASCII.GetBytes(guestPath);
+        var hashInput = new byte[salt.Length + guestPathBytes.Length];
+        salt.CopyTo(hashInput);
+        guestPathBytes.CopyTo(hashInput.AsSpan(salt.Length));
+        
+        var fullHash = System.Security.Cryptography.SHA256.HashData(hashInput);
         var randBytes = new byte[16];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(randBytes);
+        Array.Copy(fullHash, randBytes, 16);
+        
         var randPtr = PushBytes(randBytes);
         Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr, BitConverter.ToString(randBytes));
 

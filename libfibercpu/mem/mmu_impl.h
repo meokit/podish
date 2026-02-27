@@ -2,16 +2,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include "../state.h"  // Ensure EmuState is defined
 #include "mmu.h"
-
-namespace fiberish::mem {
-
-// ----------------------------------------------------------------------------
-// Mmu Implementation
-// ----------------------------------------------------------------------------
-
-}  // namespace fiberish::mem
 
 namespace fiberish::mem {
 
@@ -25,11 +18,6 @@ inline EmuState* Mmu::get_state() {
     // Always Trigger Precise Fault mechanism to stop current block execution
     // and allow retry (if handled) or stop (if not).
 
-    // 1. Rollback EIP
-    // if (op) state->ctx.eip = op->next_eip - op->GetLength();
-    // Now the caller need to rollback eip itself
-
-    // 2. Call User Handler (if any)
     bool handled = false;
     if (fault_handler) {
         handled = (bool)fault_handler(fault_opaque, addr, is_write);
@@ -39,7 +27,7 @@ inline EmuState* Mmu::get_state() {
         get_state()->status = EmuStatus::Fault;
     }
 
-    // Caller MUST check status, if not Running, exit from DecodedOp chain
+    // Caller MUST check status; if not Running, exit from DecodedOp chain
     return get_state()->status;
 }
 
@@ -61,20 +49,17 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     const uint32_t l2_idx = (addr >> 12) & 0x3FF;
     const uint32_t offset = addr & 0xFFF;
 
-    // 1. Check L1
-    // We do NOT use a reference here because signal_fault might invalidate it
+    // 1. Check L1 Directory
     if (!page_dir->l1_directory[l1_idx]) {
         auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
-        // Retry
+        // Retry after fault handler
         if (!page_dir || !page_dir->l1_directory[l1_idx]) {
             return std::unexpected(FaultCode::PageFault);
         }
     }
 
-    // Now it is safe to acquire the pointer (but still safer to use raw pointer if we fear realloc)
-    // We use raw pointer to the Chunk to avoid any unique_ptr ref weirdness
     auto* chunk = page_dir->l1_directory[l1_idx].get();
 
     // 2. Check Permissions
@@ -83,10 +68,10 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
         auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
-        // Retry: Need to re-fetch chunk/perm because handler might have changed them!
+        // Retry: Refetch chunk/perm because handler might have changed them
         if (!page_dir || !page_dir->l1_directory[l1_idx]) return std::unexpected(FaultCode::PageFault);
 
-        chunk = page_dir->l1_directory[l1_idx].get();  // Refresh pointer
+        chunk = page_dir->l1_directory[l1_idx].get();
         current_perm = chunk->permissions[l2_idx];
 
         if (!has_property(current_perm, req_perm)) {
@@ -94,7 +79,7 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
         }
     }
 
-    // Dirty Bit
+    // Mark Dirty Bit if writing
     if (has_property(req_perm, Property::Write) && !has_property(current_perm, Property::Dirty)) {
         current_perm = current_perm | Property::Dirty;
         chunk->permissions[l2_idx] = current_perm;
@@ -113,10 +98,10 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
         bool is_exec = has_property(current_perm, Property::Exec);
         tlb.fill(addr, page_base, current_perm);
 
-        // Trap SMC on executable pages
+        // Trap SMC (Self-Modifying Code) on executable pages
         if (is_exec) {
             const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-            tlb.write_tlb[idx].tag = 1;
+            tlb.write_tlb[idx].tag = 1;  // Invalidate write tag to force slow-path for SMC detection
         }
     }
 
@@ -142,17 +127,20 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 template <typename T>
 [[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read_no_utlb(GuestAddr addr) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = end_addr & ~PAGE_MASK;
+    const uint32_t target_tag = addr & ~PAGE_MASK;
+    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
+
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.read_tlb[idx];
 
-    if (entry.tag == target_tag) [[likely]] {
+    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_read_hits++;
         stats.total_reads++;
 #endif
-        auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
-        return ptr;
+        T val;
+        std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
+        return val;
     }
 
 #ifdef ENABLE_TLB_STATS
@@ -166,16 +154,18 @@ template <typename T>
 template <typename T>
 [[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write_no_utlb(GuestAddr addr, T val) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = end_addr & ~PAGE_MASK;
+    const uint32_t target_tag = addr & ~PAGE_MASK;
+    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
+
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.write_tlb[idx];
 
-    if (entry.tag == target_tag) [[likely]] {
+    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_write_hits++;
         stats.total_writes++;
 #endif
-        *reinterpret_cast<T*>(entry.addend + addr) = val;
+        std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
         return {};
     }
 
@@ -185,33 +175,39 @@ template <typename T>
 #endif
     return write_slow<T>(addr, val);
 }
+
 template <typename T>
 MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = end_addr & ~PAGE_MASK;
+    const uint32_t target_tag = addr & ~PAGE_MASK;
+    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
 
-    if (utlb->tag_r == target_tag) [[likely]] {
+    if (((utlb->tag_r ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l1_read_hits++;
         stats.total_reads++;
 #endif
-        return *reinterpret_cast<T*>(utlb->addend + addr);
+        T val;
+        std::memcpy(&val, (const void*)(utlb->addend + addr), sizeof(T));
+        return val;
     }
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.read_tlb[idx];
 
-    if (entry.tag == target_tag) [[likely]] {
+    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_read_hits++;
         stats.total_reads++;
 #endif
-        auto ptr = *reinterpret_cast<T*>(entry.addend + addr);
+        T val;
+        std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
+
         utlb->tag_r = target_tag;
         utlb->addend = entry.addend;
         utlb->tag_w =
             has_property(entry.perm, Property::Write) ? target_tag : std::numeric_limits<decltype(utlb->tag_w)>::max();
-        return ptr;
+        return val;
     }
 
     utlb->invalidate();
@@ -227,26 +223,28 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
 template <typename T>
 MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = end_addr & ~PAGE_MASK;
+    const uint32_t target_tag = addr & ~PAGE_MASK;
+    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
 
-    if (utlb->tag_w == target_tag) [[likely]] {
+    if (((utlb->tag_w ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l1_write_hits++;
         stats.total_writes++;
 #endif
-        *reinterpret_cast<T*>(utlb->addend + addr) = val;
+        std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
         return {};
     }
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.write_tlb[idx];
 
-    if (entry.tag == target_tag) [[likely]] {
+    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_write_hits++;
         stats.total_writes++;
 #endif
-        *reinterpret_cast<T*>(entry.addend + addr) = val;
+        std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
+
         utlb->tag_w = target_tag;
         utlb->addend = entry.addend;
         utlb->tag_r =
@@ -267,11 +265,8 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(GuestAddr addr, MicroTLB* utlb, const ShimOp* cur_op) {
     if (auto result = read_tlb_only<T>(addr, utlb)) return result;
-
     get_state()->sync_eip_to_op_start(cur_op);
-
     if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-
     return read_slow<T>(addr);
 }
 
@@ -279,11 +274,8 @@ template <typename T, bool fail_on_tlb_miss>
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const ShimOp* cur_op) {
     if (auto result = write_tlb_only<T>(addr, val, utlb)) return result;
-
     get_state()->sync_eip_to_op_start(cur_op);
-
     if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-
     return write_slow<T>(addr, val);
 }
 
@@ -298,7 +290,8 @@ template <typename T>
     } else {
         auto res = resolve_slow(addr, Property::Read);
         if (!res) return std::unexpected(res.error());
-        val = *reinterpret_cast<T*>(*res);
+        // Safe copy for unaligned slow-path access
+        std::memcpy(&val, *res, sizeof(T));
     }
 
     if (mem_hook) {
@@ -307,12 +300,10 @@ template <typename T>
             std::memcpy(&hook_val, &val, sizeof(T));
             mem_hook(mem_hook_opaque, addr, sizeof(T), 0, hook_val);
         } else {
-            // First trigger
             std::memcpy(&hook_val, &val, 8);
-            mem_hook(mem_hook_opaque, addr, sizeof(T), 0, hook_val);
+            mem_hook(mem_hook_opaque, addr, 8, 0, hook_val);
 
-            // The second Trigger
-            std::memcpy(&hook_val, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(&val) + 8), sizeof(T) - 8);
+            std::memcpy(&hook_val, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(&val) + 8), sizeof(T) - 8);
             mem_hook(mem_hook_opaque, addr + 8, sizeof(T) - 8, 0, hook_val);
         }
     }
@@ -329,12 +320,10 @@ template <typename T>
             std::memcpy(&hook_val, &val, sizeof(T));
             mem_hook(mem_hook_opaque, addr, sizeof(T), 1, hook_val);
         } else {
-            // First trigger
             std::memcpy(&hook_val, &val, 8);
-            mem_hook(mem_hook_opaque, addr, sizeof(T), 1, hook_val);
+            mem_hook(mem_hook_opaque, addr, 8, 1, hook_val);
 
-            // The second Trigger
-            std::memcpy(&hook_val, reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(&val) + 8), sizeof(T) - 8);
+            std::memcpy(&hook_val, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(&val) + 8), sizeof(T) - 8);
             mem_hook(mem_hook_opaque, addr + 8, sizeof(T) - 8, 1, hook_val);
         }
     }
@@ -348,13 +337,16 @@ template <typename T>
     HostAddr ptr = *res;
 
     if (ptr && smc_handler) {
-        Property p = get_property(addr);
+        Property p = get_property(addr);  // Assuming get_property exists elsewhere
         if (has_property(p, Property::Exec)) {
             smc_handler(smc_opaque, addr);
         }
     }
 
-    if (ptr) *reinterpret_cast<T*>(ptr) = val;
+    if (ptr) {
+        // Safe copy for unaligned slow-path access
+        std::memcpy(ptr, &val, sizeof(T));
+    }
     return {};
 }
 
@@ -430,7 +422,11 @@ template <typename T>
     }
 
     if (!ptr) return T{};
-    return *reinterpret_cast<T*>(ptr);
+
+    T val;
+    // Use memcpy for safety, assuming exec reads could also be unaligned
+    std::memcpy(&val, ptr, sizeof(T));
+    return val;
 }
 
 // Translate Exec

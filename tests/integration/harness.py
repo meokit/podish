@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
+import os
+import shutil
 
 import pexpect
 
@@ -27,9 +29,20 @@ def _fiberpod_cmd(
     use_tty: bool = False,
     volumes: list[tuple[str, str]] | None = None,
 ) -> tuple[str, list[str]]:
-    """Build command for FiberPod."""
+    """Build command for FiberPod.
+
+    Uses 'dotnet run --project' instead of 'dotnet <dll>' to ensure consistent
+    runtime behavior. Direct DLL execution has issues with RAND_bytes in pexpect.
+    """
+    import os
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     cmd = [
-        fiberpod_dll,
+        "dotnet",
+        "run",
+        "--project", f"{project_root}/FiberPod/FiberPod.csproj",
+        "--no-build",
+        "--",
         "run",
     ]
 
@@ -45,12 +58,16 @@ def _fiberpod_cmd(
     # Add image/rootfs
     cmd.append(image_or_rootfs)
 
+    # Force System.CommandLine to stop parsing options so it doesn't strip '-'
+    # from guest arguments like '-aes-128-cbc'.
+    cmd.append("--")
+
     # Add command and args
     if command:
         cmd.append(command)
     cmd.extend(args)
 
-    return "dotnet", cmd
+    return "dotnet", cmd[1:]  # Skip first "dotnet" since spawn adds it
 
 
 def run_case(
@@ -114,6 +131,17 @@ def _run_case_fiberpod(
         volumes=volumes,
     )
 
+    # Use host's HOME for dotnet CLI (to avoid read-only /root in guest),
+    # but guest's HOME will be set separately inside the emulated environment.
+    clean_env = {
+        "TERM": os.environ.get("TERM", "xterm"),
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "DOTNET_CLI_HOME": os.path.expanduser("~"),
+        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "true",
+        "DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
+        "DOTNET_NOLOGO": "true",
+    }
+
     print(f"\n[Harness] Running case '{case.name}' with command: {' '.join(args)}")
     child = pexpect.spawn(
         dotnet,
@@ -121,6 +149,7 @@ def _run_case_fiberpod(
         cwd=str(project_root),
         encoding="utf-8",
         timeout=case.timeout,
+        env=clean_env,
     )
 
     return _wait_and_validate(child, case)
@@ -215,3 +244,59 @@ def run_interactive_case(
     finally:
         if child.isalive():
             child.terminate(force=True)
+
+def run_fiberpod_command(
+    project_root: Path,
+    fiberpod_dll: str,
+    image_or_rootfs: str,
+    command: str,
+    args: list[str] | None = None,
+    volumes: list[tuple[str, str]] | None = None,
+    timeout: int = 60,
+    send_eof: bool = False,
+    allow_timeout: bool = False,
+) -> str:
+    """
+    Run an arbitrary command in FiberPod and return captured output.
+    """
+    dotnet, cmd = _fiberpod_cmd(
+        fiberpod_dll=fiberpod_dll,
+        image_or_rootfs=image_or_rootfs,
+        command=command,
+        args=args or [],
+        use_tty=False,
+        volumes=volumes,
+    )
+
+    # Keep the host's PATH so pexpect can find 'dotnet', but strip out
+    # things like OPENSSL_CONF that would poison the guest.
+    # Use host's HOME for dotnet CLI (to avoid read-only /root in guest),
+    # but guest's HOME will be set inside the emulated environment.
+    clean_env = {
+        "TERM": os.environ.get("TERM", "xterm"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        # Use host's HOME for dotnet CLI config, guest HOME is set separately
+        "DOTNET_CLI_HOME": os.path.expanduser("~"),
+        "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "true",
+        "DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
+        "DOTNET_NOLOGO": "true",
+    }
+
+    print(f"\n[Harness] Running command: {' '.join(cmd)}")
+    child = pexpect.spawn(
+        "dotnet",
+        cmd,
+        cwd=str(project_root),
+        encoding="utf-8",
+        timeout=timeout,
+        env=clean_env,
+    )
+
+    case_pseudo = EmulatorCase(
+        name=command,
+        binary_name=command,
+        timeout=timeout,
+        send_eof=send_eof,
+        allow_timeout=allow_timeout
+    )
+    return _wait_and_validate(child, case_pseudo)
