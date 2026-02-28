@@ -33,7 +33,7 @@ class TestBindMount:
         integration_assets_dir: Path,
         case: EmulatorCase,
         fiberpod_dll: str | None,
-        alpine_image: str | None,
+        alpine_image: str,
     ) -> None:
         """Run bind mount test cases."""
         if case.rootfs is not None:
@@ -61,15 +61,20 @@ class TestFileBindMount:
         self,
         project_root: Path,
         fiberpod_dll: str | None,
+        alpine_image: str,
     ) -> None:
         """Test binding a single file into the container."""
         import pexpect
         import tempfile
 
-        # Use alpine rootfs which has /bin/cat
-        rootfs = project_root / "tests/linux/rootfs"
+        # Use alpine rootfs which has /bin/ash.
+        # Note: /bin/ash might be an absolute symlink to /bin/busybox, which
+        # will fail `ash.exists()` on the host. Use `lstat` to check if the link itself exists.
+        rootfs = Path(alpine_image)
         ash = rootfs / "bin/ash"
-        if not ash.exists():
+        try:
+            ash.lstat()
+        except FileNotFoundError:
             pytest.skip(f"Alpine rootfs not found: {rootfs}")
 
         # Create a temp file with known content
@@ -140,7 +145,7 @@ class TestMountApi:
         integration_assets_dir: Path,
         case: EmulatorCase,
         fiberpod_dll: str | None,
-        alpine_image: str | None,
+        alpine_image: str,
     ) -> None:
         """Run mount API test cases."""
         if case.rootfs is not None:

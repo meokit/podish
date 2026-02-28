@@ -657,14 +657,14 @@ public partial class SyscallManager
         if (Strace)
             SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
 
-        ValueTask<int> retTask = new(-38); // ENOSYS
+        ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
 
         if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
             retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
         else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
 
         // --- Handling Async Syscalls ---
-        if (retTask.IsCompleted)
+        if (retTask.IsCompleted && retTask.Result != -(int)Errno.ERESTARTSYS)
         {
             var ret = retTask.Result;
 
@@ -679,7 +679,7 @@ public partial class SyscallManager
         }
         else
         {
-            // Async completion (Blocking)
+            // Async completion (Blocking) OR requires HandleAsyncSyscall (-ERESTARTSYS handling)
             if (fiberTask != null)
             {
                 // Save context for TraceExit

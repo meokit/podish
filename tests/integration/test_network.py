@@ -3,7 +3,7 @@ from pathlib import Path
 from .harness import EmulatorCase, run_case
 
 @pytest.mark.integration
-def test_network(project_root: Path, fiberpod_dll: str, alpine_image: str) -> None:
+def test_network(project_root: Path, integration_assets_dir: Path, fiberpod_dll: str, alpine_image: str) -> None:
     case = EmulatorCase(
         name="network",
         binary_name="test_network",
@@ -18,4 +18,4 @@ def test_network(project_root: Path, fiberpod_dll: str, alpine_image: str) -> No
         ],
     )
 
-    run_case(project_root, project_root / "build/integration-assets/assets", case, fiberpod_dll, alpine_image)
+    run_case(project_root, integration_assets_dir, case, fiberpod_dll, alpine_image)

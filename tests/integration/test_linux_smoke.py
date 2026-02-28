@@ -49,7 +49,7 @@ def test_linux_smoke_cases(
     integration_assets_dir: Path,
     case: EmulatorCase,
     fiberpod_dll: str | None,
-    alpine_image: str | None,
+    alpine_image: str,
 ) -> None:
     """Run static linking smoke tests."""
     # In FiberPod mode, resolve rootfs path if needed
@@ -69,17 +69,13 @@ def test_linux_smoke_cases(
 def test_interactive_ash_echo(
     project_root: Path,
     fiberpod_dll: str | None,
+    alpine_image: str,
 ) -> None:
     """Test interactive ash shell with echo command."""
-    rootfs = project_root / "tests/linux/rootfs"
-    ash = rootfs / "bin/ash"
-    if not ash.exists():
-        pytest.skip(f"missing ash in rootfs: {ash}")
-
     # Use FiberPod with rootfs path
     run_interactive_case(
         project_root=project_root,
-        rootfs_or_image=str(rootfs),
+        rootfs_or_image=alpine_image,
         command="/bin/ash",
         fiberpod_dll=fiberpod_dll,
         expect_prompt=r"# ",

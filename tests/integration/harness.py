@@ -19,6 +19,7 @@ class EmulatorCase:
     timeout: int = 30
     send_eof: bool = False
     allow_timeout: bool = False
+    use_tty: bool = False
 
 
 def _fiberpod_cmd(
@@ -127,7 +128,7 @@ def _run_case_fiberpod(
         image_or_rootfs=image_or_rootfs,
         command=command,
         args=case.args,
-        use_tty=False,
+        use_tty=case.use_tty,
         volumes=volumes,
     )
 

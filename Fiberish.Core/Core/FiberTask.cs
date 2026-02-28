@@ -114,9 +114,10 @@ public class FiberTask
 
     // vfork support: parent awaits this event; child signals it on exec/exit
     public AsyncWaitQueue? VforkDoneEvent { get; set; }
+
     // vfork support: reference to the parent task that is blocked waiting for us
     public FiberTask? VforkParent { get; set; }
-    
+
     public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
     public WakeReason WakeReason { get; set; } = WakeReason.None;
 
@@ -150,14 +151,14 @@ public class FiberTask
             return true;
 
         // Not handled by VMAManager (no VMA or permission error)
-        Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.", 
+        Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.",
             addr, isWrite ? "Write" : "Read");
 
         // Dump debug info
         var stats = CPU.DumpStats();
         Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
         if (!string.IsNullOrEmpty(stats)) Logger.LogInformation("Native Stats:\n{Stats}", stats);
-        
+
         var esp = CPU.RegRead(Reg.ESP);
         var stackBuf = new byte[16];
         if (CPU.CopyFromUser(esp, stackBuf))
@@ -166,15 +167,16 @@ public class FiberTask
             var v1 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(4, 4));
             var v2 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(8, 4));
             var v3 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(12, 4));
-            Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: [0x{V0:X8}, 0x{V1:X8}, 0x{V2:X8}, 0x{V3:X8}]", esp, v0, v1, v2, v3);
+            Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: [0x{V0:X8}, 0x{V1:X8}, 0x{V2:X8}, 0x{V3:X8}]", esp, v0,
+                v1, v2, v3);
         }
         else
         {
             Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: <Could not read stack>", esp);
         }
-        
+
         Process.Mem.LogVMAs();
-            
+
         // Deliver SIGSEGV and yield
         PostSignal((int)Signal.SIGSEGV);
         _pendingFaultFromInterrupt = true;
@@ -185,10 +187,10 @@ public class FiberTask
     private bool HandleInterrupt(Engine engine, uint vector)
     {
         Logger.LogTrace("[HandleInterrupt] vector={Vector}", vector);
-        
+
         // 0x80 is Syscall
         if (vector == 0x80) return Process.Syscalls.Handle(engine, vector);
-        
+
         // #DE (Divide Error) and #UD (Invalid Opcode)
         if (vector == 0 || vector == 6)
         {
@@ -197,7 +199,7 @@ public class FiberTask
             engine.Yield();
             return true;
         }
-        
+
         return false;
     }
 
@@ -241,16 +243,17 @@ public class FiberTask
             }
 
             // Immediately discard ignored signals if they shouldn't trigger wakeups
-            if (isIgnored) 
+            if (isIgnored)
             {
                 Logger.LogDebug("[PostSignalInfo] Signal {Sig} is ignored. Discarding.", sig);
                 return;
             }
 
-            Logger.LogDebug("[PostSignalInfo] Setting PendingSignals to {1} from {2}", PendingSignals | mask, PendingSignals);
+            Logger.LogDebug("[PostSignalInfo] Setting PendingSignals to {1} from {2}", PendingSignals | mask,
+                PendingSignals);
             PendingSignals |= mask;
-            
-            PendingSignalQueue.Lock(q => 
+
+            PendingSignalQueue.Lock(q =>
             {
                 if (sig < 32)
                 {
@@ -263,6 +266,7 @@ public class FiberTask
                             break;
                         }
                     }
+
                     if (!found) q.Add(info);
                 }
                 else
@@ -284,7 +288,9 @@ public class FiberTask
         }
         else
         {
-            Logger.LogDebug("[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.", sig, SignalMask);
+            Logger.LogDebug(
+                "[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.",
+                sig, SignalMask);
         }
 
         if (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped)
@@ -296,7 +302,7 @@ public class FiberTask
     private void ProcessPendingSignals()
     {
         if (PendingSignals == 0) return;
-        
+
         for (var i = 1; i <= 64; i++)
         {
             var mask = 1UL << (i - 1);
@@ -311,9 +317,11 @@ public class FiberTask
                 if ((PendingSignals & mask) == 0) continue;
 
                 // Check blocked
-                if ((SignalMask & mask) != 0 && i != 9 && i != 19) 
+                if ((SignalMask & mask) != 0 && i != 9 && i != 19)
                 {
-                    Logger.LogDebug("[CheckPendingSignals] Signal {Sig} is currently blocked by SignalMask (0x{Mask:X})", i, SignalMask);
+                    Logger.LogDebug(
+                        "[CheckPendingSignals] Signal {Sig} is currently blocked by SignalMask (0x{Mask:X})", i,
+                        SignalMask);
                     continue;
                 }
 
@@ -342,7 +350,8 @@ public class FiberTask
                     {
                         handlerMask |= mask;
                     }
-                    Logger.LogDebug("[ProcessPendingSignals] Setting SignalMask to {Mask} from {SignalMask}", 
+
+                    Logger.LogDebug("[ProcessPendingSignals] Setting SignalMask to {Mask} from {SignalMask}",
                         SignalMask, SignalMask | handlerMask);
                     SignalMask |= handlerMask;
                 }
@@ -385,6 +394,7 @@ public class FiberTask
                     return true;
             }
         }
+
         return false;
     }
 
@@ -393,7 +403,7 @@ public class FiberTask
     /// </summary>
     public SigInfo? DequeueSignalUnsafe(int sig)
     {
-        return PendingSignalQueue.Lock(list => 
+        return PendingSignalQueue.Lock(list =>
         {
             for (int i = 0; i < list.Count; i++)
             {
@@ -401,21 +411,29 @@ public class FiberTask
                 {
                     var info = list[i];
                     list.RemoveAt(i);
-                    
+
                     // Update PendingSignals mask if no more RT signals of this type
                     if (sig >= 32)
                     {
                         bool stillPending = false;
-                        foreach (var s in list) if (s.Signo == sig) { stillPending = true; break; }
+                        foreach (var s in list)
+                            if (s.Signo == sig)
+                            {
+                                stillPending = true;
+                                break;
+                            }
+
                         if (!stillPending) PendingSignals &= ~(1UL << (sig - 1));
                     }
                     else
                     {
                         PendingSignals &= ~(1UL << (sig - 1));
                     }
+
                     return (SigInfo?)info;
                 }
             }
+
             return null;
         });
     }
@@ -462,10 +480,11 @@ public class FiberTask
             {
                 retAddr = action.Restorer;
             }
+
             var frameEsp = sp;
 
             // SignalMask already updated in ProcessPendingSignals
-            
+
             // Setup Stack based on SA_SIGINFO
             if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
             {
@@ -477,6 +496,7 @@ public class FiberTask
                 if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.SigReturnAddr;
                 SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask);
             }
+
             Logger.LogInformation(
                 "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
                 sp, frameEsp, action.Handler);
@@ -534,7 +554,8 @@ public class FiberTask
         return sig switch
         {
             (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH => DefaultSignalAction.Ignore,
-            (int)Signal.SIGSTOP or (int)Signal.SIGTSTP or (int)Signal.SIGTTIN or (int)Signal.SIGTTOU => DefaultSignalAction.Stop,
+            (int)Signal.SIGSTOP or (int)Signal.SIGTSTP or (int)Signal.SIGTTIN or (int)Signal.SIGTTOU =>
+                DefaultSignalAction.Stop,
             (int)Signal.SIGCONT => DefaultSignalAction.Continue,
             (int)Signal.SIGQUIT or (int)Signal.SIGILL or (int)Signal.SIGTRAP or
                 (int)Signal.SIGABRT or (int)Signal.SIGBUS or (int)Signal.SIGFPE or
@@ -662,20 +683,21 @@ public class FiberTask
         // esp+4: sig
         // esp+8: sigcontext
         // sizeof(sigframe) = 732
-        
+
         esp = (esp - 736u) & ~0xFu;
         var sigcontextAddr = esp + 8;
-        
+
         // Zero out the frame
         CPU.CopyToUser(esp, new byte[736]);
-        
+
         WriteSigContext(sigcontextAddr, oldMask);
-        
+
         if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return;
         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
     }
 
-    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask, SigInfo info)
+    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
+        SigInfo info)
     {
         // ... (existing stack alignment)
         esp = (esp - 512u) & ~0xFu;
@@ -693,16 +715,16 @@ public class FiberTask
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), info.Signo);
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), info.Errno);
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
-        
+
         // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
         BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
-        
+
         // Write the unionized payload value (e.g. SIGRT)
         BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
-        
+
         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
-        
+
         // Populate UContext uc_sigmask (offset 108)
         var maskBuf = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(maskBuf, oldMask);
@@ -769,15 +791,16 @@ public class FiberTask
         CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
         CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
         CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
-        
+
         // Restore signal mask
-        if (buf.Length >= 88) 
+        if (buf.Length >= 88)
         {
             // Cheat: Restore full 64-bit mask from oldmask + cr2 area (80-87)
             // This is a convenient hack for our emulator to handle RT signals correctly in sigreturn.
             var oldSignalMask = SignalMask;
             SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
-            Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask, oldSignalMask);
+            Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask,
+                oldSignalMask);
         }
     }
 
@@ -829,10 +852,10 @@ public class FiberTask
 
     public bool TryEnterGuestRun()
     {
-        return !Exited && 
-               Process.State != ProcessState.Stopped && 
-               PendingSyscall == null && 
-               Continuation == null && 
+        return !Exited &&
+               Process.State != ProcessState.Stopped &&
+               PendingSyscall == null &&
+               Continuation == null &&
                ExecutionMode == TaskExecutionMode.RunningGuest;
     }
 
@@ -914,6 +937,7 @@ public class FiberTask
                 {
                     Status = FiberTaskStatus.Waiting;
                 }
+
                 return;
             }
 
@@ -1007,7 +1031,7 @@ public class FiberTask
 
         // Log the fault for transparency, but at Debug/Trace level if it's expected to be handled?
         // Actually, hardware faults are serious, so Information level is a good middle ground.
-        Logger.LogInformation("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.", 
+        Logger.LogInformation("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
             faultName, CPU.Eip, sig);
 
         if (vector == 6)
@@ -1026,10 +1050,10 @@ public class FiberTask
                 Logger.LogInformation("#UD bytes @0x{EIP:X}: <unreadable>", ip);
             }
         }
-        
+
         // Deliver the signal!
         PostSignal((int)sig);
-        
+
         // Re-schedule to allow signal processing (either handler or default action)
         Status = FiberTaskStatus.Ready;
         CommonKernel.Schedule(this);
@@ -1078,6 +1102,13 @@ public class FiberTask
                 ControllingTty = Process.ControllingTty // Inherit controlling tty
             };
             newProc.CopyImageFrom(Process);
+
+            // Inherit signal dispositions
+            foreach (var kv in Process.SignalActions)
+            {
+                newProc.SignalActions[kv.Key] = kv.Value;
+            }
+
             KernelScheduler.Current!.RegisterProcess(newProc);
         }
 
@@ -1140,7 +1171,8 @@ public class FiberTask
             var vforkEvent = new AsyncWaitQueue();
             child.VforkDoneEvent = vforkEvent;
             child.VforkParent = this;
-            Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
+            Logger.LogInformation(
+                "[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
                 TID, child.TID);
             await vforkEvent;
             Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
@@ -1156,7 +1188,8 @@ public class FiberTask
     {
         if (VforkDoneEvent != null)
         {
-            Logger.LogInformation("[SignalVforkDone] Child TID={ChildTid} signaling parent TID={ParentTid} that vfork is done",
+            Logger.LogInformation(
+                "[SignalVforkDone] Child TID={ChildTid} signaling parent TID={ParentTid} that vfork is done",
                 TID, VforkParent?.TID);
             VforkDoneEvent.Set();
             VforkDoneEvent = null; // Clear the event after signaling
