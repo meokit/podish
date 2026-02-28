@@ -160,4 +160,57 @@ public partial class SyscallManager
         if (sm.GetTID != null) return sm.GetTID(sm.Engine);
         return 1;
     }
+
+    private static async ValueTask<int> SysSetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var head = a1;
+        var len = a2;
+
+        if (len != 12) return -(int)Errno.EINVAL; // 32-bit robust_list_head is exactly 12 bytes
+
+        task.RobustListHead = head;
+        task.RobustListSize = len;
+
+        return 0;
+    }
+
+    private static async ValueTask<int> SysGetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var pid = (int)a1;
+        var headPtr = a2;
+        var lenPtr = a3;
+
+        FiberTask? targetTask;
+        if (pid == 0)
+        {
+            targetTask = sm.Engine.Owner as FiberTask;
+        }
+        else
+        {
+            targetTask = KernelScheduler.Current?.GetTask(pid);
+            if (targetTask == null) return -(int)Errno.ESRCH;
+        }
+
+        if (targetTask == null) return -(int)Errno.ESRCH;
+
+        var headBuf = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(headBuf, targetTask.RobustListHead);
+        if (!sm.Engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
+
+        if (lenPtr != 0)
+        {
+            var lenBuf = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, targetTask.RobustListSize);
+            if (!sm.Engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
+        }
+
+        return 0;
+    }
 }

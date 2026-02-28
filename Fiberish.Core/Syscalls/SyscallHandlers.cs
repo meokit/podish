@@ -82,6 +82,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.vfork, SysVfork);
         Register(X86SyscallNumbers.futex, SysFutex);
         Register(X86SyscallNumbers.set_thread_area, SysSetThreadArea);
+        Register(X86SyscallNumbers.set_robust_list, SysSetRobustList);
+        Register(X86SyscallNumbers.get_robust_list, SysGetRobustList);
         Register(X86SyscallNumbers.exit_group, SysExitGroup);
         Register(X86SyscallNumbers.set_tid_address, SysSetTidAddress);
         Register(X86SyscallNumbers.waitid, SysWaitId);

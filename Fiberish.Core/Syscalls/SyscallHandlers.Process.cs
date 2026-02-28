@@ -22,6 +22,8 @@ public partial class SyscallManager
             // vfork: wake parent before exiting
             task.SignalVforkDone();
 
+            task.ExitRobustList();
+
             task.Exited = true;
             task.ExitStatus = exitCode;
 
@@ -66,6 +68,8 @@ public partial class SyscallManager
         {
             // vfork: wake parent before exiting
             task.SignalVforkDone();
+
+            task.ExitRobustList();
 
             task.Exited = true;
             task.ExitStatus = exitCode;
@@ -578,6 +582,10 @@ public partial class SyscallManager
             task.AltStackSize = 0;
             task.AltStackFlags = 0;
 
+            task.ExitRobustList();
+            task.RobustListHead = 0;
+            task.RobustListSize = 0;
+
             Logger.LogInformation("[SysExecve] Re-executing as: {Args}", string.Join(" ", newArgs));
 
             try
@@ -662,6 +670,10 @@ public partial class SyscallManager
         task.AltStackSp = 0;
         task.AltStackSize = 0;
         task.AltStackFlags = 0;
+
+        task.ExitRobustList();
+        task.RobustListHead = 0;
+        task.RobustListSize = 0;
 
         // Load new ELF via Process.Exec (Handles memory clearing + vDSO setup + ELF loading)
         Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",

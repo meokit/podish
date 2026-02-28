@@ -79,6 +79,7 @@ add_integration_binary("test_bind_mount" "tests/src/test_bind_mount.c")
 add_integration_binary("test_open_tree" "tests/src/test_open_tree.c")
 add_integration_binary("test_move_mount" "tests/src/test_move_mount.c")
 add_integration_binary("test_bind_mount_ro" "tests/src/test_bind_mount_ro.c")
+add_integration_binary("test_robust_futex" "tests/src/test_robust_futex.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 

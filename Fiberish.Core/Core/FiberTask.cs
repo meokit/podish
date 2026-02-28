@@ -112,6 +112,9 @@ public class FiberTask
 
     public uint ChildClearTidPtr { get; set; }
 
+    public uint RobustListHead { get; set; }
+    public uint RobustListSize { get; set; }
+
     // vfork support: parent awaits this event; child signals it on exec/exit
     public AsyncWaitQueue? VforkDoneEvent { get; set; }
 
@@ -1092,6 +1095,21 @@ public class FiberTask
         else
         {
             var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
+
+            if (!cloneVm)
+            {
+                // Unmap all Shared VMAs from the native emulator engine so that they
+                // will fault and be correctly linked back to their shared MemoryObjects.
+                // Otherwise they remain as deep-copied private pages in the new emulator.
+                foreach (var vma in newMem.VMAs)
+                {
+                    if ((vma.Flags & Fiberish.Memory.MapFlags.Shared) != 0)
+                    {
+                        newCpu.MemUnmap(vma.Start, vma.Length);
+                    }
+                }
+            }
+
             var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
             // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
             newProc = new Process(NextTID(), newMem, newSys, Process.UTS)
@@ -1327,6 +1345,83 @@ public class FiberTask
         finally
         {
             _handlingAsyncSyscall = false;
+        }
+    }
+
+    public void ExitRobustList()
+    {
+        if (RobustListHead == 0) return;
+
+        var head = RobustListHead;
+        var limit = 2048; // ROBUST_LIST_LIMIT
+
+        // read futex_offset
+        var futexOffsetBuf = new byte[4];
+        if (!CPU.CopyFromUser(head + 4, futexOffsetBuf)) return;
+        var futexOffset = BinaryPrimitives.ReadInt32LittleEndian(futexOffsetBuf);
+
+        // read list_op_pending
+        var pendingBuf = new byte[4];
+        if (!CPU.CopyFromUser(head + 8, pendingBuf)) return;
+        var pendingObj = BinaryPrimitives.ReadUInt32LittleEndian(pendingBuf);
+
+        // read list next
+        var entryBuf = new byte[4];
+        if (!CPU.CopyFromUser(head, entryBuf)) return;
+        var entry = BinaryPrimitives.ReadUInt32LittleEndian(entryBuf);
+
+        Logger.LogTrace("[ExitRobustList] FutexOffset={Offset} PendingObj={Pending:X8} FirstEntry={Entry:X8}", futexOffset, pendingObj, entry);
+
+        var sm = Process.Syscalls;
+
+        while (entry != head && entry != 0)
+        {
+            var nextBuf = new byte[4];
+            var rc = CPU.CopyFromUser(entry, nextBuf);
+            if (!rc) break; // Error reading next pointer
+            var nextEntry = BinaryPrimitives.ReadUInt32LittleEndian(nextBuf);
+            
+            if (entry != pendingObj)
+            {
+                HandleFutexDeath(sm, (uint)(entry + futexOffset), false);
+            }
+
+            entry = nextEntry;
+            if (--limit == 0) break;
+        }
+
+        if (pendingObj != 0)
+        {
+            Logger.LogTrace("[ExitRobustList] Handling death for pending {Uaddr:X8}", pendingObj + futexOffset);
+            HandleFutexDeath(sm, (uint)(pendingObj + futexOffset), true);
+        }
+    }
+
+    private void HandleFutexDeath(SyscallManager sm, uint uaddr, bool pendingOp)
+    {
+        var uvalBuf = new byte[4];
+        if (!CPU.CopyFromUser(uaddr, uvalBuf)) return;
+        var uval = BinaryPrimitives.ReadUInt32LittleEndian(uvalBuf);
+
+        var owner = uval & LinuxConstants.FUTEX_TID_MASK;
+
+        // If this is a pending op, and no one owns it, we might just wake it
+        if (pendingOp && owner == 0)
+        {
+            sm.Futex.Wake(uaddr, 1);
+            return;
+        }
+
+        if (owner != TID) return;
+
+        var mval = (uval & LinuxConstants.FUTEX_WAITERS) | LinuxConstants.FUTEX_OWNER_DIED;
+
+        BinaryPrimitives.WriteUInt32LittleEndian(uvalBuf, mval);
+        if (!CPU.CopyToUser(uaddr, uvalBuf)) return;
+
+        if ((uval & LinuxConstants.FUTEX_WAITERS) != 0)
+        {
+            sm.Futex.Wake(uaddr, 1);
         }
     }
 }

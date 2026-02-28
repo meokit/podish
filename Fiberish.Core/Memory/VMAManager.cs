@@ -12,6 +12,8 @@ public class VMAManager
     private readonly List<VMA> _vmas = [];
     public ExternalPageManager ExternalPages { get; } = new();
 
+    public IReadOnlyList<VMA> VMAs => _vmas;
+
     public VMA? FindVMA(uint addr)
     {
         foreach (var vma in _vmas)

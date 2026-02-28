@@ -224,6 +224,10 @@ public static class LinuxConstants
     public const int FUTEX_PRIVATE_FLAG = 128;
     public const int FUTEX_CLOCK_REALTIME = 256;
 
+    public const uint FUTEX_OWNER_DIED = 0x40000000;
+    public const uint FUTEX_WAITERS = 0x80000000;
+    public const uint FUTEX_TID_MASK = 0x3fffffff;
+
     // Mount flags
     public const uint MS_RDONLY = 1;
     public const uint MS_NOSUID = 2;
