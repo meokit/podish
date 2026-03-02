@@ -287,6 +287,11 @@ public struct DirectoryEntry
     public InodeType Type;
 }
 
+public interface IMagicSymlinkInode
+{
+    bool TryResolveLink(out LinuxFile file);
+}
+
 public class Dentry
 {
     private static long _nextId;

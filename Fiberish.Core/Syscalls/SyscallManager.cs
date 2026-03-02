@@ -6,6 +6,7 @@ using Fiberish.Native;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using System.Threading;
 
 namespace Fiberish.Syscalls;
 
@@ -17,7 +18,10 @@ public partial class SyscallManager
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly Dictionary<IntPtr, SyscallManager> _registry = [];
     private static readonly object _registryLock = new();
+    private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
+
+    internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
@@ -627,6 +631,10 @@ public partial class SyscallManager
 
     public bool Handle(Engine engine, uint vector)
     {
+        var previous = _activeSyscallManager.Value;
+        _activeSyscallManager.Value = this;
+        try
+        {
         // Handle Breakpoint (INT 3)
         if (vector == 3)
         {
@@ -741,6 +749,11 @@ public partial class SyscallManager
         if (shouldYield) engine.Yield();
 
         return true;
+        }
+        finally
+        {
+            _activeSyscallManager.Value = previous;
+        }
     }
 
     public void Close()

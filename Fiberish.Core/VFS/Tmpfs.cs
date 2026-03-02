@@ -63,6 +63,9 @@ public class TmpfsInode : Inode
     private readonly HashSet<string> _childNames = [];
     private byte[]? _data = [];
 
+    // Track open file handles to prevent data loss on unlink-while-open
+    private int _openCount = 0;
+
     // Flock state
     private int _lockType = 0; // 0: None, 1: Shared, 2: Exclusive
     private readonly HashSet<LinuxFile> _sharedHolders = [];
@@ -197,7 +200,7 @@ public class TmpfsInode : Inode
                 unlinkedInode?.Dentries.Remove(dentry);
                 _childNames.Remove(name);
 
-                // Crucial: Decrement refcount of the unlinked inode
+                // Decrement refcount of the unlinked inode
                 unlinkedInode?.Put();
             }
         }
@@ -264,9 +267,6 @@ public class TmpfsInode : Inode
                     }
                     else
                     {
-                        var allMatchingNames = string.Join(", ", sb.Dentries.Keys.Where(k => k.Name == oldName).Select(k => k.ParentIno.ToString()));
-                        var myDentryIds = string.Join(", ", Dentries.Select(d => d.Id.ToString()));
-                        Console.WriteLine($"[Tmpfs.Rename] Key missing for {oldName}. Matching ParentIds in cache: [{allMatchingNames}]. My Dentries IDs: [{myDentryIds}]");
                         throw new InvalidOperationException("Source does not exist");
                     }
                 }
@@ -498,17 +498,37 @@ public class TmpfsInode : Inode
         return list;
     }
 
+    public override void Open(LinuxFile linuxFile)
+    {
+        Interlocked.Increment(ref _openCount);
+    }
+
     protected override void Release()
     {
-        // Clean up tmpfs inode resources
-        _data = null;
-        _childNames.Clear();
+        // Only clear data if no open file handles remain.
+        // This handles the case where a file is unlinked while still open,
+        // and the underlying TmpfsInode's refcount drops to 0 due to
+        // OverlayFS not forwarding Get/Put to underlying inodes.
+        if (_openCount == 0)
+        {
+            _data = null;
+            _childNames.Clear();
+        }
     }
 
     public override void Release(LinuxFile linuxFile)
     {
+        Interlocked.Decrement(ref _openCount);
+
         // Drop any locks held by this file description
         Flock(linuxFile, LinuxConstants.LOCK_UN);
+
+        // If this was the last open handle and the inode is no longer linked,
+        // clean up the data now.
+        if (_openCount == 0 && Dentries.Count == 0)
+        {
+            _data = null;
+        }
 
         base.Release(linuxFile);
     }

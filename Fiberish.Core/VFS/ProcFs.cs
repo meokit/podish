@@ -52,18 +52,29 @@ file static class ProcContext
 {
     public static ProcOpenContext Capture(ProcSuperBlock sb)
     {
-        var scheduler = KernelScheduler.Current;
-        var task = scheduler?.CurrentTask;
+        var activeSm = SyscallManager.ActiveSyscallManager ?? sb.FallbackSyscallManager;
+        var activeTask = activeSm?.Engine.Owner as FiberTask;
+        var scheduler = activeTask?.CommonKernel ?? KernelScheduler.Current;
+        var task = activeTask ?? scheduler?.CurrentTask;
         return new ProcOpenContext(
             scheduler,
             task,
             task?.Process,
-            task?.Process.Syscalls ?? sb.FallbackSyscallManager);
+            task?.Process.Syscalls ?? activeSm);
     }
 
-    public static Process? ResolveProcessByPid(int pid)
+    public static Process? ResolveProcessByPid(int pid, ProcSuperBlock? sb = null)
     {
-        return KernelScheduler.Current?.GetProcess(pid);
+        var activeTask = SyscallManager.ActiveSyscallManager?.Engine.Owner as FiberTask;
+        if (activeTask != null)
+            return activeTask.CommonKernel.GetProcess(pid);
+
+        var currentScheduler = KernelScheduler.Current;
+        if (currentScheduler != null)
+            return currentScheduler.GetProcess(pid);
+
+        var fallbackTask = sb?.FallbackSyscallManager?.Engine.Owner as FiberTask;
+        return fallbackTask?.CommonKernel.GetProcess(pid);
     }
 }
 
@@ -116,7 +127,7 @@ file sealed class ProcRootInode : Inode
 
         if (root.Children.TryGetValue(name, out var cached))
         {
-            if (int.TryParse(name, out var cachedPid) && ProcContext.ResolveProcessByPid(cachedPid) == null)
+            if (int.TryParse(name, out var cachedPid) && ProcContext.ResolveProcessByPid(cachedPid, _sb) == null)
             {
                 root.Children.Remove(name);
             }
@@ -148,7 +159,7 @@ file sealed class ProcRootInode : Inode
         }
 
         if (!int.TryParse(name, out var pid)) return null;
-        if (ProcContext.ResolveProcessByPid(pid) == null) return null;
+        if (ProcContext.ResolveProcessByPid(pid, _sb) == null) return null;
 
         created = CreatePidDirectory(root, pid);
         root.Children[name] = created;
@@ -230,7 +241,7 @@ file sealed class ProcPidDirectoryInode : Inode
     public override Dentry? Lookup(string name)
     {
         if (Dentries.Count == 0) return null;
-        if (ProcContext.ResolveProcessByPid(_pid) == null) return null;
+        if (ProcContext.ResolveProcessByPid(_pid, _sb) == null) return null;
 
         var dir = Dentries[0];
         if (dir.Children.TryGetValue(name, out var cached))
@@ -240,17 +251,17 @@ file sealed class ProcPidDirectoryInode : Inode
         {
             "status" => CreateFile(dir, name, 0x124, _ =>
             {
-                var p = ProcContext.ResolveProcessByPid(_pid);
+                var p = ProcContext.ResolveProcessByPid(_pid, _sb);
                 return p == null ? string.Empty : ProcFsManager.GenerateStatus(p);
             }),
             "cmdline" => CreateFile(dir, name, 0x124, _ =>
             {
-                var p = ProcContext.ResolveProcessByPid(_pid);
+                var p = ProcContext.ResolveProcessByPid(_pid, _sb);
                 return p == null ? string.Empty : ProcFsManager.GenerateCmdline(p);
             }),
             "stat" => CreateFile(dir, name, 0x124, _ =>
             {
-                var p = ProcContext.ResolveProcessByPid(_pid);
+                var p = ProcContext.ResolveProcessByPid(_pid, _sb);
                 return p == null ? string.Empty : ProcFsManager.GenerateStat(p);
             }),
             "mountinfo" => CreateFile(dir, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
@@ -284,7 +295,7 @@ file sealed class ProcPidDirectoryInode : Inode
             new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
         };
 
-        if (ProcContext.ResolveProcessByPid(_pid) == null)
+        if (ProcContext.ResolveProcessByPid(_pid, _sb) == null)
             return entries;
 
         entries.Add(new DirectoryEntry { Name = "status", Ino = 0, Type = InodeType.File });
@@ -344,7 +355,7 @@ file sealed class ProcPidSymlinkInode : Inode
 
     public override string Readlink()
     {
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return string.Empty;
 
         var target = _targetResolver(process);
@@ -373,7 +384,7 @@ file sealed class ProcPidFdDirectoryInode : Inode
     public override Dentry? Lookup(string name)
     {
         if (Dentries.Count == 0) return null;
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return null;
         if (!int.TryParse(name, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
@@ -396,7 +407,7 @@ file sealed class ProcPidFdDirectoryInode : Inode
             new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
         };
 
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return entries;
 
         foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
@@ -424,7 +435,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
     public override Dentry? Lookup(string name)
     {
         if (Dentries.Count == 0) return null;
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return null;
         if (!int.TryParse(name, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
@@ -447,7 +458,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
             new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
         };
 
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return entries;
 
         foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
@@ -456,7 +467,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
     }
 }
 
-file sealed class ProcPidFdSymlinkInode : Inode
+file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode
 {
     private readonly ProcSuperBlock _sb;
     private readonly int _pid;
@@ -476,7 +487,7 @@ file sealed class ProcPidFdSymlinkInode : Inode
 
     public override string Readlink()
     {
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return string.Empty;
         if (!process.Syscalls.FDs.TryGetValue(_fd, out var file)) return string.Empty;
 
@@ -485,6 +496,24 @@ file sealed class ProcPidFdSymlinkInode : Inode
 
         var loc = new PathLocation(file.Dentry, file.Mount);
         return process.Syscalls.GetAbsolutePath(loc);
+    }
+
+    public bool TryResolveLink(out LinuxFile file)
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
+        if (process == null)
+        {
+            file = null!;
+            return false;
+        }
+        if (!process.Syscalls.FDs.TryGetValue(_fd, out var existing) || existing == null)
+        {
+            file = null!;
+            return false;
+        }
+
+        file = existing;
+        return true;
     }
 }
 
@@ -508,7 +537,7 @@ file sealed class ProcPidFdInfoFileInode : Inode
 
     public override void Open(LinuxFile linuxFile)
     {
-        var process = ProcContext.ResolveProcessByPid(_pid);
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         string text;
         if (process == null || !process.Syscalls.FDs.TryGetValue(_fd, out var file))
         {

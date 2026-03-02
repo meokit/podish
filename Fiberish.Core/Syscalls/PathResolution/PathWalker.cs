@@ -282,6 +282,32 @@ public class PathWalker
                 shouldFollow = false;
             }
 
+            // Handle magic links first
+            if (next.Inode is IMagicSymlinkInode magicLink)
+            {
+                // NoMagiclinks: Do not follow magic links at all
+                if ((nd.Flags & LookupFlags.NoMagiclinks) != 0)
+                {
+                    if (mustFollow)
+                        return nd.SetError(-(int)Errno.ELOOP);
+                    // For final component, just return the symlink dentry itself
+                    if (isLast)
+                    {
+                        nd.LastName = name;
+                        nd.LastType = LastType.Normal;
+                        nd.Path = new PathLocation(next, mount);
+                    }
+                    return true;
+                }
+
+                // Try to resolve magic link
+                if ((shouldFollow || mustFollow) && magicLink.TryResolveLink(out var resolvedFile))
+                {
+                    nd.Path = new PathLocation(resolvedFile.Dentry, resolvedFile.Mount);
+                    return true;
+                }
+            }
+
             if (shouldFollow || mustFollow)
             {
                 if (!FollowSymlink(nd, next, mount))
