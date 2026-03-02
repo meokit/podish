@@ -587,6 +587,10 @@ public partial class SyscallManager
             task.RobustListSize = 0;
 
             Logger.LogInformation("[SysExecve] Re-executing as: {Args}", string.Join(" ", newArgs));
+            Logger.LogDebug("[SysExecve] Shebang re-exec argc={ArgCount} envc={EnvCount}",
+                newArgs.Count, origEnvs.Count);
+            foreach (var env in origEnvs.Where(e => e.StartsWith("APK_", StringComparison.Ordinal)))
+                Logger.LogDebug("[SysExecve] Shebang env: {Env}", env);
 
             try
             {

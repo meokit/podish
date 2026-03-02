@@ -225,4 +225,5 @@ public class Process
         var cmdline = string.Join('\0', args) + '\0';
         CommandLineRaw = Encoding.UTF8.GetBytes(cmdline);
     }
+
 }

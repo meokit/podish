@@ -1,4 +1,6 @@
 using Fiberish.VFS;
+using Fiberish.Memory;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -67,6 +69,98 @@ public class OverlayTests
             if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
             if (Directory.Exists(tempWork)) Directory.Delete(tempWork, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayCopyUp_PageCacheMustNotAlias_WhenLowerAndUpperInoMatch()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            var filePath = Path.Combine(tempLower, "file");
+            File.WriteAllText(filePath, "lower");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var fileOv = overlaySb.Root.Inode!.Lookup("file")!;
+            var overlayInode = Assert.IsType<OverlayInode>(fileOv.Inode);
+            Assert.NotNull(overlayInode.LowerInode);
+            Assert.Null(overlayInode.UpperInode);
+
+            // Trigger copy-up, so the same overlay inode now points to upper.
+            var linuxFile = new LinuxFile(fileOv, FileFlags.O_WRONLY, null!);
+            var rc = overlayInode.Write(linuxFile, "x"u8.ToArray(), 0);
+            Assert.True(rc >= 0);
+            Assert.NotNull(overlayInode.UpperInode);
+
+            var lowerInode = overlayInode.LowerInode!;
+            var upperInode = overlayInode.UpperInode!;
+
+            // Force a worst-case ino collision that used to alias page cache keys.
+            const ulong forcedIno = 12345;
+            lowerInode.Ino = forcedIno;
+            upperInode.Ino = forcedIno;
+
+            var manager = MemoryObjectManager.Instance;
+            var lowerCache = manager.GetOrCreateInodePageCache(lowerInode);
+            var upperCache = manager.GetOrCreateInodePageCache(upperInode);
+
+            try
+            {
+                Assert.NotSame(lowerCache, upperCache);
+
+                lowerCache.GetOrCreatePage(0, ptr =>
+                {
+                    Marshal.Copy("LOWER"u8.ToArray(), 0, ptr, 5);
+                    return true;
+                }, out var lowerIsNew);
+                Assert.True(lowerIsNew);
+
+                upperCache.GetOrCreatePage(0, ptr =>
+                {
+                    Marshal.Copy("UPPER"u8.ToArray(), 0, ptr, 5);
+                    return true;
+                }, out var upperIsNew);
+                Assert.True(upperIsNew);
+
+                var lowerBuf = new byte[5];
+                var upperBuf = new byte[5];
+                Marshal.Copy(lowerCache.GetPage(0), lowerBuf, 0, 5);
+                Marshal.Copy(upperCache.GetPage(0), upperBuf, 0, 5);
+
+                Assert.Equal("LOWER", System.Text.Encoding.ASCII.GetString(lowerBuf));
+                Assert.Equal("UPPER", System.Text.Encoding.ASCII.GetString(upperBuf));
+            }
+            finally
+            {
+                manager.ReleaseInodePageCache(lowerInode);
+                manager.ReleaseInodePageCache(upperInode);
+                lowerCache.Release();
+                upperCache.Release();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
         }
     }
 }

@@ -16,17 +16,28 @@ public sealed class MemoryObjectManager
     /// </summary>
     public MemoryObject GetOrCreateInodePageCache(Inode inode)
     {
-        var key = $"pagecache:{RuntimeHelpers.GetHashCode(inode.SuperBlock)}:{inode.Ino}";
-        var obj = CreateOrOpenNamed(key, () =>
-            new MemoryObject(MemoryObjectKind.File, null, 0, 0, true), out _);
-        inode.PageCache ??= obj;
-        return obj;
+        var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
+        lock (_lock)
+        {
+            if (_namedObjects.TryGetValue(key, out var existing))
+            {
+                existing.AddRef(); // caller mapping reference
+                inode.PageCache ??= existing;
+                return existing;
+            }
+
+            var obj = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+            _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
+            obj.AddRef(); // caller mapping reference
+            inode.PageCache = obj;
+            return obj;
+        }
     }
 
     public void ReleaseInodePageCache(Inode inode)
     {
         if (inode.PageCache == null) return;
-        var key = $"pagecache:{RuntimeHelpers.GetHashCode(inode.SuperBlock)}:{inode.Ino}";
+        var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
         CloseNamed(key); // decrements ref; freed when count hits 0
         inode.PageCache = null;
     }

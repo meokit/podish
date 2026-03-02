@@ -89,6 +89,7 @@ add_integration_binary("test_cow_private_mmap" "tests/src/test_cow_private_mmap.
 add_integration_binary("test_cow_anonymous" "tests/src/test_cow_anonymous.c")
 add_integration_binary("test_shared_futex_wake_unmapped" "tests/src/test_shared_futex_wake_unmapped.c")
 add_integration_binary("test_proc_fd_magic" "tests/src/test_proc_fd_magic.c")
+add_integration_binary("test_proc_fd_exec" "tests/src/test_proc_fd_exec.c")
 
 add_custom_target(integration-tests-build DEPENDS ${INTEGRATION_TEST_OUTPUTS})
 
