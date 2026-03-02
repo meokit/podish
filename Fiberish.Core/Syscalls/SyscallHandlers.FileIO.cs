@@ -261,6 +261,7 @@ public partial class SyscallManager
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, PathLocation startLoc = default)
     {
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
+        const uint O_TMPFILE_MASK = 0x400000;
         var createdHere = false;
         var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
 
@@ -268,6 +269,39 @@ public partial class SyscallManager
         var loc = sm.PathWalk(path, startLoc.IsValid ? startLoc : null, !noFollow);
         var dentry = loc.Dentry;
         var mount = loc.Mount;
+
+        if ((flags & O_TMPFILE_MASK) != 0)
+        {
+            if (dentry == null || dentry.Inode == null || dentry.Inode.Type != InodeType.Directory)
+            {
+                return -(int)Errno.ENOTDIR;
+            }
+            if (mount != null && mount.IsReadOnly) return -(int)Errno.EROFS;
+
+            var t = sm.Engine.Owner as FiberTask;
+            var uid = t?.Process.EUID ?? 0;
+            var gid = t?.Process.EGID ?? 0;
+
+            try
+            {
+                var tmpName = $".tmpfile.{Guid.NewGuid():N}";
+                var anonDentry = new Dentry(tmpName, null, dentry, dentry.SuperBlock);
+                var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+                
+                dentry.Inode.Create(anonDentry, finalMode, uid, gid);
+                
+                var openFlags = flags & ~O_TMPFILE_MASK;
+                var f = new LinuxFile(anonDentry, (FileFlags)openFlags, mount ?? sm.RootMount!)
+                {
+                    IsTmpFile = true
+                };
+                return sm.AllocFD(f);
+            }
+            catch
+            {
+                return -(int)Errno.EIO;
+            }
+        }
 
         if (dentry == null)
         {

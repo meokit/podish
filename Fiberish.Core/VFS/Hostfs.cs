@@ -721,7 +721,7 @@ public partial class HostInode : Inode
 
     public override int Write(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        if (Type == InodeType.Directory) return 0;
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         var append = (linuxFile?.Flags ?? 0 & FileFlags.O_APPEND) != 0;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)

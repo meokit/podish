@@ -96,6 +96,7 @@ public partial class SyscallManager
 
         Register(X86SyscallNumbers.creat, SysCreat);
         Register(X86SyscallNumbers.link, SysLink);
+        Register(X86SyscallNumbers.linkat, SysLinkat);
         Register(X86SyscallNumbers.chdir, SysChdir);
         Register(X86SyscallNumbers.fchdir, SysFchdir);
         Register(X86SyscallNumbers.time, SysTime);

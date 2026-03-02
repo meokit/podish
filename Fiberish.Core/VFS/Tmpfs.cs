@@ -85,7 +85,7 @@ public class TmpfsInode : Inode
         lock (Lock)
         {
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(parentDentry.Id, name);
+            var key = new DCacheKey(Ino, name);
             lock (sb.Lock)
             {
                 sb.Dentries[key] = childDentry;
@@ -104,7 +104,7 @@ public class TmpfsInode : Inode
             var primaryDentry = Dentries[0];
 
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(primaryDentry.Id, name);
+            var key = new DCacheKey(Ino, name);
             if (sb.Dentries.TryGetValue(key, out var dentry))
             {
                 primaryDentry.Children[name] = dentry;
@@ -121,8 +121,9 @@ public class TmpfsInode : Inode
         {
             if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
 
+            var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(dentry.Parent!.Id, dentry.Name);
+            var key = new DCacheKey(Ino, dentry.Name);
             if (sb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             var inode = (TmpfsInode)sb.AllocInode();
@@ -138,7 +139,7 @@ public class TmpfsInode : Inode
                 sb.Dentries[key] = dentry;
             }
 
-            dentry.Parent.Children[dentry.Name] = dentry;
+            primaryDentry.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
             return dentry;
@@ -151,8 +152,9 @@ public class TmpfsInode : Inode
         {
             if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
 
+            var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(dentry.Parent!.Id, dentry.Name);
+            var key = new DCacheKey(Ino, dentry.Name);
             if (sb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             var inode = (TmpfsInode)sb.AllocInode();
@@ -168,7 +170,7 @@ public class TmpfsInode : Inode
                 sb.Dentries[key] = dentry;
             }
 
-            dentry.Parent.Children[dentry.Name] = dentry;
+            primaryDentry.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
             return dentry;
@@ -182,7 +184,7 @@ public class TmpfsInode : Inode
             if (Dentries.Count == 0) return;
             var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(primaryDentry.Id, name);
+            var key = new DCacheKey(Ino, name);
             if (sb.Dentries.TryGetValue(key, out var dentry))
             {
                 lock (sb.Lock)
@@ -240,13 +242,35 @@ public class TmpfsInode : Inode
         if (targetParent.Dentries.Count == 0) throw new InvalidOperationException("Target parent detached");
         var newPrimary = targetParent.Dentries[0];
 
-        var oldKey = new DCacheKey(oldPrimary.Id, oldName);
-        var newKey = new DCacheKey(newPrimary.Id, newName);
+        var oldKey = new DCacheKey(Ino, oldName);
+        var newKey = new DCacheKey(targetParent.Ino, newName);
 
         lock (sb.Lock)
         {
-            if (!sb.Dentries.TryGetValue(oldKey, out var dentry))
-                throw new InvalidOperationException("Source does not exist");
+            if (!oldPrimary.Children.TryGetValue(oldName, out var dentry))
+            {
+                // Fallback to searching all Dentries for this inode if not in primary
+                foreach (var parentDentry in Dentries)
+                {
+                    if (parentDentry.Children.TryGetValue(oldName, out dentry)) break;
+                }
+
+                if (dentry == null)
+                {
+                    // Fallback to sb cache search
+                    if (sb.Dentries.TryGetValue(oldKey, out var cacheMatch))
+                    {
+                        dentry = cacheMatch;
+                    }
+                    else
+                    {
+                        var allMatchingNames = string.Join(", ", sb.Dentries.Keys.Where(k => k.Name == oldName).Select(k => k.ParentIno.ToString()));
+                        var myDentryIds = string.Join(", ", Dentries.Select(d => d.Id.ToString()));
+                        Console.WriteLine($"[Tmpfs.Rename] Key missing for {oldName}. Matching ParentIds in cache: [{allMatchingNames}]. My Dentries IDs: [{myDentryIds}]");
+                        throw new InvalidOperationException("Source does not exist");
+                    }
+                }
+            }
 
             // 2. Cycle Check: Ensure we aren't moving a directory into its own subdirectory
             if (dentry.Inode!.Type == InodeType.Directory)
@@ -299,8 +323,10 @@ public class TmpfsInode : Inode
         {
             if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
 
+            var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(dentry.Parent!.Id, dentry.Name);
+            var key = new DCacheKey(Ino, dentry.Name);
+            
             if (sb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             dentry.Instantiate(oldInode);
@@ -310,7 +336,7 @@ public class TmpfsInode : Inode
                 sb.Dentries[key] = dentry;
             }
 
-            dentry.Parent.Children[dentry.Name] = dentry;
+            primaryDentry.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
             return dentry;
         }
@@ -322,8 +348,9 @@ public class TmpfsInode : Inode
         {
             if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
 
+            var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
-            var key = new DCacheKey(dentry.Parent!.Id, dentry.Name);
+            var key = new DCacheKey(Ino, dentry.Name);
             if (sb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             var inode = (TmpfsInode)sb.AllocInode();
@@ -341,7 +368,7 @@ public class TmpfsInode : Inode
                 sb.Dentries[key] = dentry;
             }
 
-            dentry.Parent.Children[dentry.Name] = dentry;
+            primaryDentry.Children[dentry.Name] = dentry;
             _childNames.Add(dentry.Name);
 
             return dentry;
@@ -465,7 +492,7 @@ public class TmpfsInode : Inode
 
         var sb = (TmpfsSuperBlock)SuperBlock;
         foreach (var name in _childNames)
-            if (sb.Dentries.TryGetValue(new DCacheKey(primaryDentry.Id, name), out var dentry))
+            if (sb.Dentries.TryGetValue(new DCacheKey(Ino, name), out var dentry))
                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
 
         return list;

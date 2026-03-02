@@ -220,6 +220,15 @@ public class PathWalker
         if (current.Inode == null || current.Inode.Type != InodeType.Directory)
             return nd.SetError(-(int)Errno.ENOTDIR);
 
+        // LOOKUP_PARENT: For the last component, just record the name and stop.
+        // nd.Path stays as the parent directory. This mirrors Linux LOOKUP_PARENT.
+        if (isLast && (nd.Flags & LookupFlags.Parent) != 0)
+        {
+            nd.LastName = name;
+            nd.LastType = LastType.Normal;
+            return true;
+        }
+
         // Lookup or get from cache
         Dentry? next;
         if (current.Children.TryGetValue(name, out var cached))

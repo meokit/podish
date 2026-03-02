@@ -197,6 +197,7 @@ public abstract class Inode
 
     public virtual int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         return 0;
     }
 
@@ -359,6 +360,7 @@ public class LinuxFile
     public FileFlags Flags { get; set; }
     public Mount Mount { get; set; }
     public object? PrivateData { get; set; }
+    public bool IsTmpFile { get; set; }
 
     /// <summary>
     ///     Check if write operation is allowed (mount read-only check).
@@ -390,6 +392,18 @@ public class LinuxFile
     {
         if (Interlocked.Decrement(ref _refCount) > 0) return;
 
+        if (IsTmpFile && Dentry.Parent?.Inode != null)
+        {
+            try
+            {
+                Dentry.Parent.Inode.Unlink(Dentry.Name);
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
+
         Dentry.Inode?.Release(this);
         Dentry.Inode?.Put(); // Decrease reference count
         // Note: Mount reference is not released here as it's typically
@@ -397,14 +411,14 @@ public class LinuxFile
     }
 }
 
-public struct DCacheKey(long parentId, string name) : IEquatable<DCacheKey>
+public struct DCacheKey(ulong parentIno, string name) : IEquatable<DCacheKey>
 {
-    public long ParentId = parentId;
+    public ulong ParentIno = parentIno;
     public string Name = name;
 
     public readonly bool Equals(DCacheKey other)
     {
-        return ParentId == other.ParentId && Name == other.Name;
+        return ParentIno == other.ParentIno && Name == other.Name;
     }
 
     public override bool Equals(object? obj)
@@ -414,7 +428,7 @@ public struct DCacheKey(long parentId, string name) : IEquatable<DCacheKey>
 
     public readonly override int GetHashCode()
     {
-        return HashCode.Combine(ParentId, Name);
+        return HashCode.Combine(ParentIno, Name);
     }
 
     public static bool operator ==(DCacheKey left, DCacheKey right)

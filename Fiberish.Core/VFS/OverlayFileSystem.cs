@@ -112,6 +112,15 @@ public class OverlayInode : Inode
 
         if (Type == InodeType.Directory)
         {
+            // Check if directory already exists in upper before creating a duplicate.
+            // This can happen when multiple OverlayInode instances for the same directory
+            // each try to CopyUp independently.
+            var existing = upperParent.Inode!.Lookup(LowerDentry.Name);
+            if (existing != null)
+            {
+                UpperDentry = existing;
+                return 0;
+            }
             upperParent.Inode!.Mkdir(upperDentry, Mode, Uid, Gid);
             UpperDentry = upperDentry;
             return 0;
@@ -195,7 +204,8 @@ public class OverlayInode : Inode
         // Create Overlay Inode
         var inode = new OverlayInode(SuperBlock, lowerDentry, upperDentry);
 
-        return new Dentry(name, inode, null, SuperBlock);
+        var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
+        return new Dentry(name, inode, parentDentry, SuperBlock);
     }
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
@@ -310,6 +320,37 @@ public class OverlayInode : Inode
         // Common apk path: source is newly created temp file in upper already.
         // For lower-only source entries, full copy-up rename semantics can be added later.
         UpperInode.Rename(oldName, targetParent.UpperInode, newName);
+    }
+
+    public override Dentry Link(Dentry dentry, Inode oldInode)
+    {
+        if (oldInode is not OverlayInode oldOverlay)
+            throw new InvalidOperationException("Source is not an overlay inode");
+
+        // Link mutates directory entries, so parent must exist in upper
+        if (UpperDentry == null)
+            CopyUpDirectory();
+
+        // Source must also be evaluated. If it only exists in lower, it needs to be copied up
+        // because we can't create a hardlink in upper pointing to lower.
+        // Inoverlayfs, a hardlink to a lower file triggers copy-up of the source.
+        if (oldOverlay.UpperInode == null)
+        {
+            var res = oldOverlay.CopyUp(null);
+            if (res < 0)
+                throw new IOException($"CopyUp failed during Link with error {res}");
+        }
+
+        if (UpperInode == null || oldOverlay.UpperInode == null)
+            throw new InvalidOperationException("Upper directory or source is unavailable for link");
+
+        var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
+        UpperInode.Link(upperDentry, oldOverlay.UpperInode);
+
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
+        dentry.Instantiate(newOverlayInode);
+
+        return dentry;
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)

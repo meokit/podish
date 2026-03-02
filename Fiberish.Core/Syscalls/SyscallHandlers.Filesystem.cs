@@ -66,6 +66,81 @@ public partial class SyscallManager
         }
     }
 
+    private static async ValueTask<int> SysLinkat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var olddirfd = (int)a1;
+        var oldpath = sm.ReadString(a2);
+        var newdirfd = (int)a3;
+        var newpath = sm.ReadString(a4);
+        var flags = (int)a5;
+
+        Logger.LogInformation($"[Linkat] olddirfd={olddirfd} oldpath='{oldpath}' newdirfd={newdirfd} newpath='{newpath}' flags={flags:X}");
+
+        PathLocation oldStartLoc = default;
+        if (olddirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !oldpath.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(olddirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            oldStartLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+        }
+
+        PathLocation newStartLoc = default;
+        if (newdirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !newpath.StartsWith("/"))
+        {
+            var fdir = sm.GetFD(newdirfd);
+            if (fdir == null) return -(int)Errno.EBADF;
+            newStartLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+        }
+
+        var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
+        
+        // Debug: what does /proc/self/fd/7 resolve to?
+        if (oldpath.StartsWith("/proc/self/fd/"))
+        {
+            var testLoc = sm.PathWalkWithFlags(oldpath, LookupFlags.None); // no follow
+            if (testLoc.IsValid && testLoc.Dentry?.Inode?.Type == InodeType.Symlink)
+            {
+                var resolved = testLoc.Dentry.Inode.Readlink();
+                Logger.LogInformation($"[Linkat] symlink '{oldpath}' resolves to: '{resolved}'");
+            }
+        }
+
+        var oldLoc = sm.PathWalkWithFlags(oldpath, oldStartLoc.IsValid ? oldStartLoc : sm.CurrentWorkingDirectory, followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!oldLoc.IsValid)
+        {
+            Logger.LogInformation($"[Linkat] oldLoc invalid for {oldpath}");
+            return -(int)Errno.ENOENT;
+        }
+        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
+
+        var (dirLoc, name, err) = sm.PathWalkForCreate(newpath, newStartLoc.IsValid ? newStartLoc : null);
+        if (err != 0)
+        {
+            Logger.LogInformation($"[Linkat] PathWalkForCreate failed for {newpath} err={err}");
+            return err;
+        }
+        if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount))
+        {
+            return -(int)Errno.EXDEV;
+        }
+
+        try
+        {
+            var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
+            dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
+            return 0;
+        }
+        catch (Exception)
+        {
+            return -(int)Errno.EIO;
+        }
+    }
+
     private static async ValueTask<int> SysChdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -547,14 +622,20 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), 0);
+        var oldPath = sm.ReadString(a2);
+        var newPath = sm.ReadString(a4);
+        Logger.LogInformation($"[RenameAt] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}'");
+        return ImplRename(sm, (int)a1, oldPath, (int)a3, newPath, 0);
     }
 
     private static async ValueTask<int> SysRenameAt2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        return ImplRename(sm, (int)a1, sm.ReadString(a2), (int)a3, sm.ReadString(a4), a5);
+        var oldPath = sm.ReadString(a2);
+        var newPath = sm.ReadString(a4);
+        Logger.LogInformation($"[RenameAt2] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}' flags={a5}");
+        return ImplRename(sm, (int)a1, oldPath, (int)a3, newPath, a5);
     }
 
     private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath,
@@ -577,10 +658,19 @@ public partial class SyscallManager
         }
 
         var (oldParentLoc, oldName, oldErr) = sm.PathWalkForCreate(oldPath, oldStart);
-        if (oldErr != 0) return oldErr;
+        if (oldErr != 0)
+        {
+            Logger.LogInformation($"[Rename] PathWalkForCreate(oldPath) failed err={oldErr}");
+            return oldErr;
+        }
 
         var (newParentLoc, newName, newErr) = sm.PathWalkForCreate(newPath, newStart);
-        if (newErr != 0) return newErr;
+        if (newErr != 0)
+        {
+            Logger.LogInformation($"[Rename] PathWalkForCreate(newPath) failed err={newErr}");
+            return newErr;
+        }
+
 
         try
         {
@@ -595,16 +685,19 @@ public partial class SyscallManager
         {
             return -(int)Errno.ENOENT;
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            Logger.LogInformation($"[Rename] UnauthorizedAccessException: {ex.Message}");
             return -(int)Errno.EACCES;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            Logger.LogInformation($"[Rename] IOException: {ex.Message}");
             return -(int)Errno.EIO;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.LogInformation($"[Rename] Exception: {ex.Message}");
             return -(int)Errno.EACCES;
         }
     }
