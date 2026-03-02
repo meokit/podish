@@ -281,6 +281,34 @@ public class Engine : IDisposable
         return true;
     }
 
+    /// <summary>
+    ///     Best-effort read from guest memory without invoking PageFaultResolver.
+    ///     Returns the number of bytes copied before hitting an unmapped/inaccessible range.
+    /// </summary>
+    public unsafe int CopyFromUserNoFault(uint vaddr, Span<byte> data)
+    {
+        var len = data.Length;
+        var read = 0;
+
+        fixed (byte* pData = data)
+        {
+            while (read < len)
+            {
+                var currAddr = vaddr + (uint)read;
+                var ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
+                if (ptr == null) return read;
+
+                var pageOffset = currAddr & 0xFFF;
+                var chunk = Math.Min(len - read, 4096 - (int)pageOffset);
+
+                Buffer.MemoryCopy(ptr, pData + read, chunk, chunk);
+                read += chunk;
+            }
+        }
+
+        return read;
+    }
+
     public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
     {
         if (addr == 0) return "";

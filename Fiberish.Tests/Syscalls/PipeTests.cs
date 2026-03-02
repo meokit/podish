@@ -92,22 +92,47 @@ public class PipeTests
         Assert.Equal(before, env.SyscallManager.FDs.Count);
     }
 
+    [Fact]
+    public async Task Pipe2_Efault_WithTaskOwner_DoesNotRecurseAndRollsBack()
+    {
+        using var env = new TestEnv(attachTaskOwner: true);
+        const uint invalidFdsAddr = 0xDEAD0000;
+        var before = env.SyscallManager.FDs.Count;
+
+        var rc = await CallSysPipe2(env, invalidFdsAddr, 0);
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+        Assert.Equal(before, env.SyscallManager.FDs.Count);
+    }
+
     private sealed class TestEnv : IDisposable
     {
-        public TestEnv()
+        public TestEnv(bool attachTaskOwner = false)
         {
             Engine = new Engine();
             Vma = new VMAManager();
+            if (attachTaskOwner)
+            {
+                Process = new Process(100, Vma, null!);
+                Scheduler = new KernelScheduler();
+                Task = new FiberTask(100, Process, Engine, Scheduler);
+                Engine.Owner = Task;
+                KernelScheduler.Current = Scheduler;
+            }
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             SyscallManager.MountRootHostfs(".");
         }
 
         public Engine Engine { get; }
         public VMAManager Vma { get; }
+        public Process? Process { get; }
+        public FiberTask? Task { get; }
+        public KernelScheduler? Scheduler { get; }
         public SyscallManager SyscallManager { get; }
 
         public void Dispose()
         {
+            if (Scheduler != null) KernelScheduler.Current = null;
+            GC.KeepAlive(Task);
         }
 
         public void MapUserPage(uint addr)

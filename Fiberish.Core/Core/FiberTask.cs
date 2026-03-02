@@ -87,6 +87,7 @@ public class FiberTask
     }
 
     private bool _pendingFaultFromInterrupt;
+    private int _pageFaultDepth;
 
     public int TID { get; }
     public int PID { get; }
@@ -150,43 +151,65 @@ public class FiberTask
 
     private bool HandlePageFault(uint addr, bool isWrite)
     {
-        if (Process.Mem.HandleFault(addr, isWrite, CPU))
-            return true;
-
-        // Not handled by VMAManager (no VMA or permission error)
-        Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.",
-            addr, isWrite ? "Write" : "Read");
-        Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
-            CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
-
-        // Dump debug info
-        var stats = CPU.DumpStats();
-        Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
-        if (!string.IsNullOrEmpty(stats)) Logger.LogInformation("Native Stats:\n{Stats}", stats);
-
-        var esp = CPU.RegRead(Reg.ESP);
-        var stackBuf = new byte[16];
-        if (CPU.CopyFromUser(esp, stackBuf))
+        var depth = Interlocked.Increment(ref _pageFaultDepth);
+        try
         {
-            var v0 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(0, 4));
-            var v1 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(4, 4));
-            var v2 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(8, 4));
-            var v3 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(12, 4));
-            Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: [0x{V0:X8}, 0x{V1:X8}, 0x{V2:X8}, 0x{V3:X8}]", esp, v0,
-                v1, v2, v3);
+            if (depth > 1)
+            {
+                // Avoid recursive fault diagnostics causing stack overflow.
+                Logger.LogWarning("Re-entrant page fault at 0x{Addr:X} ({Mode}); delivering SIGSEGV with minimal diagnostics.",
+                    addr, isWrite ? "Write" : "Read");
+                PostSignal((int)Signal.SIGSEGV);
+                _pendingFaultFromInterrupt = true;
+                CPU.Yield();
+                return true;
+            }
+
+            if (Process.Mem.HandleFault(addr, isWrite, CPU))
+                return true;
+
+            // Not handled by VMAManager (no VMA or permission error)
+            Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.",
+                addr, isWrite ? "Write" : "Read");
+            Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
+                CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
+
+            // Dump debug info
+            var stats = CPU.DumpStats();
+            Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
+            if (!string.IsNullOrEmpty(stats)) Logger.LogInformation("Native Stats:\n{Stats}", stats);
+
+            var esp = CPU.RegRead(Reg.ESP);
+            var stackBuf = new byte[16];
+            // Fault diagnostics must not trigger nested page faults.
+            var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
+            if (copied == stackBuf.Length)
+            {
+                var v0 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(0, 4));
+                var v1 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(4, 4));
+                var v2 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(8, 4));
+                var v3 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(12, 4));
+                Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: [0x{V0:X8}, 0x{V1:X8}, 0x{V2:X8}, 0x{V3:X8}]",
+                    esp, v0, v1, v2, v3);
+            }
+            else
+            {
+                Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: <partial read {Copied}/{Total} bytes>",
+                    esp, copied, stackBuf.Length);
+            }
+
+            Process.Mem.LogVMAs();
+
+            // Deliver SIGSEGV and yield
+            PostSignal((int)Signal.SIGSEGV);
+            _pendingFaultFromInterrupt = true;
+            CPU.Yield();
+            return true; // Return true to C++ so it stops with Yield status instead of Fault status
         }
-        else
+        finally
         {
-            Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: <Could not read stack>", esp);
+            Interlocked.Decrement(ref _pageFaultDepth);
         }
-
-        Process.Mem.LogVMAs();
-
-        // Deliver SIGSEGV and yield
-        PostSignal((int)Signal.SIGSEGV);
-        _pendingFaultFromInterrupt = true;
-        CPU.Yield();
-        return true; // Return true to C++ so it stops with Yield status instead of Fault status
     }
 
     private bool HandleInterrupt(Engine engine, uint vector)
