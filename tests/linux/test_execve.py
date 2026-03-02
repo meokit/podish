@@ -3,12 +3,11 @@ import pexpect
 import os
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-LINUX_ROOTFS = os.path.join(PROJECT_ROOT, "tests/linux/rootfs")
 LINUX_ASSETS = os.path.join(PROJECT_ROOT, "tests/linux/assets")
 TEST_ASSET = os.path.join(PROJECT_ROOT, "tests/linux/assets/test_execve_vdso")
 
 
-def test_execve_vdso_persistence(fiberpod_dll):
+def test_execve_vdso_persistence(fiberpod_dll, alpine_image):
     """
     Verifies that SysExecve properly re-maps vDSO and maintains signal capabilities.
     The `build_cli` fixture (from conftest.py) ensures the project is built once
@@ -21,7 +20,7 @@ def test_execve_vdso_persistence(fiberpod_dll):
         fiberpod_dll,
         "run",
         "-v", f"{LINUX_ASSETS}:/tests",
-        LINUX_ROOTFS,
+        alpine_image,
         "--",
         "/tests/test_execve_vdso",
         "arg1",

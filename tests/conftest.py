@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -70,3 +71,54 @@ def podman_available() -> bool:
     if not available:
         print("[conftest] Warning: podman not available")
     return available
+
+
+# Alpine i386 image for FiberPod tests
+ALPINE_I386_IMAGE = "docker.io/i386/alpine:latest"
+ALPINE_IMAGE = "localhost/fiberish-alpine-i386:latest"
+
+@pytest.fixture(scope="session")
+def alpine_image(podman_available: bool) -> str:
+    """
+    Build an Alpine i386 image with openssl preinstalled, export it as rootfs.
+    """
+    override = os.environ.get("FIBERISH_ALPINE_IMAGE")
+    if override:
+        return override
+
+    if not podman_available:
+        pytest.skip("podman not available; set FIBERISH_ALPINE_IMAGE to a prepared image")
+
+    subprocess.run(["podman", "pull", "--platform", "linux/386", ALPINE_I386_IMAGE], check=True)
+    subprocess.run(
+        [
+            "podman",
+            "build",
+            "--platform",
+            "linux/386",
+            "--pull=never",
+            "-t",
+            ALPINE_IMAGE,
+            "-f",
+            "-",
+            "/tmp",
+        ],
+        check=True,
+        input=f"FROM {ALPINE_I386_IMAGE}\nRUN apk add --no-cache openssl\n",
+        text=True,
+    )
+
+    rootfs_dir = Path(tempfile.mkdtemp(prefix="fiberish-alpine-rootfs-"))
+    tar_path = rootfs_dir / "rootfs.tar"
+    container_id = subprocess.check_output(
+        ["podman", "create", "--platform", "linux/386", ALPINE_IMAGE],
+        text=True,
+    ).strip()
+    try:
+        subprocess.run(["podman", "export", container_id, "-o", str(tar_path)], check=True)
+        subprocess.run(["tar", "-xf", str(tar_path), "-C", str(rootfs_dir)], check=True)
+    finally:
+        subprocess.run(["podman", "rm", "-f", container_id], check=False)
+        tar_path.unlink(missing_ok=True)
+
+    return str(rootfs_dir)

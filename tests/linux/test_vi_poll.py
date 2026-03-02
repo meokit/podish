@@ -4,11 +4,9 @@ import sys
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 EMULATOR_LOG = os.path.join(PROJECT_ROOT, "emulator.log")
-ROOTFS = os.path.join(PROJECT_ROOT, "tests/linux/rootfs")
-VI_BIN = os.path.join(ROOTFS, "bin/busybox")
 
 
-def test_vi_poll_spam(fiberpod_dll):
+def test_vi_poll_spam(fiberpod_dll, alpine_image):
     """
     Runs busybox vi under the emulator with --trace, then checks the log for
     excessive poll busy-wait messages.
@@ -20,9 +18,10 @@ def test_vi_poll_spam(fiberpod_dll):
     if os.path.exists(EMULATOR_LOG):
         os.remove(EMULATOR_LOG)
 
-    if not os.path.exists(VI_BIN):
+    vi_bin = os.path.join(alpine_image, "bin/busybox")
+    if not os.path.exists(vi_bin):
         import pytest
-        pytest.skip(f"busybox binary not found at {VI_BIN}")
+        pytest.skip(f"busybox binary not found at {vi_bin}")
 
     args = [
         fiberpod_dll,
@@ -31,7 +30,7 @@ def test_vi_poll_spam(fiberpod_dll):
         "run",
         "-i",
         "-t",
-        ROOTFS,
+        alpine_image,
         "--",
         "/bin/busybox",
         "vi",

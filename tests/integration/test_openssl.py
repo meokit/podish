@@ -66,8 +66,8 @@ def run_emulator_openssl(
 
 
 @pytest.mark.integration
-def test_openssl_md5_correctness(project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+def test_openssl_md5_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path):
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     data = b"fiberish-openssl-md5\n"
     (tmp_path / "input.txt").write_bytes(data)
     expected_md5 = hashlib.md5(data).hexdigest()
@@ -75,7 +75,7 @@ def test_openssl_md5_correctness(project_root: Path, fiberpod_dll: str, openssl_
     out = run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         ["dgst", "-md5", "/work/input.txt"],
         work_dir=tmp_path,
@@ -84,8 +84,8 @@ def test_openssl_md5_correctness(project_root: Path, fiberpod_dll: str, openssl_
 
 
 @pytest.mark.integration
-def test_openssl_sha256_correctness(project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+def test_openssl_sha256_correctness(project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path):
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     data = b"fiberish-openssl-sha256\n"
     (tmp_path / "input.txt").write_bytes(data)
     expected_sha256 = hashlib.sha256(data).hexdigest()
@@ -93,7 +93,7 @@ def test_openssl_sha256_correctness(project_root: Path, fiberpod_dll: str, opens
     out = run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         ["dgst", "-sha256", "/work/input.txt"],
         work_dir=tmp_path,
@@ -103,16 +103,16 @@ def test_openssl_sha256_correctness(project_root: Path, fiberpod_dll: str, opens
 
 @pytest.mark.integration
 def test_openssl_aes_128_cbc_correctness(
-    project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path
+    project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path
 ):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     plaintext = "Hello, this is a secret message for AES-128-CBC!\n"
     (tmp_path / "plaintext.txt").write_text(plaintext)
 
     run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         [
             "enc",
@@ -156,15 +156,15 @@ def test_openssl_aes_128_cbc_correctness(
 
 @pytest.mark.integration
 def test_openssl_rsa_keygen_correctness(
-    project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path
+    project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path
 ):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     key_file_host = tmp_path / "test_rsa.pem"
 
     run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         ["genrsa", "-out", "/work/test_rsa.pem", "1024"],
         work_dir=tmp_path,
@@ -184,16 +184,16 @@ def test_openssl_rsa_keygen_correctness(
 
 @pytest.mark.integration
 def test_openssl_chacha20_correctness(
-    project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path
+    project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path
 ):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     plaintext = "Hello, this is a secret message for ChaCha20!\n"
     (tmp_path / "plaintext_chacha20.txt").write_text(plaintext)
 
     run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         [
             "enc",
@@ -236,15 +236,15 @@ def test_openssl_chacha20_correctness(
 
 @pytest.mark.integration
 def test_openssl_ec_keygen_correctness(
-    project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path
+    project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path
 ):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     key_file_host = tmp_path / "test_ec.pem"
 
     run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "/work/test_ec.pem"],
         work_dir=tmp_path,
@@ -264,9 +264,9 @@ def test_openssl_ec_keygen_correctness(
 
 @pytest.mark.integration
 def test_openssl_s_client_correctness(
-    project_root: Path, fiberpod_dll: str, openssl_alpine_image: str, tmp_path: Path
+    project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path
 ):
-    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, openssl_alpine_image)
+    openssl_bin = resolve_openssl_bin(project_root, fiberpod_dll, alpine_image)
     cert_path = tmp_path / "server.crt"
     key_path = tmp_path / "server.key"
 
@@ -274,7 +274,7 @@ def test_openssl_s_client_correctness(
         run_emulator_openssl(
             project_root,
             fiberpod_dll,
-            openssl_alpine_image,
+            alpine_image,
             openssl_bin,
             [
                 "req",
@@ -343,7 +343,7 @@ def test_openssl_s_client_correctness(
     out = run_emulator_openssl(
         project_root,
         fiberpod_dll,
-        openssl_alpine_image,
+        alpine_image,
         openssl_bin,
         ["s_client", "-connect", f"127.0.0.1:{port}", "-brief", "-no_ign_eof"],
         send_eof=True,
