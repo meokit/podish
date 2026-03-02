@@ -210,6 +210,71 @@ public partial class SyscallManager
         }
     }
 
+    private static async ValueTask<int> SysPipe2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var fdsAddr = a1;
+        var flags = (FileFlags)a2;
+
+        // Validate flags - only O_CLOEXEC and O_NONBLOCK are supported
+        // O_DIRECT (0x4000) is not currently supported
+        const FileFlags SupportedFlags = FileFlags.O_CLOEXEC | FileFlags.O_NONBLOCK;
+        if ((flags & ~SupportedFlags) != 0)
+            return -(int)Errno.EINVAL;
+
+        int? rFd = null;
+        int? wFd = null;
+
+        try
+        {
+            var pipe = new PipeInode();
+
+            // Build file flags for reader and writer
+            // O_NONBLOCK is stored in LinuxFile.Flags and checked by read/write syscalls
+            var baseFlags = flags & SupportedFlags;
+
+            // Reader
+            var rFlags = FileFlags.O_RDONLY | baseFlags;
+            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root.Dentry, sm.Root.Dentry!.SuperBlock);
+            var rFile = new LinuxFile(rDentry, rFlags, sm.AnonMount);
+            rFd = sm.AllocFD(rFile);
+
+            // Writer
+            var wFlags = FileFlags.O_WRONLY | baseFlags;
+            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root.Dentry, sm.Root.Dentry.SuperBlock);
+            var wFile = new LinuxFile(wDentry, wFlags, sm.AnonMount);
+            wFd = sm.AllocFD(wFile);
+
+            // Write FDs to user memory
+            var fds = new[] { rFd.Value, wFd.Value };
+            if (!sm.Engine.CopyToUser(fdsAddr, MemoryMarshal.AsBytes(fds.AsSpan())))
+            {
+                // Rollback on EFAULT
+                sm.FreeFD(rFd.Value);
+                sm.FreeFD(wFd.Value);
+                return -(int)Errno.EFAULT;
+            }
+
+            return 0;
+        }
+        catch (OutOfMemoryException)
+        {
+            // Rollback on OOM
+            if (rFd.HasValue) sm.FreeFD(rFd.Value);
+            if (wFd.HasValue) sm.FreeFD(wFd.Value);
+            return -(int)Errno.ENOMEM;
+        }
+        catch (Exception ex)
+        {
+            // Rollback on any other error
+            if (rFd.HasValue) sm.FreeFD(rFd.Value);
+            if (wFd.HasValue) sm.FreeFD(wFd.Value);
+            Logger.LogError(ex, "SysPipe2 failed");
+            return -(int)Errno.ENFILE;
+        }
+    }
+
     private static async ValueTask<int> SysCreat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // creat(path, mode) is open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
