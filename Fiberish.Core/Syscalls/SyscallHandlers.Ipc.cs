@@ -20,12 +20,12 @@ public partial class SyscallManager
     /// </summary>
     private static async ValueTask<int> SysIpc(
         IntPtr state,
-        uint call,      // IPC subcommand with version (low 16 bits = op, high 16 bits = version)
-        uint first,     // First argument (varies by call)
-        uint second,    // Second argument (varies by call)
-        uint third,     // Third argument (varies by call)
-        uint ptr,       // Pointer argument (varies by call)
-        uint fifth)     // Fifth argument (varies by call)
+        uint call, // IPC subcommand with version (low 16 bits = op, high 16 bits = version)
+        uint first, // First argument (varies by call)
+        uint second, // Second argument (varies by call)
+        uint third, // Third argument (varies by call)
+        uint ptr, // Pointer argument (varies by call)
+        uint fifth) // Fifth argument (varies by call)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -43,13 +43,13 @@ public partial class SyscallManager
         int ret = op switch
         {
             LinuxConstants.SHMGET => DoShmGet(sm, (int)first, second, (int)third, uid, gid, pid),
-            LinuxConstants.SHMAT => DoShmAt(sm, (int)first, second, (int)third, ptr, pid),
-            LinuxConstants.SHMDT => DoShmDt(sm, first, pid),
-            LinuxConstants.SHMCTL => DoShmCtl(sm, (int)first, (int)second, third, uid, gid, pid, version),
-            
+            LinuxConstants.SHMAT => DoShmAt(sm, (int)first, ptr, (int)second, third, pid),
+            LinuxConstants.SHMDT => DoShmDt(sm, ptr, pid),
+            LinuxConstants.SHMCTL => DoShmCtl(sm, (int)first, (int)second, ptr, uid, gid, pid, version),
+
             LinuxConstants.SEMGET => sm.SysVSem.SemGet((int)first, (int)second, (int)third, uid, gid),
             LinuxConstants.SEMCTL => DoSemCtlFromIpc(sm, (int)first, (int)second, third, ptr, uid, gid),
-            
+
             _ => -(int)Errno.ENOSYS
         };
 
@@ -83,7 +83,7 @@ public partial class SyscallManager
     private static int DoShmAt(SyscallManager sm, int shmid, uint shmaddr, int shmflg, uint ptr, int pid)
     {
         var result = sm.SysVShm.ShmAt(shmid, shmaddr, shmflg, pid, sm.Mem, sm.Engine);
-        
+
         if (result < 0)
             return (int)result;
 
@@ -98,9 +98,10 @@ public partial class SyscallManager
                 sm.SysVShm.ShmDt((uint)result, pid, sm.Mem, sm.Engine);
                 return -(int)Errno.EFAULT;
             }
+
             return 0;
         }
-        
+
         // If ptr is NULL, return the address directly (non-standard but some programs expect this)
         return (int)result;
     }
@@ -130,7 +131,7 @@ public partial class SyscallManager
         {
             actualCmd = cmd & ~LinuxConstants.IPC_64;
         }
-        
+
         return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, sm.Engine, uid, gid, pid);
     }
 
@@ -139,7 +140,7 @@ public partial class SyscallManager
         // In sys_ipc on i386, the 4th arg (ptr) is a pointer to the union semun.
         // We must dereference it to get the actual value for SETVAL/IPC_STAT.
         uint argVal = 0;
-        if (ptr != 0) 
+        if (ptr != 0)
         {
             Span<byte> buf = stackalloc byte[4];
             if (sm.Engine.CopyFromUser(ptr, buf))
@@ -147,6 +148,7 @@ public partial class SyscallManager
                 argVal = BitConverter.ToUInt32(buf);
             }
         }
+
         return sm.SysVSem.SemCtl(first, second, (int)third, argVal, sm.Engine, uid, gid);
     }
 
@@ -160,7 +162,8 @@ public partial class SyscallManager
         return new ValueTask<int>(sm.SysVSem.SemGet((int)key, (int)nsems, (int)semflg, uid, gid));
     }
 
-    private static async ValueTask<int> SysSemOp(IntPtr state, uint semid, uint sops, uint nsops, uint _4, uint _5, uint _6)
+    private static async ValueTask<int> SysSemOp(IntPtr state, uint semid, uint sops, uint nsops, uint _4, uint _5,
+        uint _6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -174,7 +177,7 @@ public partial class SyscallManager
         var t = sm.Engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
-        
+
         int actualCmd = (int)cmd;
         if ((cmd & LinuxConstants.IPC_64) != 0)
             actualCmd = (int)(cmd & ~LinuxConstants.IPC_64);

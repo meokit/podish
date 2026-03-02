@@ -31,9 +31,18 @@ public class VMA
     public MapFlags Flags { get; set; }
     public LinuxFile? File { get; set; }
     public long Offset { get; set; }
-    public long FileSz { get; set; } // Max bytes to read from file relative to Start
+
+    // Max bytes of valid file data relative to the Start of this VMA. Used for zero-filling BSS and partial pages.
+    public long FileBackingLength { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;
     public MemoryObject MemoryObject { get; set; } = null!;
+
+    /// <summary>
+    ///     For MAP_PRIVATE + file: holds COW'd private pages.
+    ///     Null for MAP_SHARED, MAP_PRIVATE anon, and threads.
+    /// </summary>
+    public MemoryObject? CowObject { get; set; }
+
     public uint ViewPageOffset { get; set; }
 
     public uint Length => End - Start;
@@ -42,15 +51,23 @@ public class VMA
     {
         var shared = (Flags & MapFlags.Shared) != 0;
         MemoryObject obj;
-        if (shared)
+
+        if (shared || CowObject != null)
         {
+            // Shared VMA: share MemoryObject (MAP_SHARED file, MAP_SHARED anon, SysV shm)
+            // MAP_PRIVATE file mmap: MemoryObject IS the inode page cache (shared across processes);
+            //   per-process writes go into CowObject, not MemoryObject, so AddRef is correct.
             MemoryObject.AddRef();
             obj = MemoryObject;
         }
         else
         {
+            // MAP_PRIVATE anonymous: deep-copy so child is fully isolated from parent
             obj = MemoryObject.ForkCloneForPrivate();
         }
+
+        // COW object: private per-process — deep-copy existing COW pages on fork
+        MemoryObject? cowObj = CowObject?.ForkCloneForPrivate();
 
         return new VMA
         {
@@ -60,9 +77,10 @@ public class VMA
             Flags = Flags,
             File = File, // File object is shared (like os.File in Go)
             Offset = Offset,
-            FileSz = FileSz,
+            FileBackingLength = FileBackingLength,
             Name = Name,
             MemoryObject = obj,
+            CowObject = cowObj,
             ViewPageOffset = ViewPageOffset
         };
     }

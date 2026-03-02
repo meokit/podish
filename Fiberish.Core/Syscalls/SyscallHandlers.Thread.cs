@@ -19,30 +19,76 @@ public partial class SyscallManager
         var val = a3;
 
         var opCode = op & 0x7F;
+        var isPrivate = (op & 0x80) != 0; // FUTEX_PRIVATE_FLAG = 128
 
         if (opCode == 0) // WAIT
         {
+            // Read current value first — this also faults in the page
             var tidBuf = new byte[4];
             if (!sm.Engine.CopyFromUser(uaddr, tidBuf)) return -(int)Errno.EFAULT;
             var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
             if (currentVal != val) return -(int)Errno.EAGAIN; // EWOULDBLOCK
 
-            var waiter = sm.Futex.PrepareWait(uaddr);
+            // Resolve the futex key AFTER the page is faulted in
+            nint physKey = 0;
+            if (!isPrivate)
+            {
+                var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
+                if (hostPtr == IntPtr.Zero) return -(int)Errno.EFAULT;
+                physKey = (nint)hostPtr;
+            }
+
+            var waiter = isPrivate
+                ? sm.Futex.PrepareWait(uaddr)
+                : sm.Futex.PrepareWaitShared(physKey);
 
             var task = sm.Engine.Owner as FiberTask;
             if (task != null)
             {
-                if (await new FutexAwaiter(waiter, task) == AwaitResult.Interrupted)
+                Logger.LogInformation(
+                    "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
+                    task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
+                var result = await new FutexAwaiter(waiter, task);
+                Logger.LogInformation(
+                    "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
+                    task.TID, result, task.WakeReason, task.PendingSignals);
+                if (result == AwaitResult.Interrupted)
+                {
+                    // Cancel the waiter to avoid leaking it in the queue
+                    if (isPrivate)
+                        sm.Futex.CancelWait(uaddr, waiter);
+                    else
+                        sm.Futex.CancelWaitShared(physKey, waiter);
                     return -(int)Errno.ERESTARTSYS;
+                }
             }
 
             return 0;
         }
 
+        // Resolve key for non-WAIT ops
+        nint sharedKey = 0;
+        if (!isPrivate)
+        {
+            if (opCode == 1) // WAKE
+            {
+                // Force a page fault to ensure the page is mapped in this process's engine,
+                // so we can reliably get its physical address for the cross-process shared key.
+                sm.Engine.CopyFromUser(uaddr, new byte[1]);
+            }
+
+            var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
+            // Fall back to virtual address key if not mapped (best-effort)
+            sharedKey = hostPtr != IntPtr.Zero ? (nint)hostPtr : 0;
+        }
+
         if (opCode == 1) // WAKE
         {
             var count = (int)val;
-            return sm.Futex.Wake(uaddr, count);
+            if (isPrivate) return sm.Futex.Wake(uaddr, count);
+            return sharedKey != 0
+                ? sm.Futex.WakeShared(sharedKey, count)
+                : sm.Futex.Wake(uaddr, count); // fallback: page not mapped here
         }
 
         return -(int)Errno.ENOSYS;
@@ -80,6 +126,7 @@ public partial class SyscallManager
                 {
                     _task.WakeReason = WakeReason.Event;
                 }
+
                 runOnce.Invoke();
             });
         }
@@ -92,6 +139,7 @@ public partial class SyscallManager
                 _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
+
             if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result)
             {
                 return AwaitResult.Interrupted;
@@ -161,7 +209,8 @@ public partial class SyscallManager
         return 1;
     }
 
-    private static async ValueTask<int> SysSetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -178,7 +227,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysGetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;

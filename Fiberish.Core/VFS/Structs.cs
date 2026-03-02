@@ -1,4 +1,5 @@
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -90,6 +91,12 @@ public abstract class SuperBlock
 
 public abstract class Inode
 {
+    /// <summary>
+    ///     Per-inode page cache. Lazily created on first file mmap.
+    ///     Analogous to Linux inode.i_mapping / address_space.
+    /// </summary>
+    public MemoryObject? PageCache { get; set; }
+
     public virtual ulong Ino { get; set; }
     public virtual InodeType Type { get; set; }
     public virtual int Mode { get; set; }
@@ -129,6 +136,7 @@ public abstract class Inode
     protected virtual void Release()
     {
         // Subclasses can override to clean up resources
+        MemoryObjectManager.Instance.ReleaseInodePageCache(this);
     }
 
     // Operations

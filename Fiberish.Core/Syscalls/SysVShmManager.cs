@@ -145,9 +145,11 @@ public class SysVShmManager
                 return -(int)Errno.EIDRM; // Segment doesn't exist
 
             // Check permissions
-            var requiredFlags = (flags & LinuxConstants.SHM_RDONLY) != 0 ? LinuxConstants.SHM_R : LinuxConstants.SHM_R | LinuxConstants.SHM_W;
-            if (!CheckPermission(segment, engine.Owner is FiberTask t ? t.Process.EUID : 0, 
-                engine.Owner is FiberTask t2 ? t2.Process.EGID : 0, requiredFlags))
+            var requiredFlags = (flags & LinuxConstants.SHM_RDONLY) != 0
+                ? LinuxConstants.SHM_R
+                : LinuxConstants.SHM_R | LinuxConstants.SHM_W;
+            if (!CheckPermission(segment, engine.Owner is FiberTask t ? t.Process.EUID : 0,
+                    engine.Owner is FiberTask t2 ? t2.Process.EGID : 0, requiredFlags))
                 return -(int)Errno.EACCES;
         }
 
@@ -204,7 +206,7 @@ public class SysVShmManager
                 Flags = MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous,
                 File = null,
                 Offset = 0,
-                FileSz = segment.Size,
+                FileBackingLength = segment.Size,
                 Name = $"[sysv shm:{shmid}]",
                 MemoryObject = segment.BackingObject,
                 ViewPageOffset = 0
@@ -319,7 +321,7 @@ public class SysVShmManager
                     // Check ownership
                     if (segment.CUid != uid && uid != 0)
                         return -(int)Errno.EPERM;
-                    
+
                     segment.MarkedForDelete = true;
                     segment.Lpid = pid;
                     segment.CTime = DateTime.UtcNow;
@@ -327,7 +329,7 @@ public class SysVShmManager
                     // If no attachments, destroy immediately
                     if (segment.NAttch == 0)
                         DestroySegment(segment);
-                    
+
                     return 0;
 
                 case LinuxConstants.SHM_LOCK:
@@ -462,22 +464,36 @@ public class SysVShmManager
         var offset = 0;
 
         // ipc_perm structure (16 bytes)
-        BitConverter.TryWriteBytes(data.AsSpan(offset), segment.Key); offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Uid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Gid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CUid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CGid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Mode); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Shmid); offset += 2; // seq (reuse shmid)
+        BitConverter.TryWriteBytes(data.AsSpan(offset), segment.Key);
+        offset += 4;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Uid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Gid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CUid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CGid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Mode);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Shmid);
+        offset += 2; // seq (reuse shmid)
 
         // Rest of shmid_ds
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.Size); offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.ATime.Subtract(DateTime.UnixEpoch).TotalSeconds); offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.DTime.Subtract(DateTime.UnixEpoch).TotalSeconds); offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.CTime.Subtract(DateTime.UnixEpoch).TotalSeconds); offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Cpid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Lpid); offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.NAttch); offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.Size);
+        offset += 4;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.ATime.Subtract(DateTime.UnixEpoch).TotalSeconds);
+        offset += 4;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.DTime.Subtract(DateTime.UnixEpoch).TotalSeconds);
+        offset += 4;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.CTime.Subtract(DateTime.UnixEpoch).TotalSeconds);
+        offset += 4;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Cpid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Lpid);
+        offset += 2;
+        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.NAttch);
+        offset += 2;
         // shm_unused, shm_unused2, shm_unused3 are zero
 
         if (!engine.CopyToUser(buf, data))

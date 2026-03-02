@@ -36,6 +36,7 @@ public sealed class ExternalPageManager
             isNew = false;
             return IntPtr.Zero;
         }
+
         _pages[pageAddr] = ptr;
         isNew = true;
         return ptr;
@@ -76,6 +77,19 @@ public sealed class ExternalPageManager
         foreach (var pageAddr in _pages.Keys.ToArray()) Release(pageAddr);
     }
 
+    public static void AddRef(IntPtr ptr)
+    {
+        AddGlobalRef(ptr);
+    }
+
+    public static int GetRefCount(IntPtr ptr)
+    {
+        lock (GlobalLock)
+        {
+            return GlobalRefs.TryGetValue(ptr, out var count) ? count : 0;
+        }
+    }
+
     private static void AddGlobalRef(IntPtr ptr)
     {
         lock (GlobalLock)
@@ -113,6 +127,7 @@ public sealed class ExternalPageManager
         {
             ptr = (IntPtr)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
         }
+
         if (ptr == IntPtr.Zero) return IntPtr.Zero;
 
         unsafe

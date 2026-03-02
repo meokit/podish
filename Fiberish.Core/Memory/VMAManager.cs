@@ -57,6 +57,31 @@ public class VMAManager
                 throw new InvalidOperationException("Overlap detected");
         }
 
+        var isShared = (flags & MapFlags.Shared) != 0;
+        MemoryObject memObj;
+        MemoryObject? cowObj = null;
+        uint viewPageOff = 0;
+
+        if (file == null)
+        {
+            // Anonymous mapping
+            memObj = MemoryObjectManager.Instance.CreateAnonymous(isShared);
+        }
+        else if (isShared)
+        {
+            // MAP_SHARED file: share the inode's global page cache
+            memObj = MemoryObjectManager.Instance.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            viewPageOff = (uint)(offset / LinuxConstants.PageSize);
+        }
+        else
+        {
+            // MAP_PRIVATE file (including ELF_LOAD): shared inode cache as read-only source + private COW object
+            memObj = MemoryObjectManager.Instance.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            viewPageOff = (uint)(offset / LinuxConstants.PageSize);
+            cowObj = MemoryObjectManager.Instance.CreateAnonymous(shared: false);
+        }
+
+
         var vma = new VMA
         {
             Start = addr,
@@ -65,12 +90,11 @@ public class VMAManager
             Flags = flags,
             File = file,
             Offset = offset,
-            FileSz = filesz,
+            FileBackingLength = filesz,
             Name = name,
-            MemoryObject = file == null
-                ? MemoryObjectManager.Instance.CreateAnonymous((flags & MapFlags.Shared) != 0)
-                : MemoryObjectManager.Instance.CreateFile(file, offset, filesz, (flags & MapFlags.Shared) != 0),
-            ViewPageOffset = 0
+            MemoryObject = memObj,
+            CowObject = cowObj,
+            ViewPageOffset = viewPageOff
         };
 
         // Insert sorted
@@ -134,6 +158,7 @@ public class VMAManager
             {
                 SyncVMA(vma, engine);
                 vma.MemoryObject.Release();
+                vma.CowObject?.Release();
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -150,8 +175,8 @@ public class VMAManager
                 {
                     long diff = tailStart - vma.Start;
                     tailOffset = vma.Offset + diff;
-                    if (vma.FileSz > diff)
-                        tailFileSz = vma.FileSz - diff;
+                    if (vma.FileBackingLength > diff)
+                        tailFileSz = vma.FileBackingLength - diff;
                 }
 
                 var tailVMA = new VMA
@@ -162,9 +187,10 @@ public class VMAManager
                     Flags = vma.Flags,
                     File = vma.File,
                     Offset = tailOffset,
-                    FileSz = tailFileSz,
+                    FileBackingLength = tailFileSz,
                     Name = vma.Name,
                     MemoryObject = vma.MemoryObject,
+                    CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = vma.ViewPageOffset + ((tailStart - vma.Start) / LinuxConstants.PageSize)
                 };
                 vma.MemoryObject.AddRef();
@@ -176,8 +202,8 @@ public class VMAManager
                 if (vma.File != null)
                 {
                     long newLen = vma.End - vma.Start;
-                    if (vma.FileSz > newLen)
-                        vma.FileSz = newLen;
+                    if (vma.FileBackingLength > newLen)
+                        vma.FileBackingLength = newLen;
                 }
 
                 continue;
@@ -192,10 +218,10 @@ public class VMAManager
                 if (vma.File != null)
                 {
                     vma.Offset += diff;
-                    if (vma.FileSz > diff)
-                        vma.FileSz -= diff;
+                    if (vma.FileBackingLength > diff)
+                        vma.FileBackingLength -= diff;
                     else
-                        vma.FileSz = 0;
+                        vma.FileBackingLength = 0;
                 }
 
                 continue;
@@ -208,8 +234,8 @@ public class VMAManager
                 if (vma.File != null)
                 {
                     long newLen = vma.End - vma.Start;
-                    if (vma.FileSz > newLen)
-                        vma.FileSz = newLen;
+                    if (vma.FileBackingLength > newLen)
+                        vma.FileBackingLength = newLen;
                 }
             }
         }
@@ -245,7 +271,7 @@ public class VMAManager
             var oldEnd = vma.End;
             var oldPerms = vma.Perms;
             var oldOffset = vma.Offset;
-            var oldFileSz = vma.FileSz;
+            var oldFileSz = vma.FileBackingLength;
             var oldViewPageOffset = vma.ViewPageOffset;
 
             // Fully covered: just flip perms.
@@ -265,9 +291,10 @@ public class VMAManager
                 Flags = vma.Flags,
                 File = vma.File,
                 Offset = vma.File != null ? oldOffset + midDiff : 0,
-                FileSz = 0,
+                FileBackingLength = 0,
                 Name = vma.Name,
                 MemoryObject = vma.MemoryObject,
+                CowObject = vma.CowObject?.ForkCloneForPrivate(),
                 ViewPageOffset = oldViewPageOffset + ((uint)midDiff / LinuxConstants.PageSize)
             };
             vma.MemoryObject.AddRef();
@@ -276,7 +303,7 @@ public class VMAManager
                 var remain = oldFileSz - midDiff;
                 if (remain < 0) remain = 0;
                 var midLen = (long)(mid.End - mid.Start);
-                mid.FileSz = Math.Min(remain, midLen);
+                mid.FileBackingLength = Math.Min(remain, midLen);
             }
 
             // Left tail stays in the existing VMA.
@@ -291,7 +318,7 @@ public class VMAManager
                 if (vma.File != null)
                 {
                     var leftLen = (long)(vma.End - vma.Start);
-                    vma.FileSz = Math.Min(oldFileSz, leftLen);
+                    vma.FileBackingLength = Math.Min(oldFileSz, leftLen);
                 }
             }
 
@@ -308,9 +335,10 @@ public class VMAManager
                     Flags = vma.Flags,
                     File = vma.File,
                     Offset = vma.File != null ? oldOffset + rightDiff : 0,
-                    FileSz = 0,
+                    FileBackingLength = 0,
                     Name = vma.Name,
                     MemoryObject = vma.MemoryObject,
+                    CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = oldViewPageOffset + ((uint)rightDiff / LinuxConstants.PageSize)
                 };
                 vma.MemoryObject.AddRef();
@@ -319,7 +347,7 @@ public class VMAManager
                     var remain = oldFileSz - rightDiff;
                     if (remain < 0) remain = 0;
                     var rightLen = (long)(right.End - right.Start);
-                    right.FileSz = Math.Min(remain, rightLen);
+                    right.FileBackingLength = Math.Min(remain, rightLen);
                 }
             }
 
@@ -331,7 +359,7 @@ public class VMAManager
                 vma.Perms = mid.Perms;
                 vma.File = mid.File;
                 vma.Offset = mid.Offset;
-                vma.FileSz = mid.FileSz;
+                vma.FileBackingLength = mid.FileBackingLength;
                 vma.Name = mid.Name;
                 vma.ViewPageOffset = mid.ViewPageOffset;
                 // Drop the temporary extra ref held by mid.
@@ -412,46 +440,287 @@ public class VMAManager
         var vma = FindVMA(addr);
         if (vma == null)
         {
-            Logger.LogTrace("No VMA found for address 0x{Addr:x}", addr);
+            Logger.LogWarning("No VMA found for address 0x{Addr:x}", addr);
+            // Debug: when null pointer is accessed, dump interpreter ldso struct and .dynamic section
+            if (addr == 0)
+            {
+                // Scan BSS for any non-zero data (ldso might not be at the assumed offset)
+                var bssStart = 0x565FA2B8u;
+                var bssLen = 0x565FC000u - bssStart;
+                var bssData = new byte[bssLen];
+                if (engine.CopyFromUser(bssStart, bssData))
+                {
+                    // Show first 256 bytes of BSS
+                    Logger.LogWarning("DUMP BSS @ 0x{Addr:x} first 256 bytes: {Data}",
+                        bssStart, BitConverter.ToString(bssData[..256]));
+                    // Search for the pattern 0x56555000 (expected ldso.base) in BSS
+                    var searchPattern = BitConverter.GetBytes(0x56555000u);
+                    for (int si = 0; si <= bssData.Length - 4; si += 4)
+                    {
+                        if (bssData[si] == searchPattern[0] && bssData[si + 1] == searchPattern[1] &&
+                            bssData[si + 2] == searchPattern[2] && bssData[si + 3] == searchPattern[3])
+                        {
+                            Logger.LogWarning("Found 0x56555000 at BSS offset {Off} (guest addr 0x{Addr:x})", si,
+                                bssStart + (uint)si);
+                        }
+                    }
+
+                    // Count non-zero 4-byte words
+                    int nonZero = 0;
+                    for (int si = 0; si < bssData.Length; si += 4)
+                    {
+                        if (BitConverter.ToUInt32(bssData, si) != 0)
+                        {
+                            if (nonZero < 10)
+                                Logger.LogWarning("Non-zero word at BSS+{Off} (0x{Addr:x}) = 0x{Val:X}",
+                                    si, bssStart + (uint)si, BitConverter.ToUInt32(bssData, si));
+                            nonZero++;
+                        }
+                    }
+
+                    Logger.LogWarning("BSS non-zero words: {Count} out of {Total}", nonZero, bssData.Length / 4);
+
+                    // Dump ldso struct at the found address 0x565FBB40
+                    var ldsoOff = 6280; // BSS offset of 0x565FBB40
+                    if (ldsoOff + 128 <= bssData.Length)
+                    {
+                        var baseVal = BitConverter.ToUInt32(bssData, ldsoOff);
+                        var nameVal = BitConverter.ToUInt32(bssData, ldsoOff + 4);
+                        var dynvVal = BitConverter.ToUInt32(bssData, ldsoOff + 8);
+                        var nextVal = BitConverter.ToUInt32(bssData, ldsoOff + 12);
+                        var prevVal = BitConverter.ToUInt32(bssData, ldsoOff + 16);
+                        var phdrVal = BitConverter.ToUInt32(bssData, ldsoOff + 20);
+                        var phnumVal = BitConverter.ToUInt32(bssData, ldsoOff + 24);
+                        var phentsizeVal = BitConverter.ToUInt32(bssData, ldsoOff + 28);
+                        var symsVal = BitConverter.ToUInt32(bssData, ldsoOff + 32);
+                        var hashtabVal = BitConverter.ToUInt32(bssData, ldsoOff + 36);
+                        var ghashtabVal = BitConverter.ToUInt32(bssData, ldsoOff + 40);
+                        var versymVal = BitConverter.ToUInt32(bssData, ldsoOff + 44);
+                        var stringsVal = BitConverter.ToUInt32(bssData, ldsoOff + 48);
+                        Logger.LogWarning(
+                            "ldso@0x565FBB40: base=0x{B:X} name=0x{N:X} dynv=0x{D:X} syms=0x{S:X} hashtab=0x{H:X} ghashtab=0x{G:X} strings=0x{ST:X} phdr=0x{P:X} phnum={PN} phentsize={PE}",
+                            baseVal, nameVal, dynvVal, symsVal, hashtabVal, ghashtabVal, stringsVal, phdrVal, phnumVal,
+                            phentsizeVal);
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning("DUMP BSS: CopyFromUser failed");
+                }
+
+                // Dump .dynamic section at 0x565F9EC4
+                var dynAddr = 0x565F9EC4u;
+                var dynData = new byte[128];
+                if (engine.CopyFromUser(dynAddr, dynData))
+                {
+                    Logger.LogWarning("DUMP .dynamic @ 0x{Addr:x}: first 8 entries:", dynAddr);
+                    for (int di = 0; di < 8; di++)
+                    {
+                        var tag = BitConverter.ToUInt32(dynData, di * 8);
+                        var val = BitConverter.ToUInt32(dynData, di * 8 + 4);
+                        Logger.LogWarning("  DT[{Idx}] tag=0x{Tag:X} val=0x{Val:X}", di, tag, val);
+                    }
+                }
+            }
+
             return false;
         }
 
-        if (isWrite && (vma.Perms & Protection.Write) == 0)
+        var pageStart = addr & LinuxConstants.PageMask;
+        var pageIndex = vma.ViewPageOffset + ((pageStart - vma.Start) / LinuxConstants.PageSize);
+
+
+        // ── COW path: MAP_PRIVATE file mmap ──────────────────────────────────────
+        if (vma.CowObject != null)
+        {
+            if (isWrite)
+            {
+                var existingCow = vma.CowObject.GetPage(pageIndex);
+                if (existingCow != IntPtr.Zero)
+                {
+                    // Already in CowObject.
+                    // 1. Strip Write permission immediately and Yield to flush uTLB across CPUs
+                    engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)(vma.Perms & ~Protection.Write));
+                    engine.Yield();
+
+                    // 2. Check reference count to see if we have exclusive ownership.
+                    // An exclusively mapped COW page will have a global ref count of 2:
+                    // 1 reference owned by the vma.CowObject
+                    // 1 reference owned by the ExternalPages tracking (current VMA)
+                    if (ExternalPageManager.GetRefCount(existingCow) == 2)
+                    {
+                        // We are the exclusive owner. No need to copy, just upgrade to Writable.
+                        engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
+                        return true;
+                    }
+                    else
+                    {
+                        // Page is shared (e.g. after fork). Must Copy-On-Write.
+                        var newPage = ExternalPageManager.AllocateExternalPage();
+                        if (newPage == IntPtr.Zero) return false;
+
+                        unsafe
+                        {
+                            Buffer.MemoryCopy((void*)existingCow, (void*)newPage,
+                                LinuxConstants.PageSize, LinuxConstants.PageSize);
+                        }
+
+                        // Update CowObject and adjust reference counts.
+                        // AllocateExternalPage already gives newPage RefCount=1 (owned by CowObject)
+                        vma.CowObject.SetPage(pageIndex, newPage);
+
+                        ExternalPageManager.ReleasePtr(existingCow); // Drop CowObject's old ref to existingCow
+
+                        // Remap in Engine
+                        ExternalPages.Release(pageStart); // drops old mapping: existingCow loses 1 ref
+                        if (!ExternalPages.AddMapping(pageStart, newPage, out _))
+                            return false; // newPage gains 1 ref -> Total 2
+                        if (!engine.MapExternalPage(pageStart, newPage, (byte)vma.Perms)) return false;
+                        return true;
+                    }
+                }
+                else
+                {
+                    // Not in CowObject yet. We need to copy from the inode cache.
+                    var srcPage = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
+                    {
+                        if (vma.File == null)
+                        {
+                            unsafe
+                            {
+                                new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                            }
+
+                            return true;
+                        }
+
+                        // 1. Relative coordinate (Relative to VMA Start)
+                        long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
+                        // 2. Absolute coordinate (Absolute within the File)
+                        var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
+
+                        var readLen = LinuxConstants.PageSize;
+                        if (vma.FileBackingLength > 0)
+                        {
+                            // Relative length - relative offset = valid file bytes remaining to read in this page
+                            var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
+
+                            if (remainingBackingBytes <= 0) readLen = 0;
+                            else if (remainingBackingBytes < LinuxConstants.PageSize)
+                                readLen = (int)remainingBackingBytes;
+                        }
+
+                        unsafe
+                        {
+                            Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
+                            buf.Clear(); // Critical: Ensure partial reads don't leak uninitialized memory
+                            if (readLen > 0)
+                            {
+                                vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], absoluteFileOffset);
+                            }
+                        }
+
+                        return true;
+                    }, out _);
+
+                    if (srcPage == IntPtr.Zero) return false;
+
+                    // Allocate private copy from inode cache
+                    existingCow = ExternalPageManager.AllocateExternalPage();
+                    if (existingCow == IntPtr.Zero) return false;
+
+                    unsafe
+                    {
+                        Buffer.MemoryCopy((void*)srcPage, (void*)existingCow,
+                            LinuxConstants.PageSize, LinuxConstants.PageSize);
+                    }
+
+                    // AllocateExternalPage() gives existingCow RefCount=1. 
+                    // This first reference is implicitly owned by CowObject.
+                    vma.CowObject.SetPage(pageIndex, existingCow);
+
+                    // Replace old read-only mapping with writable COW page
+                    ExternalPages.Release(pageStart); // drop old inode cache ref from VMA
+
+                    // Add mapping gives existingCow a +1 ref (Total 2)
+                    if (!ExternalPages.AddMapping(pageStart, existingCow, out _)) return false;
+                    if (!engine.MapExternalPage(pageStart, existingCow, (byte)vma.Perms)) return false; // full perms
+                    return true;
+                }
+            }
+            else
+            {
+                // Read access: prefer COW page if it exists, otherwise inode cache (read-only map)
+                var cowPage = vma.CowObject.GetPage(pageIndex);
+                if (cowPage != IntPtr.Zero)
+                {
+                    if (!ExternalPages.AddMapping(pageStart, cowPage, out var addedRef)) return false;
+                    if (!engine.MapExternalPage(pageStart, cowPage, (byte)vma.Perms))
+                    {
+                        if (addedRef) ExternalPages.Release(pageStart);
+                        return false;
+                    }
+
+                    return true;
+                }
+                // Fall through to normal read path, but map READ-ONLY
+                // (so a subsequent write will fault back here for COW)
+            }
+        }
+
+        // ── Existing logic (unchanged) ───────────────────────────────────────────
+        if (isWrite && (vma.Perms & Protection.Write) == 0 && vma.CowObject == null)
         {
             Logger.LogTrace("Write fault on read-only VMA: {VmaName} at 0x{Addr:x}", vma.Name, addr);
             return false;
         }
 
-        var pageStart = addr & LinuxConstants.PageMask;
-        var tempPerms = vma.Perms | Protection.Write;
-        var pageIndex = vma.ViewPageOffset + ((pageStart - vma.Start) / LinuxConstants.PageSize);
+        var mapPerms = (vma.CowObject != null)
+            ? (vma.Perms & ~Protection.Write) // read-only: write fault triggers COW
+            : vma.Perms;
+
+        var tempPerms = mapPerms | Protection.Write;
 
         IntPtr hostPtr;
         hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
         {
-            if (vma.File == null) return true;
-
-            long vmaOffset = pageStart - vma.Start;
-            var off = vma.Offset + vmaOffset;
-
-            var readLen = LinuxConstants.PageSize;
-            if (vma.FileSz > 0)
+            if (vma.File == null)
             {
-                var remainingFile = vma.FileSz - vmaOffset;
-                if (remainingFile <= 0)
-                    readLen = 0;
-                else if (remainingFile < LinuxConstants.PageSize)
-                    readLen = (int)remainingFile;
+                unsafe
+                {
+                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                }
+
+                return true;
             }
 
-            if (readLen <= 0) return true;
+            // For COW vmaps, pageIndex is in file-coordinate space
+            // (ViewPageOffset + page-within-vma). Compute file byte offset accordingly.
+            // 1. Relative coordinate (Relative to VMA Start)
+            long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
+            // 2. Absolute coordinate (Absolute within the File)
+            var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
+
+            var readLen = LinuxConstants.PageSize;
+            if (vma.FileBackingLength > 0)
+            {
+                // Relative length - relative offset = valid file bytes remaining to read in this page
+                var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
+
+                if (remainingBackingBytes <= 0) readLen = 0;
+                else if (remainingBackingBytes < LinuxConstants.PageSize) readLen = (int)remainingBackingBytes;
+            }
 
             unsafe
             {
                 Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-                var n = vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], off);
-                Logger.LogDebug("HandleFault: Read {N} bytes from file at offset {Off}", n, off);
+                buf.Clear(); // Zero-fill before partial read to prevent heap garbage
+                if (readLen > 0)
+                {
+                    vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], absoluteFileOffset);
+                }
             }
+
             return true;
         }, out _);
         if (hostPtr == IntPtr.Zero)
@@ -460,7 +729,7 @@ public class VMAManager
             return false;
         }
 
-        if (!ExternalPages.AddMapping(pageStart, hostPtr, out var addedRef))
+        if (!ExternalPages.AddMapping(pageStart, hostPtr, out var added))
         {
             Logger.LogError("HandleFault: page mapping mismatch for 0x{PageStart:x}", pageStart);
             return false;
@@ -468,13 +737,13 @@ public class VMAManager
 
         if (!engine.MapExternalPage(pageStart, hostPtr, (byte)tempPerms))
         {
-            if (addedRef) ExternalPages.Release(pageStart);
+            if (added) ExternalPages.Release(pageStart);
             Logger.LogError("HandleFault: MapExternalPage failed for 0x{PageStart:x}", pageStart);
             return false;
         }
 
         // Set final permissions
-        if (tempPerms != vma.Perms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
+        if (tempPerms != mapPerms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)mapPerms);
 
         return true;
     }
@@ -510,20 +779,22 @@ public class VMAManager
                 var data = new byte[LinuxConstants.PageSize];
                 if (!engine.CopyFromUser(page, data)) continue; // Skip if fault? Or handle error?
 
-                long vmaOffset = page - vma.Start;
-                var off = vma.Offset + vmaOffset;
+                // 1. Relative coordinate (Relative to VMA Start)
+                long vmaRelativeOffset = page - vma.Start;
+                // 2. Absolute coordinate (Absolute within the File)
+                var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
 
                 var writeLen = LinuxConstants.PageSize;
-                if (vma.FileSz > 0)
+                if (vma.FileBackingLength > 0)
                 {
-                    var remainingFile = vma.FileSz - vmaOffset;
-                    if (remainingFile <= 0)
+                    var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
+                    if (remainingBackingBytes <= 0)
                         writeLen = 0;
-                    else if (remainingFile < LinuxConstants.PageSize)
-                        writeLen = (int)remainingFile;
+                    else if (remainingBackingBytes < LinuxConstants.PageSize)
+                        writeLen = (int)remainingBackingBytes;
                 }
 
-                if (writeLen > 0) vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), off);
+                if (writeLen > 0) vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), absoluteFileOffset);
             }
     }
 

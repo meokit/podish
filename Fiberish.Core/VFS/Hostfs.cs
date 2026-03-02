@@ -415,8 +415,14 @@ public partial class HostInode : Inode
     {
         get
         {
-            try { return File.GetLastWriteTime(HostPath); }
-            catch { return base.MTime; }
+            try
+            {
+                return File.GetLastWriteTime(HostPath);
+            }
+            catch
+            {
+                return base.MTime;
+            }
         }
         set => base.MTime = value;
     }
@@ -425,8 +431,14 @@ public partial class HostInode : Inode
     {
         get
         {
-            try { return File.GetLastAccessTime(HostPath); }
-            catch { return base.ATime; }
+            try
+            {
+                return File.GetLastAccessTime(HostPath);
+            }
+            catch
+            {
+                return base.ATime;
+            }
         }
         set => base.ATime = value;
     }
@@ -435,8 +447,14 @@ public partial class HostInode : Inode
     {
         get
         {
-            try { return File.GetCreationTime(HostPath); }
-            catch { return base.CTime; }
+            try
+            {
+                return File.GetCreationTime(HostPath);
+            }
+            catch
+            {
+                return base.CTime;
+            }
         }
         set => base.CTime = value;
     }
@@ -632,7 +650,9 @@ public partial class HostInode : Inode
             var share = FileShare.ReadWrite;
 
             if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.ReadWrite;
-            else access = FileAccess.ReadWrite; // Default to ReadWrite at host level to support CopyUp, even if guest asked for ReadOnly
+            else
+                access = FileAccess
+                    .ReadWrite; // Default to ReadWrite at host level to support CopyUp, even if guest asked for ReadOnly
 
             var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
             var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
@@ -644,8 +664,26 @@ public partial class HostInode : Inode
             else if (hasTrunc) mode = FileMode.Truncate;
 
             // Use SafeFileHandle with RandomAccess for thread-safe I/O without locks
-            var handle = File.OpenHandle(HostPath, mode, access, share);
-            linuxFile.PrivateData = handle;
+            try
+            {
+                var handle = File.OpenHandle(HostPath, mode, access, share);
+                linuxFile.PrivateData = handle;
+            }
+            catch (UnauthorizedAccessException) when (access == FileAccess.ReadWrite &&
+                                                      (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
+                                                      (linuxFile.Flags & FileFlags.O_RDWR) == 0)
+            {
+                // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
+                var handle = File.OpenHandle(HostPath, mode, FileAccess.Read, share);
+                linuxFile.PrivateData = handle;
+            }
+            catch (IOException) when (access == FileAccess.ReadWrite && (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
+                                      (linuxFile.Flags & FileFlags.O_RDWR) == 0)
+            {
+                // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
+                var handle = File.OpenHandle(HostPath, mode, FileAccess.Read, share);
+                linuxFile.PrivateData = handle;
+            }
         }
     }
 
@@ -702,6 +740,7 @@ public partial class HostInode : Inode
                 RandomAccess.Write(handle, buffer, offset);
                 Size = (ulong)RandomAccess.GetLength(handle);
             }
+
             return buffer.Length;
         }
 
@@ -709,7 +748,8 @@ public partial class HostInode : Inode
         using var tempHandle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         if (append)
         {
-            lock (tempHandle) // Note: locking on a local 'using' handle is less effective across threads, but preserves the logic
+            lock
+                (tempHandle) // Note: locking on a local 'using' handle is less effective across threads, but preserves the logic
             {
                 var tempWriteOffset = RandomAccess.GetLength(tempHandle);
                 RandomAccess.Write(tempHandle, buffer, tempWriteOffset);
@@ -721,6 +761,7 @@ public partial class HostInode : Inode
             RandomAccess.Write(tempHandle, buffer, offset);
             Size = (ulong)RandomAccess.GetLength(tempHandle);
         }
+
         return buffer.Length;
     }
 

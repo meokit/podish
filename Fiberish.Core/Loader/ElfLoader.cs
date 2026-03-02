@@ -129,28 +129,29 @@ public class ElfLoader
 
         var platPtr = PushString("i686");
         var execFnPtr = PushString(guestPath);
-        
+
         var salt = "fiberish-salt-2024"u8;
         var guestPathBytes = Encoding.ASCII.GetBytes(guestPath);
         var hashInput = new byte[salt.Length + guestPathBytes.Length];
         salt.CopyTo(hashInput);
         guestPathBytes.CopyTo(hashInput.AsSpan(salt.Length));
-        
+
         var fullHash = System.Security.Cryptography.SHA256.HashData(hashInput);
         var randBytes = new byte[16];
         Array.Copy(fullHash, randBytes, 16);
-        
+
         var randPtr = PushBytes(randBytes);
-        Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr, BitConverter.ToString(randBytes));
+        Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr,
+            BitConverter.ToString(randBytes));
 
         // ABI: Stack pointer should be 16-byte aligned at process entry (where argc is).
         // To achieve this, we count the number of words we're about to push:
         // argc (1) + argv (ArgCount + 1) + envp (EnvCount + 1) + auxv ((AuxCount + 1) * 2)
         // Note: each auxv entry is 2 words (key, value).
-        int auxCount = 13; // We push 12 entries + AT_NULL
+        int auxCount = 14; // 13 + AT_SECURE
         int totalWords = 1 + (args.Length + 1) + (envs.Length + 1) + (auxCount * 2);
         int totalSize = totalWords * 4;
-        
+
         // We want (sp - totalSize) % 16 == 0.
         // So sp % 16 should be totalSize % 16.
         uint targetSp = sp - (uint)totalSize;
@@ -181,6 +182,7 @@ public class ElfLoader
         // AT_BASE is the interpreter's load base (0 if no interpreter)
         PushAux(LinuxConstants.AT_BASE, interpBase);
         PushAux(LinuxConstants.AT_FLAGS, 0);
+        PushAux(LinuxConstants.AT_SECURE, 0);
         // i386 baseline from native Alpine container (podman) for better libc/OpenSSL feature probing.
         PushAux(LinuxConstants.AT_HWCAP, 0x0fcbfbfd);
         PushAux(LinuxConstants.AT_HWCAP2, 0);
@@ -250,20 +252,48 @@ public class ElfLoader
 
                 var pageStart = vaddrRaw & LinuxConstants.PageMask;
                 var pageOffset = offsetRaw & LinuxConstants.PageMask;
-                var diff = vaddrRaw - pageStart;
-
-                var totalSize = sizeRaw + diff;
-                var alignedLen = (totalSize + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-
                 if (sizeRaw > 0)
                 {
                     if (dentry == null)
                         throw new FileNotFoundException($"Could not find file in VFS or Host for mapping: {fileDesc}");
 
-                    var fileSzLimit = diff + (long)segment.Size;
-                    var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount!);
-                    mm.Mmap(pageStart, alignedLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
-                        fileSzLimit, "ELF_LOAD", engine);
+                    var bssStart = vaddrRaw + (uint)segment.Size;
+                    var bssEnd = vaddrRaw + sizeRaw;
+
+                    // Map the FILE portion (which includes the overlapping BSS on the last page)
+                    var fileMapEnd = (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+                    var fileMapLen = (uint)(fileMapEnd - pageStart);
+
+                    if (fileMapLen > 0)
+                    {
+                        var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount!);
+                        var trueFileSz = (long)(dentry.Inode?.Size ?? 0);
+                        mm.Mmap(pageStart, fileMapLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
+                            trueFileSz, "ELF_LOAD", engine);
+                    }
+
+                    // Zero-fill the BSS portion on the last file page
+                    // CopyToUser already triggers HandleFault via PageFaultResolver when needed
+                    if (bssStart < fileMapEnd && bssEnd > bssStart)
+                    {
+                        var zeroLen = (int)(Math.Min(fileMapEnd, bssEnd) - bssStart);
+                        var zeroes = new byte[zeroLen];
+                        if (!engine.CopyToUser(bssStart, zeroes))
+                        {
+                            Logger.LogWarning("ElfLoader: Failed to zero-fill BSS tail at 0x{Addr:x} (len {Len})",
+                                bssStart, zeroLen);
+                        }
+                    }
+
+                    // Map the remaining full BSS pages as Anonymous
+                    if (bssEnd > fileMapEnd)
+                    {
+                        var anonLen = (uint)((bssEnd - fileMapEnd + LinuxConstants.PageOffsetMask) &
+                                             LinuxConstants.PageMask);
+                        mm.Mmap(fileMapEnd, anonLen, perms, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous,
+                            null, 0,
+                            0, "ELF_BSS", engine);
+                    }
                 }
 
                 // Track brk

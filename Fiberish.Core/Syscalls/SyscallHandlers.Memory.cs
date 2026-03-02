@@ -33,6 +33,7 @@ public partial class SyscallManager
                     return (int)sm.BrkAddr;
                 }
             }
+
             sm.BrkAddr = newBrk;
             return (int)sm.BrkAddr;
         }
@@ -104,7 +105,9 @@ public partial class SyscallManager
 
         try
         {
-            var res = sm.Mem.Mmap(addr, len, (Protection)prot, (MapFlags)flags, f, offset, len, "MMAP2", sm.Engine);
+            long trueFileSz = (long)(f?.Dentry.Inode?.Size ?? 0);
+            var res = sm.Mem.Mmap(addr, len, (Protection)prot, (MapFlags)flags, f, offset, trueFileSz, "MMAP2",
+                sm.Engine);
             return (int)res;
         }
         catch
@@ -200,6 +203,7 @@ public partial class SyscallManager
                 var unmapLen = oldLenAligned - newLenAligned;
                 sm.Mem.Munmap(unmapStart, unmapLen, sm.Engine);
             }
+
             return (int)oldAddr;
         }
 

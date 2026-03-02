@@ -38,6 +38,28 @@ public sealed class MemoryObject
         }
     }
 
+    /// <summary>
+    /// Try to get an existing page without creating it.
+    /// </summary>
+    public IntPtr GetPage(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            return _pages.TryGetValue(pageIndex, out var p) ? p : IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
+    /// Used by COW: store a private page that was just allocated.
+    /// </summary>
+    internal void SetPage(uint pageIndex, IntPtr ptr)
+    {
+        lock (_lock)
+        {
+            _pages[pageIndex] = ptr;
+        }
+    }
+
     public void Release()
     {
         List<IntPtr>? toRelease = null;
@@ -99,14 +121,27 @@ public sealed class MemoryObject
         {
             foreach (var (pageIndex, pagePtr) in _pages)
             {
-                var copy = ExternalPageManager.AllocateExternalPage();
-                if (copy == IntPtr.Zero) continue;
-                unsafe
+                if (Kind == MemoryObjectKind.Anonymous)
                 {
-                    new Span<byte>((void*)pagePtr, Fiberish.Native.LinuxConstants.PageSize)
-                        .CopyTo(new Span<byte>((void*)copy, Fiberish.Native.LinuxConstants.PageSize));
+                    // Anonymous mappings lack CowObject, so they cannot rely on HandleFault COW.
+                    // Do a deep copy here to maintain strict isolation for MAP_PRIVATE anon.
+                    var newPage = ExternalPageManager.AllocateExternalPage();
+                    if (newPage != IntPtr.Zero)
+                    {
+                        unsafe
+                        {
+                            Buffer.MemoryCopy((void*)pagePtr, (void*)newPage, 4096, 4096);
+                        }
+
+                        clone._pages[pageIndex] = newPage;
+                    }
                 }
-                clone._pages[pageIndex] = copy;
+                else
+                {
+                    // File-backed mappings rely on CowObject for copy-on-write
+                    ExternalPageManager.AddRef(pagePtr);
+                    clone._pages[pageIndex] = pagePtr;
+                }
             }
         }
 

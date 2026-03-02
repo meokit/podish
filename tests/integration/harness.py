@@ -16,6 +16,7 @@ class EmulatorCase:
     args: list[str] = field(default_factory=list)
     rootfs: Path | None = None
     expect_tokens: list[str] = field(default_factory=list)
+    reject_tokens: list[str] = field(default_factory=list)
     timeout: int = 30
     send_eof: bool = False
     allow_timeout: bool = False
@@ -187,6 +188,12 @@ def _wait_and_validate(child: pexpect.spawn, case: EmulatorCase) -> str:
         if token not in output:
             raise AssertionError(
                 f"[{case.name}] missing token {token!r}\nOutput:\n{output}"
+            )
+
+    for token in case.reject_tokens:
+        if token in output:
+            raise AssertionError(
+                f"[{case.name}] unexpected token {token!r} found in output\nOutput:\n{output}"
             )
 
     return output

@@ -181,7 +181,14 @@ public:
                 page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
             }
 
-            page_dir->l1_directory[l1_idx]->permissions[l2_idx] = perms;
+            auto& entry_perms = page_dir->l1_directory[l1_idx]->permissions[l2_idx];
+            // Preserve External flag: mmap is used to change R/W/X permissions,
+            // but must not drop the External ownership marker.
+            if (has_property(entry_perms, Property::External)) {
+                entry_perms = perms | Property::External;
+            } else {
+                entry_perms = perms;
+            }
         }
         tlb.flush();
     }

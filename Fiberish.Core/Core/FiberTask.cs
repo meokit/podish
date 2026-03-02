@@ -789,6 +789,7 @@ public class FiberTask
         CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s[36..]));
         CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s[40..]));
         CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s[44..]));
+        Logger.LogInformation("[RestoreSigContext] addr=0x{Addr:x} EAX=0x{EAX:X}", addr, CPU.RegRead(Reg.EAX));
 
         // IP, Flags, SP
         CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
@@ -832,6 +833,7 @@ public class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[36..], CPU.RegRead(Reg.EDX));
             BinaryPrimitives.WriteUInt32LittleEndian(s[40..], CPU.RegRead(Reg.ECX));
             BinaryPrimitives.WriteUInt32LittleEndian(s[44..], CPU.RegRead(Reg.EAX));
+            Logger.LogInformation("[WriteSigContext] addr=0x{Addr:x} EAX=0x{EAX:X}", addr, CPU.RegRead(Reg.EAX));
 
             BinaryPrimitives.WriteUInt32LittleEndian(s[48..], 0); // trapno
             BinaryPrimitives.WriteUInt32LittleEndian(s[52..], 0); // err
@@ -875,7 +877,16 @@ public class FiberTask
         CommonKernel.CurrentTask = this;
         try
         {
-            ProcessPendingSignals();
+            // We must NOT process pending signals if we are in the middle of waiting
+            // for an async syscall to finish its C# awaiter (or its continuation).
+            // If we deliver the signal now, it will save the PRE-SYSCALL completion EAX (SyscallNr)
+            // and then HandleAsyncSyscall will deliver it AGAIN with the POST-SYSCALL EAX (-EINTR)
+            // creating a nested sigreturn that restores SyscallNr and causes userspace to read the 
+            // wrong return value (like returning 240 instead of -4).
+            if (PendingSyscall == null && Continuation == null)
+            {
+                ProcessPendingSignals();
+            }
 
             // ── Phase 1: Resume a stored continuation ────────────────────────────────
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
@@ -1032,9 +1043,7 @@ public class FiberTask
             _ => $"Vector {vector}"
         };
 
-        // Log the fault for transparency, but at Debug/Trace level if it's expected to be handled?
-        // Actually, hardware faults are serious, so Information level is a good middle ground.
-        Logger.LogInformation("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
+        Logger.LogWarning("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
             faultName, CPU.Eip, sig);
 
         if (vector == 6)
@@ -1370,7 +1379,8 @@ public class FiberTask
         if (!CPU.CopyFromUser(head, entryBuf)) return;
         var entry = BinaryPrimitives.ReadUInt32LittleEndian(entryBuf);
 
-        Logger.LogTrace("[ExitRobustList] FutexOffset={Offset} PendingObj={Pending:X8} FirstEntry={Entry:X8}", futexOffset, pendingObj, entry);
+        Logger.LogTrace("[ExitRobustList] FutexOffset={Offset} PendingObj={Pending:X8} FirstEntry={Entry:X8}",
+            futexOffset, pendingObj, entry);
 
         var sm = Process.Syscalls;
 
@@ -1380,7 +1390,7 @@ public class FiberTask
             var rc = CPU.CopyFromUser(entry, nextBuf);
             if (!rc) break; // Error reading next pointer
             var nextEntry = BinaryPrimitives.ReadUInt32LittleEndian(nextBuf);
-            
+
             if (entry != pendingObj)
             {
                 HandleFutexDeath(sm, (uint)(entry + futexOffset), false);

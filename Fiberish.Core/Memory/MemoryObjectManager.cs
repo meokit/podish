@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Fiberish.VFS;
+
 namespace Fiberish.Memory;
 
 public sealed class MemoryObjectManager
@@ -6,6 +9,27 @@ public sealed class MemoryObjectManager
     private readonly object _lock = new();
 
     public static MemoryObjectManager Instance { get; } = new();
+
+    /// <summary>
+    ///     Get or create the inode's global page cache MemoryObject.
+    ///     Reuses CreateOrOpenNamed (same mechanism as SysV shm).
+    /// </summary>
+    public MemoryObject GetOrCreateInodePageCache(Inode inode)
+    {
+        var key = $"pagecache:{RuntimeHelpers.GetHashCode(inode.SuperBlock)}:{inode.Ino}";
+        var obj = CreateOrOpenNamed(key, () =>
+            new MemoryObject(MemoryObjectKind.File, null, 0, 0, true), out _);
+        inode.PageCache ??= obj;
+        return obj;
+    }
+
+    public void ReleaseInodePageCache(Inode inode)
+    {
+        if (inode.PageCache == null) return;
+        var key = $"pagecache:{RuntimeHelpers.GetHashCode(inode.SuperBlock)}:{inode.Ino}";
+        CloseNamed(key); // decrements ref; freed when count hits 0
+        inode.PageCache = null;
+    }
 
     public MemoryObject CreateAnonymous(bool shared)
     {
