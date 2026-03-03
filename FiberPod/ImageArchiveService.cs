@@ -1,6 +1,8 @@
 using System.Formats.Tar;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Fiberish.VFS;
 
 namespace FiberPod;
@@ -34,48 +36,7 @@ internal sealed class ImageArchiveService
         var tmp = outputArchive + ".tmp";
         if (File.Exists(tmp))
             File.Delete(tmp);
-
-        var manifest = new SaveArchiveManifest(new List<SaveArchiveImage>());
-        using (var fs = File.Create(tmp))
-        using (var writer = new TarWriter(fs, TarEntryFormat.Pax, leaveOpen: false))
-        {
-            var seenBlobs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var seenIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var imageRef in imageReferences)
-            {
-                var (storeDir, safeName) = ResolveStoreDirForImage(imageRef);
-                var imagePath = Path.Combine(storeDir, "image.json");
-                if (!File.Exists(imagePath))
-                    throw new FileNotFoundException($"image metadata not found: {imagePath}");
-
-                var storedImage = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath))
-                                  ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
-                manifest.Images.Add(new SaveArchiveImage(imageRef, safeName));
-
-                writer.WriteEntry(imagePath, $"images/{safeName}/image.json");
-                foreach (var layer in storedImage.Layers)
-                {
-                    if (!File.Exists(layer.BlobPath))
-                        throw new FileNotFoundException($"layer blob missing: {layer.BlobPath}");
-                    if (!File.Exists(layer.IndexPath))
-                        throw new FileNotFoundException($"layer index missing: {layer.IndexPath}");
-
-                    var digestHex = DigestHex(layer.Digest);
-                    if (seenBlobs.Add(digestHex))
-                        writer.WriteEntry(layer.BlobPath, $"blobs/{digestHex}.tar");
-                    if (seenIndexes.Add(digestHex))
-                        writer.WriteEntry(layer.IndexPath, $"indexes/{digestHex}.json");
-                }
-            }
-
-            var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
-            var manifestEntry = new PaxTarEntry(TarEntryType.RegularFile, "manifest.json")
-            {
-                DataStream = new MemoryStream(manifestBytes, writable: false)
-            };
-            writer.WriteEntry(manifestEntry);
-        }
-
+        SaveOciArchive(tmp, imageReferences);
         File.Move(tmp, outputArchive, overwrite: true);
     }
 
@@ -89,61 +50,186 @@ internal sealed class ImageArchiveService
         try
         {
             ExtractTarToDirectory(inputArchive, extractedRoot);
-            var imagesRoot = Path.Combine(extractedRoot, "images");
-            if (!Directory.Exists(imagesRoot))
-                throw new InvalidOperationException("archive missing images/ directory");
+            if (!File.Exists(Path.Combine(extractedRoot, "oci-layout")) ||
+                !File.Exists(Path.Combine(extractedRoot, "index.json")))
+                throw new InvalidOperationException("unsupported archive format: expected OCI archive layout");
 
-            var loaded = new List<string>();
-            foreach (var imageDir in Directory.EnumerateDirectories(imagesRoot))
-            {
-                var safeName = Path.GetFileName(imageDir);
-                var imagePath = Path.Combine(imageDir, "image.json");
-                if (!File.Exists(imagePath))
-                    continue;
-
-                var original = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath))
-                               ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
-                var targetStore = Path.Combine(_ociImagesDir, safeName);
-                var targetBlobs = Path.Combine(targetStore, "blobs");
-                var targetIndexes = Path.Combine(targetStore, "indexes");
-                Directory.CreateDirectory(targetBlobs);
-                Directory.CreateDirectory(targetIndexes);
-
-                var rewrittenLayers = new List<OciStoredLayer>(original.Layers.Count);
-                foreach (var layer in original.Layers)
-                {
-                    var digestHex = DigestHex(layer.Digest);
-                    var srcBlob = Path.Combine(extractedRoot, "blobs", $"{digestHex}.tar");
-                    var srcIndex = Path.Combine(extractedRoot, "indexes", $"{digestHex}.json");
-                    if (!File.Exists(srcBlob))
-                        throw new InvalidOperationException($"archive missing blob for digest {layer.Digest}");
-                    if (!File.Exists(srcIndex))
-                        throw new InvalidOperationException($"archive missing index for digest {layer.Digest}");
-
-                    var dstBlob = Path.Combine(targetBlobs, $"{digestHex}.tar");
-                    var dstIndex = Path.Combine(targetIndexes, $"{digestHex}.json");
-                    File.Copy(srcBlob, dstBlob, overwrite: true);
-                    File.Copy(srcIndex, dstIndex, overwrite: true);
-                    rewrittenLayers.Add(layer with { BlobPath = dstBlob, IndexPath = dstIndex });
-                }
-
-                var rewritten = original with
-                {
-                    StoreDirectory = targetStore,
-                    Layers = rewrittenLayers
-                };
-                Directory.CreateDirectory(targetStore);
-                File.WriteAllText(Path.Combine(targetStore, "image.json"),
-                    JsonSerializer.Serialize(rewritten, JsonOptions));
-                loaded.Add(rewritten.ImageReference);
-            }
-
-            return loaded;
+            return LoadOciArchiveExtracted(extractedRoot);
         }
         finally
         {
             try { Directory.Delete(extractedRoot, recursive: true); } catch { }
         }
+    }
+
+    private void SaveOciArchive(string archivePath, IReadOnlyList<string> imageReferences)
+    {
+        var layoutRoot = Path.Combine(Path.GetTempPath(), $"fiberpod-oci-layout-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(layoutRoot);
+        try
+        {
+            var blobsRoot = Path.Combine(layoutRoot, "blobs", "sha256");
+            Directory.CreateDirectory(blobsRoot);
+
+            var indexDescriptors = new List<OciDescriptor>();
+            var writtenBlobs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var imageRef in imageReferences)
+            {
+                var (storeDir, _) = ResolveStoreDirForImage(imageRef);
+                var imagePath = Path.Combine(storeDir, "image.json");
+                if (!File.Exists(imagePath))
+                    throw new FileNotFoundException($"image metadata not found: {imagePath}");
+                var storedImage = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath))
+                                  ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
+
+                var layerDescriptors = new List<OciDescriptor>(storedImage.Layers.Count);
+                var diffIds = new List<string>(storedImage.Layers.Count);
+                foreach (var layer in storedImage.Layers)
+                {
+                    if (!File.Exists(layer.BlobPath))
+                        throw new FileNotFoundException($"layer blob missing: {layer.BlobPath}");
+
+                    var layerHex = Sha256HexOfFile(layer.BlobPath);
+                    var layerDigest = "sha256:" + layerHex;
+                    var dstBlob = Path.Combine(blobsRoot, layerHex);
+                    if (writtenBlobs.Add(layerHex))
+                        File.Copy(layer.BlobPath, dstBlob, overwrite: true);
+
+                    var size = new FileInfo(layer.BlobPath).Length;
+                    layerDescriptors.Add(new OciDescriptor(
+                        "application/vnd.oci.image.layer.v1.tar",
+                        layerDigest,
+                        size));
+                    diffIds.Add(layerDigest);
+                }
+
+                var config = new OciImageConfig(
+                    Architecture: "386",
+                    Os: "linux",
+                    Rootfs: new OciRootFs("layers", diffIds),
+                    History: diffIds.Select(_ => new OciHistory("fiberpod save")).ToList());
+                var configBytes = JsonSerializer.SerializeToUtf8Bytes(config, JsonOptions);
+                var configHex = Sha256Hex(configBytes);
+                var configDigest = "sha256:" + configHex;
+                var configPath = Path.Combine(blobsRoot, configHex);
+                if (writtenBlobs.Add(configHex))
+                    File.WriteAllBytes(configPath, configBytes);
+
+                var manifest = new OciManifest(
+                    SchemaVersion: 2,
+                    MediaType: "application/vnd.oci.image.manifest.v1+json",
+                    Config: new OciDescriptor("application/vnd.oci.image.config.v1+json", configDigest,
+                        configBytes.LongLength),
+                    Layers: layerDescriptors);
+                var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+                var manifestHex = Sha256Hex(manifestBytes);
+                var manifestDigest = "sha256:" + manifestHex;
+                var manifestPath = Path.Combine(blobsRoot, manifestHex);
+                if (writtenBlobs.Add(manifestHex))
+                    File.WriteAllBytes(manifestPath, manifestBytes);
+
+                indexDescriptors.Add(new OciDescriptor(
+                    "application/vnd.oci.image.manifest.v1+json",
+                    manifestDigest,
+                    manifestBytes.LongLength,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["org.opencontainers.image.ref.name"] = imageRef
+                    }));
+            }
+
+            var layout = JsonSerializer.SerializeToUtf8Bytes(new OciLayout("1.0.0"), JsonOptions);
+            File.WriteAllBytes(Path.Combine(layoutRoot, "oci-layout"), layout);
+            var index = JsonSerializer.SerializeToUtf8Bytes(new OciIndex(2, indexDescriptors), JsonOptions);
+            File.WriteAllBytes(Path.Combine(layoutRoot, "index.json"), index);
+
+            CreateTarFromDirectory(layoutRoot, archivePath);
+        }
+        finally
+        {
+            try { Directory.Delete(layoutRoot, recursive: true); } catch { }
+        }
+    }
+
+    private IReadOnlyList<string> LoadOciArchiveExtracted(string extractedRoot)
+    {
+        var indexPath = Path.Combine(extractedRoot, "index.json");
+        var index = JsonSerializer.Deserialize<OciIndex>(File.ReadAllText(indexPath))
+                    ?? throw new InvalidOperationException("invalid OCI index.json");
+        if (index.Manifests == null || index.Manifests.Count == 0)
+            throw new InvalidOperationException("OCI archive has no manifests");
+
+        var loaded = new List<string>();
+        foreach (var manifestDesc in index.Manifests)
+        {
+            var refName = manifestDesc.Annotations != null &&
+                          manifestDesc.Annotations.TryGetValue("org.opencontainers.image.ref.name", out var n)
+                ? n
+                : $"imported:{DigestHex(manifestDesc.Digest)[..12]}";
+
+            var manifestBlobPath = OciBlobPath(extractedRoot, manifestDesc.Digest);
+            var manifest = JsonSerializer.Deserialize<OciManifest>(File.ReadAllText(manifestBlobPath))
+                           ?? throw new InvalidOperationException($"invalid manifest blob {manifestDesc.Digest}");
+
+            var safeName = ToSafeImageName(refName);
+            var storeDir = Path.Combine(_ociImagesDir, safeName);
+            var blobsDir = Path.Combine(storeDir, "blobs");
+            var indexesDir = Path.Combine(storeDir, "indexes");
+            Directory.CreateDirectory(blobsDir);
+            Directory.CreateDirectory(indexesDir);
+
+            var layers = new List<OciStoredLayer>();
+            foreach (var layerDesc in manifest.Layers)
+            {
+                var srcLayerBlob = OciBlobPath(extractedRoot, layerDesc.Digest);
+                var tarPath = EnsureUncompressedTar(srcLayerBlob);
+                try
+                {
+                    var tarHex = Sha256HexOfFile(tarPath);
+                    var tarDigest = "sha256:" + tarHex;
+                    var dstBlob = Path.Combine(blobsDir, $"{tarHex}.tar");
+                    File.Copy(tarPath, dstBlob, overwrite: true);
+
+                    var indexFile = Path.Combine(indexesDir, $"{tarHex}.json");
+                    using (var tarStream = File.OpenRead(dstBlob))
+                    {
+                        var layerIndex = OciLayerIndexBuilder.BuildFromTar(tarStream, tarDigest);
+                        var persistedEntries = layerIndex.Entries.Values
+                            .Select(e => e with { InlineData = null })
+                            .ToList();
+                        File.WriteAllText(indexFile, JsonSerializer.Serialize(persistedEntries, JsonOptions));
+                    }
+
+                    layers.Add(new OciStoredLayer(
+                        tarDigest,
+                        "application/vnd.oci.image.layer.v1.tar",
+                        new FileInfo(dstBlob).Length,
+                        dstBlob,
+                        indexFile));
+                }
+                finally
+                {
+                    if (tarPath != srcLayerBlob && File.Exists(tarPath))
+                    {
+                        try { File.Delete(tarPath); } catch { }
+                    }
+                }
+            }
+
+            var (registry, repository, tag) = ParseImageReference(refName);
+            var stored = new OciStoredImage(
+                refName,
+                registry,
+                repository,
+                tag,
+                manifestDesc.Digest,
+                storeDir,
+                layers);
+            File.WriteAllText(Path.Combine(storeDir, "image.json"), JsonSerializer.Serialize(stored, JsonOptions));
+            loaded.Add(refName);
+        }
+
+        return loaded;
     }
 
     public string Import(string sourceTar, string imageReference)
@@ -492,6 +578,57 @@ internal sealed class ImageArchiveService
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
+    private static string Sha256Hex(byte[] data)
+    {
+        var hash = SHA256.HashData(data);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string OciBlobPath(string extractedRoot, string digest)
+    {
+        var hex = DigestHex(digest);
+        var p = Path.Combine(extractedRoot, "blobs", "sha256", hex);
+        if (!File.Exists(p))
+            throw new FileNotFoundException($"missing OCI blob {digest}");
+        return p;
+    }
+
+    private static string EnsureUncompressedTar(string blobPath)
+    {
+        using var fs = File.OpenRead(blobPath);
+        Span<byte> magic = stackalloc byte[2];
+        if (fs.Read(magic) == 2 && magic[0] == 0x1F && magic[1] == 0x8B)
+        {
+            fs.Position = 0;
+            var tmpTar = Path.Combine(Path.GetTempPath(), $"fiberpod-layer-{Guid.NewGuid():N}.tar");
+            using var gzip = new GZipStream(fs, CompressionMode.Decompress, leaveOpen: true);
+            using var outFile = File.Create(tmpTar);
+            gzip.CopyTo(outFile);
+            return tmpTar;
+        }
+
+        return blobPath;
+    }
+
+    private static void CreateTarFromDirectory(string sourceDir, string tarPath)
+    {
+        using var fs = File.Create(tarPath);
+        using var writer = new TarWriter(fs, TarEntryFormat.Pax, leaveOpen: false);
+        foreach (var path in Directory.EnumerateFileSystemEntries(sourceDir, "*", SearchOption.AllDirectories)
+                     .OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var rel = Path.GetRelativePath(sourceDir, path).Replace('\\', '/');
+            if (Directory.Exists(path))
+            {
+                writer.WriteEntry(new PaxTarEntry(TarEntryType.Directory, rel.TrimEnd('/') + "/"));
+            }
+            else if (File.Exists(path))
+            {
+                writer.WriteEntry(path, rel);
+            }
+        }
+    }
+
     private static (string Registry, string Repository, string Tag) ParseImageReference(string imageReference)
     {
         var firstSlashIndex = imageReference.IndexOf('/');
@@ -601,7 +738,8 @@ internal sealed class ImageArchiveService
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        WriteIndented = true
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
     };
 
     private static void EnsureFileSystemsRegistered()
@@ -695,5 +833,46 @@ internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisp
     }
 }
 
-internal sealed record SaveArchiveManifest(List<SaveArchiveImage> Images);
-internal sealed record SaveArchiveImage(string ImageReference, string SafeName);
+internal sealed record OciLayout(
+    [property: JsonPropertyName("imageLayoutVersion")]
+    string ImageLayoutVersion);
+internal sealed record OciIndex(
+    [property: JsonPropertyName("schemaVersion")]
+    int SchemaVersion,
+    [property: JsonPropertyName("manifests")]
+    List<OciDescriptor> Manifests);
+internal sealed record OciDescriptor(
+    [property: JsonPropertyName("mediaType")]
+    string MediaType,
+    [property: JsonPropertyName("digest")]
+    string Digest,
+    [property: JsonPropertyName("size")]
+    long Size,
+    [property: JsonPropertyName("annotations")]
+    Dictionary<string, string>? Annotations = null);
+internal sealed record OciManifest(
+    [property: JsonPropertyName("schemaVersion")]
+    int SchemaVersion,
+    [property: JsonPropertyName("mediaType")]
+    string MediaType,
+    [property: JsonPropertyName("config")]
+    OciDescriptor Config,
+    [property: JsonPropertyName("layers")]
+    List<OciDescriptor> Layers);
+internal sealed record OciImageConfig(
+    [property: JsonPropertyName("architecture")]
+    string Architecture,
+    [property: JsonPropertyName("os")]
+    string Os,
+    [property: JsonPropertyName("rootfs")]
+    OciRootFs Rootfs,
+    [property: JsonPropertyName("history")]
+    List<OciHistory> History);
+internal sealed record OciRootFs(
+    [property: JsonPropertyName("type")]
+    string Type,
+    [property: JsonPropertyName("diff_ids")]
+    List<string> DiffIds);
+internal sealed record OciHistory(
+    [property: JsonPropertyName("created_by")]
+    string CreatedBy);

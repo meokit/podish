@@ -39,6 +39,10 @@ def test_save_load_roundtrip_contract(project_root: Path, fiberpod_dll: str, alp
     )
     assert save_res.returncode == 0, f"save failed\nstdout:\n{save_res.stdout}\nstderr:\n{save_res.stderr}"
     assert archive.exists() and archive.stat().st_size > 0, "save did not produce archive"
+    with tarfile.open(archive, "r") as tf:
+        names = set(tf.getnames())
+    assert "oci-layout" in names, "save archive is not OCI layout"
+    assert "index.json" in names, "save archive missing OCI index.json"
 
     safe_image = "docker.io_i386_alpine_latest"
     store_dir = project_root / ".fiberpod" / "oci" / "images" / safe_image
