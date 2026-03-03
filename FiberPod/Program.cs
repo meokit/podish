@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Fiberish.Core;
 using Fiberish.Core.VFS;
 using Fiberish.Core.VFS.TTY;
@@ -64,6 +65,10 @@ internal class Program
         {
             AllowMultipleArgumentsPerToken = false
         };
+        var containerLogDriverOption = new Option<string>(
+            new[] { "--log-driver" },
+            () => "json-file",
+            "Container log driver (json-file|none)");
         var imageArgument = new Argument<string>("image", "Image name (or path to rootfs)");
         var exeArgument =
             new Argument<string>("command", () => "", "Command to execute (optional if image has entrypoint)");
@@ -76,6 +81,7 @@ internal class Program
         runCommand.AddOption(noOverlayOption);
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
+        runCommand.AddOption(containerLogDriverOption);
         runCommand.AddArgument(imageArgument);
         runCommand.AddArgument(exeArgument);
         runCommand.AddArgument(exeArgsArgument);
@@ -89,6 +95,7 @@ internal class Program
             var noOverlay = context.ParseResult.GetValueForOption(noOverlayOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
+            var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
             var image = context.ParseResult.GetValueForArgument(imageArgument);
             var exe = context.ParseResult.GetValueForArgument(exeArgument);
             var exeArgs = context.ParseResult.GetValueForArgument(exeArgsArgument) ?? Array.Empty<string>();
@@ -109,7 +116,19 @@ internal class Program
                 logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
             }
 
+            if (!ContainerLogDriverParser.TryParse(containerLogDriverRaw, out var containerLogDriver))
+            {
+                Console.Error.WriteLine($"[FiberPod] invalid --log-driver value: {containerLogDriverRaw}. Use json-file|none");
+                context.ExitCode = 125;
+                return;
+            }
+
             SetupLogging(logLevel, logFile);
+
+            var containerId = Guid.NewGuid().ToString("N")[..12];
+            var containerDir = Path.Combine(containersDir, containerId);
+            Directory.CreateDirectory(containerDir);
+            var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
 
             var rootfsPath = image;
             var safeImageName = image.Replace("/", "_").Replace(":", "_");
@@ -145,7 +164,24 @@ internal class Program
                 Logger.LogInformation("Env: {Envs}", string.Join(", ", guestEnvs));
             }
 
-            var exitCode = await RunContainer(rootfsPath, exe, exeArgs, volumes, guestEnvs, dnsServers, interactive && tty, strace, !noOverlay, containersDir);
+            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, image));
+
+            var exitCode = await RunContainer(
+                rootfsPath,
+                exe,
+                exeArgs,
+                volumes,
+                guestEnvs,
+                dnsServers,
+                interactive && tty,
+                strace,
+                !noOverlay,
+                containersDir,
+                containerId,
+                image,
+                containerDir,
+                containerLogDriver,
+                eventStore);
             context.ExitCode = exitCode;
         });
 
@@ -188,8 +224,80 @@ internal class Program
             }
         });
 
+        // --- Logs Command ---
+        var logsCommand = new Command("logs", "Fetch container logs");
+        var logsContainerArgument = new Argument<string>("container", "Container ID");
+        var logsTimestampsOption = new Option<bool>(new[] { "--timestamps" }, "Show timestamps");
+        logsCommand.AddArgument(logsContainerArgument);
+        logsCommand.AddOption(logsTimestampsOption);
+        logsCommand.SetHandler((context) =>
+        {
+            var containerId = context.ParseResult.GetValueForArgument(logsContainerArgument);
+            var showTimestamps = context.ParseResult.GetValueForOption(logsTimestampsOption);
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var logPath = Path.Combine(fiberpodDir, "containers", containerId, "ctr.log");
+            if (!File.Exists(logPath))
+            {
+                Console.Error.WriteLine($"[FiberPod] log file not found for container {containerId}");
+                context.ExitCode = 1;
+                return;
+            }
+
+            foreach (var line in File.ReadLines(logPath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                ContainerLogEntry? entry;
+                try
+                {
+                    entry = JsonSerializer.Deserialize<ContainerLogEntry>(line);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (entry == null) continue;
+
+                if (showTimestamps)
+                    Console.Out.Write($"{entry.Time:O} ");
+                Console.Out.Write(entry.Log);
+            }
+        });
+
+        // --- Events Command ---
+        var eventsCommand = new Command("events", "Show container runtime events");
+        var eventsFormatOption = new Option<string>(
+            new[] { "--format" },
+            () => "default",
+            "Output format (default|json)");
+        eventsCommand.AddOption(eventsFormatOption);
+        eventsCommand.SetHandler((context) =>
+        {
+            var format = context.ParseResult.GetValueForOption(eventsFormatOption) ?? "default";
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var store = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
+            foreach (var evt in store.ReadAll())
+            {
+                if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(evt));
+                    continue;
+                }
+
+                var exitPart = evt.ExitCode.HasValue ? $" exit={evt.ExitCode.Value}" : string.Empty;
+                var imagePart = !string.IsNullOrEmpty(evt.Image) ? $" image={evt.Image}" : string.Empty;
+                var msgPart = !string.IsNullOrEmpty(evt.Message) ? $" msg={evt.Message}" : string.Empty;
+                Console.WriteLine($"{evt.Time:O} {evt.Type} {evt.ContainerId}{imagePart}{exitPart}{msgPart}");
+            }
+        });
+
         rootCommand.AddCommand(runCommand);
         rootCommand.AddCommand(pullCommand);
+        rootCommand.AddCommand(logsCommand);
+        rootCommand.AddCommand(eventsCommand);
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -215,7 +323,8 @@ internal class Program
     }
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir)
+        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
+        string containerId, string image, string containerDir, ContainerLogDriver logDriver, ContainerEventStore eventStore)
     {
         await Task.CompletedTask; // TODO: remove async?
 
@@ -234,7 +343,8 @@ internal class Program
         PosixSignalRegistration? sigwinch = null;
         var isInteractive = useTty && !Console.IsInputRedirected;
 
-        var driver = new ConsoleTtyDriver();
+        using var logSink = CreateContainerLogSink(logDriver, containerDir);
+        var driver = new ConsoleTtyDriver(logSink);
         var broadcaster = new SchedulerSignalBroadcaster(scheduler);
         ttyDiag = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
         driver.BindTty(ttyDiag);
@@ -284,6 +394,8 @@ internal class Program
             if (!Directory.Exists(flattenedRootfsPath))
             {
                 Console.Error.WriteLine($"[FiberPod Error] RootFS path not found: {flattenedRootfsPath}");
+                eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
+                    "rootfs not found"));
                 return 1;
             }
 
@@ -361,18 +473,23 @@ internal class Program
 
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs, finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!);
+            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", containerId, image));
 
             // 5. Run Scheduler
             scheduler.Run();
 
             // Cleanup temp rootfs happens in the loop above
 
+            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image,
+                mainTask.ExitStatus));
             return mainTask.ExitStatus;
         }
         catch (Exception ex)
         {
             Logger.LogCritical(ex, "Critical Error during container emulation");
             Console.Error.WriteLine($"[FiberPod] Error: {ex.Message}");
+            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
+                ex.Message));
             return 1;
         }
         finally
@@ -550,17 +667,34 @@ internal class Program
         }
     }
 
+    private static IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir)
+    {
+        return driver switch
+        {
+            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log")),
+            ContainerLogDriver.None => new NoneContainerLogSink(),
+            _ => new NoneContainerLogSink()
+        };
+    }
+
     private class ConsoleTtyDriver : ITtyDriver
     {
         private readonly Stream _stderr = Console.OpenStandardError();
         private readonly Stream _stdout = Console.OpenStandardOutput();
+        private readonly IContainerLogSink _containerLogSink;
         private TtyDiscipline? _tty;
+
+        public ConsoleTtyDriver(IContainerLogSink containerLogSink)
+        {
+            _containerLogSink = containerLogSink;
+        }
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {
             var stream = kind == TtyEndpointKind.Stderr ? _stderr : _stdout;
             stream.Write(buffer);
             stream.Flush();
+            _containerLogSink.Write(kind, buffer);
             return buffer.Length;
         }
 
