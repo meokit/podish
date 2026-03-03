@@ -30,6 +30,7 @@ def _fiberpod_cmd(
     args: Iterable[str],
     use_tty: bool = False,
     volumes: list[tuple[str, str]] | None = None,
+    use_rootfs: bool = False,
 ) -> tuple[str, list[str]]:
     """Build command for FiberPod.
 
@@ -57,8 +58,11 @@ def _fiberpod_cmd(
     if use_tty:
         cmd.extend(["-i", "-t"])
 
-    # Add image/rootfs
-    cmd.append(image_or_rootfs)
+    # Add image or podman-compatible --rootfs
+    if use_rootfs:
+        cmd.extend(["--rootfs", image_or_rootfs])
+    else:
+        cmd.append(image_or_rootfs)
 
     # Force System.CommandLine to stop parsing options so it doesn't strip '-'
     # from guest arguments like '-aes-128-cbc'.
@@ -131,6 +135,7 @@ def _run_case_fiberpod(
         args=case.args,
         use_tty=case.use_tty,
         volumes=volumes,
+        use_rootfs=case.rootfs is not None,
     )
 
     # Keep the host's PATH so pexpect can find 'dotnet', but strip out
@@ -262,6 +267,7 @@ def run_fiberpod_command(
     command: str,
     args: list[str] | None = None,
     volumes: list[tuple[str, str]] | None = None,
+    use_rootfs: bool = False,
     timeout: int = 60,
     send_eof: bool = False,
     allow_timeout: bool = False,
@@ -276,6 +282,7 @@ def run_fiberpod_command(
         args=args or [],
         use_tty=False,
         volumes=volumes,
+        use_rootfs=use_rootfs,
     )
 
     print(f"\n[Harness] Running command: {' '.join(cmd)}")

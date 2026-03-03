@@ -12,6 +12,15 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    public sealed class RootMountOptions
+    {
+        public string Source { get; init; } = "none";
+        public string FsType { get; init; } = "none";
+        public string Options { get; init; } = "rw";
+        public uint? Flags { get; init; }
+        public Dentry? Root { get; init; }
+    }
+
     public const uint MountFlagMask = LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID |
                                       LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
 
@@ -47,6 +56,7 @@ public partial class SyscallManager
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", FileSystem = new LayerFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", FileSystem = new SilkFileSystem() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new ProcFileSystem() });
 
         PtyManager = new PtyManager(Logger);
@@ -187,35 +197,75 @@ public partial class SyscallManager
         RegisterMount(RootMount, null, root);
     }
 
+    public Mount CreateRootMount(SuperBlock sb, RootMountOptions? options = null)
+    {
+        options ??= new RootMountOptions();
+        var flags = options.Flags ?? ParseMountFlagsFromOptions(options.Options);
+        var mountRoot = options.Root ?? sb.Root;
+        var mount = new Mount(sb, mountRoot)
+        {
+            Flags = flags,
+            Source = options.Source,
+            FsType = options.FsType,
+            Options = options.Options
+        };
+        return mount;
+    }
+
+    public void MountRoot(Mount rootMount)
+    {
+        if (rootMount == null) throw new ArgumentNullException(nameof(rootMount));
+        InitializeRoot(rootMount.Root, rootMount);
+    }
+
+    public void MountRoot(SuperBlock sb, RootMountOptions? options = null)
+    {
+        MountRoot(CreateRootMount(sb, options));
+    }
+
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
-        var mountFlags = ParseMountFlagsFromOptions(options);
-        var fsCtx = BuildFsContextFromLegacyMount("hostfs", hostPath, mountFlags, options);
-        var mountRc = CreateDetachedMountFromFsContext(fsCtx, 0, out var mount, (int)mountFlags);
-        if (mountRc != 0 || mount == null)
-            throw new IOException($"Failed to create root hostfs mount: rc={mountRc}");
-
-        mount.Options = options;
-        InitializeRoot(mount.Root, mount);
+        var hostFsType = FileSystemRegistry.Get("hostfs")!;
+        var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostPath, null);
+        MountRoot(sb, new RootMountOptions
+        {
+            Source = hostPath,
+            FsType = "hostfs",
+            Options = options
+        });
     }
 
     public void MountRootOverlay(string hostRoot, string upperName = "overlay_upper",
         string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
     {
-        var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        var overlayFsType = FileSystemRegistry.Get("overlay")!;
+        MountRootOverlayWithUpper(hostRoot, "tmpfs", upperName, options);
+    }
 
+    public void MountRootOverlayWithUpper(string hostRoot, string upperFsType, string upperSource,
+        string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
+    {
+        var hostFsType = FileSystemRegistry.Get("hostfs")!;
         var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
-        var upperSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, upperName, null);
+        MountRootOverlayWithLower(lowerSb, upperFsType, upperSource, options);
+    }
+
+    public void MountRootOverlayWithLower(SuperBlock lowerSb, string upperFsType, string upperSource,
+        string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
+    {
+        var upperType = FileSystemRegistry.Get(upperFsType) ??
+                        throw new Exception($"Upper filesystem not registered: {upperFsType}");
+        var overlayFsType = FileSystemRegistry.Get("overlay")!;
+        var upperSb = upperType.FileSystem.ReadSuper(upperType, 0, upperSource, null);
 
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
         var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
 
-        var mountFlags = ParseMountFlagsFromOptions(options);
-        var mount = CreateDetachedMount(overlaySb, "overlay", "overlay", mountFlags);
-        mount.Options = options;
-        InitializeRoot(overlaySb.Root, mount);
+        MountRoot(overlaySb, new RootMountOptions
+        {
+            Source = "overlay",
+            FsType = "overlay",
+            Options = options
+        });
     }
 
     public void MountStandardDev(TtyDiscipline? tty = null, bool ensureMountPoint = true)

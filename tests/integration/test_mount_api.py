@@ -67,16 +67,6 @@ class TestFileBindMount:
         import pexpect
         import tempfile
 
-        # Use alpine rootfs which has /bin/ash.
-        # Note: /bin/ash might be an absolute symlink to /bin/busybox, which
-        # will fail `ash.exists()` on the host. Use `lstat` to check if the link itself exists.
-        rootfs = Path(alpine_image)
-        ash = rootfs / "bin/ash"
-        try:
-            ash.lstat()
-        except FileNotFoundError:
-            pytest.skip(f"Alpine rootfs not found: {rootfs}")
-
         # Create a temp file with known content
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write("BIND_MOUNT_TEST_CONTENT\n")
@@ -88,7 +78,7 @@ class TestFileBindMount:
                 fiberpod_dll,
                 "run",
                 "-v", f"{temp_file}:/tmp/test_bind.txt",
-                str(rootfs),
+                alpine_image,
                 "/bin/cat",
                 "/tmp/test_bind.txt",
             ]

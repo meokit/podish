@@ -14,6 +14,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.X86", "Fiberish.X8
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FiberPod", "FiberPod\FiberPod.csproj", "{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.SilkFS", "Fiberish.SilkFS\Fiberish.SilkFS.csproj", "{10945492-3C8C-4A82-A384-4C3B7AB70606}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.SilkFS.Tests", "Fiberish.SilkFS.Tests\Fiberish.SilkFS.Tests.csproj", "{5B279E7A-5366-4425-AF3D-D235D61A7D53}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -40,6 +44,14 @@ Global
 		{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{10945492-3C8C-4A82-A384-4C3B7AB70606}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{10945492-3C8C-4A82-A384-4C3B7AB70606}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{10945492-3C8C-4A82-A384-4C3B7AB70606}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{10945492-3C8C-4A82-A384-4C3B7AB70606}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

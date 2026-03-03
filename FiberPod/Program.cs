@@ -6,6 +6,8 @@ using Fiberish.Core;
 using Fiberish.Core.VFS;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 
@@ -50,9 +52,9 @@ internal class Program
         var straceOption = new Option<bool>(
             new[] { "--strace", "-s" },
             "Enable syscall tracing (strace-like logs)");
-        var noOverlayOption = new Option<bool>(
-            new[] { "--no-overlay" },
-            "Disable OverlayFS and run directly on hostfs root");
+        var rootfsOption = new Option<string?>(
+            new[] { "--rootfs" },
+            "Use a local root filesystem path (Podman-compatible rootfs mode)");
         var envOption = new Option<string[]>(
             new[] { "--env", "-e" },
             "Set environment variables (e.g. -e KEY=VALUE)")
@@ -69,16 +71,16 @@ internal class Program
             new[] { "--log-driver" },
             () => "json-file",
             "Container log driver (json-file|none)");
-        var imageArgument = new Argument<string>("image", "Image name (or path to rootfs)");
+        var imageArgument = new Argument<string?>("image", () => null, "Image name");
         var exeArgument =
-            new Argument<string>("command", () => "", "Command to execute (optional if image has entrypoint)");
+            new Argument<string?>("command", () => null, "Command to execute (optional if image has entrypoint)");
         var exeArgsArgument = new Argument<string[]>("args", () => Array.Empty<string>(), "Command arguments");
 
         runCommand.AddOption(volumeOption);
         runCommand.AddOption(interactiveOption);
         runCommand.AddOption(ttyOption);
         runCommand.AddOption(straceOption);
-        runCommand.AddOption(noOverlayOption);
+        runCommand.AddOption(rootfsOption);
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
@@ -92,22 +94,37 @@ internal class Program
             var interactive = context.ParseResult.GetValueForOption(interactiveOption);
             var tty = context.ParseResult.GetValueForOption(ttyOption);
             var strace = context.ParseResult.GetValueForOption(straceOption);
-            var noOverlay = context.ParseResult.GetValueForOption(noOverlayOption);
+            var rootfs = context.ParseResult.GetValueForOption(rootfsOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
             var image = context.ParseResult.GetValueForArgument(imageArgument);
             var exe = context.ParseResult.GetValueForArgument(exeArgument);
             var exeArgs = context.ParseResult.GetValueForArgument(exeArgsArgument) ?? Array.Empty<string>();
+            var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
+
+            if (useRootfs)
+            {
+                // Podman-compatible: with --rootfs, positional arguments are command + args.
+                if (!string.IsNullOrWhiteSpace(image))
+                {
+                    if (!string.IsNullOrWhiteSpace(exe))
+                        exeArgs = new[] { exe! }.Concat(exeArgs).ToArray();
+                    exe = image;
+                    image = null;
+                }
+            }
 
             var logLevel = context.ParseResult.GetValueForOption(logLevelOption);
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var imagesDir = Path.Combine(fiberpodDir, "images");
+            var ociStoreImagesDir = Path.Combine(fiberpodDir, "oci", "images");
             var logsDir = Path.Combine(fiberpodDir, "logs");
             var containersDir = Path.Combine(fiberpodDir, "containers");
             Directory.CreateDirectory(imagesDir);
+            Directory.CreateDirectory(ociStoreImagesDir);
             Directory.CreateDirectory(logsDir);
             Directory.CreateDirectory(containersDir);
 
@@ -130,55 +147,75 @@ internal class Program
             Directory.CreateDirectory(containerDir);
             var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
 
-            var rootfsPath = image;
-            var safeImageName = image.Replace("/", "_").Replace(":", "_");
+            var imageRef = image ?? rootfs ?? "<unknown>";
+            var rootfsPath = rootfs ?? image ?? string.Empty;
+            var safeImageName = imageRef.Replace("/", "_").Replace(":", "_");
             var pulledDir = Path.Combine(imagesDir, safeImageName);
+            var ociStoreDir = Path.Combine(ociStoreImagesDir, safeImageName);
 
-            if (!Directory.Exists(rootfsPath) && Directory.Exists(pulledDir))
+            if (!useRootfs)
             {
-                rootfsPath = pulledDir;
-            }
-            else if (!Directory.Exists(rootfsPath))
-            {
-                // Try to pull
-                Console.Error.WriteLine($"[FiberPod] Unable to find image '{image}' locally");
-                Console.Error.WriteLine($"[FiberPod] Trying to pull {image}...");
-                var pullService = new OciPullService(Logger);
-                try
+                if (string.IsNullOrWhiteSpace(image))
                 {
-                    await pullService.PullAndExtractImageAsync(image, pulledDir);
-                    rootfsPath = pulledDir;
+                    Console.Error.WriteLine("[FiberPod] image is required unless --rootfs is set");
+                    context.ExitCode = 125;
+                    return;
                 }
-                catch (Exception ex)
+
+                if (!Directory.Exists(rootfsPath) && Directory.Exists(ociStoreDir))
                 {
-                    Console.Error.WriteLine($"[FiberPod Error] Failed to pull image: {ex.Message}");
+                    rootfsPath = ociStoreDir;
+                }
+                else if (!Directory.Exists(rootfsPath))
+                {
+                    Console.Error.WriteLine($"[FiberPod] Unable to find image '{image}' locally");
+                    Console.Error.WriteLine($"[FiberPod] Trying to pull {image}...");
+                    var pullService = new OciPullService(Logger);
+                    try
+                    {
+                        await pullService.PullAndStoreImageAsync(image, ociStoreDir);
+                        rootfsPath = ociStoreDir;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[FiberPod Error] Failed to pull image: {ex.Message}");
+                        context.ExitCode = 1;
+                        return;
+                    }
+                }
+            }
+            else
+            {
+                if (!Directory.Exists(rootfsPath))
+                {
+                    Console.Error.WriteLine($"[FiberPod Error] --rootfs path not found: {rootfsPath}");
                     context.ExitCode = 1;
                     return;
                 }
             }
 
-            Logger.LogInformation("Running image/rootfs: {Image}", image);
+            Logger.LogInformation("Running image/rootfs: {Image}", imageRef);
             if (!string.IsNullOrEmpty(exe))
             {
                 Logger.LogInformation("Executing: {Exe} {Args}", exe, string.Join(" ", exeArgs));
                 Logger.LogInformation("Env: {Envs}", string.Join(", ", guestEnvs));
             }
 
-            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, image));
+            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
             var exitCode = await RunContainer(
                 rootfsPath,
-                exe,
+                exe ?? string.Empty,
                 exeArgs,
                 volumes,
                 guestEnvs,
                 dnsServers,
                 interactive && tty,
                 strace,
-                !noOverlay,
+                !useRootfs,
                 containersDir,
                 containerId,
-                image,
+                imageRef,
                 containerDir,
                 containerLogDriver,
                 eventStore);
@@ -345,9 +382,6 @@ internal class Program
     {
         await Task.CompletedTask; // TODO: remove async?
 
-        // Simulate flattening OCI layers into a single temporary hostfs directory
-        string flattenedRootfsPath = PrepareFlattenedRootfs(rootfsPath);
-
         // 1. Create Kernel Scheduler
         var scheduler = new KernelScheduler();
         scheduler.LoggerFactory = Logging.LoggerFactory;
@@ -408,16 +442,66 @@ internal class Program
 
         try
         {
-            if (!Directory.Exists(flattenedRootfsPath))
+            if (!Directory.Exists(rootfsPath))
             {
-                Console.Error.WriteLine($"[FiberPod Error] RootFS path not found: {flattenedRootfsPath}");
+                Console.Error.WriteLine($"[FiberPod Error] RootFS path not found: {rootfsPath}");
                 eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
                     "rootfs not found"));
                 return 1;
             }
 
-            // 3. Bootstrap runtime with OverlayFS enabled
-            var runtime = KernelRuntime.Bootstrap(flattenedRootfsPath, strace, useOverlay, ttyDiag);
+            // 3. Bootstrap bare runtime, and let FiberPod assemble the rootfs.
+            var runtime = KernelRuntime.BootstrapBare(strace, ttyDiag);
+            if (useOverlay)
+            {
+                if (!TryCreateLayerLower(rootfsPath, out var layerLowerSb, out var layerProvider, out var layerError))
+                {
+                    Console.Error.WriteLine($"[FiberPod Error] {layerError}");
+                    eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
+                        layerError));
+                    return 1;
+                }
+
+                using var _ = layerProvider;
+                var silkUpperStore = Path.Combine(containerDir, "silk-upper");
+                Directory.CreateDirectory(silkUpperStore);
+                var silkType = FileSystemRegistry.Get("silkfs")
+                               ?? throw new InvalidOperationException("silkfs is not registered");
+                var overlayType = FileSystemRegistry.Get("overlay")
+                                  ?? throw new InvalidOperationException("overlay is not registered");
+
+                var upperSb = silkType.FileSystem.ReadSuper(silkType, 0, silkUpperStore, null);
+                var overlaySb = overlayType.FileSystem.ReadSuper(overlayType, 0, "root_overlay", new OverlayMountOptions
+                {
+                    Lower = layerLowerSb!,
+                    Upper = upperSb
+                });
+                runtime.Syscalls.MountRoot(overlaySb, new SyscallManager.RootMountOptions
+                {
+                    Source = "overlay",
+                    FsType = "overlay",
+                    Options = "rw,relatime,lowerdir=/,upperdir=/silk-upper,workdir=/work"
+                });
+                runtime.Syscalls.MountStandardDev(ttyDiag);
+                runtime.Syscalls.MountStandardProc();
+                runtime.Syscalls.MountStandardShm();
+                runtime.Syscalls.CreateStandardTmp();
+            }
+            else
+            {
+                var hostType = FileSystemRegistry.Get("hostfs")
+                               ?? throw new InvalidOperationException("hostfs is not registered");
+                var hostSb = hostType.FileSystem.ReadSuper(hostType, 0, rootfsPath, null);
+                runtime.Syscalls.MountRoot(hostSb, new SyscallManager.RootMountOptions
+                {
+                    Source = rootfsPath,
+                    FsType = "hostfs",
+                    Options = "rw,relatime"
+                });
+                runtime.Syscalls.MountStandardDev(ttyDiag);
+                runtime.Syscalls.MountStandardProc();
+                runtime.Syscalls.MountStandardShm();
+            }
 
             // 4. Mount Volumes
             foreach (var vol in volumes)
@@ -555,14 +639,173 @@ internal class Program
         }
     }
 
-    /// <summary>
-    /// Simulates preparing the flattened OCI view.
-    /// Since OciPullService already extracts all layers sequentially into the target folder,
-    /// we can just use the path directly as the lowest layer base for OverlayFS.
-    /// </summary>
-    private static string PrepareFlattenedRootfs(string imageOrPath)
+    private static bool TryCreateLayerLower(string ociStoreDir, out SuperBlock? lowerSb, out IDisposable? provider,
+        out string error)
     {
-        return imageOrPath;
+        lowerSb = null;
+        provider = null;
+        error = string.Empty;
+
+        var imagePath = Path.Combine(ociStoreDir, "image.json");
+        if (!File.Exists(imagePath))
+        {
+            error =
+                $"overlay mode expects OCI image store, but '{ociStoreDir}' has no image.json. Pull with `fiberpod pull --store-oci IMAGE`.";
+            return false;
+        }
+
+        OciStoredImage? storedImage;
+        try
+        {
+            storedImage = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath));
+        }
+        catch (Exception ex)
+        {
+            error = $"failed to parse OCI image metadata: {ex.Message}";
+            return false;
+        }
+
+        if (storedImage == null || storedImage.Layers.Count == 0)
+        {
+            error = "OCI image metadata is empty or invalid.";
+            return false;
+        }
+
+        var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        var layerIndexes = new List<IReadOnlyList<LayerIndexEntry>>(storedImage.Layers.Count);
+        foreach (var layer in storedImage.Layers)
+        {
+            if (!File.Exists(layer.IndexPath))
+            {
+                error = $"missing layer index file: {layer.IndexPath}";
+                return false;
+            }
+
+            if (!File.Exists(layer.BlobPath))
+            {
+                error = $"missing layer blob file: {layer.BlobPath}";
+                return false;
+            }
+
+            try
+            {
+                var entries = JsonSerializer.Deserialize<List<LayerIndexEntry>>(File.ReadAllText(layer.IndexPath));
+                if (entries == null)
+                {
+                    error = $"invalid layer index JSON: {layer.IndexPath}";
+                    return false;
+                }
+
+                layerIndexes.Add(entries);
+            }
+            catch (Exception ex)
+            {
+                error = $"failed to parse layer index '{layer.IndexPath}': {ex.Message}";
+                return false;
+            }
+
+            digestToBlobPath[layer.Digest] = layer.BlobPath;
+        }
+
+        var merged = MergeLayerIndexes(layerIndexes);
+        var layerType = FileSystemRegistry.Get("layerfs");
+        if (layerType == null)
+        {
+            error = "layerfs is not registered";
+            return false;
+        }
+
+        provider = new TarBlobLayerContentProvider(digestToBlobPath);
+        lowerSb = layerType.FileSystem.ReadSuper(layerType, 0, "layer-lower",
+            new LayerMountOptions { Index = merged, ContentProvider = (ILayerContentProvider)provider });
+        return true;
+    }
+
+    private static LayerIndex MergeLayerIndexes(IReadOnlyList<IReadOnlyList<LayerIndexEntry>> layers)
+    {
+        var merged = new Dictionary<string, LayerIndexEntry>(StringComparer.Ordinal)
+        {
+            ["/"] = new LayerIndexEntry("/", InodeType.Directory, 0x1ED)
+        };
+
+        foreach (var layer in layers)
+        {
+            foreach (var entry in layer)
+            {
+                var path = NormalizeAbsolutePath(entry.Path);
+                if (path == "/") continue;
+
+                var parent = ParentPath(path);
+                var name = BaseName(path);
+                if (name == ".wh..wh..opq")
+                {
+                    RemoveAllChildren(merged, parent);
+                    continue;
+                }
+
+                if (name.StartsWith(".wh.", StringComparison.Ordinal) && name.Length > 4)
+                {
+                    var hiddenName = name[4..];
+                    var hiddenPath = parent == "/" ? "/" + hiddenName : parent + "/" + hiddenName;
+                    RemovePathWithDescendants(merged, hiddenPath);
+                    continue;
+                }
+
+                merged[path] = entry with { Path = path };
+            }
+        }
+
+        var index = new LayerIndex();
+        foreach (var entry in merged.Values
+                     .Where(e => e.Path != "/")
+                     .OrderBy(e => e.Path.Count(c => c == '/'))
+                     .ThenBy(e => e.Path, StringComparer.Ordinal))
+            index.AddEntry(entry);
+        return index;
+    }
+
+    private static void RemoveAllChildren(Dictionary<string, LayerIndexEntry> merged, string parentPath)
+    {
+        var prefix = parentPath == "/" ? "/" : parentPath + "/";
+        var keys = merged.Keys.Where(k => k != "/" && k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
+        foreach (var k in keys)
+            merged.Remove(k);
+    }
+
+    private static void RemovePathWithDescendants(Dictionary<string, LayerIndexEntry> merged, string path)
+    {
+        var normalized = NormalizeAbsolutePath(path);
+        merged.Remove(normalized);
+        var prefix = normalized == "/" ? "/" : normalized + "/";
+        var keys = merged.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
+        foreach (var k in keys)
+            merged.Remove(k);
+    }
+
+    private static string NormalizeAbsolutePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "/";
+        var p = path.Replace('\\', '/');
+        if (!p.StartsWith('/')) p = "/" + p;
+        while (p.Contains("//", StringComparison.Ordinal)) p = p.Replace("//", "/", StringComparison.Ordinal);
+        if (p.Length > 1 && p.EndsWith('/')) p = p.TrimEnd('/');
+        return p;
+    }
+
+    private static string ParentPath(string path)
+    {
+        var normalized = NormalizeAbsolutePath(path);
+        if (normalized == "/") return "/";
+        var lastSlash = normalized.LastIndexOf('/');
+        return lastSlash <= 0 ? "/" : normalized[..lastSlash];
+    }
+
+    private static string BaseName(string path)
+    {
+        var normalized = NormalizeAbsolutePath(path);
+        if (normalized == "/") return "/";
+        var lastSlash = normalized.LastIndexOf('/');
+        return lastSlash < 0 ? normalized : normalized[(lastSlash + 1)..];
     }
 
     private static string BuildResolvConfContent(string[] dnsServers)
@@ -633,38 +876,62 @@ internal class Program
         return sb.ToString();
     }
 
-    private static void CopyDirectory(string sourceDir, string destinationDir)
+    private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
     {
-        var dir = new DirectoryInfo(sourceDir);
-        DirectoryInfo[] dirs = dir.GetDirectories();
+        private readonly Dictionary<string, string> _digestToBlobPath;
+        private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
+        private readonly object _lock = new();
 
-        Directory.CreateDirectory(destinationDir);
-
-        foreach (FileInfo file in dir.GetFiles())
+        public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)
         {
-            string targetFilePath = Path.Combine(destinationDir, file.Name);
-            if (file.LinkTarget != null)
+            _digestToBlobPath = digestToBlobPath;
+        }
+
+        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+        {
+            bytesRead = 0;
+            if (entry.Type != InodeType.File) return true;
+
+            if (entry.InlineData != null)
             {
-                File.CreateSymbolicLink(targetFilePath, file.LinkTarget);
+                if (offset >= entry.InlineData.Length) return true;
+                var remaining = entry.InlineData.Length - (int)offset;
+                var toCopy = Math.Min(buffer.Length, remaining);
+                entry.InlineData.AsSpan((int)offset, toCopy).CopyTo(buffer);
+                bytesRead = toCopy;
+                return true;
             }
-            else
+
+            if (entry.DataOffset < 0 || string.IsNullOrWhiteSpace(entry.BlobDigest))
+                return false;
+            if (!_digestToBlobPath.TryGetValue(entry.BlobDigest, out var blobPath))
+                return false;
+
+            lock (_lock)
             {
-                file.CopyTo(targetFilePath);
+                if (!_streams.TryGetValue(entry.BlobDigest, out var stream))
+                {
+                    stream = new FileStream(blobPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    _streams[entry.BlobDigest] = stream;
+                }
+
+                var start = entry.DataOffset + offset;
+                if (start < 0 || start >= stream.Length)
+                    return true;
+
+                stream.Seek(start, SeekOrigin.Begin);
+                bytesRead = stream.Read(buffer);
+                return true;
             }
         }
 
-        foreach (DirectoryInfo subDir in dirs)
+        public void Dispose()
         {
-            string newDestinationDir = Path.Combine(destinationDir, subDir.Name);
-            if (subDir.LinkTarget != null)
+            lock (_lock)
             {
-                // Can be created as directory symlink or file symlink. 
-                // We'll use File.CreateSymbolicLink for all symlinks to avoid needing to know the target type if it's broken or absolute.
-                File.CreateSymbolicLink(newDestinationDir, subDir.LinkTarget);
-            }
-            else
-            {
-                CopyDirectory(subDir.FullName, newDestinationDir);
+                foreach (var s in _streams.Values)
+                    s.Dispose();
+                _streams.Clear();
             }
         }
     }

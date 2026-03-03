@@ -2,6 +2,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Fiberish.X86\Fiberish.X86.csproj"/>
+        <ProjectReference Include="..\Fiberish.SilkFS\Fiberish.SilkFS.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

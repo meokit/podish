@@ -26,7 +26,7 @@ public class Tmpfs : FileSystem
 
 public class TmpfsSuperBlock : SuperBlock
 {
-    private ulong _nextIno = 1;
+    protected ulong _nextIno = 1;
 
     public TmpfsSuperBlock(FileSystemType type)
     {

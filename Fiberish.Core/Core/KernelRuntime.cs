@@ -20,7 +20,7 @@ public sealed class KernelRuntime
     public VMAManager Memory { get; }
     public SyscallManager Syscalls { get; }
 
-    public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)
+    public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
     {
         var engine = new Engine();
         var mm = new VMAManager();
@@ -30,22 +30,36 @@ public sealed class KernelRuntime
             Strace = strace
         };
 
-        if (useOverlay)
-        {
-            sys.MountRootOverlay(rootRes);
-            sys.MountStandardDev(tty);
-            sys.MountStandardProc();
-            sys.MountStandardShm();
-            sys.CreateStandardTmp();
-        }
-        else
-        {
-            sys.MountRootHostfs(rootRes);
-            sys.MountStandardDev(tty);
-            sys.MountStandardProc();
-            sys.MountStandardShm();
-        }
-
         return new KernelRuntime(engine, mm, sys);
+    }
+
+    public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)
+    {
+        return BootstrapWithRoot(strace, sys =>
+        {
+            if (useOverlay)
+            {
+                sys.MountRootOverlay(rootRes);
+                sys.MountStandardDev(tty);
+                sys.MountStandardProc();
+                sys.MountStandardShm();
+                sys.CreateStandardTmp();
+            }
+            else
+            {
+                sys.MountRootHostfs(rootRes);
+                sys.MountStandardDev(tty);
+                sys.MountStandardProc();
+                sys.MountStandardShm();
+            }
+        }, tty);
+    }
+
+    public static KernelRuntime BootstrapWithRoot(bool strace, Action<SyscallManager> mountRoot,
+        TtyDiscipline? tty = null)
+    {
+        var runtime = BootstrapBare(strace, tty);
+        mountRoot(runtime.Syscalls);
+        return runtime;
     }
 }

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -73,52 +72,36 @@ def podman_available() -> bool:
     return available
 
 
-# Alpine i386 image for FiberPod tests
-ALPINE_I386_IMAGE = "docker.io/i386/alpine:latest"
-ALPINE_IMAGE = "localhost/fiberish-alpine-i386:latest"
+# Alpine i386 image for FiberPod tests (OCI store mode)
+ALPINE_OCI_IMAGE = "docker.io/i386/alpine:latest"
 
 @pytest.fixture(scope="session")
-def alpine_image(podman_available: bool) -> str:
+def alpine_image(build_fiberpod: str) -> str:
     """
-    Build an Alpine i386 image with openssl preinstalled, export it as rootfs.
+    Ensure Alpine i386 image is available in FiberPod OCI store and return store path.
     """
     override = os.environ.get("FIBERISH_ALPINE_IMAGE")
     if override:
         return override
 
-    if not podman_available:
-        pytest.skip("podman not available; set FIBERISH_ALPINE_IMAGE to a prepared image")
-
-    subprocess.run(["podman", "pull", "--platform", "linux/386", ALPINE_I386_IMAGE], check=True)
-    subprocess.run(
-        [
-            "podman",
-            "build",
-            "--platform",
-            "linux/386",
-            "--pull=never",
-            "-t",
-            ALPINE_IMAGE,
-            "-f",
-            "-",
-            "/tmp",
-        ],
-        check=True,
-        input=f"FROM {ALPINE_I386_IMAGE}\nRUN apk add --no-cache openssl\n",
-        text=True,
-    )
-
-    rootfs_dir = Path(tempfile.mkdtemp(prefix="fiberish-alpine-rootfs-"))
-    tar_path = rootfs_dir / "rootfs.tar"
-    container_id = subprocess.check_output(
-        ["podman", "create", "--platform", "linux/386", ALPINE_IMAGE],
-        text=True,
-    ).strip()
-    try:
-        subprocess.run(["podman", "export", container_id, "-o", str(tar_path)], check=True)
-        subprocess.run(["tar", "-xf", str(tar_path), "-C", str(rootfs_dir)], check=True)
-    finally:
-        subprocess.run(["podman", "rm", "-f", container_id], check=False)
-        tar_path.unlink(missing_ok=True)
-
-    return str(rootfs_dir)
+    safe_image = ALPINE_OCI_IMAGE.replace("/", "_").replace(":", "_")
+    store_dir = PROJECT_ROOT / ".fiberpod" / "oci" / "images" / safe_image
+    image_meta = store_dir / "image.json"
+    if not image_meta.exists():
+        print(f"\n[conftest] Pulling OCI store image {ALPINE_OCI_IMAGE} for integration tests…")
+        subprocess.run(
+            [
+                "dotnet",
+                "run",
+                "--project",
+                str(FIBERPOD_PROJECT),
+                "--no-build",
+                "--",
+                "pull",
+                "--store-oci",
+                ALPINE_OCI_IMAGE,
+            ],
+            check=True,
+            cwd=str(PROJECT_ROOT),
+        )
+    return str(store_dir)
