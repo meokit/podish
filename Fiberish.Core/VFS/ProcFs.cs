@@ -54,13 +54,15 @@ file static class ProcContext
     {
         var activeSm = SyscallManager.ActiveSyscallManager ?? sb.FallbackSyscallManager;
         var activeTask = activeSm?.Engine.Owner as FiberTask;
-        var scheduler = activeTask?.CommonKernel ?? KernelScheduler.Current;
-        var task = activeTask ?? scheduler?.CurrentTask;
+        var scheduler = KernelScheduler.Current ?? activeTask?.CommonKernel;
+        var task = scheduler?.CurrentTask ?? activeTask;
+        var process = task?.Process;
+
         return new ProcOpenContext(
             scheduler,
             task,
-            task?.Process,
-            task?.Process.Syscalls ?? activeSm);
+            process,
+            process?.Syscalls ?? activeSm);
     }
 
     public static Process? ResolveProcessByPid(int pid, ProcSuperBlock? sb = null)

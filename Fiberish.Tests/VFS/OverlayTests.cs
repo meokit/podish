@@ -163,4 +163,53 @@ public class OverlayTests
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
         }
     }
+
+    [Fact]
+    public void OverlaySymlink_InLowerOnlyDirectory_ShouldCreateInUpper()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempLower, "usr/lib"));
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var usrOv = overlaySb.Root.Inode!.Lookup("usr")!;
+            var libOv = usrOv.Inode!.Lookup("lib")!;
+            var libInode = Assert.IsType<OverlayInode>(libOv.Inode);
+            Assert.Null(libInode.UpperDentry);
+
+            var linkDentry = new Dentry("libbz2.so.1", null, libOv, overlaySb);
+            libInode.Symlink(linkDentry, "libbz2.so.1.0.8", 0, 0);
+
+            var created = libOv.Inode!.Lookup("libbz2.so.1");
+            Assert.NotNull(created);
+            Assert.Equal(InodeType.Symlink, created!.Inode!.Type);
+            Assert.Equal("libbz2.so.1.0.8", created.Inode.Readlink());
+            Assert.NotNull(libInode.UpperDentry);
+            Assert.Equal("libbz2.so.1.0.8", libInode.UpperInode!.Lookup("libbz2.so.1")!.Inode!.Readlink());
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
 }

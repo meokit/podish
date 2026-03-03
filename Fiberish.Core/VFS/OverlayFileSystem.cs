@@ -353,6 +353,26 @@ public class OverlayInode : Inode
         return dentry;
     }
 
+    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        if (string.IsNullOrEmpty(target))
+            throw new ArgumentException("Symlink target cannot be null or empty", nameof(target));
+
+        // Symlink mutates directory entries, so parent must exist in upper.
+        if (UpperDentry == null)
+            CopyUpDirectory();
+
+        if (UpperDentry == null || UpperInode == null)
+            throw new InvalidOperationException("Upper directory is unavailable for symlink");
+
+        var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
+        UpperInode.Symlink(upperDentry, target, uid, gid);
+
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
+        dentry.Instantiate(newOverlayInode);
+        return dentry;
+    }
+
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // Read from Upper if exists, else Lower.

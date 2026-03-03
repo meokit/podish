@@ -70,6 +70,7 @@ public partial class SyscallManager
         uint brkBase,
         bool strace,
         PathLocation root, PathLocation cwd, PathLocation procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock,
+        Mount anonMount,
         TtyDiscipline? tty,
         PtyManager ptyManager,
         MountNamespace mountNamespace)
@@ -87,6 +88,7 @@ public partial class SyscallManager
         ProcessRoot = procRoot;
         DevShmRoot = devShmRoot;
         MemfdSuperBlock = memfdSuperBlock;
+        AnonMount = anonMount;
         Tty = tty;
         PtyManager = ptyManager;
 
@@ -124,7 +126,7 @@ public partial class SyscallManager
     ///     Mount for anonymous inode files (timerfd, eventfd, epoll, socket, etc.).
     ///     Similar to Linux's anon_inodefs.
     /// </summary>
-    public Mount AnonMount { get; } = null!;
+    public Mount AnonMount { get; private set; } = null!;
 
     // System V Shared Memory (Global IPC namespace)
     public SysVShmManager SysVShm { get; }
@@ -605,7 +607,7 @@ public partial class SyscallManager
 
         var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
-            ProcessRoot, DevShmRoot, MemfdSuperBlock, Tty, PtyManager,
+            ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
             sharedNamespace)
         {
             CloneHandler = CloneHandler,
