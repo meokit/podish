@@ -29,8 +29,14 @@ public class OverlayFileSystem : FileSystem
         if (data is not OverlayMountOptions options)
             throw new ArgumentException("OverlayFS requires OverlayMountOptions in data");
 
-        var sb = new OverlaySuperBlock(fsType, options.Lower, options.Upper);
-        sb.Root = new Dentry("/", new OverlayInode(sb, options.Lower.Root, options.Upper.Root), null, sb);
+        var lowers = options.Lowers?.Where(l => l != null).ToList() ?? [];
+        if (lowers.Count == 0 && options.Lower != null) lowers.Add(options.Lower);
+        if (lowers.Count == 0)
+            throw new ArgumentException("OverlayFS requires at least one lower superblock");
+
+        var sb = new OverlaySuperBlock(fsType, lowers, options.Upper);
+        var lowerRoots = lowers.Select(l => l.Root).Where(r => r != null).ToList();
+        sb.Root = new Dentry("/", new OverlayInode(sb, lowerRoots!, options.Upper.Root), null, sb);
         sb.Root.Parent = sb.Root;
 
         return sb;
@@ -39,19 +45,23 @@ public class OverlayFileSystem : FileSystem
 
 public class OverlayMountOptions
 {
-    public SuperBlock Lower { get; set; } = null!;
+    public SuperBlock? Lower { get; set; }
+    public IReadOnlyList<SuperBlock>? Lowers { get; set; }
     public SuperBlock Upper { get; set; } = null!;
 }
 
 public class OverlaySuperBlock : SuperBlock
 {
-    public OverlaySuperBlock(FileSystemType type, SuperBlock lower, SuperBlock upper)
+    public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper)
     {
+        if (lowers.Count == 0) throw new ArgumentException("OverlayFS requires at least one lower layer", nameof(lowers));
         Type = type;
-        LowerSB = lower;
+        LowerSBs = lowers;
+        LowerSB = lowers[0];
         UpperSB = upper;
     }
 
+    public IReadOnlyList<SuperBlock> LowerSBs { get; }
     public SuperBlock LowerSB { get; }
     public SuperBlock UpperSB { get; }
 
@@ -60,16 +70,21 @@ public class OverlaySuperBlock : SuperBlock
         // Only called if we need a pure virtual inode? 
         // Overlay inodes are always bonded to underlying inodes.
         // But we might need to allocate a new OverlayInode wrapper.
-        return new OverlayInode(this, null, null);
+        return new OverlayInode(this, (Dentry?)null, null);
     }
 }
 
 public class OverlayInode : Inode
 {
     public OverlayInode(SuperBlock sb, Dentry? lower, Dentry? upper)
+        : this(sb, lower != null ? [lower] : null, upper)
+    {
+    }
+
+    public OverlayInode(SuperBlock sb, IReadOnlyList<Dentry>? lowers, Dentry? upper)
     {
         SuperBlock = sb;
-        LowerDentry = lower;
+        LowerDentries = lowers?.Where(d => d != null).ToList() ?? [];
         UpperDentry = upper;
     }
 
@@ -93,7 +108,12 @@ public class OverlayInode : Inode
     public override DateTime ATime { get => SourceInode?.ATime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.ATime = value; } }
     public override DateTime CTime { get => SourceInode?.CTime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.CTime = value; } }
 
-    public Dentry? LowerDentry { get; }
+    /// <summary>
+    /// Lower dentries ordered from top-most lower layer to bottom-most lower layer.
+    /// Lookup resolves in this order.
+    /// </summary>
+    public IReadOnlyList<Dentry> LowerDentries { get; }
+    public Dentry? LowerDentry => LowerDentries.Count > 0 ? LowerDentries[0] : null;
     public Dentry? UpperDentry { get; private set; }
 
     public Inode? LowerInode => LowerDentry?.Inode;
@@ -196,13 +216,22 @@ public class OverlayInode : Inode
         // 1. Lookup in Upper
         var upperDentry = UpperInode?.Lookup(name);
 
-        // 2. Lookup in Lower
-        var lowerDentry = LowerInode?.Lookup(name);
+        // 2. Lookup in Lower layers (top-most lower wins)
+        Dentry? lowerDentry = null;
+        foreach (var lower in LowerDentries)
+        {
+            var candidate = lower.Inode?.Lookup(name);
+            if (candidate != null)
+            {
+                lowerDentry = candidate;
+                break;
+            }
+        }
 
         if (upperDentry == null && lowerDentry == null) return null;
 
         // Create Overlay Inode
-        var inode = new OverlayInode(SuperBlock, lowerDentry, upperDentry);
+        var inode = new OverlayInode(SuperBlock, lowerDentry != null ? [lowerDentry] : null, upperDentry);
 
         var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
         return new Dentry(name, inode, parentDentry, SuperBlock);
@@ -219,7 +248,7 @@ public class OverlayInode : Inode
         UpperInode!.Create(upperDentry, mode, uid, gid);
 
         // Now update the overlay dentry's inode
-        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry); // Created only in upper
+        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry); // Created only in upper
         dentry.Instantiate(newOverlayInode);
 
         return dentry;
@@ -233,7 +262,7 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Mkdir(upperDentry, mode, uid, gid);
 
-        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
 
         return dentry;
@@ -347,7 +376,7 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Link(upperDentry, oldOverlay.UpperInode);
 
-        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
 
         return dentry;
@@ -368,7 +397,7 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Symlink(upperDentry, target, uid, gid);
 
-        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
         return dentry;
     }
@@ -419,9 +448,14 @@ public class OverlayInode : Inode
     {
         var entries = new Dictionary<string, DirectoryEntry>();
 
-        if (LowerInode != null)
-            foreach (var e in LowerInode.GetEntries())
+        // Merge lower layers from bottom to top so higher lower layers override.
+        for (var i = LowerDentries.Count - 1; i >= 0; i--)
+        {
+            var inode = LowerDentries[i].Inode;
+            if (inode == null) continue;
+            foreach (var e in inode.GetEntries())
                 entries[e.Name] = e;
+        }
 
         if (UpperInode != null)
             foreach (var e in UpperInode.GetEntries())

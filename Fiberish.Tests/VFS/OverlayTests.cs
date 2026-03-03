@@ -212,4 +212,105 @@ public class OverlayTests
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
         }
     }
+
+    [Fact]
+    public void OverlayLookup_MultipleLowers_PicksTopmostLower()
+    {
+        var tempLowerTop = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempLowerBottom = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLowerTop);
+        Directory.CreateDirectory(tempLowerBottom);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLowerTop, "same.txt"), "top");
+            File.WriteAllText(Path.Combine(tempLowerBottom, "same.txt"), "bottom");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerTopSb = new HostSuperBlock(fsType, tempLowerTop, opts);
+            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, "/", null)!;
+            var lowerBottomSb = new HostSuperBlock(fsType, tempLowerBottom, opts);
+            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions
+                {
+                    Lowers = [lowerTopSb, lowerBottomSb],
+                    Upper = upperSb
+                });
+
+            var d = overlaySb.Root.Inode!.Lookup("same.txt");
+            Assert.NotNull(d);
+            var f = new LinuxFile(d!, FileFlags.O_RDONLY, null!);
+            var buf = new byte[16];
+            var n = d!.Inode!.Read(f, buf, 0);
+            Assert.True(n > 0);
+            Assert.Equal("top", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+        }
+        finally
+        {
+            if (Directory.Exists(tempLowerTop)) Directory.Delete(tempLowerTop, true);
+            if (Directory.Exists(tempLowerBottom)) Directory.Delete(tempLowerBottom, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayGetEntries_MultipleLowers_MergesAndOverridesByHigherLower()
+    {
+        var tempLowerTop = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempLowerBottom = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLowerTop);
+        Directory.CreateDirectory(tempLowerBottom);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLowerTop, "same.txt"), "top");
+            File.WriteAllText(Path.Combine(tempLowerTop, "top-only.txt"), "t");
+            File.WriteAllText(Path.Combine(tempLowerBottom, "same.txt"), "bottom");
+            File.WriteAllText(Path.Combine(tempLowerBottom, "bottom-only.txt"), "b");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerTopSb = new HostSuperBlock(fsType, tempLowerTop, opts);
+            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, "/", null)!;
+            var lowerBottomSb = new HostSuperBlock(fsType, tempLowerBottom, opts);
+            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions
+                {
+                    Lowers = [lowerTopSb, lowerBottomSb],
+                    Upper = upperSb
+                });
+
+            var names = overlaySb.Root.Inode!.GetEntries().Select(e => e.Name).ToHashSet();
+            Assert.Contains("same.txt", names);
+            Assert.Contains("top-only.txt", names);
+            Assert.Contains("bottom-only.txt", names);
+        }
+        finally
+        {
+            if (Directory.Exists(tempLowerTop)) Directory.Delete(tempLowerTop, true);
+            if (Directory.Exists(tempLowerBottom)) Directory.Delete(tempLowerBottom, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
 }
