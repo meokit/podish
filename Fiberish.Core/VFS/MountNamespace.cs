@@ -1,3 +1,6 @@
+using System.Linq;
+using System.Threading;
+
 namespace Fiberish.VFS;
 
 /// <summary>
@@ -7,6 +10,8 @@ namespace Fiberish.VFS;
 /// </summary>
 public class MountNamespace
 {
+    private int _refCount = 1;
+    private readonly object _lock = new();
     public readonly record struct MountInfoEntry(
         long Id,
         long ParentId,
@@ -36,6 +41,8 @@ public class MountNamespace
     /// </summary>
     public IReadOnlyList<Mount> Mounts => _mounts;
 
+    public int RefCount => _refCount;
+
     /// <summary>
     ///     Gets the number of mounts in this namespace.
     /// </summary>
@@ -46,14 +53,17 @@ public class MountNamespace
     /// </summary>
     public void RegisterMount(Mount mount, Mount? parent, Dentry mountPoint)
     {
-        if (!mount.IsAttached)
-            mount.Attach(mountPoint, parent);
+        lock (_lock)
+        {
+            if (!mount.IsAttached)
+                mount.Attach(mountPoint, parent);
 
-        // Mount namespace owns one reference while attached.
-        mount.Get();
+            // Mount namespace owns one reference while attached.
+            mount.Get();
 
-        _mounts.Add(mount);
-        _mountHash[(parent, mountPoint)] = mount;
+            _mounts.Add(mount);
+            _mountHash[(parent, mountPoint)] = mount;
+        }
     }
 
     /// <summary>
@@ -61,19 +71,20 @@ public class MountNamespace
     /// </summary>
     public void UnregisterMount(Mount mount)
     {
-        var parent = mount.Parent;
-        var mountPoint = mount.MountPoint;
-
-        mount.Detach();
-        _mounts.Remove(mount);
-
-        if (mountPoint != null)
+        lock (_lock)
         {
-            _mountHash.Remove((parent, mountPoint));
-        }
+            var parent = mount.Parent;
+            var mountPoint = mount.MountPoint;
 
-        // Drop mount namespace ownership.
-        mount.Put();
+            mount.Detach();
+            _mounts.Remove(mount);
+
+            if (mountPoint != null)
+                _mountHash.Remove((parent, mountPoint));
+
+            // Drop mount namespace ownership.
+            mount.Put();
+        }
     }
 
     /// <summary>
@@ -81,7 +92,10 @@ public class MountNamespace
     /// </summary>
     public Mount? FindMount(Mount? parent, Dentry dentry)
     {
-        return _mountHash.GetValueOrDefault((parent, dentry));
+        lock (_lock)
+        {
+            return _mountHash.GetValueOrDefault((parent, dentry));
+        }
     }
 
     /// <summary>
@@ -89,7 +103,10 @@ public class MountNamespace
     /// </summary>
     public bool HasMountAt(Mount? parent, Dentry dentry)
     {
-        return _mountHash.ContainsKey((parent, dentry));
+        lock (_lock)
+        {
+            return _mountHash.ContainsKey((parent, dentry));
+        }
     }
 
     /// <summary>
@@ -98,23 +115,8 @@ public class MountNamespace
     /// </summary>
     public MountNamespace Share()
     {
-        var shared = new MountNamespace
-        {
-            RootMount = RootMount
-        };
-
-        // Share the same mount list and hash
-        foreach (var mount in _mounts)
-        {
-            shared._mounts.Add(mount);
-        }
-
-        foreach (var kv in _mountHash)
-        {
-            shared._mountHash[kv.Key] = kv.Value;
-        }
-
-        return shared;
+        Get();
+        return this;
     }
 
     /// <summary>
@@ -122,7 +124,10 @@ public class MountNamespace
     /// </summary>
     public List<Mount>.Enumerator GetEnumerator()
     {
-        return _mounts.GetEnumerator();
+        lock (_lock)
+        {
+            return _mounts.ToList().GetEnumerator();
+        }
     }
 
     /// <summary>
@@ -160,7 +165,12 @@ public class MountNamespace
     /// </summary>
     public IEnumerable<(string Source, string Target, string FsType, string Options)> GetMountInfos()
     {
-        foreach (var mount in _mounts)
+        List<Mount> mountsSnapshot;
+        lock (_lock)
+        {
+            mountsSnapshot = _mounts.ToList();
+        }
+        foreach (var mount in mountsSnapshot)
         {
             var target = BuildMountPath(mount);
             yield return (mount.Source ?? "none", target, mount.FsType ?? "unknown", mount.Options ?? "rw");
@@ -169,7 +179,12 @@ public class MountNamespace
 
     public IEnumerable<MountInfoEntry> GetMountInfoEntries()
     {
-        foreach (var mount in _mounts)
+        List<Mount> mountsSnapshot;
+        lock (_lock)
+        {
+            mountsSnapshot = _mounts.ToList();
+        }
+        foreach (var mount in mountsSnapshot)
         {
             var target = BuildMountPath(mount);
             var parentId = mount.Parent?.Id ?? 0;
@@ -180,6 +195,31 @@ public class MountNamespace
                 target,
                 mount.FsType ?? "unknown",
                 mount.Options ?? "rw");
+        }
+    }
+
+    public void Get()
+    {
+        Interlocked.Increment(ref _refCount);
+    }
+
+    public void Put()
+    {
+        if (Interlocked.Decrement(ref _refCount) > 0)
+            return;
+
+        List<Mount> mountsToRelease;
+        lock (_lock)
+        {
+            mountsToRelease = _mounts.ToList();
+        }
+
+        foreach (var mount in mountsToRelease)
+            UnregisterMount(mount);
+
+        lock (_lock)
+        {
+            RootMount = null;
         }
     }
 }

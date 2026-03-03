@@ -38,6 +38,7 @@ public partial class SyscallManager
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
+        _mountNamespace = new MountNamespace();
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
@@ -159,7 +160,8 @@ public partial class SyscallManager
     /// <summary>
     ///     Mount namespace containing all mounts and lookup hash.
     /// </summary>
-    private readonly MountNamespace _mountNamespace = new();
+    private readonly MountNamespace _mountNamespace;
+    private int _closed;
 
     /// <summary>
     ///     Gets mount information for /proc/mounts.
@@ -1111,6 +1113,9 @@ public partial class SyscallManager
 
     public void Close()
     {
+        if (Interlocked.Exchange(ref _closed, 1) != 0)
+            return;
+
         lock (_registryLock)
         {
             if (Engine != null)
@@ -1120,9 +1125,9 @@ public partial class SyscallManager
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
         ReleaseContainerPins();
 
-        // Release mount namespace ownership refs (including root mount).
-        foreach (var mount in _mountNamespace.Mounts.ToArray())
-            _mountNamespace.UnregisterMount(mount);
+        // Release this process' reference to the mount namespace.
+        // Mount detach/unmount is controlled by umount(2), not by process exit.
+        _mountNamespace.Put();
 
         Root.Dentry?.Inode?.Put();
         CurrentWorkingDirectory.Dentry?.Inode?.Put();
