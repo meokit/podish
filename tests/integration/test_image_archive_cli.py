@@ -88,7 +88,9 @@ def test_export_contract(project_root: Path, fiberpod_dll: str, alpine_image: st
         "run",
         "docker.io/i386/alpine:latest",
         "--",
-        "/bin/true",
+        "/bin/sh",
+        "-c",
+        "echo upper-export-ok > /tmp/fiberpod-export-marker.txt",
     )
     assert run_res.returncode == 0, f"run failed\nstdout:\n{run_res.stdout}\nstderr:\n{run_res.stderr}"
     after = {p.name for p in containers_dir.iterdir() if p.is_dir()}
@@ -111,4 +113,7 @@ def test_export_contract(project_root: Path, fiberpod_dll: str, alpine_image: st
 
     with tarfile.open(archive, "r") as tf:
         names = set(tf.getnames())
+        marker = tf.extractfile("tmp/fiberpod-export-marker.txt")
+        marker_text = marker.read().decode("utf-8").strip() if marker is not None else ""
     assert "bin/sh" in names or "./bin/sh" in names, "export archive missing expected rootfs content"
+    assert marker_text == "upper-export-ok"
