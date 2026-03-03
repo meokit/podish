@@ -54,9 +54,12 @@ file static class ProcContext
     {
         var activeSm = SyscallManager.ActiveSyscallManager ?? sb.FallbackSyscallManager;
         var activeTask = activeSm?.Engine.Owner as FiberTask;
-        var scheduler = KernelScheduler.Current ?? activeTask?.CommonKernel;
-        var task = scheduler?.CurrentTask ?? activeTask;
-        var process = task?.Process;
+        var fallbackTask = sb.FallbackSyscallManager?.Engine.Owner as FiberTask;
+        var scheduler = activeTask?.CommonKernel ?? KernelScheduler.Current ?? fallbackTask?.CommonKernel;
+
+        // /proc/self must prefer the task currently executing this syscall.
+        var task = activeTask ?? scheduler?.CurrentTask ?? fallbackTask;
+        var process = task?.Process ?? activeTask?.Process ?? scheduler?.CurrentTask?.Process ?? fallbackTask?.Process;
 
         return new ProcOpenContext(
             scheduler,
@@ -166,6 +169,18 @@ file sealed class ProcRootInode : Inode
         created = CreatePidDirectory(root, pid);
         root.Children[name] = created;
         return created;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        // /proc/self must always reflect current task.
+        if (name == "self") return false;
+
+        // /proc/<pid> must track live task table.
+        if (int.TryParse(name, out var pid))
+            return ProcContext.ResolveProcessByPid(pid, _sb) != null;
+
+        return true;
     }
 
     public override List<DirectoryEntry> GetEntries()
@@ -289,6 +304,17 @@ file sealed class ProcPidDirectoryInode : Inode
         return created;
     }
 
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        // Whole /proc/<pid> subtree becomes invalid once process is gone.
+        if (ProcContext.ResolveProcessByPid(_pid, _sb) == null) return false;
+
+        // Keep fd/fdinfo hot paths fresh because child fd tables are highly dynamic.
+        if (name is "fd" or "fdinfo") return false;
+
+        return true;
+    }
+
     public override List<DirectoryEntry> GetEntries()
     {
         var entries = new List<DirectoryEntry>
@@ -389,7 +415,8 @@ file sealed class ProcPidFdDirectoryInode : Inode
         var process = ProcContext.ResolveProcessByPid(_pid, _sb);
         if (process == null) return null;
         if (!int.TryParse(name, out var fd)) return null;
-        if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
+        if (!process.Syscalls.FDs.ContainsKey(fd))
+            return null;
 
         var dir = Dentries[0];
         if (dir.Children.TryGetValue(name, out var cached))
@@ -399,6 +426,14 @@ file sealed class ProcPidFdDirectoryInode : Inode
         var dentry = new Dentry(name, inode, dir, _sb);
         dir.Children[name] = dentry;
         return dentry;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
+        if (process == null) return false;
+        if (!int.TryParse(name, out var fd)) return false;
+        return process.Syscalls.FDs.ContainsKey(fd);
     }
 
     public override List<DirectoryEntry> GetEntries()
@@ -450,6 +485,14 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
         var dentry = new Dentry(name, inode, dir, _sb);
         dir.Children[name] = dentry;
         return dentry;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
+        if (process == null) return false;
+        if (!int.TryParse(name, out var fd)) return false;
+        return process.Syscalls.FDs.ContainsKey(fd);
     }
 
     public override List<DirectoryEntry> GetEntries()
@@ -685,7 +728,8 @@ file sealed class ProcSelfSymlinkInode : Inode
     public override string Readlink()
     {
         var proc = ProcContext.Capture(_sb).Process;
-        return (proc?.TGID ?? 0).ToString();
+        var tgid = proc?.TGID ?? 0;
+        return tgid.ToString();
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)

@@ -145,6 +145,15 @@ public abstract class Inode
         return null;
     }
 
+    /// <summary>
+    ///     Revalidate a cached child dentry before path walk uses it.
+    ///     Return false to drop cache and force fresh Lookup(name).
+    /// </summary>
+    public virtual bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        return true;
+    }
+
     public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
         throw new NotSupportedException();

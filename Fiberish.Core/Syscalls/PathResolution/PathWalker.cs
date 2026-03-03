@@ -230,12 +230,22 @@ public class PathWalker
         }
 
         // Lookup or get from cache
-        Dentry? next;
+        Dentry? next = null;
         if (current.Children.TryGetValue(name, out var cached))
         {
-            next = cached;
+            var valid = current.Inode.RevalidateCachedChild(current, name, cached);
+            if (!valid)
+            {
+                current.Children.Remove(name);
+                next = null;
+            }
+            else
+            {
+                next = cached;
+            }
         }
-        else
+
+        if (next == null)
         {
             next = current.Inode.Lookup(name);
             if (next == null)
