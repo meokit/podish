@@ -95,6 +95,11 @@ public class ConsoleInode : Inode
             {
                 if (_discipline != null)
                 {
+                    // Process raw device input before readiness check so control chars
+                    // (e.g. VINTR/^C) can generate signals immediately while callers
+                    // are blocked in select/pselect/poll, without waiting for a read().
+                    _discipline.ProcessPendingInput();
+
                     // Check if there's data in the input queue or pending input from device
                     if (_discipline.HasDataAvailable) revents |= POLLIN;
                 }

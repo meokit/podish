@@ -309,6 +309,33 @@ public class TtyDisciplineTests
         Assert.Equal("\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
 
+    [Fact]
+    public void ConsolePoll_processes_VINTR_and_broadcasts_SIGINT_without_read()
+    {
+        var driver = new MockTtyDriver();
+        var broadcaster = new MockSignalBroadcaster();
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, true, tty);
+        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            tty.Input(new byte[] { 3 }); // VINTR (Ctrl-C)
+
+            const short POLLIN = 0x0001;
+            var revents = inode.Poll(file, POLLIN);
+
+            Assert.True(broadcaster.SignalSent);
+            Assert.Equal(2, broadcaster.LastSignal); // SIGINT
+            Assert.Equal(0, revents); // No readable data from VINTR itself
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
     #endregion
 
     #region Flow Control Tests (IXON/IXOFF)
@@ -711,6 +738,14 @@ public class TtyDisciplineTests
         {
             LastSignal = signal;
             SignalSent = true;
+        }
+    }
+
+    private sealed class TestSuperBlock : SuperBlock
+    {
+        public override Inode AllocInode()
+        {
+            throw new NotSupportedException();
         }
     }
 
