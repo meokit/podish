@@ -49,6 +49,9 @@ public class MountNamespace
         if (!mount.IsAttached)
             mount.Attach(mountPoint, parent);
 
+        // Mount namespace owns one reference while attached.
+        mount.Get();
+
         _mounts.Add(mount);
         _mountHash[(parent, mountPoint)] = mount;
     }
@@ -68,6 +71,9 @@ public class MountNamespace
         {
             _mountHash.Remove((parent, mountPoint));
         }
+
+        // Drop mount namespace ownership.
+        mount.Put();
     }
 
     /// <summary>

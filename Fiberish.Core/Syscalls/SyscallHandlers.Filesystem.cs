@@ -1774,34 +1774,10 @@ public partial class SyscallManager
         {
             if (targetMount == null) return -(int)Errno.EINVAL;
 
-            // Update flags
-            if ((flags & LinuxConstants.MS_RDONLY) != 0)
-                targetMount.Flags |= LinuxConstants.MS_RDONLY;
-            else
-                targetMount.Flags &= ~LinuxConstants.MS_RDONLY;
-
-            if ((flags & LinuxConstants.MS_NOSUID) != 0)
-                targetMount.Flags |= LinuxConstants.MS_NOSUID;
-            else
-                targetMount.Flags &= ~LinuxConstants.MS_NOSUID;
-
-            if ((flags & LinuxConstants.MS_NODEV) != 0)
-                targetMount.Flags |= LinuxConstants.MS_NODEV;
-            else
-                targetMount.Flags &= ~LinuxConstants.MS_NODEV;
-
-            if ((flags & LinuxConstants.MS_NOEXEC) != 0)
-                targetMount.Flags |= LinuxConstants.MS_NOEXEC;
-            else
-                targetMount.Flags &= ~LinuxConstants.MS_NOEXEC;
-
-            // Update options string
-            var opts = new List<string> { (targetMount.Flags & LinuxConstants.MS_RDONLY) != 0 ? "ro" : "rw" };
-            if ((targetMount.Flags & LinuxConstants.MS_NOSUID) != 0) opts.Add("nosuid");
-            if ((targetMount.Flags & LinuxConstants.MS_NODEV) != 0) opts.Add("nodev");
-            if ((targetMount.Flags & LinuxConstants.MS_NOEXEC) != 0) opts.Add("noexec");
-            opts.Add("relatime");
-            targetMount.Options = string.Join(",", opts);
+            var remountSet = flags & SyscallManager.MountFlagMask;
+            var remountClear = (~flags) & SyscallManager.MountFlagMask;
+            targetMount.Flags = SyscallManager.ApplyMountFlagUpdate(targetMount.Flags, remountSet, remountClear);
+            SyscallManager.RefreshMountOptions(targetMount);
 
             // Update MountList
             var targetPath = sm.GetAbsolutePath(targetLoc);
@@ -1827,53 +1803,26 @@ public partial class SyscallManager
             var bindMount = srcMount.Clone(srcDentry);
             bindMount.Source = source;
             bindMount.FsType = "none"; // bind mounts show as "none" in /proc/mounts
-            bindMount.Flags = flags & (LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV |
-                                       LinuxConstants.MS_NOEXEC);
-            bindMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
+            bindMount.Flags = flags & SyscallManager.MountFlagMask;
+            bindMount.Options = SyscallManager.BuildMountOptions(bindMount.Flags);
 
-            // Attach to target
-            sm.RegisterMount(bindMount, targetMount, targetDentry);
+            var attachRc = sm.AttachDetachedMount(bindMount, targetLoc);
+            if (attachRc != 0) return attachRc;
 
             var targetPath = sm.GetAbsolutePath(targetLoc);
 
             return 0;
         }
 
-        // Regular mount (non-bind)
-        var fsType = FileSystemRegistry.Get(fstype);
-        if (fsType == null)
-            return -(int)Errno.ENODEV;
+        // Regular mount (non-bind): converge to fs context + detached mount path
+        var mountFlags = flags & SyscallManager.MountFlagMask;
+        var fsCtx = sm.BuildFsContextFromLegacyMount(fstype, source, mountFlags, dataString);
+        var mountRc = sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var newMount, (int)flags);
+        if (mountRc != 0 || newMount == null)
+            return mountRc != 0 ? mountRc : -(int)Errno.EINVAL;
 
-        object? dataObj = dataString;
-        SuperBlock? newSb;
-
-        try
-        {
-            newSb = fsType.FileSystem.ReadSuper(fsType, (int)flags, source, dataObj);
-        }
-        catch (Exception e)
-        {
-            Logger.LogWarning($"Mount failed for {fstype}: {e.Message}");
-            return -(int)Errno.EINVAL;
-        }
-
-        if (newSb == null!)
-            return -(int)Errno.EINVAL;
-
-        // Create new mount
-        var newMount = new Mount(newSb, newSb.Root)
-        {
-            Source = string.IsNullOrEmpty(source) ? fstype : source,
-            FsType = fstype,
-            Flags = flags & (LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV |
-                             LinuxConstants.MS_NOEXEC)
-        };
-        newMount.Options = (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro,relatime" : "rw,relatime";
-        if (!string.IsNullOrWhiteSpace(dataString))
-            newMount.Options += $",{dataString}";
-
-        // Attach to target
-        sm.RegisterMount(newMount, targetMount, targetDentry);
+        var attachRegularRc = sm.AttachDetachedMount(newMount, targetLoc);
+        if (attachRegularRc != 0) return attachRegularRc;
 
         var targetPath2 = sm.GetAbsolutePath(targetLoc);
 
@@ -1983,6 +1932,17 @@ public partial class SyscallManager
 
     #region New Mount API (open_tree, move_mount, mount_setattr)
 
+    // fsopen flags
+    private const uint FSOPEN_CLOEXEC = 0x00000001;
+
+    // fsconfig commands
+    private const uint FSCONFIG_SET_FLAG = 0;
+    private const uint FSCONFIG_SET_STRING = 1;
+    private const uint FSCONFIG_CMD_CREATE = 6;
+
+    // fsmount flags
+    private const uint FSMOUNT_CLOEXEC = 0x00000001;
+
     // open_tree flags
     private const uint OPEN_TREE_CLONE = 1;
     private const uint OPEN_TREE_CLOEXEC = (uint)FileFlags.O_CLOEXEC;
@@ -2007,6 +1967,109 @@ public partial class SyscallManager
     private const uint MOUNT_ATTR_STRICTATIME = 0x00000040;
     private const uint MOUNT_ATTR_NODIRATIME = 0x00000080;
     private const uint MOUNT_ATTR_IDMAP = 0x00100000;
+
+    /// <summary>
+    /// fsopen(2) - Open filesystem context
+    /// syscall number 430 on x86
+    /// </summary>
+    private static async ValueTask<int> SysFsopen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fsName = sm.ReadString(a1);
+        var flags = a2;
+
+        if (string.IsNullOrEmpty(fsName)) return -(int)Errno.EINVAL;
+        if ((flags & ~FSOPEN_CLOEXEC) != 0) return -(int)Errno.EINVAL;
+
+        var fsType = FileSystemRegistry.Get(fsName);
+        if (fsType == null) return -(int)Errno.ENODEV;
+
+        var fileFlags = (flags & FSOPEN_CLOEXEC) != 0 ? FileFlags.O_CLOEXEC | FileFlags.O_RDONLY : FileFlags.O_RDONLY;
+        var fsCtx = new FsContextFile(sm.AnonMount.Root, sm.AnonMount, fsName, fileFlags);
+        return sm.AllocFD(fsCtx);
+    }
+
+    /// <summary>
+    /// fsconfig(2) - Configure filesystem context
+    /// syscall number 431 on x86
+    /// </summary>
+    private static async ValueTask<int> SysFsconfig(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fsFd = (int)a1;
+        var cmd = a2;
+        var keyPtr = a3;
+        var valuePtr = a4;
+        var aux = (int)a5;
+
+        var file = sm.GetFD(fsFd);
+        if (file is not FsContextFile fsCtx) return -(int)Errno.EBADF;
+        if (fsCtx.State == FsContextState.Created && cmd != FSCONFIG_CMD_CREATE) return -(int)Errno.EBUSY;
+
+        switch (cmd)
+        {
+            case FSCONFIG_SET_FLAG:
+            {
+                var key = sm.ReadString(keyPtr);
+                if (string.IsNullOrEmpty(key)) return -(int)Errno.EINVAL;
+                fsCtx.SetFlag(key);
+                return 0;
+            }
+            case FSCONFIG_SET_STRING:
+            {
+                var key = sm.ReadString(keyPtr);
+                if (string.IsNullOrEmpty(key)) return -(int)Errno.EINVAL;
+                if (valuePtr == 0) return -(int)Errno.EINVAL;
+                var value = sm.ReadString(valuePtr);
+                fsCtx.SetString(key, value);
+                return 0;
+            }
+            case FSCONFIG_CMD_CREATE:
+            {
+                // Minimal validation: only one create transition.
+                if (fsCtx.State == FsContextState.Created) return -(int)Errno.EBUSY;
+                fsCtx.State = FsContextState.Created;
+                return 0;
+            }
+            default:
+                _ = aux; // reserved for future command support
+                return -(int)Errno.EINVAL;
+        }
+    }
+
+    /// <summary>
+    /// fsmount(2) - Create detached mount from context
+    /// syscall number 432 on x86
+    /// </summary>
+    private static async ValueTask<int> SysFsmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fsFd = (int)a1;
+        var flags = a2;
+        var mountAttrs = a3;
+
+        if ((flags & ~FSMOUNT_CLOEXEC) != 0) return -(int)Errno.EINVAL;
+
+        var file = sm.GetFD(fsFd);
+        if (file is not FsContextFile fsCtx) return -(int)Errno.EBADF;
+        if (fsCtx.State != FsContextState.Created) return -(int)Errno.EINVAL;
+
+        var mountRc = sm.CreateDetachedMountFromFsContext(fsCtx, mountAttrs, out var detachedMount);
+        if (mountRc != 0) return mountRc;
+
+        var mountFileFlags =
+            (flags & FSMOUNT_CLOEXEC) != 0 ? FileFlags.O_CLOEXEC | FileFlags.O_RDONLY : FileFlags.O_RDONLY;
+        var mountFile = new MountFile(detachedMount!, mountFileFlags);
+        return sm.AllocFD(mountFile);
+    }
 
     /// <summary>
     /// open_tree(2) - Get a file descriptor for a mount point
@@ -2047,13 +2110,16 @@ public partial class SyscallManager
         {
             // Clone the mount with the specific dentry as root (for bind mounts)
             var clonedMount = mount.Clone(loc.Dentry);
-            mountFile = new MountFile(clonedMount);
+            var mountFileFlags =
+                (flags & OPEN_TREE_CLOEXEC) != 0 ? FileFlags.O_CLOEXEC | FileFlags.O_RDONLY : FileFlags.O_RDONLY;
+            mountFile = new MountFile(clonedMount, mountFileFlags);
         }
         else
         {
             // Return a file descriptor for the mount point (not cloning)
-            mountFile = new MountFile(mount);
-            mount.Get(); // Increase ref count
+            var mountFileFlags =
+                (flags & OPEN_TREE_CLOEXEC) != 0 ? FileFlags.O_CLOEXEC | FileFlags.O_RDONLY : FileFlags.O_RDONLY;
+            mountFile = new MountFile(mount, mountFileFlags);
         }
 
         // Allocate FD
@@ -2101,17 +2167,8 @@ public partial class SyscallManager
         if (!toLoc.IsValid) return -(int)Errno.ENOENT;
         if (toLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        var toDentry = toLoc.Dentry;
-        var toMount = toLoc.Mount!;
-
-        // Ensure types match (directory to directory, or file to file)
-        var isTargetDir = toDentry.Inode.Type == InodeType.Directory;
-        var isSourceDir = mount.Root.Inode?.Type == InodeType.Directory;
-        if (isTargetDir && !isSourceDir) return -(int)Errno.ENOTDIR;
-        if (!isTargetDir && isSourceDir) return -(int)Errno.ENOTDIR;
-
-        // Attach the mount
-        sm.RegisterMount(mount, toMount, toDentry);
+        var attachRc = sm.AttachDetachedMount(mount, toLoc);
+        if (attachRc != 0) return attachRc;
 
         var targetPathStr = sm.GetAbsolutePath(toLoc);
 
@@ -2169,31 +2226,10 @@ public partial class SyscallManager
         var attrSet = BitConverter.ToUInt64(buf, 0);
         var attrClr = BitConverter.ToUInt64(buf, 8);
 
-        // Apply attributes
-        uint newFlags = mount.Flags;
-
-        // Clear attributes
-        if ((attrClr & MOUNT_ATTR_RDONLY) != 0) newFlags &= ~LinuxConstants.MS_RDONLY;
-        if ((attrClr & MOUNT_ATTR_NOSUID) != 0) newFlags &= ~LinuxConstants.MS_NOSUID;
-        if ((attrClr & MOUNT_ATTR_NODEV) != 0) newFlags &= ~LinuxConstants.MS_NODEV;
-        if ((attrClr & MOUNT_ATTR_NOEXEC) != 0) newFlags &= ~LinuxConstants.MS_NOEXEC;
-
-        // Set attributes
-        if ((attrSet & MOUNT_ATTR_RDONLY) != 0) newFlags |= LinuxConstants.MS_RDONLY;
-        if ((attrSet & MOUNT_ATTR_NOSUID) != 0) newFlags |= LinuxConstants.MS_NOSUID;
-        if ((attrSet & MOUNT_ATTR_NODEV) != 0) newFlags |= LinuxConstants.MS_NODEV;
-        if ((attrSet & MOUNT_ATTR_NOEXEC) != 0) newFlags |= LinuxConstants.MS_NOEXEC;
-
-        mount.Flags = newFlags;
-
-        // Update mount info options string
-        var opts = new List<string> { (newFlags & LinuxConstants.MS_RDONLY) != 0 ? "ro" : "rw" };
-        if ((newFlags & LinuxConstants.MS_NOSUID) != 0) opts.Add("nosuid");
-        if ((newFlags & LinuxConstants.MS_NODEV) != 0) opts.Add("nodev");
-        if ((newFlags & LinuxConstants.MS_NOEXEC) != 0) opts.Add("noexec");
-        opts.Add("relatime");
-
-        mount.Options = string.Join(",", opts);
+        var setMask = SyscallManager.MapMountAttrToMountFlags(attrSet);
+        var clearMask = SyscallManager.MapMountAttrToMountFlags(attrClr);
+        mount.Flags = SyscallManager.ApplyMountFlagUpdate(mount.Flags, setMask, clearMask);
+        SyscallManager.RefreshMountOptions(mount);
 
         return 0;
     }

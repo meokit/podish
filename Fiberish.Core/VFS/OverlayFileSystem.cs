@@ -31,12 +31,19 @@ public class OverlayFileSystem : FileSystem
 
         var lowers = options.Lowers?.Where(l => l != null).ToList() ?? [];
         if (lowers.Count == 0 && options.Lower != null) lowers.Add(options.Lower);
+        if (lowers.Count == 0 && options.LowerRoots != null)
+            lowers.AddRange(options.LowerRoots.Select(r => r.SuperBlock).Where(sb => sb != null).Distinct());
         if (lowers.Count == 0)
             throw new ArgumentException("OverlayFS requires at least one lower superblock");
+        var upper = options.Upper ?? options.UpperRoot?.SuperBlock;
+        if (upper == null)
+            throw new ArgumentException("OverlayFS requires an upper layer");
 
-        var sb = new OverlaySuperBlock(fsType, lowers, options.Upper);
-        var lowerRoots = lowers.Select(l => l.Root).Where(r => r != null).ToList();
-        sb.Root = new Dentry("/", new OverlayInode(sb, lowerRoots!, options.Upper.Root), null, sb);
+        var sb = new OverlaySuperBlock(fsType, lowers, upper);
+        var lowerRoots = options.LowerRoots?.Where(r => r != null).ToList() ??
+                         lowers.Select(l => l.Root).Where(r => r != null).ToList();
+        var upperRoot = options.UpperRoot ?? upper.Root;
+        sb.Root = new Dentry("/", new OverlayInode(sb, lowerRoots!, upperRoot), null, sb);
         sb.Root.Parent = sb.Root;
 
         return sb;
@@ -47,7 +54,9 @@ public class OverlayMountOptions
 {
     public SuperBlock? Lower { get; set; }
     public IReadOnlyList<SuperBlock>? Lowers { get; set; }
-    public SuperBlock Upper { get; set; } = null!;
+    public SuperBlock? Upper { get; set; }
+    public IReadOnlyList<Dentry>? LowerRoots { get; set; }
+    public Dentry? UpperRoot { get; set; }
 }
 
 public class OverlaySuperBlock : SuperBlock

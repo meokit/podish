@@ -1,5 +1,8 @@
 using System.Text;
+using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
 
@@ -133,6 +136,83 @@ public class HostfsMetadataTests
         finally
         {
             if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void MountHostfs_ReadOnly_UsesDetachedMount_AndDoesNotCreateMetaDir()
+    {
+        var hostDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(hostDir);
+        File.WriteAllText(Path.Combine(hostDir, "data.txt"), "hello");
+
+        using var engine = new Engine();
+        var vma = new VMAManager();
+        var sm = new SyscallManager(engine, vma, 0);
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+        var rootSb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootMount = new Mount(rootSb, rootSb.Root)
+        {
+            Source = "tmpfs",
+            FsType = "tmpfs",
+            Options = "rw"
+        };
+        sm.InitializeRoot(rootSb.Root, rootMount);
+
+        try
+        {
+            sm.MountHostfs(hostDir, "/mnt", readOnly: true);
+
+            var loc = sm.PathWalkWithFlags("/mnt/data.txt", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            Assert.Equal("hostfs", loc.Mount!.FsType);
+            Assert.True(loc.Mount.IsReadOnly);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount);
+            var buf = new byte[16];
+            var n = loc.Dentry!.Inode!.Read(file, buf, 0);
+            Assert.Equal("hello", Encoding.UTF8.GetString(buf, 0, n));
+
+            Assert.False(Directory.Exists(Path.Combine(hostDir, ".fiberish_meta")));
+        }
+        finally
+        {
+            sm.Close();
+            if (Directory.Exists(hostDir)) Directory.Delete(hostDir, true);
+        }
+    }
+
+    [Fact]
+    public void MountRootHostfs_ReadOnlyMetadataless_DoesNotCreateMetaDir()
+    {
+        var hostDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(hostDir);
+        File.WriteAllText(Path.Combine(hostDir, "root-data.txt"), "hello-root");
+
+        using var engine = new Engine();
+        var vma = new VMAManager();
+        var sm = new SyscallManager(engine, vma, 0);
+
+        try
+        {
+            sm.MountRootHostfs(hostDir, "ro,metadataless");
+
+            var loc = sm.PathWalkWithFlags("/root-data.txt", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            Assert.Equal("hostfs", loc.Mount!.FsType);
+            Assert.True(loc.Mount.IsReadOnly);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount);
+            var buf = new byte[32];
+            var n = loc.Dentry!.Inode!.Read(file, buf, 0);
+            Assert.Equal("hello-root", Encoding.UTF8.GetString(buf, 0, n));
+
+            Assert.False(Directory.Exists(Path.Combine(hostDir, ".fiberish_meta")));
+        }
+        finally
+        {
+            sm.Close();
+            if (Directory.Exists(hostDir)) Directory.Delete(hostDir, true);
         }
     }
 }

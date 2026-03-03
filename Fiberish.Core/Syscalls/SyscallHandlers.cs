@@ -293,6 +293,9 @@ public partial class SyscallManager
         // New Mount API
         Register(X86SyscallNumbers.open_tree, SysOpenTree);
         Register(X86SyscallNumbers.move_mount, SysMoveMount);
+        Register(X86SyscallNumbers.fsopen, SysFsopen);
+        Register(X86SyscallNumbers.fsconfig, SysFsconfig);
+        Register(X86SyscallNumbers.fsmount, SysFsmount);
         Register(X86SyscallNumbers.mount_setattr, SysMountSetattr);
 
         // Magic Syscall for debugging

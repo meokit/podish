@@ -7,7 +7,7 @@ namespace Fiberish.VFS;
 /// </summary>
 public class MountFile : LinuxFile
 {
-    public MountFile(Mount mount) : base(mount.Root, FileFlags.O_RDONLY, mount)
+    public MountFile(Mount mount, FileFlags flags = FileFlags.O_RDONLY) : base(mount.Root, flags, mount)
     {
         // Mount is set via base constructor
         mount.Get(); // Extra reference for the DetachedMount property

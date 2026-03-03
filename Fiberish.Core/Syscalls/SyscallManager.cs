@@ -12,6 +12,9 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    public const uint MountFlagMask = LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID |
+                                      LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
+
     public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
 
     private const int MaxSyscalls = 512;
@@ -20,6 +23,7 @@ public partial class SyscallManager
     private static readonly object _registryLock = new();
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
+    private readonly List<Mount> _containerOwnedMounts = [];
 
     internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
 
@@ -185,15 +189,14 @@ public partial class SyscallManager
 
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
-        var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostPath, null);
-        var mount = new Mount(sb, sb.Root)
-        {
-            Source = hostPath,
-            FsType = "hostfs",
-            Options = options
-        };
-        InitializeRoot(sb.Root, mount);
+        var mountFlags = ParseMountFlagsFromOptions(options);
+        var fsCtx = BuildFsContextFromLegacyMount("hostfs", hostPath, mountFlags, options);
+        var mountRc = CreateDetachedMountFromFsContext(fsCtx, 0, out var mount, (int)mountFlags);
+        if (mountRc != 0 || mount == null)
+            throw new IOException($"Failed to create root hostfs mount: rc={mountRc}");
+
+        mount.Options = options;
+        InitializeRoot(mount.Root, mount);
     }
 
     public void MountRootOverlay(string hostRoot, string upperName = "overlay_upper",
@@ -209,39 +212,44 @@ public partial class SyscallManager
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
         var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
 
-        var mount = new Mount(overlaySb, overlaySb.Root)
-        {
-            Source = "overlay",
-            FsType = "overlay",
-            Options = options
-        };
+        var mountFlags = ParseMountFlagsFromOptions(options);
+        var mount = CreateDetachedMount(overlaySb, "overlay", "overlay", mountFlags);
+        mount.Options = options;
         InitializeRoot(overlaySb.Root, mount);
     }
 
     public void MountStandardDev(TtyDiscipline? tty = null, bool ensureMountPoint = true)
     {
-        if (ensureMountPoint) EnsureDirectory(Root, "dev");
-
+        var devLoc = ensureMountPoint ? EnsureDirectory(Root, "dev") : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
         var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
 
-        var devDentry = Root.Dentry!.Inode?.Lookup("dev");
-        if (devDentry != null && devDentry.Inode?.Type == InodeType.Directory)
-            Mount(Root, "dev", devSb, "devtmpfs", "devtmpfs", "rw,relatime", "/dev");
+        if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
+        {
+            var devMount = CreateDetachedMount(devSb, "devtmpfs", "devtmpfs", 0);
+            var attachRc = AttachDetachedMount(devMount, devLoc);
+            if (attachRc != 0)
+                Logger.LogWarning("Failed to mount devtmpfs at /dev: rc={Rc}", attachRc);
+        }
         else
+        {
             Logger.LogWarning("/dev not found in rootfs, skipping devtmpfs mount.");
+        }
 
         // Initialize stdio FDs (uses devSb which might or might not be mounted)
         InitStdio(devSb, tty ?? Tty);
 
         // Mount devpts through the mounted /dev to avoid creating pts under a detached devtmpfs root.
-        var devLoc = PathWalk("/dev");
-        if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
+        var mountedDevLoc = PathWalk("/dev");
+        if (mountedDevLoc.IsValid && mountedDevLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
-            EnsureDirectory(devLoc, "pts");
+            var ptsLoc = EnsureDirectory(mountedDevLoc, "pts");
             var devptsFsType = FileSystemRegistry.Get("devpts")!;
             var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
-            Mount(devLoc, "pts", devptsSb, "devpts", "devpts", "rw,relatime,gid=5,mode=620", "/dev/pts");
+            var devptsMount = CreateDetachedMount(devptsSb, "devpts", "devpts", 0, "gid=5,mode=620");
+            var attachRc = AttachDetachedMount(devptsMount, ptsLoc);
+            if (attachRc != 0)
+                Logger.LogWarning("Failed to mount devpts at /dev/pts: rc={Rc}", attachRc);
         }
         else
         {
@@ -251,14 +259,15 @@ public partial class SyscallManager
 
     public void MountStandardProc(bool ensureMountPoint = true)
     {
-        if (ensureMountPoint) EnsureDirectory(Root, "proc");
-
-        var procDentry = Root.Dentry!.Inode?.Lookup("proc");
-        if (procDentry != null && procDentry.Inode?.Type == InodeType.Directory)
+        var procLoc = ensureMountPoint ? EnsureDirectory(Root, "proc") : PathWalk("/proc");
+        if (procLoc.IsValid && procLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
             var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", this);
-            Mount(Root, "proc", procSb, "proc", "proc", "rw,relatime", "/proc");
+            var procMount = CreateDetachedMount(procSb, "proc", "proc", 0);
+            var attachRc = AttachDetachedMount(procMount, procLoc);
+            if (attachRc != 0)
+                Logger.LogWarning("Failed to mount procfs at /proc: rc={Rc}", attachRc);
         }
         else
         {
@@ -275,8 +284,12 @@ public partial class SyscallManager
         var devLoc = PathWalk("/dev");
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
-            EnsureDirectory(devLoc, "shm");
-            Mount(devLoc, "shm", shmSb, "tmpfs", "tmpfs", "rw,nosuid,nodev", "/dev/shm");
+            var shmLoc = EnsureDirectory(devLoc, "shm");
+            var shmMount = CreateDetachedMount(shmSb, "tmpfs", "tmpfs",
+                LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV);
+            var attachRc = AttachDetachedMount(shmMount, shmLoc);
+            if (attachRc != 0)
+                Logger.LogWarning("Failed to mount tmpfs at /dev/shm: rc={Rc}", attachRc);
         }
         else
         {
@@ -413,16 +426,35 @@ public partial class SyscallManager
             throw new FileNotFoundException("Host path not found", hostPath);
         }
 
-        var fsType = FileSystemRegistry.Get("hostfs") ?? throw new Exception("hostfs not registered");
-        var optionsText = readOnly ? "ro,metadataless" : "rw";
-        var options = HostfsMountOptions.Parse(optionsText);
-        var sb = new HostSuperBlock(fsType, hostPath, options);
-        var rootDentry = sb.GetDentry(hostPath, "/", null) ??
-                         throw new FileNotFoundException("Root path not found", hostPath);
-        sb.Root = rootDentry;
-        sb.Root.Parent = sb.Root;
+        var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, "hostfs");
+        fsCtx.SetString("source", hostPath);
+        if (readOnly)
+        {
+            fsCtx.SetFlag("ro");
+            fsCtx.SetFlag("metadataless");
+        }
+        else
+        {
+            fsCtx.SetFlag("rw");
+        }
+        fsCtx.State = FsContextState.Created;
 
-        Mount(current, name, sb, hostPath, "hostfs", optionsText, guestPath);
+        var mountRc = CreateDetachedMountFromFsContext(fsCtx, 0, out var detachedMount);
+        if (mountRc != 0 || detachedMount == null)
+            throw new IOException($"Failed to create detached hostfs mount: rc={mountRc}");
+
+        var mountHandle = new MountFile(detachedMount);
+        try
+        {
+            var targetLoc = new PathLocation(current.Dentry!.Children[name], current.Mount);
+            var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
+            if (attachRc != 0)
+                throw new IOException($"Failed to attach detached hostfs mount: rc={attachRc}");
+        }
+        finally
+        {
+            mountHandle.Close();
+        }
     }
 
     public void MountDetachedTmpfsFile(string guestPath, string sourceName, ReadOnlySpan<byte> content, bool readOnly = true)
@@ -439,8 +471,17 @@ public partial class SyscallManager
         var name = parts[^1];
         EnsureFileMountPoint(current, name);
 
-        var tmpFsType = FileSystemRegistry.Get("tmpfs") ?? throw new Exception("tmpfs not registered");
-        var sb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, $"detached:{sourceName}", null);
+        var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, "tmpfs");
+        fsCtx.SetString("source", $"detached:{sourceName}");
+        fsCtx.SetFlag("nosuid");
+        fsCtx.SetFlag("nodev");
+        if (readOnly) fsCtx.SetFlag("ro");
+        fsCtx.State = FsContextState.Created;
+
+        var resolveRc = ResolveFsContextMountPlan(fsCtx, 0, out var sb, out var mountSource, out var fsTypeName,
+            out var mountFlags, out var extraOptions);
+        if (resolveRc != 0 || sb == null || string.IsNullOrEmpty(mountSource) || string.IsNullOrEmpty(fsTypeName))
+            throw new IOException($"Failed to resolve fs context: rc={resolveRc}");
 
         var fileDentry = new Dentry(sourceName, null, sb.Root, sb);
         sb.Root.Inode!.Create(fileDentry, 0x1A4, 0, 0); // 0644
@@ -462,39 +503,270 @@ public partial class SyscallManager
         sb.Root = fileDentry;
         sb.Root.Parent = sb.Root;
 
-        var opts = readOnly ? "ro,nosuid,nodev" : "rw,nosuid,nodev";
-        Mount(current, name, sb, $"tmpfs:{sourceName}", "tmpfs", opts, guestPath);
+        // Align with detached mount fd semantics:
+        // 1) create detached mount, 2) hold via MountFile handle, 3) attach to target.
+        var detachedMount = CreateDetachedMount(sb, mountSource!, fsTypeName!, mountFlags, extraOptions);
+        var mountHandle = new MountFile(detachedMount);
+        try
+        {
+            var targetLoc = new PathLocation(current.Dentry!.Children[name], current.Mount);
+            var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
+            if (attachRc != 0) throw new IOException($"Failed to attach detached tmpfs mount: rc={attachRc}");
+            PinContainerMount(mountHandle.Mount);
+        }
+        finally
+        {
+            mountHandle.Close();
+        }
     }
 
-    private void Mount(PathLocation parent, string name, SuperBlock sb, string source, string fstype, string options,
-        string? targetOverride = null)
+    public void PinContainerMount(Mount mount)
     {
-        // Use cached dentry if available (PathWalk checks Children first, so we must mount on the same object)
-        Dentry dentry;
-        if (parent.Dentry!.Children.TryGetValue(name, out var cached))
-        {
-            dentry = cached;
-        }
-        else
-        {
-            dentry = parent.Dentry.Inode!.Lookup(name) ?? throw new Exception($"Mount point {name} not found");
-            parent.Dentry.Children[name] = dentry; // Cache it so PathWalk finds the mounted dentry
-        }
+        mount.Get();
+        _containerOwnedMounts.Add(mount);
+    }
 
-        // Determine parent mount
-        var parentMount = parent.Mount;
+    public void ReleaseContainerPins()
+    {
+        for (var i = _containerOwnedMounts.Count - 1; i >= 0; i--)
+            _containerOwnedMounts[i].Put();
+        _containerOwnedMounts.Clear();
+    }
 
-        // Create new Mount object and attach it
-        var mount = new Mount(sb, sb.Root)
+    public Mount CreateDetachedMount(SuperBlock sb, string source, string fsType, uint flags, string? extraOptions = null)
+    {
+        return new Mount(sb, sb.Root)
         {
             Source = source,
-            FsType = fstype,
-            Options = options
+            FsType = fsType,
+            Flags = flags,
+            Options = BuildMountOptions(flags, extraOptions)
         };
+    }
 
-        RegisterMount(mount, parentMount, dentry);
+    public static string BuildMountOptions(uint flags, string? extraOptions = null)
+    {
+        var opts = new List<string> { (flags & LinuxConstants.MS_RDONLY) != 0 ? "ro" : "rw" };
+        if ((flags & LinuxConstants.MS_NOSUID) != 0) opts.Add("nosuid");
+        if ((flags & LinuxConstants.MS_NODEV) != 0) opts.Add("nodev");
+        if ((flags & LinuxConstants.MS_NOEXEC) != 0) opts.Add("noexec");
+        opts.Add("relatime");
+        if (!string.IsNullOrWhiteSpace(extraOptions)) opts.Add(extraOptions!);
+        return string.Join(",", opts);
+    }
 
-        var targetPath = targetOverride ?? BuildPath(dentry);
+    public static uint ApplyMountFlagUpdate(uint currentFlags, uint setMask, uint clearMask)
+    {
+        currentFlags &= ~clearMask;
+        currentFlags |= setMask;
+        return currentFlags;
+    }
+
+    public static uint MapMountAttrToMountFlags(ulong attrMask)
+    {
+        uint flags = 0;
+        const ulong MOUNT_ATTR_RDONLY = 0x00000001;
+        const ulong MOUNT_ATTR_NOSUID = 0x00000002;
+        const ulong MOUNT_ATTR_NODEV = 0x00000004;
+        const ulong MOUNT_ATTR_NOEXEC = 0x00000008;
+        if ((attrMask & MOUNT_ATTR_RDONLY) != 0) flags |= LinuxConstants.MS_RDONLY;
+        if ((attrMask & MOUNT_ATTR_NOSUID) != 0) flags |= LinuxConstants.MS_NOSUID;
+        if ((attrMask & MOUNT_ATTR_NODEV) != 0) flags |= LinuxConstants.MS_NODEV;
+        if ((attrMask & MOUNT_ATTR_NOEXEC) != 0) flags |= LinuxConstants.MS_NOEXEC;
+        return flags;
+    }
+
+    public static void RefreshMountOptions(Mount mount)
+    {
+        mount.Options = BuildMountOptions(mount.Flags);
+    }
+
+    public static uint ParseMountFlagsFromOptions(string? options)
+    {
+        if (string.IsNullOrWhiteSpace(options)) return 0;
+        uint flags = 0;
+        var tokens = options.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var token in tokens)
+        {
+            switch (token)
+            {
+                case "ro":
+                    flags |= LinuxConstants.MS_RDONLY;
+                    break;
+                case "rw":
+                    flags &= ~LinuxConstants.MS_RDONLY;
+                    break;
+                case "nosuid":
+                    flags |= LinuxConstants.MS_NOSUID;
+                    break;
+                case "nodev":
+                    flags |= LinuxConstants.MS_NODEV;
+                    break;
+                case "noexec":
+                    flags |= LinuxConstants.MS_NOEXEC;
+                    break;
+            }
+        }
+
+        return flags;
+    }
+
+    public int CreateDetachedMountFromFsContext(FsContextFile fsCtx, uint mountAttrs, out Mount? detachedMount,
+        int readSuperFlags = 0)
+    {
+        detachedMount = null;
+        var rc = ResolveFsContextMountPlan(fsCtx, mountAttrs, out var sb, out var source, out var fsType, out var flags,
+            out var extraOptions, readSuperFlags);
+        if (rc != 0) return rc;
+        detachedMount = CreateDetachedMount(sb!, source!, fsType!, flags, extraOptions);
+        return 0;
+    }
+
+    public int ResolveFsContextMountPlan(FsContextFile fsCtx, uint mountAttrs, out SuperBlock? sb, out string? source,
+        out string? fsTypeName, out uint flags, out string? extraOptions, int readSuperFlags = 0)
+    {
+        sb = null;
+        source = null;
+        fsTypeName = null;
+        flags = 0;
+        extraOptions = null;
+
+        var fsType = FileSystemRegistry.Get(fsCtx.FsType);
+        if (fsType == null) return -(int)Errno.ENODEV;
+
+        extraOptions = fsCtx.BuildMountDataString();
+        source = string.IsNullOrEmpty(fsCtx.Source) ? fsCtx.FsType : fsCtx.Source;
+        fsTypeName = fsCtx.FsType;
+
+        var readSuperDataRc = BuildReadSuperData(fsCtx, extraOptions, out var readSuperData);
+        if (readSuperDataRc != 0) return readSuperDataRc;
+
+        try
+        {
+            sb = fsType.FileSystem.ReadSuper(fsType, readSuperFlags, source!, readSuperData);
+        }
+        catch
+        {
+            return -(int)Errno.EINVAL;
+        }
+
+        if (fsCtx.FlagOptions.Contains("ro")) flags |= LinuxConstants.MS_RDONLY;
+        if (fsCtx.FlagOptions.Contains("nosuid")) flags |= LinuxConstants.MS_NOSUID;
+        if (fsCtx.FlagOptions.Contains("nodev")) flags |= LinuxConstants.MS_NODEV;
+        if (fsCtx.FlagOptions.Contains("noexec")) flags |= LinuxConstants.MS_NOEXEC;
+
+        flags |= MapMountAttrToMountFlags(mountAttrs);
+        return 0;
+    }
+
+    public FsContextFile BuildFsContextFromLegacyMount(string fsType, string source, uint flags, string? dataString)
+    {
+        var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, fsType);
+        if (!string.IsNullOrEmpty(source)) fsCtx.SetString("source", source);
+
+        if ((flags & LinuxConstants.MS_RDONLY) != 0) fsCtx.SetFlag("ro");
+        else fsCtx.SetFlag("rw");
+        if ((flags & LinuxConstants.MS_NOSUID) != 0) fsCtx.SetFlag("nosuid");
+        if ((flags & LinuxConstants.MS_NODEV) != 0) fsCtx.SetFlag("nodev");
+        if ((flags & LinuxConstants.MS_NOEXEC) != 0) fsCtx.SetFlag("noexec");
+
+        if (!string.IsNullOrWhiteSpace(dataString))
+        {
+            var tokens = dataString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var token in tokens)
+            {
+                var eq = token.IndexOf('=');
+                if (eq <= 0)
+                {
+                    fsCtx.SetFlag(token);
+                    continue;
+                }
+
+                var key = token[..eq];
+                var value = token[(eq + 1)..];
+                if (!string.IsNullOrEmpty(key))
+                    fsCtx.SetString(key, value);
+            }
+        }
+
+        fsCtx.State = FsContextState.Created;
+        return fsCtx;
+    }
+
+    private int BuildReadSuperData(FsContextFile fsCtx, string? extraOptions, out object? data)
+    {
+        data = extraOptions;
+        if (!string.Equals(fsCtx.FsType, "overlay", StringComparison.Ordinal))
+            return 0;
+
+        return BuildOverlayMountOptions(extraOptions, out data);
+    }
+
+    private int BuildOverlayMountOptions(string? optionString, out object? data)
+    {
+        data = null;
+        if (string.IsNullOrWhiteSpace(optionString))
+            return -(int)Errno.EINVAL;
+
+        string? lowerdir = null;
+        string? upperdir = null;
+        var tokens = optionString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var token in tokens)
+        {
+            var eq = token.IndexOf('=');
+            if (eq <= 0 || eq == token.Length - 1) continue;
+            var key = token[..eq];
+            var value = token[(eq + 1)..];
+            if (string.Equals(key, "lowerdir", StringComparison.Ordinal))
+                lowerdir = value;
+            else if (string.Equals(key, "upperdir", StringComparison.Ordinal))
+                upperdir = value;
+        }
+
+        if (string.IsNullOrEmpty(lowerdir) || string.IsNullOrEmpty(upperdir))
+            return -(int)Errno.EINVAL;
+
+        var lowerRoots = new List<Dentry>();
+        var lowerSbs = new List<SuperBlock>();
+        var lowerParts = lowerdir.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var lowerPath in lowerParts)
+        {
+            var lowerLoc = PathWalkWithFlags(lowerPath, LookupFlags.FollowSymlink);
+            if (!lowerLoc.IsValid || lowerLoc.Dentry?.Inode?.Type != InodeType.Directory || lowerLoc.Mount == null)
+                return -(int)Errno.EINVAL;
+            lowerRoots.Add(lowerLoc.Dentry);
+            lowerSbs.Add(lowerLoc.Mount.SB);
+        }
+
+        var upperLoc = PathWalkWithFlags(upperdir, LookupFlags.FollowSymlink);
+        if (!upperLoc.IsValid || upperLoc.Dentry?.Inode?.Type != InodeType.Directory || upperLoc.Mount == null)
+            return -(int)Errno.EINVAL;
+
+        data = new OverlayMountOptions
+        {
+            LowerRoots = lowerRoots,
+            Lowers = lowerSbs,
+            UpperRoot = upperLoc.Dentry,
+            Upper = upperLoc.Mount.SB
+        };
+        return 0;
+    }
+
+    public int AttachDetachedMount(Mount mount, PathLocation toLoc)
+    {
+        if (!toLoc.IsValid || toLoc.Dentry?.Inode == null || toLoc.Mount == null) return -(int)Errno.ENOENT;
+        if (toLoc.Dentry.IsMounted) return -(int)Errno.EBUSY;
+
+        var toDentry = toLoc.Dentry;
+        var toMount = toLoc.Mount;
+
+        var isTargetDir = toDentry.Inode.Type == InodeType.Directory;
+        var isSourceDir = mount.Root.Inode?.Type == InodeType.Directory;
+        if (isTargetDir && !isSourceDir) return -(int)Errno.ENOTDIR;
+        if (!isTargetDir && isSourceDir) return -(int)Errno.ENOTDIR;
+
+        RegisterMount(mount, toMount, toDentry);
+        return 0;
     }
 
     /// <summary>
@@ -543,22 +815,6 @@ public partial class SyscallManager
 
             if (current.Parent == null || current.Parent == current) break;
             current = current.Parent;
-        }
-
-        parts.Reverse();
-        return "/" + string.Join("/", parts);
-    }
-
-    private static string BuildPath(Dentry dentry)
-    {
-        var parts = new List<string>();
-        var cur = dentry;
-        while (cur != null)
-        {
-            if (cur.Name != "/") parts.Add(cur.Name);
-
-            if (cur.Parent == null || cur.Parent == cur) break;
-            cur = cur.Parent;
         }
 
         parts.Reverse();
@@ -810,6 +1066,13 @@ public partial class SyscallManager
             if (Engine != null)
                 _registry.Remove(Engine.State);
         }
+
+        // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
+        ReleaseContainerPins();
+
+        // Release mount namespace ownership refs (including root mount).
+        foreach (var mount in _mountNamespace.Mounts.ToArray())
+            _mountNamespace.UnregisterMount(mount);
 
         Root.Dentry?.Inode?.Put();
         CurrentWorkingDirectory.Dentry?.Inode?.Put();
