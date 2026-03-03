@@ -906,6 +906,13 @@ internal class Program
                 return false;
             if (!_digestToBlobPath.TryGetValue(entry.BlobDigest, out var blobPath))
                 return false;
+            if (offset < 0) return false;
+            if ((ulong)offset >= entry.Size) return true;
+
+            var remainingInEntry = (long)entry.Size - offset;
+            if (remainingInEntry <= 0) return true;
+            var maxReadable = (int)Math.Min(buffer.Length, remainingInEntry);
+            if (maxReadable <= 0) return true;
 
             lock (_lock)
             {
@@ -920,7 +927,7 @@ internal class Program
                     return true;
 
                 stream.Seek(start, SeekOrigin.Begin);
-                bytesRead = stream.Read(buffer);
+                bytesRead = stream.Read(buffer[..maxReadable]);
                 return true;
             }
         }
