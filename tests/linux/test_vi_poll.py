@@ -18,14 +18,9 @@ def test_vi_poll_spam(fiberpod_dll, alpine_image):
     if os.path.exists(EMULATOR_LOG):
         os.remove(EMULATOR_LOG)
 
-    vi_bin = os.path.join(alpine_image, "bin/busybox")
-    if not os.path.exists(vi_bin):
-        import pytest
-        pytest.skip(f"busybox binary not found at {vi_bin}")
-
     args = [
         fiberpod_dll,
-        "--log-level", "Trace",
+        "--log-level", "debug",
         "--log-file", EMULATOR_LOG,
         "run",
         "-i",
