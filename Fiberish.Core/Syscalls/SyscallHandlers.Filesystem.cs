@@ -77,8 +77,6 @@ public partial class SyscallManager
         var newpath = sm.ReadString(a4);
         var flags = (int)a5;
 
-        Logger.LogInformation($"[Linkat] olddirfd={olddirfd} oldpath='{oldpath}' newdirfd={newdirfd} newpath='{newpath}' flags={flags:X}");
-
         PathLocation oldStartLoc = default;
         if (olddirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !oldpath.StartsWith("/"))
         {
@@ -96,32 +94,15 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
-        
-        // Debug: what does /proc/self/fd/7 resolve to?
-        if (oldpath.StartsWith("/proc/self/fd/"))
-        {
-            var testLoc = sm.PathWalkWithFlags(oldpath, LookupFlags.None); // no follow
-            if (testLoc.IsValid && testLoc.Dentry?.Inode?.Type == InodeType.Symlink)
-            {
-                var resolved = testLoc.Dentry.Inode.Readlink();
-                Logger.LogInformation($"[Linkat] symlink '{oldpath}' resolves to: '{resolved}'");
-            }
-        }
-
         var oldLoc = sm.PathWalkWithFlags(oldpath, oldStartLoc.IsValid ? oldStartLoc : sm.CurrentWorkingDirectory, followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
         if (!oldLoc.IsValid)
         {
-            Logger.LogInformation($"[Linkat] oldLoc invalid for {oldpath}");
             return -(int)Errno.ENOENT;
         }
         if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
         var (dirLoc, name, err) = sm.PathWalkForCreate(newpath, newStartLoc.IsValid ? newStartLoc : null);
-        if (err != 0)
-        {
-            Logger.LogInformation($"[Linkat] PathWalkForCreate failed for {newpath} err={err}");
-            return err;
-        }
+        if (err != 0) return err;
         if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount))
@@ -1840,7 +1821,6 @@ public partial class SyscallManager
         if (!targetLoc.IsValid || targetLoc.Mount == null) return -22; // EINVAL
 
         var mount = targetLoc.Mount;
-
         // If the path is not the root of the mount, it's not a mount point
         if (targetLoc.Dentry != mount.Root) return -22; // EINVAL
 
@@ -1871,7 +1851,6 @@ public partial class SyscallManager
         if (!targetLoc.IsValid || targetLoc.Mount == null) return -22; // EINVAL
 
         var mount = targetLoc.Mount;
-
         if (targetLoc.Dentry != mount.Root) return -22; // EINVAL
         if (mount == sm.Root.Mount) return -22; // EINVAL // Cannot unmount root
 

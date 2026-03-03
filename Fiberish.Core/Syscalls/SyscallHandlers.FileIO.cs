@@ -332,6 +332,7 @@ public partial class SyscallManager
 
         // Use PathWalkWithMount to track mount information
         var loc = sm.PathWalk(path, startLoc.IsValid ? startLoc : null, !noFollow);
+
         var dentry = loc.Dentry;
         var mount = loc.Mount;
 
