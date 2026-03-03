@@ -23,6 +23,22 @@ def _run_fiberpod_cli(project_root: Path, *args: str) -> subprocess.CompletedPro
         text=True,
     )
 
+def _run_fiberpod_cli_bin(project_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            "dotnet",
+            "run",
+            "--project",
+            str(project_root / "FiberPod" / "FiberPod.csproj"),
+            "--no-build",
+            "--",
+            *args,
+        ],
+        cwd=str(project_root),
+        capture_output=True,
+        text=False,
+    )
+
 
 def test_save_load_roundtrip_contract(project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path) -> None:
     _ = fiberpod_dll  # force build fixture
@@ -80,6 +96,34 @@ def test_import_contract(project_root: Path, fiberpod_dll: str, tmp_path: Path) 
     assert image_json.exists(), "import did not create image metadata"
 
 
+def test_import_gzip_contract(project_root: Path, fiberpod_dll: str, tmp_path: Path) -> None:
+    _ = fiberpod_dll  # force build fixture
+
+    rootfs_tar = tmp_path / "mini-rootfs-gz.tar"
+    payload_file = tmp_path / "hello-gz.txt"
+    payload_file.write_text("hello-from-import-gzip\n", encoding="utf-8")
+    with tarfile.open(rootfs_tar, "w") as tf:
+        tf.add(payload_file, arcname="hello-gz.txt")
+
+    rootfs_targz = tmp_path / "mini-rootfs-gz.tar.gz"
+    with open(rootfs_tar, "rb") as src, open(rootfs_targz, "wb") as dst:
+        import gzip
+        with gzip.GzipFile(fileobj=dst, mode="wb") as gz:
+            gz.write(src.read())
+
+    import_res = _run_fiberpod_cli(
+        project_root,
+        "import",
+        str(rootfs_targz),
+        "localhost/fiberpod-import:gzip",
+    )
+    assert import_res.returncode == 0, (
+        f"import gzip failed\nstdout:\n{import_res.stdout}\nstderr:\n{import_res.stderr}"
+    )
+    store_dir = project_root / ".fiberpod" / "oci" / "images" / "localhost_fiberpod-import_gzip"
+    assert (store_dir / "image.json").exists(), "gzip import did not create image metadata"
+
+
 def test_export_contract(project_root: Path, fiberpod_dll: str, alpine_image: str, tmp_path: Path) -> None:
     _ = fiberpod_dll  # force build fixture
     _ = alpine_image
@@ -121,3 +165,18 @@ def test_export_contract(project_root: Path, fiberpod_dll: str, alpine_image: st
         marker_text = marker.read().decode("utf-8").strip() if marker is not None else ""
     assert "bin/sh" in names or "./bin/sh" in names, "export archive missing expected rootfs content"
     assert marker_text == "upper-export-ok"
+
+    export_stdout_res = _run_fiberpod_cli_bin(
+        project_root,
+        "export",
+        container_id,
+    )
+    assert export_stdout_res.returncode == 0, (
+        f"export stdout failed\nstdout bytes={len(export_stdout_res.stdout)}\nstderr:\n"
+        f"{export_stdout_res.stderr.decode('utf-8', errors='replace')}"
+    )
+    stdout_archive = tmp_path / "container-export-stdout.tar"
+    stdout_archive.write_bytes(export_stdout_res.stdout)
+    with tarfile.open(stdout_archive, "r") as tf:
+        names_stdout = set(tf.getnames())
+    assert "tmp/fiberpod-export-marker.txt" in names_stdout

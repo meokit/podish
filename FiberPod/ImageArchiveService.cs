@@ -234,8 +234,6 @@ internal sealed class ImageArchiveService
 
     public string Import(string sourceTar, string imageReference)
     {
-        if (!File.Exists(sourceTar))
-            throw new FileNotFoundException($"import source not found: {sourceTar}");
         if (string.IsNullOrWhiteSpace(imageReference))
             imageReference = "localhost/fiberpod-import:latest";
 
@@ -246,39 +244,59 @@ internal sealed class ImageArchiveService
         Directory.CreateDirectory(blobsDir);
         Directory.CreateDirectory(indexesDir);
 
-        var digestHex = Sha256HexOfFile(sourceTar);
-        var digest = "sha256:" + digestHex;
-        var blobPath = Path.Combine(blobsDir, $"{digestHex}.tar");
-        File.Copy(sourceTar, blobPath, overwrite: true);
+        var tempFiles = new List<string>();
+        try
+        {
+            var normalizedTar = PrepareImportTar(sourceTar, tempFiles);
 
-        LayerIndex index;
-        using (var tarStream = File.OpenRead(blobPath))
-            index = OciLayerIndexBuilder.BuildFromTar(tarStream, digest);
-        var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
-        File.WriteAllText(indexPath, JsonSerializer.Serialize(index.Entries.Values.ToList(), JsonOptions));
+            var digestHex = Sha256HexOfFile(normalizedTar);
+            var digest = "sha256:" + digestHex;
+            var blobPath = Path.Combine(blobsDir, $"{digestHex}.tar");
+            File.Copy(normalizedTar, blobPath, overwrite: true);
 
-        var (registry, repository, tag) = ParseImageReference(imageReference);
-        var layerSize = new FileInfo(blobPath).Length;
-        var image = new OciStoredImage(
-            imageReference,
-            registry,
-            repository,
-            tag,
-            digest,
-            storeDir,
-            new[]
+            LayerIndex index;
+            using (var tarStream = File.OpenRead(blobPath))
+                index = OciLayerIndexBuilder.BuildFromTar(tarStream, digest);
+            var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
+            File.WriteAllText(indexPath, JsonSerializer.Serialize(index.Entries.Values.ToList(), JsonOptions));
+
+            var (registry, repository, tag) = ParseImageReference(imageReference);
+            var layerSize = new FileInfo(blobPath).Length;
+            var image = new OciStoredImage(
+                imageReference,
+                registry,
+                repository,
+                tag,
+                digest,
+                storeDir,
+                new[]
+                {
+                    new OciStoredLayer(
+                        digest,
+                        "application/vnd.oci.image.layer.v1.tar",
+                        layerSize,
+                        blobPath,
+                        indexPath)
+                });
+
+            File.WriteAllText(Path.Combine(storeDir, "image.json"),
+                JsonSerializer.Serialize(image, JsonOptions));
+            return image.ImageReference;
+        }
+        finally
+        {
+            foreach (var file in tempFiles)
             {
-                new OciStoredLayer(
-                    digest,
-                    "application/vnd.oci.image.layer.v1.tar",
-                    layerSize,
-                    blobPath,
-                    indexPath)
-            });
-
-        File.WriteAllText(Path.Combine(storeDir, "image.json"),
-            JsonSerializer.Serialize(image, JsonOptions));
-        return image.ImageReference;
+                try
+                {
+                    if (File.Exists(file))
+                        File.Delete(file);
+                }
+                catch
+                {
+                }
+            }
+        }
     }
 
     public void Export(string containerId, string outputArchive)
@@ -299,21 +317,41 @@ internal sealed class ImageArchiveService
         if (File.Exists(tmp))
             File.Delete(tmp);
 
+        using (var fs = File.Create(tmp))
+        {
+            ExportInternal(containerId, imageRef, upperStore, fs);
+        }
+        File.Move(tmp, outputArchive, overwrite: true);
+    }
+
+    public void ExportToStream(string containerId, Stream output)
+    {
+        if (string.IsNullOrWhiteSpace(containerId))
+            throw new InvalidOperationException("container id is required");
+        if (output == null || !output.CanWrite)
+            throw new InvalidOperationException("output stream is not writable");
+
+        var imageRef = ResolveImageReferenceForContainer(containerId);
+        if (string.IsNullOrWhiteSpace(imageRef))
+            throw new InvalidOperationException($"container not found: {containerId}");
+        var containerDir = Path.Combine(_fiberpodDir, "containers", containerId);
+        var upperStore = Path.Combine(containerDir, "silk-upper");
+        ExportInternal(containerId, imageRef, upperStore, output);
+    }
+
+    private void ExportInternal(string containerId, string imageRef, string upperStore, Stream output)
+    {
+        _ = containerId;
         var (rootDentry, exportMount, disposer) = OpenExportView(imageRef, upperStore);
         try
         {
-        using (var fs = File.Create(tmp))
-        using (var writer = new TarWriter(fs, TarEntryFormat.Pax, leaveOpen: false))
-        {
+            using var writer = new TarWriter(output, TarEntryFormat.Pax, leaveOpen: true);
             WriteDentryTreeToTar(writer, rootDentry, exportMount, "");
-        }
         }
         finally
         {
             disposer.Dispose();
         }
-
-        File.Move(tmp, outputArchive, overwrite: true);
     }
 
     private (Dentry Root, Mount ExportMount, IDisposable Disposer) OpenExportView(string imageRef, string upperStore)
@@ -608,6 +646,57 @@ internal sealed class ImageArchiveService
         }
 
         return blobPath;
+    }
+
+    private static string PrepareImportTar(string source, List<string> tempFiles)
+    {
+        var localPath = source;
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            localPath = DownloadToTempFile(uri);
+            tempFiles.Add(localPath);
+        }
+
+        if (!File.Exists(localPath))
+            throw new FileNotFoundException($"import source not found: {source}");
+
+        var tarPath = EnsureUncompressedTar(localPath);
+        if (tarPath != localPath)
+            tempFiles.Add(tarPath);
+
+        ValidateTarHeader(tarPath);
+        return tarPath;
+    }
+
+    private static string DownloadToTempFile(Uri uri)
+    {
+        using var http = new HttpClient();
+        using var resp = http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+        resp.EnsureSuccessStatusCode();
+        var tmp = Path.Combine(Path.GetTempPath(), $"fiberpod-import-{Guid.NewGuid():N}");
+        using var input = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+        using var outFile = File.Create(tmp);
+        input.CopyTo(outFile);
+        return tmp;
+    }
+
+    private static void ValidateTarHeader(string tarPath)
+    {
+        using var fs = File.OpenRead(tarPath);
+        if (fs.Length < 512)
+            throw new InvalidOperationException("import source is not a valid tar archive");
+        var header = new byte[512];
+        var n = fs.Read(header, 0, header.Length);
+        if (n < 512)
+            throw new InvalidOperationException("import source is not a valid tar archive");
+        var allZero = header.All(b => b == 0);
+        if (allZero)
+            throw new InvalidOperationException("import source tar archive is empty");
+        var magic = System.Text.Encoding.ASCII.GetString(header, 257, 5);
+        if (magic != "ustar")
+            throw new InvalidOperationException(
+                "unsupported import archive format: expected tar or tar.gz");
     }
 
     private static void CreateTarFromDirectory(string sourceDir, string tarPath)

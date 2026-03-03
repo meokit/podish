@@ -439,10 +439,9 @@ internal class Program
 
         // --- Export Command ---
         var exportCommand = new Command("export", "Export a container filesystem as tar");
-        var exportOutputOption = new Option<string>(
+        var exportOutputOption = new Option<string?>(
             new[] { "--output", "-o" },
-            "Write to an archive file")
-        { IsRequired = true };
+            "Write to an archive file (default: stdout)");
         var exportContainerArgument = new Argument<string>("container", "Container ID");
         exportCommand.AddOption(exportOutputOption);
         exportCommand.AddArgument(exportContainerArgument);
@@ -450,7 +449,7 @@ internal class Program
         {
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
-            var output = context.ParseResult.GetValueForOption(exportOutputOption)!;
+            var output = context.ParseResult.GetValueForOption(exportOutputOption);
             var container = context.ParseResult.GetValueForArgument(exportContainerArgument);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
@@ -471,8 +470,17 @@ internal class Program
             try
             {
                 var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
-                svc.Export(container, output);
-                Console.WriteLine(output);
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    using var stdout = Console.OpenStandardOutput();
+                    svc.ExportToStream(container, stdout);
+                    stdout.Flush();
+                }
+                else
+                {
+                    svc.Export(container, output);
+                    Console.WriteLine(output);
+                }
             }
             catch (Exception ex)
             {
