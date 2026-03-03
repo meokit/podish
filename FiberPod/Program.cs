@@ -305,6 +305,182 @@ internal class Program
             }
         });
 
+        // --- Save Command ---
+        var saveCommand = new Command("save", "Save image(s) to an archive");
+        var saveOutputOption = new Option<string>(
+            new[] { "--output", "-o" },
+            "Write to an archive file")
+        { IsRequired = true };
+        var saveImagesArgument = new Argument<string[]>("images", "Image references")
+        {
+            Arity = ArgumentArity.OneOrMore
+        };
+        saveCommand.AddOption(saveOutputOption);
+        saveCommand.AddArgument(saveImagesArgument);
+        saveCommand.SetHandler((context) =>
+        {
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
+            var logFile = context.ParseResult.GetValueForOption(logFileOption);
+            var output = context.ParseResult.GetValueForOption(saveOutputOption)!;
+            var images = context.ParseResult.GetValueForArgument(saveImagesArgument) ?? Array.Empty<string>();
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var logsDir = Path.Combine(fiberpodDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            if (logFile == null)
+                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
+            }
+
+            SetupLogging(logLevel, logFile);
+            try
+            {
+                var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
+                svc.Save(output, images);
+                Console.WriteLine(output);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FiberPod] save failed: {ex.Message}");
+                context.ExitCode = 1;
+            }
+        });
+
+        // --- Load Command ---
+        var loadCommand = new Command("load", "Load image(s) from an archive");
+        var loadInputOption = new Option<string>(
+            new[] { "--input", "-i" },
+            "Read from archive file")
+        { IsRequired = true };
+        loadCommand.AddOption(loadInputOption);
+        loadCommand.SetHandler((context) =>
+        {
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
+            var logFile = context.ParseResult.GetValueForOption(logFileOption);
+            var input = context.ParseResult.GetValueForOption(loadInputOption)!;
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var logsDir = Path.Combine(fiberpodDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            if (logFile == null)
+                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
+            }
+
+            SetupLogging(logLevel, logFile);
+            try
+            {
+                var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
+                var loaded = svc.Load(input);
+                foreach (var image in loaded)
+                    Console.WriteLine(image);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FiberPod] load failed: {ex.Message}");
+                context.ExitCode = 1;
+            }
+        });
+
+        // --- Import Command ---
+        var importCommand = new Command("import", "Import a rootfs tar as an image");
+        var importSourceArgument = new Argument<string>("source", "Source rootfs tar file");
+        var importReferenceArgument = new Argument<string?>("reference", () => "localhost/fiberpod-import:latest",
+            "Target image reference");
+        importCommand.AddArgument(importSourceArgument);
+        importCommand.AddArgument(importReferenceArgument);
+        importCommand.SetHandler((context) =>
+        {
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
+            var logFile = context.ParseResult.GetValueForOption(logFileOption);
+            var source = context.ParseResult.GetValueForArgument(importSourceArgument);
+            var reference = context.ParseResult.GetValueForArgument(importReferenceArgument)
+                            ?? "localhost/fiberpod-import:latest";
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var logsDir = Path.Combine(fiberpodDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            if (logFile == null)
+                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
+            }
+
+            SetupLogging(logLevel, logFile);
+            try
+            {
+                var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
+                var image = svc.Import(source, reference);
+                Console.WriteLine(image);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FiberPod] import failed: {ex.Message}");
+                context.ExitCode = 1;
+            }
+        });
+
+        // --- Export Command ---
+        var exportCommand = new Command("export", "Export a container filesystem as tar");
+        var exportOutputOption = new Option<string>(
+            new[] { "--output", "-o" },
+            "Write to an archive file")
+        { IsRequired = true };
+        var exportContainerArgument = new Argument<string>("container", "Container ID");
+        exportCommand.AddOption(exportOutputOption);
+        exportCommand.AddArgument(exportContainerArgument);
+        exportCommand.SetHandler((context) =>
+        {
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
+            var logFile = context.ParseResult.GetValueForOption(logFileOption);
+            var output = context.ParseResult.GetValueForOption(exportOutputOption)!;
+            var container = context.ParseResult.GetValueForArgument(exportContainerArgument);
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var logsDir = Path.Combine(fiberpodDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            if (logFile == null)
+                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
+            }
+
+            SetupLogging(logLevel, logFile);
+            try
+            {
+                var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
+                svc.Export(container, output);
+                Console.WriteLine(output);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FiberPod] export failed: {ex.Message}");
+                context.ExitCode = 1;
+            }
+        });
+
         // --- Logs Command ---
         var logsCommand = new Command("logs", "Fetch container logs");
         var logsContainerArgument = new Argument<string>("container", "Container ID");
@@ -377,6 +553,10 @@ internal class Program
 
         rootCommand.AddCommand(runCommand);
         rootCommand.AddCommand(pullCommand);
+        rootCommand.AddCommand(saveCommand);
+        rootCommand.AddCommand(loadCommand);
+        rootCommand.AddCommand(importCommand);
+        rootCommand.AddCommand(exportCommand);
         rootCommand.AddCommand(logsCommand);
         rootCommand.AddCommand(eventsCommand);
 
