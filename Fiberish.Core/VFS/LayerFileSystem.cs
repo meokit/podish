@@ -1,0 +1,347 @@
+using Fiberish.Native;
+
+namespace Fiberish.VFS;
+
+public class LayerFileSystem : FileSystem
+{
+    public LayerFileSystem()
+    {
+        Name = "layerfs";
+    }
+
+    public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
+    {
+        if (data is not LayerMountOptions options)
+            throw new ArgumentException("LayerFS requires LayerMountOptions in data");
+
+        var index = options.Index;
+        if (index == null)
+        {
+            if (options.Root == null)
+                throw new ArgumentException("LayerFS requires either LayerMountOptions.Index or LayerMountOptions.Root");
+            index = LayerIndex.FromNodeTree(options.Root);
+        }
+
+        var contentProvider = options.ContentProvider ?? new InMemoryLayerContentProvider();
+        var sb = new LayerSuperBlock(fsType, index, contentProvider);
+        sb.Root = new Dentry("/", sb.GetOrCreateInode("/"), null, sb);
+        sb.Root.Parent = sb.Root;
+        return sb;
+    }
+}
+
+public class LayerMountOptions
+{
+    public LayerNode? Root { get; init; }
+    public LayerIndex? Index { get; init; }
+    public ILayerContentProvider? ContentProvider { get; init; }
+}
+
+public interface ILayerContentProvider
+{
+    bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead);
+}
+
+public sealed class InMemoryLayerContentProvider : ILayerContentProvider
+{
+    public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+    {
+        bytesRead = 0;
+        if (entry.Type != InodeType.File) return true;
+        if (entry.InlineData == null) return false;
+        if (offset >= entry.InlineData.Length) return true;
+
+        var remaining = entry.InlineData.Length - (int)offset;
+        var toCopy = Math.Min(buffer.Length, remaining);
+        entry.InlineData.AsSpan((int)offset, toCopy).CopyTo(buffer);
+        bytesRead = toCopy;
+        return true;
+    }
+}
+
+public sealed class LayerIndex
+{
+    private readonly Dictionary<string, LayerIndexEntry> _entries = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, string>> _children = new(StringComparer.Ordinal);
+
+    public LayerIndex()
+    {
+        AddEntry(new LayerIndexEntry("/", InodeType.Directory, 0x1ED)); // 0755
+    }
+
+    public IReadOnlyDictionary<string, LayerIndexEntry> Entries => _entries;
+
+    public void AddEntry(LayerIndexEntry entry)
+    {
+        var normalizedPath = NormalizePath(entry.Path);
+        var normalizedEntry = entry with { Path = normalizedPath };
+        _entries[normalizedPath] = normalizedEntry;
+
+        if (normalizedEntry.Type == InodeType.Directory)
+            _children.TryAdd(normalizedPath, new Dictionary<string, string>(StringComparer.Ordinal));
+
+        if (normalizedPath == "/") return;
+
+        var parentPath = GetParentPath(normalizedPath);
+        EnsureDirectory(parentPath);
+        _children[parentPath][GetBaseName(normalizedPath)] = normalizedPath;
+    }
+
+    public bool TryGetEntry(string path, out LayerIndexEntry entry)
+    {
+        return _entries.TryGetValue(NormalizePath(path), out entry!);
+    }
+
+    public bool TryGetChildPath(string parentPath, string name, out string childPath)
+    {
+        childPath = string.Empty;
+        var p = NormalizePath(parentPath);
+        if (!_children.TryGetValue(p, out var map)) return false;
+        return map.TryGetValue(name, out childPath!);
+    }
+
+    public IReadOnlyCollection<string> GetChildNames(string parentPath)
+    {
+        var p = NormalizePath(parentPath);
+        if (!_children.TryGetValue(p, out var map)) return Array.Empty<string>();
+        return map.Keys;
+    }
+
+    public static LayerIndex FromNodeTree(LayerNode root)
+    {
+        var index = new LayerIndex();
+        index.AddFromNode(root, "/");
+        return index;
+    }
+
+    private void AddFromNode(LayerNode node, string path)
+    {
+        var entry = new LayerIndexEntry(
+            path,
+            node.Type,
+            node.Mode,
+            node.Uid,
+            node.Gid,
+            node.Size,
+            node.SymlinkTarget,
+            node.MTime,
+            node.ATime,
+            node.CTime,
+            node.Content,
+            DataOffset: -1);
+        AddEntry(entry);
+
+        if (node.Type != InodeType.Directory || node.Children == null) return;
+        foreach (var child in node.Children.Values)
+            AddFromNode(child, path == "/" ? "/" + child.Name : path + "/" + child.Name);
+    }
+
+    private void EnsureDirectory(string path)
+    {
+        var p = NormalizePath(path);
+        if (_entries.TryGetValue(p, out var existing))
+        {
+            if (existing.Type != InodeType.Directory)
+                throw new InvalidOperationException($"Path '{p}' already exists and is not a directory");
+            _children.TryAdd(p, new Dictionary<string, string>(StringComparer.Ordinal));
+            return;
+        }
+
+        AddEntry(new LayerIndexEntry(p, InodeType.Directory, 0x1ED));
+    }
+
+    private static string NormalizePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "/";
+        var p = path.Replace('\\', '/');
+        if (!p.StartsWith('/')) p = "/" + p;
+        while (p.Contains("//", StringComparison.Ordinal)) p = p.Replace("//", "/", StringComparison.Ordinal);
+        if (p.Length > 1 && p.EndsWith('/')) p = p.TrimEnd('/');
+        return p;
+    }
+
+    private static string GetParentPath(string path)
+    {
+        if (path == "/") return "/";
+        var lastSlash = path.LastIndexOf('/');
+        if (lastSlash <= 0) return "/";
+        return path[..lastSlash];
+    }
+
+    private static string GetBaseName(string path)
+    {
+        if (path == "/") return "/";
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash < 0 ? path : path[(lastSlash + 1)..];
+    }
+}
+
+public sealed record LayerIndexEntry(
+    string Path,
+    InodeType Type,
+    int Mode,
+    int Uid = 0,
+    int Gid = 0,
+    ulong Size = 0,
+    string SymlinkTarget = "",
+    DateTime? MTime = null,
+    DateTime? ATime = null,
+    DateTime? CTime = null,
+    byte[]? InlineData = null,
+    long DataOffset = -1,
+    string BlobDigest = "");
+
+public class LayerSuperBlock : SuperBlock
+{
+    private ulong _nextIno = 1;
+    private readonly Dictionary<string, LayerInode> _inodeByPath = new(StringComparer.Ordinal);
+
+    public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider)
+    {
+        Type = fsType;
+        Index = index;
+        ContentProvider = contentProvider;
+    }
+
+    public LayerIndex Index { get; }
+    public ILayerContentProvider ContentProvider { get; }
+
+    public LayerInode GetOrCreateInode(string path)
+    {
+        var normalized = path.StartsWith('/') ? path : "/" + path;
+        if (_inodeByPath.TryGetValue(normalized, out var inode)) return inode;
+        if (!Index.TryGetEntry(normalized, out var entry))
+            throw new InvalidOperationException($"Layer index entry not found: {normalized}");
+
+        inode = new LayerInode(this, normalized, entry, _nextIno++);
+        _inodeByPath[normalized] = inode;
+        return inode;
+    }
+}
+
+public sealed class LayerNode
+{
+    private LayerNode(string name, InodeType type, int mode)
+    {
+        Name = name;
+        Type = type;
+        Mode = mode;
+        Children = type == InodeType.Directory
+            ? new Dictionary<string, LayerNode>(StringComparer.Ordinal)
+            : null;
+    }
+
+    public string Name { get; }
+    public InodeType Type { get; }
+    public int Mode { get; }
+    public int Uid { get; init; }
+    public int Gid { get; init; }
+    public DateTime MTime { get; init; } = DateTime.UnixEpoch;
+    public DateTime ATime { get; init; } = DateTime.UnixEpoch;
+    public DateTime CTime { get; init; } = DateTime.UnixEpoch;
+    public byte[] Content { get; init; } = [];
+    public string SymlinkTarget { get; init; } = string.Empty;
+    public Dictionary<string, LayerNode>? Children { get; }
+    public ulong Size => (ulong)(Type == InodeType.File ? Content.Length : 0);
+
+    public static LayerNode Directory(string name, int mode = 0x1ED)
+    {
+        return new LayerNode(name, InodeType.Directory, mode);
+    }
+
+    public static LayerNode File(string name, byte[] content, int mode = 0x1A4)
+    {
+        return new LayerNode(name, InodeType.File, mode) { Content = content };
+    }
+
+    public static LayerNode Symlink(string name, string target, int mode = 0x1FF)
+    {
+        return new LayerNode(name, InodeType.Symlink, mode) { SymlinkTarget = target };
+    }
+
+    public LayerNode AddChild(LayerNode child)
+    {
+        if (Children == null) throw new InvalidOperationException("Only directories can have children");
+        Children[child.Name] = child;
+        return this;
+    }
+}
+
+public class LayerInode : Inode
+{
+    private readonly string _path;
+    private readonly LayerIndexEntry _entry;
+
+    public LayerInode(LayerSuperBlock sb, string path, LayerIndexEntry entry, ulong ino)
+    {
+        SuperBlock = sb;
+        _path = path;
+        _entry = entry;
+        Ino = ino;
+        Type = entry.Type;
+        Mode = entry.Mode;
+        Uid = entry.Uid;
+        Gid = entry.Gid;
+        Size = entry.Size;
+        MTime = entry.MTime ?? DateTime.UnixEpoch;
+        ATime = entry.ATime ?? DateTime.UnixEpoch;
+        CTime = entry.CTime ?? DateTime.UnixEpoch;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        if (_entry.Type != InodeType.Directory) return null;
+
+        var sb = (LayerSuperBlock)SuperBlock;
+        if (!sb.Index.TryGetChildPath(_path, name, out var childPath)) return null;
+
+        var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
+        return new Dentry(name, sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
+    }
+
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        if (_entry.Type != InodeType.File) return 0;
+        var sb = (LayerSuperBlock)SuperBlock;
+        return sb.ContentProvider.TryRead(_entry, offset, buffer, out var n) ? n : -(int)Errno.EIO;
+    }
+
+    public override string Readlink()
+    {
+        if (_entry.Type != InodeType.Symlink) throw new InvalidOperationException("Not a symlink");
+        return _entry.SymlinkTarget;
+    }
+
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return -(int)Errno.EROFS;
+    }
+
+    public override int Truncate(long length)
+    {
+        return -(int)Errno.EROFS;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        if (_entry.Type != InodeType.Directory) return [];
+
+        var sb = (LayerSuperBlock)SuperBlock;
+        var names = sb.Index.GetChildNames(_path);
+        var entries = new List<DirectoryEntry>(names.Count);
+        foreach (var name in names)
+        {
+            if (!sb.Index.TryGetChildPath(_path, name, out var childPath)) continue;
+            if (!sb.Index.TryGetEntry(childPath, out var childEntry)) continue;
+            var inode = sb.GetOrCreateInode(childPath);
+            entries.Add(new DirectoryEntry
+            {
+                Name = name,
+                Ino = inode.Ino,
+                Type = childEntry.Type
+            });
+        }
+
+        return entries;
+    }
+}
