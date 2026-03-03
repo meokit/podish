@@ -42,6 +42,7 @@ public partial class SyscallManager
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", FileSystem = new LayerFileSystem() });
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new ProcFileSystem() });
 
         PtyManager = new PtyManager(Logger);
@@ -349,6 +350,40 @@ public partial class SyscallManager
         return new PathLocation(dentry, parent.Mount);
     }
 
+    private static Dentry EnsureFileMountPoint(PathLocation parent, string name)
+    {
+        var parentDentry = parent.Dentry!;
+
+        if (parentDentry.Children.TryGetValue(name, out var cachedDentry))
+        {
+            if (cachedDentry.Inode?.Type != InodeType.File)
+                throw new Exception($"Path /{name} exists but is not a file");
+            return cachedDentry;
+        }
+
+        var dentry = parentDentry.Inode!.Lookup(name);
+        if (dentry == null)
+        {
+            dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            try
+            {
+                parentDentry.Inode.Create(dentry, 0x1FF, 0, 0); // 777
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("Failed to create file mount point {Name}: {Error}", name, ex.Message);
+                dentry.Instantiate(new PlaceholderInode(parentDentry.SuperBlock));
+            }
+        }
+        else if (dentry.Inode?.Type != InodeType.File)
+        {
+            throw new Exception($"Path /{name} exists but is not a file");
+        }
+
+        parentDentry.Children[name] = dentry;
+        return dentry;
+    }
+
     public void MountHostfs(string hostPath, string guestPath, bool readOnly = false)
     {
         var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -365,44 +400,13 @@ public partial class SyscallManager
         var isDir = Directory.Exists(hostPath);
 
         // Create the mount point if it doesn't exist
-        Dentry? finalDentry = null;
         if (isDir)
         {
-            finalDentry = EnsureDirectory(current, name).Dentry;
+            EnsureDirectory(current, name);
         }
         else if (isFile)
         {
-            // For file mounts, create an empty file as mount point if it doesn't exist
-            if (current.Dentry!.Children.TryGetValue(name, out var cachedDentry))
-            {
-                finalDentry = cachedDentry;
-                if (finalDentry.Inode?.Type != InodeType.File)
-                    throw new Exception($"Path /{name} exists but is not a file");
-            }
-            else
-            {
-                finalDentry = current.Dentry.Inode!.Lookup(name);
-                if (finalDentry == null)
-                {
-                    finalDentry = new Dentry(name, null, current.Dentry!, current.Dentry!.SuperBlock);
-                    try
-                    {
-                        current.Dentry!.Inode.Create(finalDentry, 0x1FF, 0, 0); // 777
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning("Failed to create file mount point {Name}: {Error}", name, ex.Message);
-                        // If Create fails, try using the dentry anyway - the mount will provide the content
-                        finalDentry.Instantiate(new PlaceholderInode(current.Dentry!.SuperBlock));
-                    }
-                }
-                else if (finalDentry.Inode?.Type != InodeType.File)
-                {
-                    throw new Exception($"Path /{name} exists but is not a file");
-                }
-
-                current.Dentry!.Children[name] = finalDentry;
-            }
+            EnsureFileMountPoint(current, name);
         }
         else
         {
@@ -410,7 +414,7 @@ public partial class SyscallManager
         }
 
         var fsType = FileSystemRegistry.Get("hostfs") ?? throw new Exception("hostfs not registered");
-        var optionsText = readOnly ? "ro" : "rw";
+        var optionsText = readOnly ? "ro,metadataless" : "rw";
         var options = HostfsMountOptions.Parse(optionsText);
         var sb = new HostSuperBlock(fsType, hostPath, options);
         var rootDentry = sb.GetDentry(hostPath, "/", null) ??
@@ -419,6 +423,47 @@ public partial class SyscallManager
         sb.Root.Parent = sb.Root;
 
         Mount(current, name, sb, hostPath, "hostfs", optionsText, guestPath);
+    }
+
+    public void MountDetachedTmpfsFile(string guestPath, string sourceName, ReadOnlySpan<byte> content, bool readOnly = true)
+    {
+        var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
+
+        var current = Root;
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            current = EnsureDirectory(current, parts[i]);
+        }
+
+        var name = parts[^1];
+        EnsureFileMountPoint(current, name);
+
+        var tmpFsType = FileSystemRegistry.Get("tmpfs") ?? throw new Exception("tmpfs not registered");
+        var sb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, $"detached:{sourceName}", null);
+
+        var fileDentry = new Dentry(sourceName, null, sb.Root, sb);
+        sb.Root.Inode!.Create(fileDentry, 0x1A4, 0, 0); // 0644
+        if (!content.IsEmpty)
+        {
+            var file = new LinuxFile(fileDentry, FileFlags.O_WRONLY, null!);
+            try
+            {
+                fileDentry.Inode!.Open(file);
+                var rc = fileDentry.Inode.Write(file, content, 0);
+                if (rc < 0) throw new IOException($"Failed to write detached tmpfs file: rc={rc}");
+            }
+            finally
+            {
+                fileDentry.Inode!.Release(file);
+            }
+        }
+
+        sb.Root = fileDentry;
+        sb.Root.Parent = sb.Root;
+
+        var opts = readOnly ? "ro,nosuid,nodev" : "rw,nosuid,nodev";
+        Mount(current, name, sb, $"tmpfs:{sourceName}", "tmpfs", opts, guestPath);
     }
 
     private void Mount(PathLocation parent, string name, SuperBlock sb, string source, string fstype, string options,

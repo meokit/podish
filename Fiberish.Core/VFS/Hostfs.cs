@@ -1,6 +1,9 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Fiberish.Native;
 using Microsoft.Win32.SafeHandles;
 
@@ -35,10 +38,12 @@ public class HostSuperBlock : SuperBlock
         Type = type;
         HostRoot = hostRoot;
         Options = options;
+        MetadataStore = new HostfsMetadataStore(HostRoot, !options.MetadataLess);
     }
 
     public string HostRoot { get; }
     public HostfsMountOptions Options { get; }
+    internal HostfsMetadataStore MetadataStore { get; }
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
@@ -49,6 +54,7 @@ public class HostSuperBlock : SuperBlock
         if (new FileInfo(hostPath).LinkTarget != null)
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Symlink);
+            MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             _dentryCache[hostPath] = newDentry;
             return newDentry;
@@ -57,6 +63,7 @@ public class HostSuperBlock : SuperBlock
         if (Directory.Exists(hostPath))
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Directory);
+            MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             _dentryCache[hostPath] = newDentry;
             return newDentry;
@@ -65,6 +72,7 @@ public class HostSuperBlock : SuperBlock
         if (File.Exists(hostPath))
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.File);
+            MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             _dentryCache[hostPath] = newDentry;
             return newDentry;
@@ -102,6 +110,7 @@ public class HostSuperBlock : SuperBlock
 
         var inode = new HostInode(_nextIno++, this, hostPath, type);
         if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
+        MetadataStore.ApplyToInode(hostPath, inode);
         dentry.Instantiate(inode);
         lock (Lock)
         {
@@ -119,6 +128,7 @@ public sealed class HostfsMountOptions
     public int Umask { get; init; } = -1;
     public int Fmask { get; init; } = -1;
     public int Dmask { get; init; } = -1;
+    public bool MetadataLess { get; init; }
 
     public int GetFileMask()
     {
@@ -151,12 +161,19 @@ public sealed class HostfsMountOptions
         var umask = -1;
         var fmask = -1;
         var dmask = -1;
+        var metadataLess = false;
 
         var tokens = optionString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         foreach (var token in tokens)
         {
             var eq = token.IndexOf('=');
-            if (eq <= 0 || eq == token.Length - 1) continue;
+            if (eq <= 0 || eq == token.Length - 1)
+            {
+                var flag = token.Trim().ToLowerInvariant();
+                if (flag is "metadataless" or "nometa")
+                    metadataLess = true;
+                continue;
+            }
 
             var key = token[..eq].Trim().ToLowerInvariant();
             var value = token[(eq + 1)..].Trim();
@@ -187,7 +204,8 @@ public sealed class HostfsMountOptions
             MountGid = gid,
             Umask = umask,
             Fmask = fmask,
-            Dmask = dmask
+            Dmask = dmask,
+            MetadataLess = metadataLess
         };
     }
 
@@ -214,6 +232,200 @@ public sealed class HostfsMountOptions
         }
     }
 }
+
+internal sealed class HostfsMetadataStore
+{
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
+    public const string MetaDirName = ".fiberish_meta";
+    private readonly string _hostRoot;
+    private readonly bool _enabled;
+    private readonly string _metaDir;
+
+    public HostfsMetadataStore(string hostRoot, bool enabled = true)
+    {
+        _enabled = enabled;
+        _hostRoot = Path.GetFullPath(hostRoot);
+        // hostRoot can be either a directory mount or a single-file mount.
+        // For file mounts, place sidecar metadata under the parent directory.
+        var metaBase = Directory.Exists(_hostRoot)
+            ? _hostRoot
+            : (Path.GetDirectoryName(_hostRoot) ?? _hostRoot);
+        _metaDir = Path.Combine(metaBase, MetaDirName);
+        if (_enabled) Directory.CreateDirectory(_metaDir);
+    }
+
+    public bool IsMetaDirPath(string path)
+    {
+        if (!_enabled) return false;
+        var full = Path.GetFullPath(path);
+        return string.Equals(full, _metaDir, StringComparison.Ordinal);
+    }
+
+    public bool TryLoad(string hostPath, out HostfsMetaRecord record)
+    {
+        if (!_enabled)
+        {
+            record = default!;
+            return false;
+        }
+
+        var metaPath = GetMetaPath(hostPath);
+        if (!File.Exists(metaPath))
+        {
+            record = default!;
+            return false;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(metaPath);
+            var parsed = JsonSerializer.Deserialize<HostfsMetaRecord>(json);
+            if (parsed == null)
+            {
+                record = default!;
+                return false;
+            }
+
+            record = parsed;
+            return true;
+        }
+        catch
+        {
+            record = default!;
+            return false;
+        }
+    }
+
+    public void Save(string hostPath, HostfsMetaRecord record)
+    {
+        if (!_enabled) return;
+        var normalizedPath = Path.GetFullPath(hostPath);
+        var metaPath = GetMetaPath(normalizedPath);
+        var toSave = record with { Path = normalizedPath };
+        File.WriteAllText(metaPath, JsonSerializer.Serialize(toSave, JsonOptions));
+    }
+
+    public void Remove(string hostPath)
+    {
+        if (!_enabled) return;
+        var metaPath = GetMetaPath(hostPath);
+        if (File.Exists(metaPath)) File.Delete(metaPath);
+    }
+
+    public void RenameMetadata(string oldPath, string newPath)
+    {
+        if (!_enabled) return;
+        var oldFull = Path.GetFullPath(oldPath);
+        var newFull = Path.GetFullPath(newPath);
+
+        if (File.Exists(oldFull) || Directory.Exists(oldFull))
+        {
+            // The host path moved already. We only need metadata remap.
+        }
+
+        if (TryLoad(oldFull, out var direct))
+        {
+            Remove(oldFull);
+            Save(newFull, direct with { Path = newFull });
+        }
+
+        // Directory rename: remap all descendants.
+        var records = ReadAllRecords().ToList();
+        foreach (var r in records)
+        {
+            if (!r.Path.StartsWith(oldFull + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
+            var suffix = r.Path[oldFull.Length..];
+            var movedPath = newFull + suffix;
+            Remove(r.Path);
+            Save(movedPath, r with { Path = movedPath });
+        }
+    }
+
+    public void ApplyToInode(string hostPath, HostInode inode)
+    {
+        if (!_enabled) return;
+        if (!TryLoad(hostPath, out var meta)) return;
+        if (meta.NodeType.HasValue)
+        {
+            inode.Type = meta.NodeType.Value;
+            inode.Rdev = meta.Rdev ?? 0;
+        }
+    }
+
+    public Dictionary<string, byte[]> LoadXAttrs(string hostPath)
+    {
+        if (!_enabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        if (!TryLoad(hostPath, out var meta) || meta.XAttrs == null)
+            return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var dict = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var kv in meta.XAttrs)
+        {
+            try
+            {
+                dict[kv.Key] = Convert.FromBase64String(kv.Value);
+            }
+            catch
+            {
+            }
+        }
+
+        return dict;
+    }
+
+    public void SaveXAttrs(string hostPath, Dictionary<string, byte[]> xattrs)
+    {
+        if (!_enabled) return;
+        var hasExisting = TryLoad(hostPath, out var existing);
+        var encoded = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kv in xattrs)
+            encoded[kv.Key] = Convert.ToBase64String(kv.Value);
+        var baseRecord = hasExisting ? existing : new HostfsMetaRecord(Path.GetFullPath(hostPath));
+        Save(hostPath, baseRecord with { XAttrs = encoded });
+    }
+
+    public void SaveMknod(string hostPath, InodeType type, uint rdev)
+    {
+        if (!_enabled) return;
+        var hasExisting = TryLoad(hostPath, out var existing);
+        var baseRecord = hasExisting ? existing : new HostfsMetaRecord(Path.GetFullPath(hostPath));
+        Save(hostPath, baseRecord with
+        {
+            NodeType = type,
+            Rdev = rdev
+        });
+    }
+
+    private IEnumerable<HostfsMetaRecord> ReadAllRecords()
+    {
+        if (!Directory.Exists(_metaDir)) yield break;
+        foreach (var file in Directory.GetFiles(_metaDir, "*.json"))
+        {
+            HostfsMetaRecord? record = null;
+            try
+            {
+                record = JsonSerializer.Deserialize<HostfsMetaRecord>(File.ReadAllText(file));
+            }
+            catch
+            {
+            }
+
+            if (record != null) yield return record;
+        }
+    }
+
+    private string GetMetaPath(string hostPath)
+    {
+        var full = Path.GetFullPath(hostPath);
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(full))).ToLowerInvariant();
+        return Path.Combine(_metaDir, $"{key}.json");
+    }
+}
+
+internal sealed record HostfsMetaRecord(
+    string Path,
+    InodeType? NodeType = null,
+    uint? Rdev = null,
+    Dictionary<string, string>? XAttrs = null);
 
 internal static partial class HostfsOwnershipMapper
 {
@@ -381,6 +593,9 @@ internal static partial class HostfsOwnershipMapper
 
 public partial class HostInode : Inode
 {
+    private readonly object _xattrLock = new();
+    private Dictionary<string, byte[]>? _xattrs;
+
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type)
     {
         Ino = ino;
@@ -478,6 +693,7 @@ public partial class HostInode : Inode
     public override Dentry? Lookup(string name)
     {
         if (Type != InodeType.Directory) return null;
+        if (name == HostfsMetadataStore.MetaDirName) return null;
         var subPath = Path.Combine(HostPath, name);
         if (Dentries.Count == 0) return null;
         return ((HostSuperBlock)SuperBlock).GetDentry(subPath, name, Dentries[0]);
@@ -494,6 +710,7 @@ public partial class HostInode : Inode
         } // Create empty file
 
         var sb = (HostSuperBlock)SuperBlock;
+        sb.MetadataStore.Remove(subPath);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         return dentry;
     }
@@ -507,7 +724,34 @@ public partial class HostInode : Inode
         Directory.CreateDirectory(subPath);
 
         var sb = (HostSuperBlock)SuperBlock;
+        sb.MetadataStore.Remove(subPath);
         sb.InstantiateDentry(dentry, subPath, true, mode);
+        return dentry;
+    }
+
+    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    {
+        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        var subPath = Path.Combine(HostPath, dentry.Name);
+        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+
+        // Hostfs fallback: materialize a placeholder and persist node semantics in sidecar metadata.
+        using (File.Create(subPath))
+        {
+        }
+
+        var sb = (HostSuperBlock)SuperBlock;
+        sb.MetadataStore.SaveMknod(subPath, type, rdev);
+        sb.InstantiateDentry(dentry, subPath, false, mode);
+        if (dentry.Inode != null)
+        {
+            dentry.Inode.Type = type;
+            dentry.Inode.Rdev = rdev;
+            dentry.Inode.Mode = mode;
+            dentry.Inode.Uid = uid;
+            dentry.Inode.Gid = gid;
+        }
+
         return dentry;
     }
 
@@ -522,6 +766,7 @@ public partial class HostInode : Inode
         {
             var dentry = sb.GetDentry(subPath, name, null);
             File.Delete(subPath);
+            sb.MetadataStore.Remove(subPath);
             dentry?.Inode?.Put();
             sb.RemoveDentry(subPath);
             return;
@@ -541,6 +786,7 @@ public partial class HostInode : Inode
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(subPath, name, null);
         Directory.Delete(subPath, false);
+        sb.MetadataStore.Remove(subPath);
         dentry?.Inode?.Put();
         sb.RemoveDentry(subPath);
     }
@@ -572,6 +818,8 @@ public partial class HostInode : Inode
             Directory.Move(oldFullPath, newFullPath);
         else
             File.Move(oldFullPath, newFullPath);
+
+        sb.MetadataStore.RenameMetadata(oldFullPath, newFullPath);
 
         // Update cache and internal path
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
@@ -631,6 +879,7 @@ public partial class HostInode : Inode
 
         File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
+        sb.MetadataStore.Remove(newPath);
         sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
         return dentry;
     }
@@ -786,11 +1035,88 @@ public partial class HostInode : Inode
         foreach (var entryPath in entries)
         {
             var name = Path.GetFileName(entryPath);
+            if (name == HostfsMetadataStore.MetaDirName) continue;
             var dentry = sb.GetDentry(entryPath, name, Dentries.Count > 0 ? Dentries[0] : null);
             if (dentry != null)
                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
         }
 
         return list;
+    }
+
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        const int XATTR_CREATE = 1;
+        const int XATTR_REPLACE = 2;
+        lock (_xattrLock)
+        {
+            EnsureXAttrsLoaded();
+            var exists = _xattrs!.ContainsKey(name);
+            if ((flags & XATTR_CREATE) != 0 && exists) return -(int)Errno.EEXIST;
+            if ((flags & XATTR_REPLACE) != 0 && !exists) return -(int)Errno.ENODATA;
+            _xattrs[name] = value.ToArray();
+            PersistXAttrs();
+            return 0;
+        }
+    }
+
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        lock (_xattrLock)
+        {
+            EnsureXAttrsLoaded();
+            if (!_xattrs!.TryGetValue(name, out var data)) return -(int)Errno.ENODATA;
+            if (value.Length == 0) return data.Length;
+            if (value.Length < data.Length) return -(int)Errno.ERANGE;
+            data.CopyTo(value);
+            return data.Length;
+        }
+    }
+
+    public override int ListXAttr(Span<byte> list)
+    {
+        lock (_xattrLock)
+        {
+            EnsureXAttrsLoaded();
+            var names = _xattrs!.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var required = 0;
+            foreach (var n in names) required += Encoding.UTF8.GetByteCount(n) + 1;
+            if (list.Length == 0) return required;
+            if (list.Length < required) return -(int)Errno.ERANGE;
+
+            var off = 0;
+            foreach (var n in names)
+            {
+                var nlen = Encoding.UTF8.GetBytes(n, list[off..]);
+                off += nlen;
+                list[off++] = 0;
+            }
+
+            return required;
+        }
+    }
+
+    public override int RemoveXAttr(string name)
+    {
+        lock (_xattrLock)
+        {
+            EnsureXAttrsLoaded();
+            if (!_xattrs!.Remove(name)) return -(int)Errno.ENODATA;
+            PersistXAttrs();
+            return 0;
+        }
+    }
+
+    private void EnsureXAttrsLoaded()
+    {
+        if (_xattrs != null) return;
+        var sb = (HostSuperBlock)SuperBlock;
+        _xattrs = sb.MetadataStore.LoadXAttrs(HostPath);
+    }
+
+    private void PersistXAttrs()
+    {
+        var sb = (HostSuperBlock)SuperBlock;
+        sb.MetadataStore.SaveXAttrs(HostPath, _xattrs!);
     }
 }
