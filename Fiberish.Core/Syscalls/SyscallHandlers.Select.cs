@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -13,6 +14,7 @@ public partial class SyscallManager
     // --- Helpers ---
     private const int NFDBITS = 32;
     private const int FD_SETSIZE = 1024;
+    private const uint NSEC_PER_SEC = 1_000_000_000;
 
     private static async ValueTask<int> SysPoll(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -23,12 +25,7 @@ public partial class SyscallManager
         var nfds = a2;
         var timeout = (int)a3; // milliseconds
 
-        // 1. Scan
-        var ready = ScanPoll(sm, fdsAddr, nfds);
-        if (ready > 0 || timeout == 0) return ready;
-
-        // 2. Await
-        return await new PollAwaiter(sm, fdsAddr, nfds, timeout);
+        return await DoPoll(sm, fdsAddr, nfds, timeout);
     }
 
     private static async ValueTask<int> SysSelect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -58,6 +55,92 @@ public partial class SyscallManager
         return await DoSelect(sm, (int)a1, a2, a3, a4, a5);
     }
 
+    private static async ValueTask<int> SysPselect6(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if (!TryReadTimespec32TimeoutMs(sm, a5, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadPselectSigmask(sm, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
+        var oldMask = task.SignalMask;
+        if (hasMask) task.SignalMask = newMask;
+        try
+        {
+            return await DoSelectWithTimeout(sm, (int)a1, a2, a3, a4, timeoutMs);
+        }
+        finally
+        {
+            if (hasMask) task.SignalMask = oldMask;
+        }
+    }
+
+    private static async ValueTask<int> SysPpoll(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if (!TryReadTimespec32TimeoutMs(sm, a3, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(sm, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
+        var oldMask = task.SignalMask;
+        if (hasMask) task.SignalMask = newMask;
+        try
+        {
+            return await DoPoll(sm, a1, a2, timeoutMs);
+        }
+        finally
+        {
+            if (hasMask) task.SignalMask = oldMask;
+        }
+    }
+
+    private static async ValueTask<int> SysPselect6Time64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if (!TryReadTimespec64TimeoutMs(sm, a5, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadPselectSigmask(sm, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
+        var oldMask = task.SignalMask;
+        if (hasMask) task.SignalMask = newMask;
+        try
+        {
+            return await DoSelectWithTimeout(sm, (int)a1, a2, a3, a4, timeoutMs);
+        }
+        finally
+        {
+            if (hasMask) task.SignalMask = oldMask;
+        }
+    }
+
+    private static async ValueTask<int> SysPpollTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if (!TryReadTimespec64TimeoutMs(sm, a3, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(sm, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
+        var oldMask = task.SignalMask;
+        if (hasMask) task.SignalMask = newMask;
+        try
+        {
+            return await DoPoll(sm, a1, a2, timeoutMs);
+        }
+        finally
+        {
+            if (hasMask) task.SignalMask = oldMask;
+        }
+    }
+
     private static async ValueTask<int> DoSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp, uint tvp)
     {
         if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
@@ -69,6 +152,12 @@ public partial class SyscallManager
             timeoutMs = tv.TvSec * 1000 + tv.TvUsec / 1000;
         }
 
+        return await DoSelectWithTimeout(sm, n, inp, outp, exp, timeoutMs);
+    }
+
+    private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, int n, uint inp, uint outp, uint exp,
+        long timeoutMs)
+    {
         // 1. Scan
         var ready = ScanSelect(sm, n, inp, outp, exp, out var resIn, out var resOut, out var resEx);
         if (ready > 0)
@@ -102,6 +191,128 @@ public partial class SyscallManager
         {
             return -(int)Errno.EINTR;
         }
+    }
+
+    private static async ValueTask<int> DoPoll(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+    {
+        // 1. Scan
+        var ready = ScanPoll(sm, fdsAddr, nfds);
+        if (ready > 0 || timeoutMs == 0) return ready;
+
+        // 2. Await
+        return await new PollAwaiter(sm, fdsAddr, nfds, timeoutMs);
+    }
+
+    private static bool TryReadPselectSigmask(SyscallManager sm, uint sigArgPtr, out bool hasMask, out ulong mask,
+        out int err)
+    {
+        hasMask = false;
+        mask = 0;
+        err = 0;
+        if (sigArgPtr == 0) return true;
+
+        var argBuf = new byte[8];
+        if (!sm.Engine.CopyFromUser(sigArgPtr, argBuf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        var sigmaskPtr = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(0, 4));
+        var sigsetsize = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(4, 4));
+        return TryReadDirectSigmask(sm, sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
+    }
+
+    private static bool TryReadDirectSigmask(SyscallManager sm, uint sigmaskPtr, uint sigsetsize, out bool hasMask,
+        out ulong mask, out int err)
+    {
+        hasMask = false;
+        mask = 0;
+        err = 0;
+        if (sigmaskPtr == 0) return true;
+        if (sigsetsize != 8)
+        {
+            err = -(int)Errno.EINVAL;
+            return false;
+        }
+
+        var maskBuf = new byte[8];
+        if (!sm.Engine.CopyFromUser(sigmaskPtr, maskBuf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        mask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+        mask &= ~(1UL << ((int)Signal.SIGKILL - 1));
+        mask &= ~(1UL << ((int)Signal.SIGSTOP - 1));
+        hasMask = true;
+        return true;
+    }
+
+    private static bool TryReadTimespec32TimeoutMs(SyscallManager sm, uint timespecPtr, out int timeoutMs, out int err)
+    {
+        timeoutMs = -1;
+        err = 0;
+        if (timespecPtr == 0) return true;
+
+        var buf = new byte[8];
+        if (!sm.Engine.CopyFromUser(timespecPtr, buf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
+    }
+
+    private static bool TryReadTimespec64TimeoutMs(SyscallManager sm, uint timespecPtr, out int timeoutMs, out int err)
+    {
+        timeoutMs = -1;
+        err = 0;
+        if (timespecPtr == 0) return true;
+
+        var buf = new byte[16];
+        if (!sm.Engine.CopyFromUser(timespecPtr, buf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        var sec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(0, 8));
+        var nsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(8, 8));
+        return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
+    }
+
+    private static bool TryConvertTimespecToTimeoutMs(long sec, long nsec, out int timeoutMs, out int err)
+    {
+        timeoutMs = -1;
+        err = 0;
+        if (sec < 0 || nsec < 0 || nsec >= NSEC_PER_SEC)
+        {
+            err = -(int)Errno.EINVAL;
+            return false;
+        }
+
+        if (sec == 0 && nsec == 0)
+        {
+            timeoutMs = 0;
+            return true;
+        }
+
+        if (sec >= int.MaxValue / 1000)
+        {
+            timeoutMs = int.MaxValue;
+            return true;
+        }
+
+        var msFromSec = sec * 1000;
+        var msFromNsec = (nsec + 999_999) / 1_000_000; // ceil to avoid busy-looping on sub-ms timeout
+        var totalMs = msFromSec + msFromNsec;
+        timeoutMs = totalMs >= int.MaxValue ? int.MaxValue : (int)totalMs;
+        return true;
     }
 
     private static int ScanSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp,

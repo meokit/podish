@@ -87,41 +87,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-
-        var epfd = (int)a1;
-        var eventsPtr = a2;
-        var maxevents = (int)a3;
-        var timeout = (int)a4;
-
-        if (maxevents <= 0) return -(int)Errno.EINVAL;
-
-        var epFile = sm.GetFD(epfd);
-        if (epFile == null) return -(int)Errno.EBADF;
-        if (epFile.Dentry.Inode is not EpollInode epollInode) return -(int)Errno.EINVAL;
-
-        // Note: epoll_event is 12 bytes long on i386
-        var buf = new byte[maxevents * 12];
-
-        // 1. Synchronous check first (like SysPoll does ScanPoll before creating awaiter)
-        var ready = epollInode.TryHarvestNow(buf, maxevents);
-        if (ready > 0 || timeout == 0)
-        {
-            if (ready > 0)
-                if (!task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, ready * 12)))
-                    return -(int)Errno.EFAULT;
-            return ready;
-        }
-
-        // 2. Nothing ready, go async
-        var result = await epollInode.WaitAsync(buf, maxevents, timeout);
-
-        if (result > 0)
-            if (!task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, result * 12)))
-                return -(int)Errno.EFAULT;
-
-        return result;
+        return await DoEpollWait(sm, a1, a2, a3, (int)a4);
     }
 
     private static async ValueTask<int> SysEpollPwait(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -133,31 +99,75 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        var sigmaskPtr = a5;
+        if (!TryReadDirectSigmask(sm, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
         var oldMask = task.SignalMask;
-
-        if (sigmaskPtr != 0)
-        {
-            var sigsetsize = a6;
-            if (sigsetsize != 8) return -(int)Errno.EINVAL;
-            var maskBuf = new byte[8];
-            if (!task.CPU.CopyFromUser(sigmaskPtr, maskBuf)) return -(int)Errno.EFAULT;
-            var mask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
-
-            mask &= ~(1UL << 8); // SIGKILL
-            mask &= ~(1UL << 18); // SIGSTOP
-            task.SignalMask = mask;
-        }
-
+        if (hasMask) task.SignalMask = newMask;
         int result;
         try
         {
-            result = await SysEpollWait(state, a1, a2, a3, a4, 0, 0);
+            result = await DoEpollWait(sm, a1, a2, a3, (int)a4);
         }
         finally
         {
-            if (sigmaskPtr != 0) task.SignalMask = oldMask;
+            if (hasMask) task.SignalMask = oldMask;
         }
+
+        return result;
+    }
+
+    private static async ValueTask<int> SysEpollPwait2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        // a1: epfd, a2: events, a3: maxevents, a4: timespec64*, a5: sigmask, a6: sigsetsize
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        if (!TryReadTimespec64TimeoutMs(sm, a4, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(sm, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+
+        var oldMask = task.SignalMask;
+        if (hasMask) task.SignalMask = newMask;
+        try
+        {
+            return await DoEpollWait(sm, a1, a2, a3, timeoutMs);
+        }
+        finally
+        {
+            if (hasMask) task.SignalMask = oldMask;
+        }
+    }
+
+    private static async ValueTask<int> DoEpollWait(SyscallManager sm, uint epfdArg, uint eventsPtr, uint maxeventsArg,
+        int timeoutMs)
+    {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var epfd = (int)epfdArg;
+        var maxevents = (int)maxeventsArg;
+        if (maxevents <= 0) return -(int)Errno.EINVAL;
+
+        var epFile = sm.GetFD(epfd);
+        if (epFile == null) return -(int)Errno.EBADF;
+        if (epFile.Dentry.Inode is not EpollInode epollInode) return -(int)Errno.EINVAL;
+
+        // epoll_event is 12 bytes on i386.
+        var buf = new byte[maxevents * 12];
+
+        var ready = epollInode.TryHarvestNow(buf, maxevents);
+        if (ready > 0 || timeoutMs == 0)
+        {
+            if (ready > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, ready * 12)))
+                return -(int)Errno.EFAULT;
+            return ready;
+        }
+
+        var result = await epollInode.WaitAsync(buf, maxevents, timeoutMs);
+        if (result > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, result * 12)))
+            return -(int)Errno.EFAULT;
 
         return result;
     }

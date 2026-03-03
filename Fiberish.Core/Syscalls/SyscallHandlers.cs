@@ -245,9 +245,13 @@ public partial class SyscallManager
 
         Register(X86SyscallNumbers.select, SysSelect);
         Register(X86SyscallNumbers._newselect, SysNewSelect);
+        Register(X86SyscallNumbers.pselect6, SysPselect6);
+        Register(X86SyscallNumbers.pselect6_time64, SysPselect6Time64);
         Register(X86SyscallNumbers.flock, SysFlock);
         Register(X86SyscallNumbers.msync, SysMsync);
         Register(X86SyscallNumbers.poll, SysPoll);
+        Register(X86SyscallNumbers.ppoll, SysPpoll);
+        Register(X86SyscallNumbers.ppoll_time64, SysPpollTime64);
         Register(X86SyscallNumbers.pipe, SysPipe);
         Register(X86SyscallNumbers.pipe2, SysPipe2);
         Register(X86SyscallNumbers.sendfile, SysSendfile);
@@ -262,6 +266,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.epoll_ctl, SysEpollCtl);
         Register(X86SyscallNumbers.epoll_wait, SysEpollWait);
         Register(X86SyscallNumbers.epoll_pwait, SysEpollPwait);
+        Register(X86SyscallNumbers.epoll_pwait2, SysEpollPwait2);
         Register(X86SyscallNumbers.faccessat2, SysFaccessAt2);
         Register(X86SyscallNumbers.fchmodat2, SysFchmodAt2);
 
