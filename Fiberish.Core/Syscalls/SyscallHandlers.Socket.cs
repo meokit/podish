@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
@@ -108,6 +109,7 @@ public partial class SyscallManager
 
         var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen);
         if (endpoint == null) return -(int)Errno.EINVAL;
+        Logger.LogTrace("[Socket] bind fd={Fd} endpoint={Endpoint} addrLen={AddrLen}", fd, endpoint, addrLen);
 
         try
         {
@@ -116,6 +118,9 @@ public partial class SyscallManager
         }
         catch (SocketException ex)
         {
+            Logger.LogWarning(ex,
+                "[Socket] bind failed fd={Fd} endpoint={Endpoint} addrLen={AddrLen} socketError={SocketError}",
+                fd, endpoint, addrLen, ex.SocketErrorCode);
             return -LinuxToWindowsSocketError(ex.SocketErrorCode);
         }
     }
