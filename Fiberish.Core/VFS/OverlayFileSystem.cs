@@ -52,6 +52,9 @@ public class OverlayMountOptions
 
 public class OverlaySuperBlock : SuperBlock
 {
+    private readonly Dictionary<string, HashSet<string>> _whiteouts = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _opaqueDirs = new(StringComparer.Ordinal);
+
     public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper)
     {
         if (lowers.Count == 0) throw new ArgumentException("OverlayFS requires at least one lower layer", nameof(lowers));
@@ -59,11 +62,69 @@ public class OverlaySuperBlock : SuperBlock
         LowerSBs = lowers;
         LowerSB = lowers[0];
         UpperSB = upper;
+        WhiteoutCodec = new HybridWhiteoutCodec();
     }
 
     public IReadOnlyList<SuperBlock> LowerSBs { get; }
     public SuperBlock LowerSB { get; }
     public SuperBlock UpperSB { get; }
+    public IOverlayWhiteoutCodec WhiteoutCodec { get; }
+
+    public void AddWhiteout(string dirKey, string name)
+    {
+        lock (Lock)
+        {
+            if (!_whiteouts.TryGetValue(dirKey, out var names))
+            {
+                names = new HashSet<string>(StringComparer.Ordinal);
+                _whiteouts[dirKey] = names;
+            }
+
+            names.Add(name);
+        }
+    }
+
+    public void RemoveWhiteout(string dirKey, string name)
+    {
+        lock (Lock)
+        {
+            if (_whiteouts.TryGetValue(dirKey, out var names))
+                names.Remove(name);
+        }
+    }
+
+    public bool HasWhiteout(string dirKey, string name)
+    {
+        lock (Lock)
+        {
+            return _whiteouts.TryGetValue(dirKey, out var names) && names.Contains(name);
+        }
+    }
+
+    public IReadOnlyCollection<string> GetWhiteouts(string dirKey)
+    {
+        lock (Lock)
+        {
+            if (!_whiteouts.TryGetValue(dirKey, out var names)) return Array.Empty<string>();
+            return names.ToArray();
+        }
+    }
+
+    public void MarkOpaque(string dirKey)
+    {
+        lock (Lock)
+        {
+            _opaqueDirs.Add(dirKey);
+        }
+    }
+
+    public bool IsOpaque(string dirKey)
+    {
+        lock (Lock)
+        {
+            return _opaqueDirs.Contains(dirKey);
+        }
+    }
 
     public override Inode AllocInode()
     {
@@ -93,6 +154,7 @@ public class OverlayInode : Inode
     public override ulong Ino { get => SourceInode?.Ino ?? 0; set { if (SourceInode != null) SourceInode.Ino = value; } }
     public override InodeType Type { get => SourceInode?.Type ?? InodeType.File; set { if (SourceInode != null) SourceInode.Type = value; } }
     public override int Mode { get => SourceInode?.Mode ?? 0; set { if (SourceInode != null) SourceInode.Mode = value; } }
+    public override uint Rdev { get => SourceInode?.Rdev ?? 0; set { if (SourceInode != null) SourceInode.Rdev = value; } }
     public override int Uid { get => SourceInode?.Uid ?? 0; set { if (SourceInode != null) SourceInode.Uid = value; } }
     public override int Gid { get => SourceInode?.Gid ?? 0; set { if (SourceInode != null) SourceInode.Gid = value; } }
     public override ulong Size 
@@ -212,9 +274,19 @@ public class OverlayInode : Inode
     {
         if (name == "..") return null; // Handled by VFS
         if (name == ".") return null; // Handled by VFS
+        var osb = (OverlaySuperBlock)SuperBlock;
+        if (osb.WhiteoutCodec.IsInternalMarkerName(name)) return null;
+
+        var dirKey = GetDirectoryKey();
+        if (osb.HasWhiteout(dirKey, name) || osb.WhiteoutCodec.HasEncodedWhiteout(UpperInode, name)) return null;
 
         // 1. Lookup in Upper
         var upperDentry = UpperInode?.Lookup(name);
+        if (upperDentry != null && osb.WhiteoutCodec.IsWhiteoutInode(upperDentry.Inode))
+            return null;
+
+        var dirOpaque = osb.IsOpaque(dirKey) || osb.WhiteoutCodec.IsEncodedOpaque(UpperInode);
+        if (dirOpaque && upperDentry == null) return null;
 
         // 2. Lookup in Lower layers (top-most lower wins)
         Dentry? lowerDentry = null;
@@ -242,6 +314,9 @@ public class OverlayInode : Inode
         // Create in Upper.
         if (UpperDentry == null)
             CopyUpDirectory();
+        var osb = (OverlaySuperBlock)SuperBlock;
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
@@ -258,6 +333,9 @@ public class OverlayInode : Inode
     {
         if (UpperDentry == null)
             CopyUpDirectory();
+        var osb = (OverlaySuperBlock)SuperBlock;
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Mkdir(upperDentry, mode, uid, gid);
@@ -316,20 +394,31 @@ public class OverlayInode : Inode
     public override void Unlink(string name)
     {
         var inUpper = UpperInode?.Lookup(name) != null;
-        var inLower = LowerInode?.Lookup(name) != null;
+        var inLower = LookupInAnyLower(name) != null;
+        var osb = (OverlaySuperBlock)SuperBlock;
 
         if (inUpper) UpperInode!.Unlink(name);
 
         if (inLower)
         {
-            // Create whiteout in Upper.
+            if (UpperDentry == null) CopyUpDirectory();
+            osb.AddWhiteout(GetDirectoryKey(), name);
+            osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
     }
 
     public override void Rmdir(string name)
     {
-        UpperInode?.Rmdir(name);
-        // Lower? Whiteout for dir?
+        var inUpper = UpperInode?.Lookup(name) != null;
+        var inLower = LookupInAnyLower(name) != null;
+        var osb = (OverlaySuperBlock)SuperBlock;
+        if (inUpper) UpperInode!.Rmdir(name);
+        if (inLower)
+        {
+            if (UpperDentry == null) CopyUpDirectory();
+            osb.AddWhiteout(GetDirectoryKey(), name);
+            osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
+        }
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -375,6 +464,9 @@ public class OverlayInode : Inode
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Link(upperDentry, oldOverlay.UpperInode);
+        var osb = (OverlaySuperBlock)SuperBlock;
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
@@ -396,10 +488,70 @@ public class OverlayInode : Inode
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Symlink(upperDentry, target, uid, gid);
+        var osb = (OverlaySuperBlock)SuperBlock;
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
         return dentry;
+    }
+
+    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    {
+        // mknod mutates directory entries, so parent must exist in upper.
+        if (UpperDentry == null)
+            CopyUpDirectory();
+
+        if (UpperDentry == null || UpperInode == null)
+            throw new InvalidOperationException("Upper directory is unavailable for mknod");
+
+        var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
+        UpperInode.Mknod(upperDentry, mode, uid, gid, type, rdev);
+
+        var osb = (OverlaySuperBlock)SuperBlock;
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+
+        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
+        dentry.Instantiate(newOverlayInode);
+        return dentry;
+    }
+
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        if (UpperInode == null)
+        {
+            var res = CopyUp(null);
+            if (res < 0) return res;
+        }
+
+        return UpperInode!.SetXAttr(name, value, flags);
+    }
+
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        if (UpperInode != null) return UpperInode.GetXAttr(name, value);
+        if (LowerInode != null) return LowerInode.GetXAttr(name, value);
+        return -(int)Errno.ENODATA;
+    }
+
+    public override int ListXAttr(Span<byte> list)
+    {
+        if (UpperInode != null) return UpperInode.ListXAttr(list);
+        if (LowerInode != null) return LowerInode.ListXAttr(list);
+        return 0;
+    }
+
+    public override int RemoveXAttr(string name)
+    {
+        if (UpperInode == null)
+        {
+            var res = CopyUp(null);
+            if (res < 0) return res;
+        }
+
+        return UpperInode!.RemoveXAttr(name);
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
@@ -446,21 +598,179 @@ public class OverlayInode : Inode
 
     public override List<DirectoryEntry> GetEntries()
     {
+        var osb = (OverlaySuperBlock)SuperBlock;
+        var dirKey = GetDirectoryKey();
         var entries = new Dictionary<string, DirectoryEntry>();
+        var dirOpaque = osb.IsOpaque(dirKey) || osb.WhiteoutCodec.IsEncodedOpaque(UpperInode);
 
         // Merge lower layers from bottom to top so higher lower layers override.
-        for (var i = LowerDentries.Count - 1; i >= 0; i--)
-        {
-            var inode = LowerDentries[i].Inode;
-            if (inode == null) continue;
-            foreach (var e in inode.GetEntries())
-                entries[e.Name] = e;
-        }
+        if (!dirOpaque)
+            for (var i = LowerDentries.Count - 1; i >= 0; i--)
+            {
+                var inode = LowerDentries[i].Inode;
+                if (inode == null) continue;
+                foreach (var e in inode.GetEntries())
+                    entries[e.Name] = e;
+            }
 
         if (UpperInode != null)
             foreach (var e in UpperInode.GetEntries())
+            {
+                var child = UpperInode.Lookup(e.Name);
+                if (osb.WhiteoutCodec.IsEncodedOpaqueEntry(e))
+                {
+                    osb.MarkOpaque(dirKey);
+                    continue;
+                }
+
+                if (osb.WhiteoutCodec.TryDecodeEncodedWhiteout(e, child?.Inode, out var targetName))
+                {
+                    osb.AddWhiteout(dirKey, targetName);
+                    entries.Remove(targetName);
+                    continue;
+                }
+
                 entries[e.Name] = e;
+            }
+
+        foreach (var whiteout in osb.GetWhiteouts(dirKey))
+            entries.Remove(whiteout);
 
         return [.. entries.Values];
+    }
+
+    private Dentry? LookupInAnyLower(string name)
+    {
+        foreach (var lower in LowerDentries)
+        {
+            var candidate = lower.Inode?.Lookup(name);
+            if (candidate != null) return candidate;
+        }
+
+        return null;
+    }
+
+    private string GetDirectoryKey()
+    {
+        var anchor = UpperDentry ?? LowerDentry ?? Dentries.FirstOrDefault();
+        if (anchor == null) return "/";
+        return BuildPath(anchor);
+    }
+
+    private static string BuildPath(Dentry dentry)
+    {
+        if (dentry.Parent == null || dentry.Parent == dentry || dentry.Name == "/") return "/";
+        var parts = new Stack<string>();
+        var cur = dentry;
+        while (cur.Parent != null && cur.Parent != cur && cur.Name != "/")
+        {
+            parts.Push(cur.Name);
+            cur = cur.Parent;
+        }
+
+        return "/" + string.Join("/", parts);
+    }
+}
+
+public interface IOverlayWhiteoutCodec
+{
+    bool IsInternalMarkerName(string name);
+    bool HasEncodedWhiteout(Inode? upperDir, string name);
+    bool IsEncodedOpaque(Inode? upperDir);
+    bool IsEncodedOpaqueEntry(DirectoryEntry entry);
+    bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName);
+    bool IsWhiteoutInode(Inode? inode);
+    bool TryCreateEncodedWhiteout(OverlayInode dir, string name);
+    void ClearEncodedWhiteout(OverlayInode dir, string name);
+}
+
+public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
+{
+    public bool IsInternalMarkerName(string name) => false;
+    public bool HasEncodedWhiteout(Inode? upperDir, string name) => false;
+    public bool IsEncodedOpaque(Inode? upperDir) => false;
+    public bool IsEncodedOpaqueEntry(DirectoryEntry entry) => false;
+    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName)
+    {
+        targetName = string.Empty;
+        return false;
+    }
+
+    public bool IsWhiteoutInode(Inode? inode) => false;
+    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name) => false;
+    public void ClearEncodedWhiteout(OverlayInode dir, string name)
+    {
+    }
+}
+
+public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
+{
+    private const string OpaqueMarker = ".wh..wh..opq";
+
+    public bool IsInternalMarkerName(string name)
+    {
+        return name == OpaqueMarker || name.StartsWith(".wh.", StringComparison.Ordinal);
+    }
+
+    public bool HasEncodedWhiteout(Inode? upperDir, string name)
+    {
+        if (upperDir == null) return false;
+        if (upperDir.Lookup($".wh.{name}") != null) return true;
+        var sameName = upperDir.Lookup(name);
+        return IsWhiteoutInode(sameName?.Inode);
+    }
+
+    public bool IsEncodedOpaque(Inode? upperDir)
+    {
+        return upperDir?.Lookup(OpaqueMarker) != null;
+    }
+
+    public bool IsEncodedOpaqueEntry(DirectoryEntry entry)
+    {
+        return entry.Name == OpaqueMarker;
+    }
+
+    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName)
+    {
+        if (entry.Name.StartsWith(".wh.", StringComparison.Ordinal) && entry.Name != OpaqueMarker)
+        {
+            targetName = entry.Name[4..];
+            return !string.IsNullOrEmpty(targetName);
+        }
+
+        if (IsWhiteoutInode(inode))
+        {
+            targetName = entry.Name;
+            return true;
+        }
+
+        targetName = string.Empty;
+        return false;
+    }
+
+    public bool IsWhiteoutInode(Inode? inode)
+    {
+        return inode != null && inode.Type == InodeType.CharDev && inode.Rdev == 0;
+    }
+
+    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name)
+    {
+        if (dir.UpperInode == null || dir.UpperDentry == null) return false;
+        if (dir.UpperInode is not TmpfsInode && dir.UpperInode is not HostInode) return false;
+        if (dir.UpperDentry == null) return false;
+        if (dir.UpperInode.Lookup(name) != null) return false;
+
+        var dentry = new Dentry(name, null, dir.UpperDentry, dir.SuperBlock);
+        dir.UpperInode.Mknod(dentry, 0x1B6, 0, 0, InodeType.CharDev, 0); // char 0/0
+
+        return true;
+    }
+
+    public void ClearEncodedWhiteout(OverlayInode dir, string name)
+    {
+        if (dir.UpperInode == null) return;
+        var existing = dir.UpperInode.Lookup(name);
+        if (existing?.Inode != null && IsWhiteoutInode(existing.Inode))
+            dir.UpperInode.Unlink(name);
     }
 }

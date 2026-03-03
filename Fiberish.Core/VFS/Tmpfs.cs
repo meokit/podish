@@ -61,6 +61,7 @@ public class TmpfsSuperBlock : SuperBlock
 public class TmpfsInode : Inode
 {
     private readonly HashSet<string> _childNames = [];
+    private readonly Dictionary<string, byte[]> _xattrs = new(StringComparer.Ordinal);
     private byte[]? _data = [];
 
     // Track open file handles to prevent data loss on unlink-while-open
@@ -375,6 +376,40 @@ public class TmpfsInode : Inode
         }
     }
 
+    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (type != InodeType.CharDev && type != InodeType.BlockDev && type != InodeType.Fifo &&
+                type != InodeType.Socket)
+                throw new InvalidOperationException("Unsupported node type");
+
+            var primaryDentry = Dentries[0];
+            var sb = (TmpfsSuperBlock)SuperBlock;
+            var key = new DCacheKey(Ino, dentry.Name);
+            if (sb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+
+            var inode = (TmpfsInode)sb.AllocInode();
+            inode.Type = type;
+            inode.Mode = mode;
+            inode.Uid = uid;
+            inode.Gid = gid;
+            inode.Rdev = rdev;
+
+            dentry.Instantiate(inode);
+
+            lock (sb.Lock)
+            {
+                sb.Dentries[key] = dentry;
+            }
+
+            primaryDentry.Children[dentry.Name] = dentry;
+            _childNames.Add(dentry.Name);
+            return dentry;
+        }
+    }
+
     public override string Readlink()
     {
         lock (Lock)
@@ -478,6 +513,64 @@ public class TmpfsInode : Inode
         Size = (ulong)size;
         MTime = DateTime.Now;
         return 0;
+    }
+
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        const int XATTR_CREATE = 1;
+        const int XATTR_REPLACE = 2;
+
+        lock (Lock)
+        {
+            var exists = _xattrs.ContainsKey(name);
+            if ((flags & XATTR_CREATE) != 0 && exists) return -(int)Errno.EEXIST;
+            if ((flags & XATTR_REPLACE) != 0 && !exists) return -(int)Errno.ENODATA;
+            _xattrs[name] = value.ToArray();
+            return 0;
+        }
+    }
+
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        lock (Lock)
+        {
+            if (!_xattrs.TryGetValue(name, out var data)) return -(int)Errno.ENODATA;
+            if (value.Length == 0) return data.Length;
+            if (value.Length < data.Length) return -(int)Errno.ERANGE;
+            data.CopyTo(value);
+            return data.Length;
+        }
+    }
+
+    public override int ListXAttr(Span<byte> list)
+    {
+        lock (Lock)
+        {
+            var names = _xattrs.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var required = 0;
+            foreach (var n in names) required += Encoding.UTF8.GetByteCount(n) + 1;
+            if (list.Length == 0) return required;
+            if (list.Length < required) return -(int)Errno.ERANGE;
+
+            var off = 0;
+            foreach (var n in names)
+            {
+                var nlen = Encoding.UTF8.GetBytes(n, list[off..]);
+                off += nlen;
+                list[off++] = 0;
+            }
+
+            return required;
+        }
+    }
+
+    public override int RemoveXAttr(string name)
+    {
+        lock (Lock)
+        {
+            if (!_xattrs.Remove(name)) return -(int)Errno.ENODATA;
+            return 0;
+        }
     }
 
     public override List<DirectoryEntry> GetEntries()

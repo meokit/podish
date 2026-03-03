@@ -19,6 +19,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.open, SysOpen);
         Register(X86SyscallNumbers.close, SysClose);
         Register(X86SyscallNumbers.unlink, SysUnlink);
+        Register(X86SyscallNumbers.mknod, SysMknod);
         Register(X86SyscallNumbers.chmod, SysChmod);
         Register(X86SyscallNumbers.chown, SysChown);
         Register(X86SyscallNumbers.lchown, SysLchown);
@@ -124,6 +125,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.mkdir, SysMkdir);
         Register(X86SyscallNumbers.rmdir, SysRmdir);
         Register(X86SyscallNumbers.mkdirat, SysMkdirAt);
+        Register(X86SyscallNumbers.mknodat, SysMknodat);
         Register(X86SyscallNumbers.unlinkat, SysUnlinkAt);
         Register(X86SyscallNumbers.utimes, SysUtimes);
         Register(X86SyscallNumbers.symlink, SysSymlink);
@@ -131,6 +133,18 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.readlink, SysReadlink);
         Register(X86SyscallNumbers.readlinkat, SysReadlinkAt);
         Register(X86SyscallNumbers.getdents, SysGetdents);
+        Register(X86SyscallNumbers.setxattr, SysSetXAttr);
+        Register(X86SyscallNumbers.lsetxattr, SysLSetXAttr);
+        Register(X86SyscallNumbers.fsetxattr, SysFSetXAttr);
+        Register(X86SyscallNumbers.getxattr, SysGetXAttr);
+        Register(X86SyscallNumbers.lgetxattr, SysLGetXAttr);
+        Register(X86SyscallNumbers.fgetxattr, SysFGetXAttr);
+        Register(X86SyscallNumbers.listxattr, SysListXAttr);
+        Register(X86SyscallNumbers.llistxattr, SysLListXAttr);
+        Register(X86SyscallNumbers.flistxattr, SysFListXAttr);
+        Register(X86SyscallNumbers.removexattr, SysRemoveXAttr);
+        Register(X86SyscallNumbers.lremovexattr, SysLRemoveXAttr);
+        Register(X86SyscallNumbers.fremovexattr, SysFRemoveXAttr);
 
         Register(X86SyscallNumbers.fstatat64, SysNewFstatAt);
         Register(X86SyscallNumbers.utimensat, SysUtimensAt);

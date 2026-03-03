@@ -41,6 +41,7 @@ public enum Errno
     ENOTEMPTY = 39, /* Directory not empty */
     ELOOP = 40, /* Too many levels of symbolic links */
     EIDRM = 43, /* Identifier removed */
+    ENODATA = 61, /* No data available */
     ENOTSOCK = 88, /* Socket operation on non-socket */
     EDESTADDRREQ = 89, /* Destination address required */
     EMSGSIZE = 90, /* Message too long */

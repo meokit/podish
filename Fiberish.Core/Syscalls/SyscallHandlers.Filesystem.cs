@@ -327,6 +327,299 @@ public partial class SyscallManager
         }
     }
 
+    private static async ValueTask<int> SysMknod(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await SysMknodat(state, LinuxConstants.AT_FDCWD, a1, a2, a3, 0, 0);
+    }
+
+    private static async ValueTask<int> SysMknodat(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var dirfd = (int)a1;
+        var path = sm.ReadString(a2);
+        var mode = (int)a3;
+        var dev = a4;
+
+        var startAtErr = ResolveStartAt(sm, dirfd, path, out var startAt);
+        if (startAtErr != 0) return startAtErr;
+
+        var (parentLoc, name, err) = sm.PathWalkForCreate(path, startAt);
+        if (err != 0) return err;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
+
+        const int S_IFMT = 0xF000;
+        const int S_IFIFO = 0x1000;
+        const int S_IFCHR = 0x2000;
+        const int S_IFBLK = 0x6000;
+        const int S_IFREG = 0x8000;
+        const int S_IFSOCK = 0xC000;
+
+        var fileType = mode & S_IFMT;
+        var t = sm.Engine.Owner as FiberTask;
+        var uid = t?.Process.EUID ?? 0;
+        var gid = t?.Process.EGID ?? 0;
+        var finalMode = DacPolicy.ApplyUmask(mode & 0x0FFF, t?.Process.Umask ?? 0);
+        var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+
+        try
+        {
+            switch (fileType)
+            {
+                case S_IFREG:
+                    parentLoc.Dentry.Inode!.Create(dentry, finalMode, uid, gid);
+                    return 0;
+                case S_IFIFO:
+                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Fifo, 0);
+                    return 0;
+                case S_IFCHR:
+                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.CharDev, dev);
+                    return 0;
+                case S_IFBLK:
+                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.BlockDev, dev);
+                    return 0;
+                case S_IFSOCK:
+                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Socket, 0);
+                    return 0;
+                default:
+                    return -(int)Errno.EINVAL;
+            }
+        }
+        catch (Exception ex)
+        {
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
+        }
+    }
+
+    private static async ValueTask<int> SysSetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await SetXAttrPath(state, a1, a2, a3, a4, a5, LookupFlags.FollowSymlink);
+    }
+
+    private static async ValueTask<int> SysLSetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await SetXAttrPath(state, a1, a2, a3, a4, a5, LookupFlags.None);
+    }
+
+    private static async ValueTask<int> SysFSetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var name = sm.ReadString(a2);
+        if (string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
+        if (a4 > int.MaxValue) return -(int)Errno.EINVAL;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+
+        var readErr = ReadUserBuffer(sm, a3, (int)a4, out var valueBytes);
+        if (readErr != 0) return readErr;
+        return f.Dentry.Inode.SetXAttr(name, valueBytes, (int)a5);
+    }
+
+    private static async ValueTask<int> SysGetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await GetXAttrPath(state, a1, a2, a3, a4, LookupFlags.FollowSymlink);
+    }
+
+    private static async ValueTask<int> SysLGetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await GetXAttrPath(state, a1, a2, a3, a4, LookupFlags.None);
+    }
+
+    private static async ValueTask<int> SysFGetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var name = sm.ReadString(a2);
+        var valueAddr = a3;
+        if (a4 > int.MaxValue) return -(int)Errno.EINVAL;
+        var size = (int)a4;
+        if (string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        return CopyXAttrToUser(sm, f.Dentry.Inode, name, valueAddr, size);
+    }
+
+    private static async ValueTask<int> SysListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await ListXAttrPath(state, a1, a2, a3, LookupFlags.FollowSymlink);
+    }
+
+    private static async ValueTask<int> SysLListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await ListXAttrPath(state, a1, a2, a3, LookupFlags.None);
+    }
+
+    private static async ValueTask<int> SysFListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var listAddr = a2;
+        if (a3 > int.MaxValue) return -(int)Errno.EINVAL;
+        var size = (int)a3;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        return CopyXAttrListToUser(sm, f.Dentry.Inode, listAddr, size);
+    }
+
+    private static async ValueTask<int> SysRemoveXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        return await RemoveXAttrPath(state, a1, a2, LookupFlags.FollowSymlink);
+    }
+
+    private static async ValueTask<int> SysLRemoveXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        return await RemoveXAttrPath(state, a1, a2, LookupFlags.None);
+    }
+
+    private static async ValueTask<int> SysFRemoveXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var name = sm.ReadString(a2);
+        if (string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
+
+        var f = sm.GetFD(fd);
+        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        return f.Dentry.Inode.RemoveXAttr(name);
+    }
+
+    private static ValueTask<int> SetXAttrPath(IntPtr state, uint pathPtr, uint namePtr, uint valuePtr, uint sizeRaw,
+        uint flags, LookupFlags lookupFlags)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+
+        var path = sm.ReadString(pathPtr);
+        var name = sm.ReadString(namePtr);
+        if (string.IsNullOrEmpty(name)) return new ValueTask<int>(-(int)Errno.EINVAL);
+        if (sizeRaw > int.MaxValue) return new ValueTask<int>(-(int)Errno.EINVAL);
+
+        var loc = sm.PathWalkWithFlags(path, lookupFlags);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        if (loc.Mount != null && loc.Mount.IsReadOnly) return new ValueTask<int>(-(int)Errno.EROFS);
+
+        var readErr = ReadUserBuffer(sm, valuePtr, (int)sizeRaw, out var valueBytes);
+        if (readErr != 0) return new ValueTask<int>(readErr);
+        return new ValueTask<int>(loc.Dentry.Inode.SetXAttr(name, valueBytes, (int)flags));
+    }
+
+    private static ValueTask<int> GetXAttrPath(IntPtr state, uint pathPtr, uint namePtr, uint valuePtr, uint sizeRaw,
+        LookupFlags lookupFlags)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+
+        var path = sm.ReadString(pathPtr);
+        var name = sm.ReadString(namePtr);
+        if (string.IsNullOrEmpty(name)) return new ValueTask<int>(-(int)Errno.EINVAL);
+        if (sizeRaw > int.MaxValue) return new ValueTask<int>(-(int)Errno.EINVAL);
+
+        var loc = sm.PathWalkWithFlags(path, lookupFlags);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        return new ValueTask<int>(CopyXAttrToUser(sm, loc.Dentry.Inode, name, valuePtr, (int)sizeRaw));
+    }
+
+    private static ValueTask<int> ListXAttrPath(IntPtr state, uint pathPtr, uint listPtr, uint sizeRaw,
+        LookupFlags lookupFlags)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+
+        var path = sm.ReadString(pathPtr);
+        if (sizeRaw > int.MaxValue) return new ValueTask<int>(-(int)Errno.EINVAL);
+
+        var loc = sm.PathWalkWithFlags(path, lookupFlags);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        return new ValueTask<int>(CopyXAttrListToUser(sm, loc.Dentry.Inode, listPtr, (int)sizeRaw));
+    }
+
+    private static ValueTask<int> RemoveXAttrPath(IntPtr state, uint pathPtr, uint namePtr, LookupFlags lookupFlags)
+    {
+        var sm = Get(state);
+        if (sm == null) return new ValueTask<int>(-(int)Errno.EPERM);
+
+        var path = sm.ReadString(pathPtr);
+        var name = sm.ReadString(namePtr);
+        if (string.IsNullOrEmpty(name)) return new ValueTask<int>(-(int)Errno.EINVAL);
+
+        var loc = sm.PathWalkWithFlags(path, lookupFlags);
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        if (loc.Mount != null && loc.Mount.IsReadOnly) return new ValueTask<int>(-(int)Errno.EROFS);
+        return new ValueTask<int>(loc.Dentry.Inode.RemoveXAttr(name));
+    }
+
+    private static int CopyXAttrToUser(SyscallManager sm, Inode inode, string name, uint valueAddr, int size)
+    {
+        Span<byte> probe = stackalloc byte[0];
+        var needed = inode.GetXAttr(name, probe);
+        if (needed < 0) return needed;
+        if (size == 0) return needed;
+        if (valueAddr == 0) return -(int)Errno.EFAULT;
+
+        var buf = new byte[size];
+        var rc = inode.GetXAttr(name, buf);
+        if (rc < 0) return rc;
+        if (rc > size) return -(int)Errno.ERANGE;
+        if (!sm.Engine.CopyToUser(valueAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
+        return rc;
+    }
+
+    private static int CopyXAttrListToUser(SyscallManager sm, Inode inode, uint listAddr, int size)
+    {
+        Span<byte> probe = stackalloc byte[0];
+        var needed = inode.ListXAttr(probe);
+        if (needed < 0) return needed;
+        if (size == 0) return needed;
+        if (listAddr == 0) return -(int)Errno.EFAULT;
+
+        var buf = new byte[size];
+        var rc = inode.ListXAttr(buf);
+        if (rc < 0) return rc;
+        if (rc > size) return -(int)Errno.ERANGE;
+        if (!sm.Engine.CopyToUser(listAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
+        return rc;
+    }
+
+    private static int ResolveStartAt(SyscallManager sm, int dirfd, string path, out PathLocation? startAt)
+    {
+        startAt = null;
+        if (path.StartsWith("/", StringComparison.Ordinal)) return 0;
+        if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD)) return 0;
+
+        var fdir = sm.GetFD(dirfd);
+        if (fdir == null) return -(int)Errno.EBADF;
+        startAt = new PathLocation(fdir.Dentry, fdir.Mount);
+        return 0;
+    }
+
+    private static int ReadUserBuffer(SyscallManager sm, uint addr, int size, out byte[] valueBytes)
+    {
+        valueBytes = [];
+        if (size < 0) return -(int)Errno.EINVAL;
+        if (size == 0) return 0;
+        if (addr == 0) return -(int)Errno.EFAULT;
+
+        valueBytes = new byte[size];
+        if (!sm.Engine.CopyFromUser(addr, valueBytes)) return -(int)Errno.EFAULT;
+        return 0;
+    }
+
     private static async ValueTask<int> SysUnlinkAt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);

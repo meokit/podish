@@ -111,7 +111,7 @@ public abstract class Inode
     ///     Device number (rdev) for character/block devices.
     ///     Encoded as (major << 8) | minor for compatibility.
     /// </summary>
-    public uint Rdev { get; set; }
+    public virtual uint Rdev { get; set; }
 
     public SuperBlock SuperBlock { get; set; } = null!;
 
@@ -181,6 +181,11 @@ public abstract class Inode
     }
 
     public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        throw new NotSupportedException();
+    }
+
+    public virtual Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
         throw new NotSupportedException();
     }
@@ -258,6 +263,26 @@ public abstract class Inode
     public virtual int Flock(LinuxFile linuxFile, int operation)
     {
         return -(int)Errno.ENOSYS;
+    }
+
+    public virtual int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        return -(int)Errno.EOPNOTSUPP;
+    }
+
+    public virtual int GetXAttr(string name, Span<byte> value)
+    {
+        return -(int)Errno.EOPNOTSUPP;
+    }
+
+    public virtual int ListXAttr(Span<byte> list)
+    {
+        return -(int)Errno.EOPNOTSUPP;
+    }
+
+    public virtual int RemoveXAttr(string name)
+    {
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     // File operations hooks

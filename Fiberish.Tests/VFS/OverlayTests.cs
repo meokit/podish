@@ -214,6 +214,52 @@ public class OverlayTests
     }
 
     [Fact]
+    public void OverlayMknod_InLowerOnlyDirectory_ShouldCreateInUpper()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempLower, "tmp"));
+
+            var hostType = new FileSystemType { Name = "hostfs" };
+            var hostOpts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+
+            var tmpType = new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() };
+            var upperSb = tmpType.FileSystem.ReadSuper(tmpType, 0, "ovl-upper-mknod", null);
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var tmpOv = overlaySb.Root.Inode!.Lookup("tmp");
+            Assert.NotNull(tmpOv);
+            var tmpInode = Assert.IsType<OverlayInode>(tmpOv!.Inode);
+            Assert.Null(tmpInode.UpperDentry);
+
+            var node = new Dentry("devnode", null, tmpOv, overlaySb);
+            tmpInode.Mknod(node, 0x180, 0, 0, InodeType.CharDev, (1u << 8) | 3u);
+
+            var created = tmpOv.Inode!.Lookup("devnode");
+            Assert.NotNull(created);
+            Assert.Equal(InodeType.CharDev, created!.Inode!.Type);
+            Assert.Equal((1u << 8) | 3u, created.Inode.Rdev);
+            Assert.NotNull(tmpInode.UpperDentry);
+            Assert.NotNull(tmpInode.UpperInode!.Lookup("devnode"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+        }
+    }
+
+    [Fact]
     public void OverlayLookup_MultipleLowers_PicksTopmostLower()
     {
         var tempLowerTop = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -311,6 +357,133 @@ public class OverlayTests
             if (Directory.Exists(tempLowerTop)) Directory.Delete(tempLowerTop, true);
             if (Directory.Exists(tempLowerBottom)) Directory.Delete(tempLowerBottom, true);
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayUnlink_LowerOnlyEntry_CreatesLogicalWhiteout()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLower, "gone.txt"), "x");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            Assert.NotNull(rootInode.Lookup("gone.txt"));
+
+            rootInode.Unlink("gone.txt");
+
+            Assert.Null(rootInode.Lookup("gone.txt"));
+            var names = rootInode.GetEntries().Select(e => e.Name).ToHashSet();
+            Assert.DoesNotContain("gone.txt", names);
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayGetEntries_EncodedOpaqueMarker_HidesLowerEntries()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLower, "lower.txt"), "l");
+            File.WriteAllText(Path.Combine(tempUpper, ".wh..wh..opq"), "");
+            File.WriteAllText(Path.Combine(tempUpper, "upper.txt"), "u");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions
+                {
+                    Lowers = [lowerSb],
+                    Upper = upperSb
+                });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            var names = rootInode.GetEntries().Select(e => e.Name).ToHashSet();
+            Assert.Contains("upper.txt", names);
+            Assert.DoesNotContain("lower.txt", names);
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayUnlink_LowerOnlyEntry_WithTmpfsUpper_UsesCharDeviceWhiteout()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLower, "gone.txt"), "x");
+
+            var hostType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(hostType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+
+            var tmpType = new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() };
+            var upperSb = new Tmpfs().ReadSuper(tmpType, 0, "upper", null);
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            rootInode.Unlink("gone.txt");
+
+            Assert.Null(rootInode.Lookup("gone.txt"));
+            Assert.NotNull(rootInode.UpperInode);
+            var marker = rootInode.UpperInode!.Lookup("gone.txt");
+            Assert.NotNull(marker);
+            Assert.Equal(InodeType.CharDev, marker!.Inode!.Type);
+            Assert.Equal(0u, marker.Inode.Rdev);
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
         }
     }
 }
