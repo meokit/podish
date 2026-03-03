@@ -22,14 +22,14 @@ internal class Program
         var rootCommand = new RootCommand("FiberPod - Podman-like CLI for x86emu");
 
         // Global Options
-        var logLevelOption = new Option<LogLevel>(
+        var logLevelOption = new Option<string>(
             new[] { "--log-level", "-l" },
-            () => LogLevel.Warning,
-            "Set the logging level (Trace, Debug, Information, Warning, Error, Critical)");
+            () => "warn",
+            "Log messages above specified level: debug, info, warn, error, fatal, panic");
         var logFileOption = new Option<string?>(
             new[] { "--log-file" },
             () => null,
-            "Path to a file where logs will be written (default to stderr if not set)");
+            "Path to a file where FiberPod engine logs will be written");
 
         rootCommand.AddGlobalOption(logLevelOption);
         rootCommand.AddGlobalOption(logFileOption);
@@ -71,10 +71,13 @@ internal class Program
             new[] { "--log-driver" },
             () => "json-file",
             "Container log driver (json-file|none)");
-        var imageArgument = new Argument<string?>("image", () => null, "Image name");
-        var exeArgument =
-            new Argument<string?>("command", () => null, "Command to execute (optional if image has entrypoint)");
-        var exeArgsArgument = new Argument<string[]>("args", () => Array.Empty<string>(), "Command arguments");
+        var runArgsArgument = new Argument<string[]>(
+            "run-args",
+            () => Array.Empty<string>(),
+            "IMAGE [COMMAND [ARG...]] (or COMMAND [ARG...] with --rootfs)")
+        {
+            Arity = ArgumentArity.ZeroOrMore
+        };
 
         runCommand.AddOption(volumeOption);
         runCommand.AddOption(interactiveOption);
@@ -84,9 +87,7 @@ internal class Program
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
-        runCommand.AddArgument(imageArgument);
-        runCommand.AddArgument(exeArgument);
-        runCommand.AddArgument(exeArgsArgument);
+        runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async (context) =>
         {
@@ -98,24 +99,34 @@ internal class Program
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
-            var image = context.ParseResult.GetValueForArgument(imageArgument);
-            var exe = context.ParseResult.GetValueForArgument(exeArgument);
-            var exeArgs = context.ParseResult.GetValueForArgument(exeArgsArgument) ?? Array.Empty<string>();
+            var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
+            string? image = null;
+            string? exe = null;
+            string[] exeArgs = Array.Empty<string>();
 
             if (useRootfs)
             {
-                // Podman-compatible: with --rootfs, positional arguments are command + args.
-                if (!string.IsNullOrWhiteSpace(image))
+                if (runArgs.Length > 0)
                 {
-                    if (!string.IsNullOrWhiteSpace(exe))
-                        exeArgs = new[] { exe! }.Concat(exeArgs).ToArray();
-                    exe = image;
-                    image = null;
+                    exe = runArgs[0];
+                    exeArgs = runArgs.Skip(1).ToArray();
+                }
+            }
+            else
+            {
+                if (runArgs.Length > 0)
+                {
+                    image = runArgs[0];
+                    if (runArgs.Length > 1)
+                    {
+                        exe = runArgs[1];
+                        exeArgs = runArgs.Skip(2).ToArray();
+                    }
                 }
             }
 
-            var logLevel = context.ParseResult.GetValueForOption(logLevelOption);
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
@@ -131,6 +142,14 @@ internal class Program
             if (logFile == null)
             {
                 logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+            }
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
             }
 
             if (!ContainerLogDriverParser.TryParse(containerLogDriverRaw, out var containerLogDriver))
@@ -234,7 +253,7 @@ internal class Program
         {
             var image = context.ParseResult.GetValueForArgument(pullImageArgument);
             var storeOci = context.ParseResult.GetValueForOption(pullStoreOciOption);
-            var logLevel = context.ParseResult.GetValueForOption(logLevelOption);
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
@@ -248,6 +267,14 @@ internal class Program
             if (logFile == null)
             {
                 logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+            }
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
             }
 
             SetupLogging(logLevel, logFile);
@@ -353,27 +380,134 @@ internal class Program
         rootCommand.AddCommand(logsCommand);
         rootCommand.AddCommand(eventsCommand);
 
-        return await rootCommand.InvokeAsync(args);
+        var normalizedArgs = NormalizeRunArgsForPodman(args);
+        return await rootCommand.InvokeAsync(normalizedArgs);
     }
 
     private static void SetupLogging(LogLevel logLevel, string? logFile)
     {
         Logging.LoggerFactory = LoggerFactory.Create(builder =>
         {
+            builder.ClearProviders();
             builder.SetMinimumLevel(logLevel);
             if (!string.IsNullOrEmpty(logFile))
             {
-                // Write to file
+                // Write only to file; never emit engine logs to console.
                 builder.AddProvider(new FileLoggerProvider(logFile));
             }
-
-            // Write to Console Error (stderr) ALWAYS
-            builder.AddConsole(options =>
-            {
-                options.LogToStandardErrorThreshold = LogLevel.Trace; // All logs to stderr
-            });
         });
         Logger = Logging.CreateLogger<Program>();
+    }
+
+    private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
+    {
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "debug":
+                level = LogLevel.Debug;
+                return true;
+            case "info":
+                level = LogLevel.Information;
+                return true;
+            case "warn":
+                level = LogLevel.Warning;
+                return true;
+            case "error":
+                level = LogLevel.Error;
+                return true;
+            case "fatal":
+            case "panic":
+                level = LogLevel.Critical;
+                return true;
+            default:
+                level = LogLevel.Warning;
+                return false;
+        }
+    }
+
+    private static string[] NormalizeRunArgsForPodman(string[] args)
+    {
+        if (args.Length == 0)
+            return args;
+
+        var runIdx = Array.FindIndex(args, a => string.Equals(a, "run", StringComparison.Ordinal));
+        if (runIdx < 0 || runIdx == args.Length - 1)
+            return args;
+
+        // If user already provided `--`, keep raw tokens.
+        for (var i = runIdx + 1; i < args.Length; i++)
+        {
+            if (args[i] == "--")
+                return args;
+        }
+
+        var optionsWithValue = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "-l",
+            "--log-level",
+            "--log-file",
+            "-v",
+            "--volume",
+            "-e",
+            "--env",
+            "--dns",
+            "--log-driver",
+            "--rootfs"
+        };
+        var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "-i",
+            "--interactive",
+            "-t",
+            "--tty",
+            "-s",
+            "--strace"
+        };
+
+        bool hasRootfs = false;
+        var firstPositional = -1;
+        for (var i = runIdx + 1; i < args.Length; i++)
+        {
+            var token = args[i];
+            if (token.StartsWith("--rootfs=", StringComparison.Ordinal))
+            {
+                hasRootfs = true;
+                continue;
+            }
+
+            if (token.StartsWith("-", StringComparison.Ordinal))
+            {
+                if (optionsNoValue.Contains(token))
+                    continue;
+
+                if (optionsWithValue.Contains(token))
+                {
+                    if (token == "--rootfs")
+                        hasRootfs = true;
+                    i++;
+                    continue;
+                }
+
+                // Unknown option before passthrough boundary: keep original to let parser report it.
+                return args;
+            }
+
+            firstPositional = i;
+            break;
+        }
+
+        if (firstPositional < 0)
+            return args;
+
+        var passThroughStart = hasRootfs ? firstPositional : firstPositional + 1;
+        if (passThroughStart >= args.Length)
+            return args;
+
+        var rewritten = new List<string>(args.Length + 1);
+        rewritten.AddRange(args.Take(passThroughStart));
+        rewritten.Add("--");
+        rewritten.AddRange(args.Skip(passThroughStart));
+        return rewritten.ToArray();
     }
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
