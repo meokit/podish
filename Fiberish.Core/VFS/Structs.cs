@@ -247,14 +247,22 @@ public abstract class Inode : IPageCacheOps
         if (buffer.Length == 0) return 0;
         var pageCache = PageCache;
         if (pageCache == null) return backendRead(linuxFile, buffer, offset);
+        if (offset < 0) return -(int)Errno.EINVAL;
 
         var total = 0;
         var cursor = offset;
+        var fileSize = (long)Size;
+        var tempPage = new byte[LinuxConstants.PageSize];
         while (total < buffer.Length)
         {
+            var fileRemaining = fileSize - cursor;
+            if (fileRemaining <= 0) break; // EOF
+
             var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
             var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
             var toCopy = Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset);
+            if (toCopy > fileRemaining) toCopy = (int)fileRemaining;
+            if (toCopy <= 0) break;
             var pagePtr = pageCache.GetPage(pageIndex);
             if (pagePtr != IntPtr.Zero)
             {
@@ -272,12 +280,37 @@ public abstract class Inode : IPageCacheOps
                 continue;
             }
 
-            var rc = backendRead(linuxFile, buffer.Slice(total, toCopy), cursor);
+            tempPage.AsSpan().Clear();
+            var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+            var pageReadLen = (int)Math.Min((long)LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
             if (rc < 0) return total > 0 ? total : rc;
-            if (rc == 0) return total;
-            total += rc;
-            cursor += rc;
-            if (rc < toCopy) return total;
+
+            pagePtr = pageCache.GetOrCreatePage(pageIndex, p =>
+            {
+                unsafe
+                {
+                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                    dst.Clear();
+                    if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
+                }
+
+                return true;
+            }, out _);
+
+            if (pagePtr == IntPtr.Zero) return total > 0 ? total : -(int)Errno.EIO;
+
+            unsafe
+            {
+                var src = (byte*)pagePtr + pageOffset;
+                fixed (byte* dst = &buffer[total])
+                {
+                    Buffer.MemoryCopy(src, dst, toCopy, toCopy);
+                }
+            }
+
+            total += toCopy;
+            cursor += toCopy;
         }
 
         return total;
@@ -290,68 +323,126 @@ public abstract class Inode : IPageCacheOps
         WriteBackendDelegate backendWrite)
     {
         if (buffer.Length == 0) return 0;
-        var rc = backendWrite(linuxFile, buffer, offset);
-        if (rc <= 0) return rc;
-        var written = rc;
-
         var pageCache = PageCache;
-        if (pageCache == null) return rc;
+        if (pageCache == null) return backendWrite(linuxFile, buffer, offset);
+        if (linuxFile == null) return backendWrite(linuxFile, buffer, offset);
+        if (offset < 0) return -(int)Errno.EINVAL;
 
         var consumed = 0;
         var cursor = offset;
-        while (consumed < written)
+        var tempPage = new byte[LinuxConstants.PageSize];
+        while (consumed < buffer.Length)
         {
             var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
             var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
-            var chunk = Math.Min(written - consumed, LinuxConstants.PageSize - pageOffset);
+            var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
             var pagePtr = pageCache.GetPage(pageIndex);
-            if (pagePtr != IntPtr.Zero)
+            if (pagePtr == IntPtr.Zero)
             {
-                unsafe
+                var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
+                var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+                var pageReadLen = 0;
+                if (!fullPageWrite && pageFileOffset < (long)Size)
                 {
-                    fixed (byte* src = &buffer[consumed])
+                    tempPage.AsSpan().Clear();
+                    pageReadLen = (int)Math.Min((long)LinuxConstants.PageSize, (long)Size - pageFileOffset);
+                    var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+                    if (rc < 0) return consumed > 0 ? consumed : rc;
+                }
+
+                pagePtr = pageCache.GetOrCreatePage(pageIndex, p =>
+                {
+                    unsafe
                     {
-                        var dst = (byte*)pagePtr + pageOffset;
-                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                        var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                        dst.Clear();
+                        if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
                     }
+
+                    return true;
+                }, out _);
+                if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.EIO;
+            }
+
+            unsafe
+            {
+                fixed (byte* src = &buffer[consumed])
+                {
+                    var dst = (byte*)pagePtr + pageOffset;
+                    Buffer.MemoryCopy(src, dst, chunk, chunk);
                 }
             }
+
+            var dirtyRc = SetPageDirty(pageIndex);
+            if (dirtyRc < 0) return consumed > 0 ? consumed : dirtyRc;
+
+            // Route through page-level op for filesystem-specific bookkeeping.
+            var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk), buffer.Slice(consumed, chunk), false);
+            if (writeRc < 0) return consumed > 0 ? consumed : writeRc;
 
             consumed += chunk;
             cursor += chunk;
         }
 
-        return rc;
+        var end = offset + consumed;
+        if (end > (long)Size) Size = (ulong)end;
+        MTime = DateTime.Now;
+        return consumed;
     }
 
-    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    protected virtual int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         // Explicitly unsupported by default: filesystems must opt in.
         return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    protected virtual int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
         // Optional optimization hook; default no-op.
         return 0;
     }
 
-    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected virtual int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
     {
         // Explicitly unsupported by default: filesystems must opt in.
         return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    protected virtual int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
         // Optional batch writeback hook; default no-op.
         return 0;
     }
 
-    public virtual int SetPageDirty(long pageIndex)
+    protected virtual int AopsSetPageDirty(long pageIndex)
     {
         // Optional dirty accounting hook for filesystems.
         return 0;
+    }
+
+    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        return AopsReadPage(linuxFile, request, pageBuffer);
+    }
+
+    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        return AopsReadahead(linuxFile, request);
+    }
+
+    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        return AopsWritePage(linuxFile, request, pageBuffer, sync);
+    }
+
+    public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        return AopsWritePages(linuxFile, request);
+    }
+
+    public virtual int SetPageDirty(long pageIndex)
+    {
+        return AopsSetPageDirty(pageIndex);
     }
 
     // Async blocking support

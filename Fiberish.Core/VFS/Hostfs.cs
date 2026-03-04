@@ -1027,7 +1027,7 @@ public partial class HostInode : Inode
         return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
     }
 
-    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
@@ -1037,7 +1037,7 @@ public partial class HostInode : Inode
         return rc < 0 ? rc : 0;
     }
 
-    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
         if (request.PageCount <= 0 || PageCache == null) return 0;
         var page = new byte[LinuxConstants.PageSize];
@@ -1065,35 +1065,62 @@ public partial class HostInode : Inode
         return 0;
     }
 
-    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
-        if (request.Length == 0)
-        {
-            lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
-            return 0;
-        }
+        if (request.Length == 0) return 0;
+        if (!sync) return 0;
 
         var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         if (rc < 0) return rc;
         lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
-        if (sync && linuxFile != null) Sync(linuxFile);
+        if (linuxFile != null) Sync(linuxFile);
         return 0;
     }
 
-    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    protected override int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
-        if (request.Sync && linuxFile != null) Sync(linuxFile);
+        if (!request.Sync) return 0;
+        if (PageCache == null) return 0;
+
+        List<long> toFlush;
         lock (_dirtyPageLock)
         {
-            _dirtyPageIndexes.RemoveWhere(i => i >= request.StartPageIndex && i <= request.EndPageIndex);
+            toFlush = _dirtyPageIndexes
+                .Where(i => i >= request.StartPageIndex && i <= request.EndPageIndex)
+                .ToList();
         }
 
+        foreach (var pageIndex in toFlush)
+        {
+            var pagePtr = PageCache.GetPage((uint)pageIndex);
+            if (pagePtr == IntPtr.Zero) continue;
+
+            var fileOffset = pageIndex * LinuxConstants.PageSize;
+            var remaining = (long)Size - fileOffset;
+            if (remaining <= 0)
+            {
+                lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+                continue;
+            }
+
+            var writeLen = (int)Math.Min((long)LinuxConstants.PageSize, remaining);
+            unsafe
+            {
+                ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
+                var rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
+                if (rc < 0) return rc;
+            }
+
+            lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+        }
+
+        if (linuxFile != null) Sync(linuxFile);
         return 0;
     }
 
-    public override int SetPageDirty(long pageIndex)
+    protected override int AopsSetPageDirty(long pageIndex)
     {
         lock (_dirtyPageLock)
         {

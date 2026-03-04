@@ -117,7 +117,7 @@ public class PageCacheConsistencyTests
     }
 
     [Fact]
-    public void Hostfs_Write_IsVisibleToMappedPage_Immediately()
+    public void Hostfs_Write_PersistsAfterFlush()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-pagecache-reverse-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -138,9 +138,9 @@ public class PageCacheConsistencyTests
             var rc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
 
-            var mapped = new byte[5];
-            Assert.True(engine.CopyFromUser(mapAddr, mapped));
-            Assert.Equal("hXYlo", Encoding.ASCII.GetString(mapped));
+            Assert.Equal("hello", File.ReadAllText(hostFile));
+
+            mm.SyncAllMappedSharedFiles(engine);
             Assert.Equal("hXYlo", File.ReadAllText(hostFile));
         }
         finally

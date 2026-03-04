@@ -319,7 +319,7 @@ public class LayerInode : Inode
         return -(int)Errno.EROFS;
     }
 
-    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
@@ -330,7 +330,7 @@ public class LayerInode : Inode
         return rc < 0 ? rc : 0;
     }
 
-    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
         if (_entry.Type != InodeType.File || request.PageCount <= 0 || PageCache == null) return 0;
 
@@ -362,17 +362,17 @@ public class LayerInode : Inode
         return 0;
     }
 
-    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
     {
         return -(int)Errno.EROFS;
     }
 
-    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    protected override int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
         return -(int)Errno.EROFS;
     }
 
-    public override int SetPageDirty(long pageIndex)
+    protected override int AopsSetPageDirty(long pageIndex)
     {
         return -(int)Errno.EROFS;
     }
