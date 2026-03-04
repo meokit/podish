@@ -94,6 +94,14 @@ public class TtyDisciplineTests
     {
         var buffer = new byte[100];
 
+        // Enable IUTF8
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var iflag = BitConverter.ToUInt32(termios, 0);
+        iflag |= 0x4000u; // IUTF8
+        BitConverter.GetBytes(iflag).CopyTo(termios, 0);
+        _tty.SetAttr(0, termios);
+
         // Input a 2-byte UTF-8 character followed by backspace
         // "é" in UTF-8 is 0xC3 0xA9
         _tty.Input(new byte[] { 0xC3, 0xA9 });
@@ -215,6 +223,96 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
         var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(-(int)Errno.EAGAIN, read);
+    }
+
+    #endregion
+
+    #region Raw Mode VMIN/VTIME Tests
+
+    [Fact]
+    public void RawMode_VMIN_blocks_until_minimum_bytes()
+    {
+        var buffer = new byte[100];
+
+        // Switch to raw mode and configure VMIN=2, VTIME=0
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 2; // VMIN = 2
+        termios[17 + 5] = 0; // VTIME = 0
+        _tty.SetAttr(0, termios);
+
+        // Input 1 byte (less than VMIN)
+        _tty.Input(new byte[] { (byte)'a' });
+        
+        // Read without O_NONBLOCK should return EAGAIN because we need 2 bytes
+        var read = _tty.Read(buffer, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
+
+        // Input 2nd byte
+        _tty.Input(new byte[] { (byte)'b' });
+
+        // Now we have 2 bytes, read should succeed
+        read = _tty.Read(buffer, 0);
+        Assert.Equal(2, read);
+        Assert.Equal("ab", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    [Fact]
+    public void RawMode_VMIN_VTIME_returns_available_bytes()
+    {
+        var buffer = new byte[100];
+
+        // Switch to raw mode and configure VMIN=3, VTIME=1 (100ms)
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 3; // VMIN = 3
+        termios[17 + 5] = 1; // VTIME = 1
+        _tty.SetAttr(0, termios);
+
+        // Input 0 bytes, should block (EAGAIN to wait for IOAwaiter)
+        var read = _tty.Read(buffer, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
+
+        // Input 2 bytes (less than VMIN). Since we don't have timer support yet in TtyDiscipline,
+        // it returns what's available immediately after the first byte arrives.
+        _tty.Input(new byte[] { (byte)'a', (byte)'b' });
+        
+        read = _tty.Read(buffer, 0);
+        Assert.Equal(2, read);
+        Assert.Equal("ab", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    [Fact]
+    public void RawMode_VTIME_only_blocks_until_data_arrives()
+    {
+        var buffer = new byte[100];
+
+        // Switch to raw mode and configure VMIN=0, VTIME=5 (500ms)
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 0; // VMIN = 0
+        termios[17 + 5] = 5; // VTIME = 5
+        _tty.SetAttr(0, termios);
+
+        // Input 0 bytes, should block (EAGAIN)
+        var read = _tty.Read(buffer, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
+
+        // Input 1 byte
+        _tty.Input(new byte[] { (byte)'x' });
+        
+        read = _tty.Read(buffer, 0);
+        Assert.Equal(1, read);
+        Assert.Equal("x", Encoding.ASCII.GetString(buffer, 0, read));
     }
 
     #endregion
@@ -545,6 +643,91 @@ public class TtyDisciplineTests
         Assert.Equal((byte)'A', buffer[0]);
     }
 
+    [Fact]
+    public void IUCLC_maps_uppercase_to_lowercase()
+    {
+        var buffer = new byte[100];
+
+        // Enable IUCLC
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var iflag = BitConverter.ToUInt32(termios, 0);
+        iflag |= 0x200u; // IUCLC (0x200)
+        BitConverter.GetBytes(iflag).CopyTo(termios, 0);
+        
+        // Switch to raw mode to avoid canonical buffering
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        // Input uppercase and lowercase letters
+        _tty.Input(Encoding.ASCII.GetBytes("Hello WORLD!"));
+        
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(12, read);
+        Assert.Equal("hello world!", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    [Fact]
+    public void IMAXBEL_rings_bell_when_buffer_full()
+    {
+        var buffer = new byte[4096]; // Read buffer
+
+        // Enable IMAXBEL
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var iflag = BitConverter.ToUInt32(termios, 0);
+        iflag |= 0x2000u; // IMAXBEL (0x2000)
+        BitConverter.GetBytes(iflag).CopyTo(termios, 0);
+        
+        // Ensure canonical mode is ON (to use _canonBuffer)
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag |= 2u; // ICANON on
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        _driver.Output.Clear();
+
+        // Fill canonical buffer (capacity is hardcoded to 4096)
+        var chunk = new byte[1024];
+        Array.Fill(chunk, (byte)'a');
+        _tty.Input(chunk);
+        _tty.Input(chunk);
+        _tty.Input(chunk);
+        _tty.Input(chunk);
+        _tty.ProcessPendingInput(); // Fill up to 4096
+
+        // Buffer is now full, next char should trigger BEL
+        _driver.Output.Clear();
+        _tty.Input(new byte[] { (byte)'b' });
+        _tty.ProcessPendingInput();
+
+        // Should output BEL (7) or ^G if ECHOCTL is on. 
+        // In our case ECHOCTL is ON, so BEL (0x07) echoes as ^G (0x5E 0x47)
+        // Let's just check that it outputs BEL or ^G
+        var strOut = Encoding.ASCII.GetString(_driver.Output.ToArray());
+        Assert.True(_driver.Output.Contains(7) || strOut.Contains("^G"));
+        
+        // At this point, _canonBuffer has 4096 'a's.
+        // The read without newline returns EAGAIN
+        var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(-(int)Errno.EAGAIN, read);
+        
+        // Remove one character with backspace so we can add a newline
+        _tty.Input(new byte[] { 127 }); // Backspace (VERASE)
+        _tty.ProcessPendingInput();
+        
+        // Input newline to flush the canonical buffer
+        _tty.Input(new byte[] { 10 }); // Newline
+        _tty.ProcessPendingInput();
+
+        // Now we can read the 4095 'a's + newline
+        read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(4096, read); // 4095 'a's + '\n'
+        Assert.DoesNotContain((byte)'b', buffer.AsSpan(0, read).ToArray());
+    }
+
     #endregion
 
     #region Output Flag Tests
@@ -592,6 +775,27 @@ public class TtyDisciplineTests
         // Should output just NL (not CR-NL)
         Assert.Single(_driver.Output);
         Assert.Equal(10, _driver.Output[0]);
+    }
+
+    [Fact]
+    public void OLCUC_maps_lowercase_to_uppercase()
+    {
+        _driver.Output.Clear();
+
+        // Enable OLCUC
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var oflag = BitConverter.ToUInt32(termios, 4);
+        oflag |= 2u; // OLCUC (2)
+        BitConverter.GetBytes(oflag).CopyTo(termios, 4);
+        _tty.SetAttr(0, termios);
+
+        // Write lowercase and uppercase
+        _tty.Write(Encoding.ASCII.GetBytes("hello WORLD!"));
+
+        // Should output "HELLO WORLD!"
+        var output = Encoding.ASCII.GetString(_driver.Output.ToArray());
+        Assert.Equal("HELLO WORLD!", output);
     }
 
     #endregion

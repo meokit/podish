@@ -175,14 +175,87 @@ public class TtyDiscipline
 
         ProcessPendingInput();
 
+        // Non-canonical mode requires special handling for VMIN and VTIME
+        if ((_lflag & ICANON) == 0)
+        {
+            var vmin = _cc[VMIN];
+            var vtime = _cc[VTIME];
+
+            // Determine if we need to enforce MIN/TIME rules. If non-blocking, we just read what we can.
+            if ((flags & FileFlags.O_NONBLOCK) == 0 && (vmin > 0 || vtime > 0))
+            {
+                // To properly implement VMIN/VTIME across the async/blocking syscall boundary,
+                // we'd ideally yield back to the scheduler. However, returning -EAGAIN causes
+                // the syscall handler to wait on IOAwaiter.
+                //
+                // VMIN > 0, VTIME > 0: Block until first byte, then start inter-byte timer. Return up to VMIN bytes.
+                // VMIN > 0, VTIME == 0: Block until VMIN bytes are available.
+                // VMIN == 0, VTIME > 0: Pure timeout read. Block up to VTIME * 100ms. If any bytes arrive, return them.
+                // VMIN == 0, VTIME == 0: Return immediately with whatever is available, even 0.
+
+                var count = _inq.Count;
+
+                if (vmin > 0 && vtime == 0)
+                {
+                    // Block until VMIN bytes
+                    if (count >= vmin || count >= buffer.Length)
+                    {
+                        var readCount = _inq.Read(buffer, flags);
+                        return readCount;
+                    }
+                    _inq.DataAvailable.Reset();
+                    return -(int)Errno.EAGAIN; // Will wait on IOAwaiter
+                }
+
+                // If VTIME is involved, we have a problem: IOAwaiter doesn't easily support timeouts right now.
+                // Wait, IOAwaiter is triggered when DataAvailable is set.
+                // For proper VTIME, we need to schedule a timeout on the FiberTask or handle it in the kernel.
+                // Since this is a synchronous Read method, if we just return -EAGAIN, it waits INDEFINITELY.
+                // To support VTIME without changing SyscallHandlers, we might have to block the thread
+                // or have the input loop inject a dummy timeout signal.
+                
+                // For now, if we have enough bytes (VMIN), or if VMIN==0 and we just check what's there:
+                if (vmin > 0 && vtime > 0)
+                {
+                    if (count >= vmin || count >= buffer.Length)
+                    {
+                        return _inq.Read(buffer, flags);
+                    }
+                    // Wait for at least one byte
+                    if (count == 0)
+                    {
+                        _inq.DataAvailable.Reset();
+                        return -(int)Errno.EAGAIN;
+                    }
+                    // We have SOME bytes (count > 0) but less than VMIN.
+                    // The inter-byte timer should be ticking. If we don't have timer support yet in this layer,
+                    // we'll return what we have (violating VMIN slightly but preventing deadlocks), OR 
+                    // we wait for more (violating VTIME). 
+                    // Let's just return what we have for now if we can't do accurate inter-byte timing easily.
+                    return _inq.Read(buffer, flags);
+                }
+
+                if (vmin == 0 && vtime > 0)
+                {
+                    if (count > 0)
+                    {
+                        return _inq.Read(buffer, flags);
+                    }
+                    // Pure timeout read. We need a way to return 0 after VTIME.
+                    // Right now we can't easily wait with timeout.
+                    // fallback to blocking for first byte like vmin=1, vtime=0.
+                    _inq.DataAvailable.Reset();
+                    return -(int)Errno.EAGAIN; 
+                }
+            }
+        }
+
         var result = _inq.Read(buffer, flags);
 
         _logger.LogInformation("[TTY] Read: _inq.Read returned {Result}, buffer contents=[{BufferContents}]",
             result, string.Join(", ", buffer.Slice(0, Math.Max(0, result)).ToArray().Select(b => $"0x{b:X2}")));
 
-        // Race condition check: If new data arrived during processing/reading but after _inq.Read reset the event,
-        // we must ensure the event is signaled again so we don't sleep forever in SysRead.
-        // Only signal if there's actually data available to read (not just pending raw input).
+        // Race condition check
         if (Device.HasInterrupt && _inq.Count > 0)
         {
             _logger.LogInformation("[TTY] Read: Race condition detected, re-signaling data available");
@@ -596,6 +669,12 @@ public class TtyDiscipline
         // ISTRIP - strip 8th bit
         if ((_iflag & ISTRIP) != 0) b = (byte)(b & 0x7F);
 
+        // IUCLC - map uppercase to lowercase
+        if ((_iflag & IUCLC) != 0 && b >= 'A' && b <= 'Z')
+        {
+            b = (byte)(b + 32);
+        }
+
         // IGNCR - ignore CR (must be checked before ICRNL)
         if ((_iflag & IGNCR) != 0 && b == 13) return null; // Return null to signal character was consumed
 
@@ -692,7 +771,7 @@ public class TtyDiscipline
             else
             {
                 // Ordinary char
-                // Buffer capacity check?
+                // Buffer capacity check
                 if (_canonBuffer.Count < 4096)
                 {
                     _canonBuffer.Add(b);
@@ -700,6 +779,12 @@ public class TtyDiscipline
                         b.ToString("X2"), _canonBuffer.Count);
                     // Echo
                     if ((_lflag & ECHO) != 0) EchoByte(TtyEndpointKind.Stdout, b);
+                }
+                else if ((_iflag & IMAXBEL) != 0)
+                {
+                    // Buffer is full and IMAXBEL is set, ring bell and discard character
+                    _logger.LogWarning("[TTY] ProcessRegularChar: Canon buffer full, sending BEL (IMAXBEL)");
+                    EchoByte(TtyEndpointKind.Stdout, 0x07); // BEL
                 }
             }
         }
@@ -758,7 +843,7 @@ public class TtyDiscipline
 
         // Handle multi-byte UTF-8 character erase
         var eraseCount = 1;
-        if ((_lflag & IEXTEN) != 0 && _canonBuffer.Count > 0)
+        if ((_iflag & IUTF8) != 0 && _canonBuffer.Count > 0)
         {
             // Check if we're erasing a UTF-8 continuation byte
             // UTF-8 continuation bytes are 10xxxxxx (0x80-0xBF)
@@ -905,7 +990,6 @@ public class TtyDiscipline
                 // OCRNL - map CR to NL
                 if ((_oflag & OCRNL) != 0)
                     expanded.Add(10);
-                // ONOCR - no CR at column 0 (we don't track column, so output anyway)
                 else if ((_oflag & ONOCR) != 0)
                     // In a full implementation, we'd track column position
                     // For now, output the CR
@@ -925,7 +1009,15 @@ public class TtyDiscipline
             }
             else
             {
-                expanded.Add(b);
+                // OLCUC - map lowercase to uppercase
+                if ((_oflag & OLCUC) != 0 && b >= 'a' && b <= 'z')
+                {
+                    expanded.Add((byte)(b - 32));
+                }
+                else
+                {
+                    expanded.Add(b);
+                }
             }
 
         var expandedArray = expanded.ToArray();
