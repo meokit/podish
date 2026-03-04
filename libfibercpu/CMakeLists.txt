@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Keep native objects compatible with the Podish macOS deployment baseline.
+# FORCE is required so existing build trees don't keep an older cached value.
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment version" FORCE)
+endif()
+
 project(libfibercpu LANGUAGES C CXX)
 
 # Enforce C++23 and C11
@@ -89,7 +96,12 @@ target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
 # Link libraries
 # If SoftFloat is used, link it
 if(USE_SOFTFLOAT)
-    target_link_libraries(fibercpu PRIVATE softfloat)
+    if(FIBERCPU_BUILD_STATIC)
+        # Fold softfloat object files directly into libfibercpu.a.
+        target_sources(fibercpu PRIVATE $<TARGET_OBJECTS:softfloat_obj>)
+    else()
+        target_link_libraries(fibercpu PRIVATE softfloat)
+    endif()
 endif()
 
 if(ENABLE_TLB_STATS)
