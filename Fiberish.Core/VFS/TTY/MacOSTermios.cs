@@ -55,8 +55,8 @@ public static class MacOSTermios
     private const int LINUX_VMIN = 6;
     private const int LINUX_VTIME = 5;
 
-    private static MacTermios _originalTermios;
-    private static bool _originalTermiosSaved;
+    private static readonly object RawModeLock = new();
+    private static readonly Dictionary<int, RawModeState> RawModeStates = [];
 
     [DllImport("libc", SetLastError = true)]
     private static extern int tcgetattr(int fd, ref MacTermios termios);
@@ -66,32 +66,51 @@ public static class MacOSTermios
 
     public static int EnableRawMode(int fd)
     {
-        if (!_originalTermiosSaved)
+        lock (RawModeLock)
         {
-            if (tcgetattr(fd, ref _originalTermios) < 0) return -GetErrnoOrDefault();
-            _originalTermiosSaved = true;
+            if (RawModeStates.TryGetValue(fd, out var existing))
+            {
+                RawModeStates[fd] = existing with { RefCount = existing.RefCount + 1 };
+                return 0;
+            }
+
+            MacTermios original = default;
+            if (tcgetattr(fd, ref original) < 0) return -GetErrnoOrDefault();
+
+            var raw = original;
+            // Input: No break, no CR to NL, no parity check, no strip char
+            // raw.c_iflag &= ~(ulong)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+            // We want strict raw, but let's just do what cfmakeraw usually does + tweaks
+            raw.c_iflag &= ~(ulong)(MAC_ICRNL | MAC_IXON);
+            raw.c_oflag &= ~(ulong)MAC_OPOST;
+            raw.c_lflag &= ~(ulong)(MAC_ECHO | MAC_ICANON | MAC_IEXTEN | MAC_ISIG);
+
+            // VMIN=1, VTIME=0 -> Blocking read until at least 1 byte
+            raw.c_cc[MAC_VMIN] = 1;
+            raw.c_cc[MAC_VTIME] = 0;
+
+            if (tcsetattr(fd, 2 /* TCSAFLUSH */, ref raw) < 0) return -GetErrnoOrDefault();
+            RawModeStates[fd] = new RawModeState(original, 1);
+            return 0;
         }
-
-        var raw = _originalTermios;
-        // Input: No break, no CR to NL, no parity check, no strip char
-        // raw.c_iflag &= ~(ulong)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-        // We want strict raw, but let's just do what cfmakeraw usually does + tweaks
-
-        raw.c_iflag &= ~(ulong)(MAC_ICRNL | MAC_IXON);
-        raw.c_oflag &= ~(ulong)MAC_OPOST;
-        raw.c_lflag &= ~(ulong)(MAC_ECHO | MAC_ICANON | MAC_IEXTEN | MAC_ISIG);
-
-        // VMIN=1, VTIME=0 -> Blocking read until at least 1 byte
-        raw.c_cc[MAC_VMIN] = 1;
-        raw.c_cc[MAC_VTIME] = 0;
-
-        if (tcsetattr(fd, 2 /* TCSAFLUSH */, ref raw) < 0) return -GetErrnoOrDefault();
-        return 0;
     }
 
     public static void DisableRawMode(int fd)
     {
-        if (_originalTermiosSaved) tcsetattr(fd, 0 /* TCSANOW */, ref _originalTermios);
+        lock (RawModeLock)
+        {
+            if (!RawModeStates.TryGetValue(fd, out var state)) return;
+
+            if (state.RefCount > 1)
+            {
+                RawModeStates[fd] = state with { RefCount = state.RefCount - 1 };
+                return;
+            }
+
+            var original = state.Original;
+            tcsetattr(fd, 0 /* TCSANOW */, ref original);
+            RawModeStates.Remove(fd);
+        }
     }
 
     public static int GetAttr(int fd, byte[] linuxTermiosData)
@@ -225,6 +244,8 @@ public static class MacOSTermios
         var err = Marshal.GetLastPInvokeError();
         return err > 0 ? err : (int)Errno.EINVAL;
     }
+
+    private readonly record struct RawModeState(MacTermios Original, int RefCount);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MacTermios
