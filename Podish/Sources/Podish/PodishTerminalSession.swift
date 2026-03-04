@@ -58,21 +58,6 @@ enum PodishRuntimeError: LocalizedError {
     }
 }
 
-final class TerminalSink: @unchecked Sendable {
-    private let view: TerminalView
-
-    init(view: TerminalView) {
-        self.view = view
-    }
-
-    func feed(_ bytes: [UInt8]) {
-        guard !bytes.isEmpty else { return }
-        DispatchQueue.main.async { [view] in
-            view.feed(byteArray: bytes[...])
-        }
-    }
-}
-
 final class TerminalDelegateAdapter: NSObject, TerminalViewDelegate {
     var onResize: ((Int, Int) -> Void)?
     var onInput: (([UInt8]) -> Void)?
@@ -97,31 +82,36 @@ final class TerminalDelegateAdapter: NSObject, TerminalViewDelegate {
 }
 
 actor PodishRuntimeActor {
-    private let workDir: String
-    private let sink: TerminalSink
+    private struct RuntimeTerminalSession {
+        var container: UnsafeMutableRawPointer
+        var terminal: UnsafeMutableRawPointer
+        var readTask: Task<Void, Never>?
+    }
 
+    private let workDir: String
     private var ctx: UnsafeMutableRawPointer?
-    private var container: UnsafeMutableRawPointer?
-    private var terminal: UnsafeMutableRawPointer?
-    private var readTask: Task<Void, Never>?
     private var callbackUserData: UnsafeMutableRawPointer?
+
+    private var sessions: [String: RuntimeTerminalSession] = [:]
+    private var onOutput: (@Sendable (String, [UInt8]) -> Void)?
     private var onLogLine: (@Sendable (String) -> Void)?
     private var onContainerState: (@Sendable ([NativeContainerListItem]) -> Void)?
 
     struct StartupState {
         let containers: [NativeContainerListItem]
-        let attachedTerminal: Bool
+        let attachedContainerId: String?
     }
 
-    init(workDir: String, sink: TerminalSink) {
+    init(workDir: String) {
         self.workDir = workDir
-        self.sink = sink
     }
 
     func setObservers(
+        onOutput: @escaping @Sendable (String, [UInt8]) -> Void,
         onLog: @escaping @Sendable (String) -> Void,
         onContainerState: @escaping @Sendable ([NativeContainerListItem]) -> Void
     ) {
+        self.onOutput = onOutput
         self.onLogLine = onLog
         self.onContainerState = onContainerState
         guard ctx != nil else { return }
@@ -129,24 +119,21 @@ actor PodishRuntimeActor {
     }
 
     func startDefaultShell() throws -> StartupState {
-        if terminal != nil {
-            return StartupState(containers: try listContainers(), attachedTerminal: true)
-        }
-
         try ensureContext()
         var containers = try listContainers()
-        var attachedTerminal = false
+        var attached: String?
 
         if containers.isEmpty {
             try pullImage("docker.io/i386/alpine:latest")
             try createAndStartContainer()
-            try attachTerminal()
-            startReadLoop()
-            attachedTerminal = true
             containers = try listContainers()
+            attached = containers.first(where: { $0.running })?.containerId ?? containers.first?.containerId
+            if let attached {
+                try ensureTerminalSession(containerId: attached)
+            }
         }
 
-        return StartupState(containers: containers, attachedTerminal: attachedTerminal)
+        return StartupState(containers: containers, attachedContainerId: attached)
     }
 
     func refreshContainers() throws -> [NativeContainerListItem] {
@@ -175,6 +162,8 @@ actor PodishRuntimeActor {
         if rc != 0 {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
+
+        closeTerminalSession(containerId: containerId)
         return try listContainers()
     }
 
@@ -187,40 +176,36 @@ actor PodishRuntimeActor {
         if rc != 0 {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
+
+        closeTerminalSession(containerId: containerId)
         return try listContainers()
     }
 
-    func attachContainer(containerId: String) throws -> [NativeContainerListItem] {
+    func ensureTerminalSession(containerId: String) throws {
         try ensureContext()
-        let handle = try openContainer(containerId: containerId)
-        try switchToContainer(handle)
-        return try listContainers()
+        if sessions[containerId] != nil { return }
+
+        let container = try openContainer(containerId: containerId)
+        var terminal: UnsafeMutableRawPointer?
+        let rc = pod_terminal_attach(container, &terminal)
+        if rc != 0 || terminal == nil {
+            pod_container_close(container)
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+
+        sessions[containerId] = RuntimeTerminalSession(container: container, terminal: terminal!, readTask: nil)
+        startReadLoop(containerId: containerId)
     }
 
-    func stop() {
-        readTask?.cancel()
-        readTask = nil
-
-        uninstallCallbacks()
-
-        if let term = terminal {
-            pod_terminal_close(term)
-            terminal = nil
-        }
-        if let c = container {
-            pod_container_close(c)
-            container = nil
-        }
-        if let c = ctx {
-            pod_ctx_destroy(c)
-            ctx = nil
-        }
+    func closeTerminalSession(containerId: String) {
+        guard let session = sessions.removeValue(forKey: containerId) else { return }
+        session.readTask?.cancel()
+        pod_terminal_close(session.terminal)
+        pod_container_close(session.container)
     }
 
-    func writeInput(_ bytes: [UInt8]) throws {
-        guard let term = terminal, !bytes.isEmpty else {
-            return
-        }
+    func writeInput(containerId: String, _ bytes: [UInt8]) throws {
+        guard !bytes.isEmpty, let term = sessions[containerId]?.terminal else { return }
 
         var offset = 0
         while offset < bytes.count {
@@ -239,11 +224,66 @@ actor PodishRuntimeActor {
         }
     }
 
-    func resize(cols: Int, rows: Int) {
-        guard let term = terminal else { return }
+    func resize(containerId: String, cols: Int, rows: Int) {
+        guard let term = sessions[containerId]?.terminal else { return }
         let safeRows = UInt16(max(0, min(65535, rows)))
         let safeCols = UInt16(max(0, min(65535, cols)))
         _ = pod_terminal_resize(term, safeRows, safeCols)
+    }
+
+    func stop() {
+        for (containerId, _) in sessions {
+            closeTerminalSession(containerId: containerId)
+        }
+        sessions.removeAll()
+
+        uninstallCallbacks()
+        if let c = ctx {
+            pod_ctx_destroy(c)
+            ctx = nil
+        }
+    }
+
+    private func startReadLoop(containerId: String) {
+        guard var session = sessions[containerId], session.readTask == nil else { return }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.readLoop(containerId: containerId)
+        }
+        session.readTask = task
+        sessions[containerId] = session
+    }
+
+    private func readLoop(containerId: String) async {
+        while !Task.isCancelled {
+            guard let term = sessions[containerId]?.terminal else { return }
+            let termAddress = UInt(bitPattern: term)
+
+            let (rc, chunk) = await Task.detached(priority: .utility) { () -> (Int32, [UInt8]) in
+                guard let termPtr = UnsafeMutableRawPointer(bitPattern: termAddress) else {
+                    return (Int32(22), [])
+                }
+                var localBuffer = [UInt8](repeating: 0, count: 4096)
+                var count: Int32 = 0
+                let rc = localBuffer.withUnsafeMutableBufferPointer { ptr in
+                    pod_terminal_read(termPtr, ptr.baseAddress, Int32(ptr.count), 200, &count)
+                }
+                if rc != 0 || count <= 0 {
+                    return (rc, [])
+                }
+                return (rc, Array(localBuffer.prefix(Int(count))))
+            }.value
+
+            if rc != 0 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
+            }
+
+            if !chunk.isEmpty {
+                onOutput?(containerId, chunk)
+            }
+        }
     }
 
     private func ensureContext() throws {
@@ -267,7 +307,6 @@ actor PodishRuntimeActor {
 
     private func installCallbacks() {
         guard let c = ctx else { return }
-
         uninstallCallbacks()
 
         let onLog = onLogLine ?? { _ in }
@@ -331,7 +370,6 @@ actor PodishRuntimeActor {
                 return try JSONDecoder().decode([NativeContainerListItem].self, from: data)
             }
 
-            // ERANGE
             if rc == 34 {
                 capacity *= 2
                 if capacity > 1_048_576 {
@@ -346,8 +384,6 @@ actor PodishRuntimeActor {
 
     private func createAndStartContainer() throws {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
-        if container != nil { return }
-
         let spec = PodishRunSpec(
             image: "docker.io/i386/alpine:latest",
             rootfs: nil,
@@ -374,26 +410,12 @@ actor PodishRuntimeActor {
         guard let outContainer else {
             throw PodishRuntimeError.native(code: -1, message: "container handle nil")
         }
+        defer { pod_container_close(outContainer) }
 
         let rcStart = pod_container_start(outContainer)
         if rcStart != 0 {
-            pod_container_close(outContainer)
             throw PodishRuntimeError.native(code: rcStart, message: lastError())
         }
-
-        container = outContainer
-    }
-
-    private func attachTerminal() throws {
-        guard let c = container else { throw PodishRuntimeError.native(code: -1, message: "container nil") }
-        if terminal != nil { return }
-
-        var outTerm: UnsafeMutableRawPointer?
-        let rc = pod_terminal_attach(c, &outTerm)
-        if rc != 0 {
-            throw PodishRuntimeError.native(code: rc, message: lastError())
-        }
-        terminal = outTerm
     }
 
     private func openContainer(containerId: String) throws -> UnsafeMutableRawPointer {
@@ -404,69 +426,6 @@ actor PodishRuntimeActor {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
         return outContainer!
-    }
-
-    private func switchToContainer(_ newContainer: UnsafeMutableRawPointer) throws {
-        if let currentTerm = terminal {
-            pod_terminal_close(currentTerm)
-            terminal = nil
-        }
-        readTask?.cancel()
-        readTask = nil
-
-        if let currentContainer = container {
-            pod_container_close(currentContainer)
-            container = nil
-        }
-
-        container = newContainer
-
-        var outTerm: UnsafeMutableRawPointer?
-        let rc = pod_terminal_attach(newContainer, &outTerm)
-        if rc != 0 || outTerm == nil {
-            throw PodishRuntimeError.native(code: rc, message: lastError())
-        }
-        terminal = outTerm
-        startReadLoop()
-    }
-
-    private func startReadLoop() {
-        guard readTask == nil else { return }
-
-        readTask = Task { [weak self] in
-            guard let self else { return }
-            await self.readLoop()
-        }
-    }
-
-    private func readLoop() async {
-        while !Task.isCancelled {
-            guard let term = terminal else { return }
-            let termAddress = UInt(bitPattern: term)
-            let (rc, chunk) = await Task.detached(priority: .utility) { () -> (Int32, [UInt8]) in
-                guard let termPtr = UnsafeMutableRawPointer(bitPattern: termAddress) else {
-                    return (Int32(22), [])
-                }
-                var localBuffer = [UInt8](repeating: 0, count: 4096)
-                var count: Int32 = 0
-                let rc = localBuffer.withUnsafeMutableBufferPointer { ptr in
-                    pod_terminal_read(termPtr, ptr.baseAddress, Int32(ptr.count), 200, &count)
-                }
-                if rc != 0 || count <= 0 {
-                    return (rc, [])
-                }
-                return (rc, Array(localBuffer.prefix(Int(count))))
-            }.value
-
-            if rc != 0 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                continue
-            }
-
-            if !chunk.isEmpty {
-                sink.feed(chunk)
-            }
-        }
     }
 
     private func lastError() -> String {
@@ -480,51 +439,48 @@ actor PodishRuntimeActor {
 
 @MainActor
 final class PodishTerminalSession: ObservableObject {
-    let terminalView: TerminalView
-    private let delegate = TerminalDelegateAdapter()
+    private let placeholderView: TerminalView
     private let runtime: PodishRuntimeActor
+    private var terminalViews: [String: TerminalView] = [:]
+    private var terminalDelegates: [String: TerminalDelegateAdapter] = [:]
 
     @Published var startupError: String?
+    @Published private(set) var activeContainerId: String?
+
     private var started = false
     var onContainerList: (([NativeContainerListItem]) -> Void)?
     var onContainerStateChanged: (([NativeContainerListItem]) -> Void)?
-    private var attachedContainerId: String?
     private var lastContainerSnapshot: [NativeContainerListItem] = []
+
+    var currentTerminalView: TerminalView {
+        if let id = activeContainerId, let view = terminalViews[id] {
+            return view
+        }
+        return placeholderView
+    }
+
+    var activeTerminalIdentity: String {
+        activeContainerId ?? "__placeholder__"
+    }
 
     init() {
         #if os(macOS)
-        terminalView = PodishTerminalView(frame: .zero)
+        placeholderView = PodishTerminalView(frame: .zero)
         #else
-        terminalView = TerminalView(frame: .zero)
+        placeholderView = TerminalView(frame: .zero)
         #endif
-
-        let sink = TerminalSink(view: terminalView)
-        let workDir = PodishTerminalSession.makeWorkDir()
-        runtime = PodishRuntimeActor(workDir: workDir, sink: sink)
-
-        terminalView.terminalDelegate = delegate
-
-        delegate.onInput = { [weak self] data in
-            guard let self else { return }
-            Task {
-                do {
-                    try await self.runtime.writeInput(data)
-                } catch {
-                    await MainActor.run { self.startupError = error.localizedDescription }
-                }
-            }
-        }
-
-        delegate.onResize = { [weak self] cols, rows in
-            guard let self else { return }
-            Task {
-                await runtime.resize(cols: cols, rows: rows)
-            }
-        }
+        runtime = PodishRuntimeActor(workDir: PodishTerminalSession.makeWorkDir())
 
         Task { [weak self] in
             guard let self else { return }
             await runtime.setObservers(
+                onOutput: { [weak self] containerId, bytes in
+                    guard let self else { return }
+                    Task { @MainActor in
+                        self.ensureTerminalView(containerId: containerId)
+                        self.terminalViews[containerId]?.feed(byteArray: bytes[...])
+                    }
+                },
                 onLog: { line in
                     print("[PodishCore] \(line)")
                 },
@@ -532,6 +488,7 @@ final class PodishTerminalSession: ObservableObject {
                     guard let self else { return }
                     Task { @MainActor in
                         self.lastContainerSnapshot = items
+                        self.reconcileRunningSessions(items)
                         self.onContainerList?(items)
                         self.onContainerStateChanged?(items)
                     }
@@ -549,13 +506,13 @@ final class PodishTerminalSession: ObservableObject {
                 let state = try await runtime.startDefaultShell()
                 DispatchQueue.main.async {
                     self.lastContainerSnapshot = state.containers
+                    self.reconcileRunningSessions(state.containers)
                     self.onContainerList?(state.containers)
                     self.onContainerStateChanged?(state.containers)
-                    if !state.attachedTerminal && !state.containers.isEmpty {
-                        self.startupError = nil
-                    } else {
-                        self.startupError = nil
+                    if let attached = state.attachedContainerId {
+                        self.attachContainer(attached)
                     }
+                    self.startupError = nil
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -577,6 +534,7 @@ final class PodishTerminalSession: ObservableObject {
                 let items = try await runtime.refreshContainers()
                 DispatchQueue.main.async {
                     self.lastContainerSnapshot = items
+                    self.reconcileRunningSessions(items)
                     self.onContainerList?(items)
                     self.onContainerStateChanged?(items)
                 }
@@ -590,7 +548,11 @@ final class PodishTerminalSession: ObservableObject {
         Task {
             do {
                 _ = try await runtime.startContainer(containerId: containerId)
-                DispatchQueue.main.async { self.startupError = nil }
+                try await runtime.ensureTerminalSession(containerId: containerId)
+                DispatchQueue.main.async {
+                    self.ensureTerminalView(containerId: containerId)
+                    self.startupError = nil
+                }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }
             }
@@ -612,7 +574,14 @@ final class PodishTerminalSession: ObservableObject {
         Task {
             do {
                 _ = try await runtime.removeContainer(containerId: containerId)
-                DispatchQueue.main.async { self.startupError = nil }
+                DispatchQueue.main.async {
+                    if self.activeContainerId == containerId {
+                        self.activeContainerId = nil
+                    }
+                    self.terminalViews.removeValue(forKey: containerId)
+                    self.terminalDelegates.removeValue(forKey: containerId)
+                    self.startupError = nil
+                }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }
             }
@@ -620,17 +589,78 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func attachContainer(_ containerId: String) {
-        if attachedContainerId == containerId { return }
+        if activeContainerId == containerId { return }
+        ensureTerminalView(containerId: containerId)
         Task {
             do {
-                _ = try await runtime.attachContainer(containerId: containerId)
+                try await runtime.ensureTerminalSession(containerId: containerId)
                 DispatchQueue.main.async {
-                    self.attachedContainerId = containerId
+                    self.activeContainerId = containerId
                     self.startupError = nil
                 }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }
             }
+        }
+    }
+
+    private func ensureTerminalView(containerId: String) {
+        if terminalViews[containerId] != nil { return }
+
+        let terminalView: TerminalView
+        #if os(macOS)
+        terminalView = PodishTerminalView(frame: .zero)
+        #else
+        terminalView = TerminalView(frame: .zero)
+        #endif
+
+        let delegate = TerminalDelegateAdapter()
+        delegate.onInput = { [weak self] data in
+            guard let self else { return }
+            Task {
+                do {
+                    try await self.runtime.writeInput(containerId: containerId, data)
+                } catch {
+                    await MainActor.run { self.startupError = error.localizedDescription }
+                }
+            }
+        }
+        delegate.onResize = { [weak self] cols, rows in
+            guard let self else { return }
+            Task {
+                await self.runtime.resize(containerId: containerId, cols: cols, rows: rows)
+            }
+        }
+
+        terminalView.terminalDelegate = delegate
+        terminalViews[containerId] = terminalView
+        terminalDelegates[containerId] = delegate
+    }
+
+    private func reconcileRunningSessions(_ items: [NativeContainerListItem]) {
+        let runningIds = Set(items.filter { $0.running }.map(\.containerId))
+        let allIds = Set(items.map(\.containerId))
+
+        for id in runningIds {
+            ensureTerminalView(containerId: id)
+            Task {
+                try? await runtime.ensureTerminalSession(containerId: id)
+            }
+        }
+
+        for (id, _) in terminalViews where !allIds.contains(id) {
+            terminalViews.removeValue(forKey: id)
+            terminalDelegates.removeValue(forKey: id)
+            if activeContainerId == id {
+                activeContainerId = nil
+            }
+            Task {
+                await runtime.closeTerminalSession(containerId: id)
+            }
+        }
+
+        if let active = activeContainerId, !allIds.contains(active) {
+            activeContainerId = nil
         }
     }
 
@@ -642,7 +672,6 @@ final class PodishTerminalSession: ObservableObject {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
     }
-
 }
 
 #if os(macOS)

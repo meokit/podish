@@ -6,7 +6,8 @@ struct TerminalWorkspaceView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            TerminalViewHost(terminalView: session.terminalView)
+            TerminalViewHost(terminalView: session.currentTerminalView)
+                .id(session.activeTerminalIdentity)
                 .background(Color.black)
                 .onAppear {
                     session.startIfNeeded()
