@@ -905,7 +905,8 @@ internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisp
         bytesRead = 0;
         if (entry.Type != InodeType.File) return true;
 
-        if (entry.InlineData != null)
+        var hasBlobBacking = entry.DataOffset >= 0 && !string.IsNullOrWhiteSpace(entry.BlobDigest);
+        if (!hasBlobBacking && entry.InlineData != null)
         {
             if (offset >= entry.InlineData.Length) return true;
             var remaining = entry.InlineData.Length - (int)offset;
