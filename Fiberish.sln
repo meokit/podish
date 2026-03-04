@@ -6,8 +6,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Fiberish.Tests", "Fiberish.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.Tests", "Fiberish.Tests\Fiberish.Tests.csproj", "{3FC2B15B-F193-4569-19BA-5D52F8F23E18}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.Cli", "Fiberish.Cli\Fiberish.Cli.csproj", "{48C83F09-43A8-47DF-9220-CE38E319F157}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.Core", "Fiberish.Core\Fiberish.Core.csproj", "{E64C1515-7B50-41AB-BDBD-9784D3623FBD}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.X86", "Fiberish.X86\Fiberish.X86.csproj", "{E391934D-B233-41EB-A16D-0162325B8D59}"
