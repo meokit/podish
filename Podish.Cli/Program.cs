@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
 
 namespace Podish.Cli;
@@ -9,6 +10,7 @@ namespace Podish.Cli;
 internal class Program
 {
     private static ILogger Logger = null!;
+    private static ILoggerFactory ProgramLoggerFactory = NullLoggerFactory.Instance;
 
     private static async Task<int> Main(string[] args)
     {
@@ -154,6 +156,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
 
             var containerId = Guid.NewGuid().ToString("N")[..12];
             var containerDir = Path.Combine(containersDir, containerId);
@@ -272,6 +275,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
 
             var pullService = new OciPullService(Logger);
             var safeImageName = image.Replace("/", "_").Replace(":", "_");
@@ -333,6 +337,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
             try
             {
                 var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
@@ -374,6 +379,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
             try
             {
                 var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
@@ -418,6 +424,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
             try
             {
                 var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
@@ -461,6 +468,7 @@ internal class Program
             }
 
             SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
             try
             {
                 var svc = new ImageArchiveService(Directory.GetCurrentDirectory());
@@ -568,7 +576,7 @@ internal class Program
 
     private static void SetupLogging(LogLevel logLevel, string? logFile)
     {
-        Logging.LoggerFactory = LoggerFactory.Create(builder =>
+        ProgramLoggerFactory = LoggerFactory.Create(builder =>
         {
             builder.ClearProviders();
             builder.SetMinimumLevel(logLevel);
@@ -578,7 +586,7 @@ internal class Program
                 builder.AddProvider(new FileLoggerProvider(logFile));
             }
         });
-        Logger = Logging.CreateLogger<Program>();
+        Logger = ProgramLoggerFactory.CreateLogger<Program>();
     }
 
     private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
@@ -697,7 +705,8 @@ internal class Program
         string containerId, string image, string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore)
     {
-        var service = new ContainerRuntimeService(Logger);
+        using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
+        var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
         return await service.RunAsync(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,

@@ -31,10 +31,12 @@ public sealed class ContainerRunRequest
 public sealed class ContainerRuntimeService
 {
     private readonly ILogger _logger;
+    private readonly ILoggerFactory _loggerFactory;
 
-    public ContainerRuntimeService(ILogger logger)
+    public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
     {
         _logger = logger;
+        _loggerFactory = loggerFactory;
     }
 
     public async Task<int> RunAsync(ContainerRunRequest request)
@@ -42,7 +44,7 @@ public sealed class ContainerRuntimeService
         await Task.CompletedTask;
 
         var scheduler = new KernelScheduler();
-        scheduler.LoggerFactory = Logging.LoggerFactory;
+        scheduler.LoggerFactory = _loggerFactory;
 
         TtyDiscipline? ttyDiag = null;
         FileStream? stdinStream = null;
@@ -54,7 +56,7 @@ public sealed class ContainerRuntimeService
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir);
         var driver = new ConsoleTtyDriver(logSink);
         var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-        ttyDiag = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
+        ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>());
         driver.BindTty(ttyDiag);
         scheduler.Tty = ttyDiag;
 

@@ -35,6 +35,7 @@ public sealed class PodishRunResult
 public sealed class PodishContext
 {
     private readonly ILogger _logger;
+    private readonly ILoggerFactory _loggerFactory;
 
     public PodishContext(PodishContextOptions options)
     {
@@ -57,8 +58,14 @@ public sealed class PodishContext
         if (!TryParsePodmanLogLevel(options.LogLevel, out var level))
             throw new ArgumentException($"invalid log level: {options.LogLevel}", nameof(options));
 
-        SetupLogging(level, logFile);
-        _logger = Logging.CreateLogger<PodishContext>();
+        _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+        {
+            builder.ClearProviders();
+            builder.SetMinimumLevel(level);
+            if (!string.IsNullOrEmpty(logFile))
+                builder.AddProvider(new PodishFileLoggerProvider(logFile));
+        });
+        _logger = _loggerFactory.CreateLogger<PodishContext>();
     }
 
     public string WorkDir { get; }
@@ -67,9 +74,11 @@ public sealed class PodishContext
     public string OciStoreImagesDir { get; }
     public string LogsDir { get; }
     public string ContainersDir { get; }
+    public ILoggerFactory LoggerFactory => _loggerFactory;
 
     public async Task<OciStoredImage> PullImageAsync(string image)
     {
+        using var _ = Logging.BeginScope(_loggerFactory);
         var pullService = new OciPullService(_logger);
         var safeImageName = image.Replace("/", "_").Replace(":", "_");
         var storeDir = Path.Combine(OciStoreImagesDir, safeImageName);
@@ -78,6 +87,7 @@ public sealed class PodishContext
 
     public async Task<PodishRunResult> RunAsync(PodishRunSpec spec)
     {
+        using var _ = Logging.BeginScope(_loggerFactory);
         var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
         if (!ContainerLogDriverParser.TryParse(spec.LogDriver, out var containerLogDriver))
             throw new InvalidOperationException($"invalid log driver: {spec.LogDriver}");
@@ -118,7 +128,7 @@ public sealed class PodishContext
         var eventStore = new ContainerEventStore(Path.Combine(FiberpodDir, "events.jsonl"));
         eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
-        var service = new ContainerRuntimeService(_logger);
+        var service = new ContainerRuntimeService(_logger, _loggerFactory);
         var exitCode = await service.RunAsync(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
@@ -143,17 +153,6 @@ public sealed class PodishContext
             ImageRef = imageRef,
             ExitCode = exitCode
         };
-    }
-
-    private static void SetupLogging(LogLevel logLevel, string? logFile)
-    {
-        Logging.LoggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.ClearProviders();
-            builder.SetMinimumLevel(logLevel);
-            if (!string.IsNullOrEmpty(logFile))
-                builder.AddProvider(new PodishFileLoggerProvider(logFile));
-        });
     }
 
     private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
