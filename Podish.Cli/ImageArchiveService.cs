@@ -6,11 +6,10 @@ using System.Text.Json.Serialization;
 using Fiberish.VFS;
 using Podish.Core;
 
-namespace FiberPod;
+namespace Podish.Cli;
 
 internal sealed class ImageArchiveService
 {
-    private readonly string _projectRoot;
     private readonly string _fiberpodDir;
     private readonly string _ociImagesDir;
     private readonly string _eventsPath;
@@ -18,7 +17,6 @@ internal sealed class ImageArchiveService
     public ImageArchiveService(string projectRoot)
     {
         EnsureFileSystemsRegistered();
-        _projectRoot = projectRoot;
         _fiberpodDir = Path.Combine(projectRoot, ".fiberpod");
         _ociImagesDir = Path.Combine(_fiberpodDir, "oci", "images");
         _eventsPath = Path.Combine(_fiberpodDir, "events.jsonl");
@@ -59,7 +57,13 @@ internal sealed class ImageArchiveService
         }
         finally
         {
-            try { Directory.Delete(extractedRoot, recursive: true); } catch { }
+            try
+            {
+                Directory.Delete(extractedRoot, recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -148,7 +152,13 @@ internal sealed class ImageArchiveService
         }
         finally
         {
-            try { Directory.Delete(layoutRoot, recursive: true); } catch { }
+            try
+            {
+                Directory.Delete(layoutRoot, recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -212,7 +222,13 @@ internal sealed class ImageArchiveService
                 {
                     if (tarPath != srcLayerBlob && File.Exists(tarPath))
                     {
-                        try { File.Delete(tarPath); } catch { }
+                        try
+                        {
+                            File.Delete(tarPath);
+                        }
+                        catch
+                        {
+                        }
                     }
                 }
             }
@@ -322,6 +338,7 @@ internal sealed class ImageArchiveService
         {
             ExportInternal(containerId, imageRef, upperStore, fs);
         }
+
         File.Move(tmp, outputArchive, overwrite: true);
     }
 
@@ -593,6 +610,7 @@ internal sealed class ImageArchiveService
                 break;
             total += n;
         }
+
         if (total == size)
             return bytes;
         return bytes[..total];
@@ -847,11 +865,18 @@ internal sealed class ImageArchiveService
 internal sealed class CompositeDisposable(params IDisposable[] disposables) : IDisposable
 {
     private readonly IDisposable[] _disposables = disposables;
+
     public void Dispose()
     {
         foreach (var d in _disposables)
         {
-            try { d.Dispose(); } catch { }
+            try
+            {
+                d.Dispose();
+            }
+            catch
+            {
+            }
         }
     }
 }
@@ -926,43 +951,42 @@ internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisp
 internal sealed record OciLayout(
     [property: JsonPropertyName("imageLayoutVersion")]
     string ImageLayoutVersion);
+
 internal sealed record OciIndex(
     [property: JsonPropertyName("schemaVersion")]
     int SchemaVersion,
     [property: JsonPropertyName("manifests")]
     List<OciDescriptor> Manifests);
+
 internal sealed record OciDescriptor(
     [property: JsonPropertyName("mediaType")]
     string MediaType,
-    [property: JsonPropertyName("digest")]
-    string Digest,
-    [property: JsonPropertyName("size")]
-    long Size,
+    [property: JsonPropertyName("digest")] string Digest,
+    [property: JsonPropertyName("size")] long Size,
     [property: JsonPropertyName("annotations")]
     Dictionary<string, string>? Annotations = null);
+
 internal sealed record OciManifest(
     [property: JsonPropertyName("schemaVersion")]
     int SchemaVersion,
     [property: JsonPropertyName("mediaType")]
     string MediaType,
-    [property: JsonPropertyName("config")]
-    OciDescriptor Config,
-    [property: JsonPropertyName("layers")]
-    List<OciDescriptor> Layers);
+    [property: JsonPropertyName("config")] OciDescriptor Config,
+    [property: JsonPropertyName("layers")] List<OciDescriptor> Layers);
+
 internal sealed record OciImageConfig(
     [property: JsonPropertyName("architecture")]
     string Architecture,
-    [property: JsonPropertyName("os")]
-    string Os,
-    [property: JsonPropertyName("rootfs")]
-    OciRootFs Rootfs,
+    [property: JsonPropertyName("os")] string Os,
+    [property: JsonPropertyName("rootfs")] OciRootFs Rootfs,
     [property: JsonPropertyName("history")]
     List<OciHistory> History);
+
 internal sealed record OciRootFs(
-    [property: JsonPropertyName("type")]
-    string Type,
+    [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("diff_ids")]
     List<string> DiffIds);
+
 internal sealed record OciHistory(
     [property: JsonPropertyName("created_by")]
     string CreatedBy);

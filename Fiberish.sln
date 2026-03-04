@@ -12,7 +12,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.Core", "Fiberish.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.X86", "Fiberish.X86\Fiberish.X86.csproj", "{E391934D-B233-41EB-A16D-0162325B8D59}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FiberPod", "FiberPod\FiberPod.csproj", "{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Cli", "Podish.Cli\Podish.Cli.csproj", "{1832ABED-BBD9-4F15-BFB4-D4CA4AE9852B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.SilkFS", "Fiberish.SilkFS\Fiberish.SilkFS.csproj", "{10945492-3C8C-4A82-A384-4C3B7AB70606}"
 EndProject

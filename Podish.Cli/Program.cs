@@ -1,18 +1,14 @@
 ﻿using System.CommandLine;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Fiberish.Core;
-using Fiberish.Core.VFS;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
-using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32.SafeHandles;
 using Podish.Core;
 
-namespace FiberPod;
+namespace Podish.Cli;
 
 internal class Program
 {
@@ -20,7 +16,7 @@ internal class Program
 
     private static async Task<int> Main(string[] args)
     {
-        var rootCommand = new RootCommand("FiberPod - Podman-like CLI for x86emu");
+        var rootCommand = new RootCommand("Podish.Cli - Podman-like CLI for x86emu");
 
         // Global Options
         var logLevelOption = new Option<string>(
@@ -30,7 +26,7 @@ internal class Program
         var logFileOption = new Option<string?>(
             new[] { "--log-file" },
             () => null,
-            "Path to a file where FiberPod engine logs will be written");
+            "Path to a file where Podish.Cli engine logs will be written");
 
         rootCommand.AddGlobalOption(logLevelOption);
         rootCommand.AddGlobalOption(logFileOption);
@@ -148,14 +144,15 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
 
             if (!ContainerLogDriverParser.TryParse(containerLogDriverRaw, out var containerLogDriver))
             {
-                Console.Error.WriteLine($"[FiberPod] invalid --log-driver value: {containerLogDriverRaw}. Use json-file|none");
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid --log-driver value: {containerLogDriverRaw}. Use json-file|none");
                 context.ExitCode = 125;
                 return;
             }
@@ -177,7 +174,7 @@ internal class Program
             {
                 if (string.IsNullOrWhiteSpace(image))
                 {
-                    Console.Error.WriteLine("[FiberPod] image is required unless --rootfs is set");
+                    Console.Error.WriteLine("[Podish.Cli] image is required unless --rootfs is set");
                     context.ExitCode = 125;
                     return;
                 }
@@ -188,8 +185,8 @@ internal class Program
                 }
                 else if (!Directory.Exists(rootfsPath))
                 {
-                    Console.Error.WriteLine($"[FiberPod] Unable to find image '{image}' locally");
-                    Console.Error.WriteLine($"[FiberPod] Trying to pull {image}...");
+                    Console.Error.WriteLine($"[Podish.Cli] Unable to find image '{image}' locally");
+                    Console.Error.WriteLine($"[Podish.Cli] Trying to pull {image}...");
                     var pullService = new OciPullService(Logger);
                     try
                     {
@@ -198,7 +195,7 @@ internal class Program
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"[FiberPod Error] Failed to pull image: {ex.Message}");
+                        Console.Error.WriteLine($"[Podish.Cli Error] Failed to pull image: {ex.Message}");
                         context.ExitCode = 1;
                         return;
                     }
@@ -208,7 +205,7 @@ internal class Program
             {
                 if (!Directory.Exists(rootfsPath))
                 {
-                    Console.Error.WriteLine($"[FiberPod Error] --rootfs path not found: {rootfsPath}");
+                    Console.Error.WriteLine($"[Podish.Cli Error] --rootfs path not found: {rootfsPath}");
                     context.ExitCode = 1;
                     return;
                 }
@@ -273,7 +270,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -291,17 +288,17 @@ internal class Program
                     var storeDir = Path.Combine(ociStoreImagesDir, safeImageName);
                     var stored = await pullService.PullAndStoreImageAsync(image, storeDir);
                     Console.WriteLine(
-                        $"[FiberPod] Image {image} stored as OCI layers at {stored.StoreDirectory} ({stored.Layers.Count} layers)");
+                        $"[Podish.Cli] Image {image} stored as OCI layers at {stored.StoreDirectory} ({stored.Layers.Count} layers)");
                 }
                 else
                 {
                     await pullService.PullAndExtractImageAsync(image, outputDir);
-                    Console.WriteLine($"[FiberPod] Image {image} pulled successfully to {outputDir}");
+                    Console.WriteLine($"[Podish.Cli] Image {image} pulled successfully to {outputDir}");
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FiberPod] Failed to pull image {image}: {ex.Message}");
+                Console.Error.WriteLine($"[Podish.Cli] Failed to pull image {image}: {ex.Message}");
                 context.ExitCode = 1;
             }
         });
@@ -309,9 +306,9 @@ internal class Program
         // --- Save Command ---
         var saveCommand = new Command("save", "Save image(s) to an archive");
         var saveOutputOption = new Option<string>(
-            new[] { "--output", "-o" },
-            "Write to an archive file")
-        { IsRequired = true };
+                new[] { "--output", "-o" },
+                "Write to an archive file")
+            { IsRequired = true };
         var saveImagesArgument = new Argument<string[]>("images", "Image references")
         {
             Arity = ArgumentArity.OneOrMore
@@ -334,7 +331,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -348,7 +345,7 @@ internal class Program
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FiberPod] save failed: {ex.Message}");
+                Console.Error.WriteLine($"[Podish.Cli] save failed: {ex.Message}");
                 context.ExitCode = 1;
             }
         });
@@ -356,9 +353,9 @@ internal class Program
         // --- Load Command ---
         var loadCommand = new Command("load", "Load image(s) from an archive");
         var loadInputOption = new Option<string>(
-            new[] { "--input", "-i" },
-            "Read from archive file")
-        { IsRequired = true };
+                new[] { "--input", "-i" },
+                "Read from archive file")
+            { IsRequired = true };
         loadCommand.AddOption(loadInputOption);
         loadCommand.SetHandler((context) =>
         {
@@ -375,7 +372,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -390,7 +387,7 @@ internal class Program
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FiberPod] load failed: {ex.Message}");
+                Console.Error.WriteLine($"[Podish.Cli] load failed: {ex.Message}");
                 context.ExitCode = 1;
             }
         });
@@ -419,7 +416,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -433,7 +430,7 @@ internal class Program
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FiberPod] import failed: {ex.Message}");
+                Console.Error.WriteLine($"[Podish.Cli] import failed: {ex.Message}");
                 context.ExitCode = 1;
             }
         });
@@ -462,7 +459,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[FiberPod] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -485,7 +482,7 @@ internal class Program
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FiberPod] export failed: {ex.Message}");
+                Console.Error.WriteLine($"[Podish.Cli] export failed: {ex.Message}");
                 context.ExitCode = 1;
             }
         });
@@ -505,7 +502,7 @@ internal class Program
             var logPath = Path.Combine(fiberpodDir, "containers", containerId, "ctr.log");
             if (!File.Exists(logPath))
             {
-                Console.Error.WriteLine($"[FiberPod] log file not found for container {containerId}");
+                Console.Error.WriteLine($"[Podish.Cli] log file not found for container {containerId}");
                 context.ExitCode = 1;
                 return;
             }
@@ -701,7 +698,8 @@ internal class Program
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
-        string containerId, string image, string containerDir, ContainerLogDriver logDriver, ContainerEventStore eventStore)
+        string containerId, string image, string containerDir, ContainerLogDriver logDriver,
+        ContainerEventStore eventStore)
     {
         var service = new ContainerRuntimeService(Logger);
         return await service.RunAsync(new ContainerRunRequest
@@ -895,7 +893,7 @@ internal class Program
     private static string BuildResolvConfContent(string[] dnsServers)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Generated by FiberPod");
+        sb.AppendLine("# Generated by Podish.Cli");
 
         if (dnsServers.Length > 0)
         {
@@ -934,6 +932,7 @@ internal class Program
                                 {
                                     sb.AppendLine($"nameserver {ip}");
                                 }
+
                                 definedNameservers++;
                             }
                         }

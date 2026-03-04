@@ -27,7 +27,8 @@ public class OciPullService
         var repository = parsed.Repository;
         var tag = parsed.Tag;
 
-        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into {OutputDir}...", registry, repository, tag, outputDirectory);
+        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into {OutputDir}...", registry, repository, tag,
+            outputDirectory);
 
         try
         {
@@ -65,11 +66,13 @@ public class OciPullService
                 var mediaType = layer.MediaType;
                 var size = layer.Size;
 
-                _logger.LogInformation("Downloading layer {Digest} ({Size} bytes) type {MediaType}...", digest[..15] + "...", size, mediaType);
+                _logger.LogInformation("Downloading layer {Digest} ({Size} bytes) type {MediaType}...",
+                    digest[..15] + "...", size, mediaType);
                 await DownloadAndExtractLayerAsync(registry, repository, digest, token, outputDirectory);
             }
 
-            _logger.LogInformation("Successfully pulled and extracted {Registry}/{Repository}:{Tag} to {OutputDir}", registry, repository, tag, outputDirectory);
+            _logger.LogInformation("Successfully pulled and extracted {Registry}/{Repository}:{Tag} to {OutputDir}",
+                registry, repository, tag, outputDirectory);
         }
         catch (Exception ex)
         {
@@ -85,7 +88,8 @@ public class OciPullService
         var repository = parsed.Repository;
         var tag = parsed.Tag;
 
-        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into OCI store {StoreDir}...", registry, repository,
+        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into OCI store {StoreDir}...", registry,
+            repository,
             tag, storeDirectory);
 
         Directory.CreateDirectory(storeDirectory);
@@ -182,7 +186,7 @@ public class OciPullService
                 {
                     // Docker Hub uses `scope=repository:library/alpine:pull` format
                     var authUrl = $"{realm}?service={service}&scope=repository:{repository}:pull";
-                    
+
                     var response = await _httpClient.GetAsync(authUrl);
                     response.EnsureSuccessStatusCode();
 
@@ -204,9 +208,12 @@ public class OciPullService
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
+
         // Request OCI or Docker V2 manifest and manifest list
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.docker.distribution.manifest.v2+json"));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.docker.distribution.manifest.list.v2+json"));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/vnd.docker.distribution.manifest.v2+json"));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/vnd.docker.distribution.manifest.list.v2+json"));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.oci.image.manifest.v1+json"));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.oci.image.index.v1+json"));
 
@@ -229,18 +236,20 @@ public class OciPullService
 
         var configJson = await response.Content.ReadAsStringAsync();
         var configDoc = JsonDocument.Parse(configJson);
-        
+
         if (configDoc.RootElement.TryGetProperty("architecture", out var archProp))
         {
             var arch = archProp.GetString();
             if (arch != null && arch != "386")
             {
-                throw new NotSupportedException($"Image architecture is '{arch}', but FiberPod emulator requires '386' (32-bit x86).");
+                throw new NotSupportedException(
+                    $"Image architecture is '{arch}', but Podish.Cli emulator requires '386' (32-bit x86).");
             }
         }
     }
 
-    private async Task DownloadAndExtractLayerAsync(string registry, string repository, string digest, string? token, string outputDirectory)
+    private async Task DownloadAndExtractLayerAsync(string registry, string repository, string digest, string? token,
+        string outputDirectory)
     {
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
         var request = new HttpRequestMessage(HttpMethod.Get, blobUrl);
@@ -253,7 +262,7 @@ public class OciPullService
         response.EnsureSuccessStatusCode();
 
         using var contentStream = await response.Content.ReadAsStreamAsync();
-        
+
         // Docker layers are gzipped tarballs
         using var gzipStream = new GZipStream(contentStream, CompressionMode.Decompress);
         using var tarReader = new TarReader(gzipStream);
@@ -289,18 +298,22 @@ public class OciPullService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning("Failed to create symlink {Link} -> {Target}: {Msg}", targetPath, entry.LinkName, ex.Message);
+                        _logger.LogWarning("Failed to create symlink {Link} -> {Target}: {Msg}", targetPath,
+                            entry.LinkName, ex.Message);
                     }
+
                     break;
                 default:
                     // Soft skip other types like BlockDevice, CharacterDevice, etc for local extraction
-                    _logger.LogDebug("Skipping unhandled tar entry type: {Type} for {Name}", entry.EntryType, entry.Name);
+                    _logger.LogDebug("Skipping unhandled tar entry type: {Type} for {Name}", entry.EntryType,
+                        entry.Name);
                     break;
             }
         }
     }
 
-    private async Task DownloadAndExpandLayerAsTarAsync(string registry, string repository, string digest, string? token,
+    private async Task DownloadAndExpandLayerAsTarAsync(string registry, string repository, string digest,
+        string? token,
         string outputTarPath)
     {
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
@@ -346,7 +359,8 @@ public class OciPullService
             }
 
             if (targetDigest == null)
-                throw new NotSupportedException("This image does not provide a 32-bit x86 (386) architecture manifest.");
+                throw new NotSupportedException(
+                    "This image does not provide a 32-bit x86 (386) architecture manifest.");
 
             _logger.LogInformation("Found 386 manifest at digest {Digest}. Fetching it...", targetDigest);
             var resolvedManifest = await GetManifestAsync(registry, repository, targetDigest, token);
