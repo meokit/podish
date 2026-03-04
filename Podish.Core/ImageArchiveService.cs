@@ -4,11 +4,10 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Fiberish.VFS;
-using Podish.Core;
 
-namespace Podish.Cli;
+namespace Podish.Core;
 
-internal sealed class ImageArchiveService
+public sealed class ImageArchiveService
 {
     private readonly string _fiberpodDir;
     private readonly string _ociImagesDir;
