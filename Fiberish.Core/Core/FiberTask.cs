@@ -63,7 +63,7 @@ public class FiberTask
         Continue
     }
 
-    private static int _tidCounter = 1000;
+    private static int _tidCounter = 0;
 
     public uint SyscallArg1;
     public uint SyscallArg2;

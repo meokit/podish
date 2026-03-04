@@ -26,12 +26,23 @@ internal sealed class NativeContext
 
     private unsafe delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> _logCallback;
     private IntPtr _logUserData;
+    private readonly object _stateCallbackLock = new();
+    private unsafe delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> _stateCallback;
+    private IntPtr _stateUserData;
 
     public void RegisterContainer(NativeContainer container)
     {
         lock (_containersLock)
         {
             _containers.Add(container);
+        }
+    }
+
+    public bool ContainsContainer(string containerId)
+    {
+        lock (_containersLock)
+        {
+            return _containers.Any(c => string.Equals(c.ContainerId, containerId, StringComparison.Ordinal));
         }
     }
 
@@ -83,6 +94,43 @@ internal sealed class NativeContext
         Context.SetLogObserver(callback == null ? null : OnLogLine);
     }
 
+    public unsafe void SetContainerStateCallback(delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback,
+        IntPtr userData)
+    {
+        lock (_stateCallbackLock)
+        {
+            _stateCallback = callback;
+            _stateUserData = userData;
+        }
+    }
+
+    public unsafe void EmitContainerStateChanged(IReadOnlyList<NativeContainerListItem> snapshot)
+    {
+        delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback;
+        IntPtr userData;
+        lock (_stateCallbackLock)
+        {
+            callback = _stateCallback;
+            userData = _stateUserData;
+        }
+
+        if (callback == null)
+            return;
+
+        try
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, PodishNativeJsonContext.Default.ListNativeContainerListItem);
+            fixed (byte* ptr = bytes)
+            {
+                callback(userData, ptr, bytes.Length);
+            }
+        }
+        catch
+        {
+            // best-effort callback
+        }
+    }
+
     private unsafe void OnLogLine(LogLevel level, string line)
     {
         delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback;
@@ -107,18 +155,34 @@ internal sealed class NativeContext
 internal sealed class NativeContainer
 {
     private readonly object _gate = new();
-    private readonly string _logicalId = Guid.NewGuid().ToString("N")[..12];
-    private readonly DateTimeOffset _createdAt = DateTimeOffset.UtcNow;
+    private readonly string _logicalId;
+    private readonly DateTimeOffset _createdAt;
 
     private PodishContainerSession? _session;
     private int? _exitCode;
     private bool _removed;
+    private string _persistedState;
 
     private unsafe delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> _outputCallback;
     private IntPtr _outputUserData;
 
     public required NativeContext Owner { get; init; }
     public required PodishRunSpec Spec { get; init; }
+
+    public NativeContainer()
+    {
+        _logicalId = Guid.NewGuid().ToString("N")[..12];
+        _createdAt = DateTimeOffset.UtcNow;
+        _persistedState = "created";
+    }
+
+    public NativeContainer(string containerId, DateTimeOffset createdAt, string state, int? exitCode)
+    {
+        _logicalId = containerId;
+        _createdAt = createdAt;
+        _persistedState = string.IsNullOrWhiteSpace(state) ? "created" : state;
+        _exitCode = exitCode;
+    }
 
     public string ContainerId
     {
@@ -179,7 +243,7 @@ internal sealed class NativeContainer
         {
             lock (_gate)
             {
-                if (_session == null) return "created";
+                if (_session == null) return _persistedState;
                 if (_session.IsCompleted) return "exited";
                 return "running";
             }
@@ -204,9 +268,28 @@ internal sealed class NativeContainer
         {
             _session = session;
             _exitCode = null;
+            _persistedState = "created";
             ApplyOutputCallbackLocked();
+            PersistMetadataLocked("created");
+        }
+
+        var started = await WaitUntilStartedOrExitedAsync(session, timeoutMs: 3000);
+        if (!started)
+        {
+            var rc = await session.WaitAsync();
+            MarkExited(session, rc);
+            throw new InvalidOperationException($"container failed to start (exit={rc})");
+        }
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_session, session))
+                return;
+            _persistedState = "running";
             PersistMetadataLocked("running");
         }
+        NotifyContainerStateChanged();
+        _ = ObserveExitAsync(session);
     }
 
     public async Task<int> WaitAsync()
@@ -221,16 +304,11 @@ internal sealed class NativeContainer
             throw new InvalidOperationException("container is not started");
 
         var rc = await session.WaitAsync();
-        lock (_gate)
-        {
-            _exitCode = rc;
-            PersistMetadataLocked("exited");
-        }
-
+        MarkExited(session, rc);
         return rc;
     }
 
-    public bool Stop(int timeoutSec)
+    public bool Stop(int signal, int timeoutMs)
     {
         PodishContainerSession? session;
         lock (_gate)
@@ -241,16 +319,23 @@ internal sealed class NativeContainer
         if (session == null || session.IsCompleted)
             return true;
 
-        if (!session.HasTerminal)
-            return false;
+        if (signal <= 0)
+            signal = 15; // SIGTERM
 
-        session.WriteInput([(byte)0x03]); // Ctrl-C
-        if (timeoutSec <= 0)
+        session.SignalInitProcess(signal);
+
+        if (timeoutMs <= 0)
             return true;
 
         try
         {
-            return session.WaitAsync().Wait(TimeSpan.FromSeconds(timeoutSec));
+            if (session.WaitAsync().Wait(TimeSpan.FromMilliseconds(timeoutMs)))
+                return true;
+
+            // Escalate to SIGKILL after graceful timeout.
+            session.SignalInitProcess(9);
+            var killWaitMs = Math.Max(250, timeoutMs);
+            return session.WaitAsync().Wait(TimeSpan.FromMilliseconds(killWaitMs));
         }
         catch
         {
@@ -340,6 +425,7 @@ internal sealed class NativeContainer
     {
         lock (_gate)
         {
+            _persistedState = "created";
             PersistMetadataLocked("created");
         }
     }
@@ -391,6 +477,62 @@ internal sealed class NativeContainer
             Spec: Spec);
         var json = JsonSerializer.Serialize(metadata, PodishNativeJsonContext.Default.NativeContainerMetadata);
         File.WriteAllText(MetadataPath, json);
+    }
+
+    private async Task ObserveExitAsync(PodishContainerSession session)
+    {
+        try
+        {
+            var rc = await session.WaitAsync();
+            MarkExited(session, rc);
+        }
+        catch
+        {
+            // ignore observer failures
+        }
+    }
+
+    private void MarkExited(PodishContainerSession session, int rc)
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_session, session))
+                return;
+            if (_persistedState == "exited" && _exitCode == rc)
+                return;
+            _exitCode = rc;
+            _persistedState = "exited";
+            PersistMetadataLocked("exited");
+            changed = true;
+        }
+
+        if (changed)
+            NotifyContainerStateChanged();
+    }
+
+    private static async Task<bool> WaitUntilStartedOrExitedAsync(PodishContainerSession session, int timeoutMs)
+    {
+        var elapsed = 0;
+        const int stepMs = 10;
+        while (elapsed < timeoutMs)
+        {
+            if (session.InitPid.HasValue)
+                return true;
+            if (session.IsCompleted)
+                return false;
+            await Task.Delay(stepMs);
+            elapsed += stepMs;
+        }
+
+        // Timeout fallback: if process is still alive, treat as started.
+        return !session.IsCompleted;
+    }
+
+    private void NotifyContainerStateChanged()
+    {
+        var snapshot = PodishNativeApi.BuildContainerListSnapshot(Owner);
+        Owner.EmitContainerStateChanged(snapshot);
     }
 }
 
@@ -508,6 +650,25 @@ public static class PodishNativeApi
         try
         {
             ctx.SetLogCallback(callback, userData);
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_ctx_set_container_state_callback", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodCtxSetContainerStateCallback(IntPtr ctxHandle,
+        delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback, IntPtr userData)
+    {
+        var ctx = FromHandle(ctxHandle);
+        if (ctx == null)
+            return PodEinval;
+
+        try
+        {
+            ctx.SetContainerStateCallback(callback, userData);
             return PodOk;
         }
         catch (Exception ex)
@@ -648,6 +809,33 @@ public static class PodishNativeApi
         return CreateContainerFromJson(ctxHandle, runSpecJsonUtf8, outContainer);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_open", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodContainerOpen(IntPtr ctxHandle, IntPtr containerIdUtf8, IntPtr* outContainer)
+    {
+        var ctx = FromHandle(ctxHandle);
+        if (ctx == null || outContainer == null)
+            return PodEinval;
+
+        var containerId = PtrToString(containerIdUtf8);
+        if (string.IsNullOrWhiteSpace(containerId))
+            return SetErrorAndReturn(ctx, "container id is required", PodEinval);
+
+        try
+        {
+            var container = OpenContainerById(ctx, containerId);
+            if (container == null)
+                return SetErrorAndReturn(ctx, $"container not found: {containerId}", PodEnoent);
+
+            var handle = GCHandle.Alloc(container, GCHandleType.Normal);
+            *outContainer = GCHandle.ToIntPtr(handle);
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "pod_container_start", CallConvs = [typeof(CallConvCdecl)])]
     public static int PodContainerStart(IntPtr containerHandle)
     {
@@ -717,32 +905,7 @@ public static class PodishNativeApi
 
         try
         {
-            var list = ReadPersistedContainerMetadata(ctx.Context.ContainersDir)
-                .Select(m => new NativeContainerListItem(
-                    Handle: string.Empty,
-                    ContainerId: m.ContainerId,
-                    Image: m.Image,
-                    State: m.State,
-                    HasTerminal: m.HasTerminal,
-                    Running: m.Running,
-                    ExitCode: m.ExitCode))
-                .ToDictionary(x => x.ContainerId, x => x, StringComparer.Ordinal);
-
-            foreach (var live in ctx.ContainersSnapshot())
-            {
-                var item = new NativeContainerListItem(
-                    Handle: live.GetHashCode().ToString("x"),
-                    ContainerId: live.ContainerId,
-                    Image: live.ImageRef,
-                    State: live.State,
-                    HasTerminal: live.HasTerminal,
-                    Running: live.IsRunning,
-                    ExitCode: live.ExitCode);
-                list[live.ContainerId] = item;
-            }
-
-            var ordered = list.Values.OrderByDescending(x => x.Running).ThenBy(x => x.ContainerId).ToList();
-
+            var ordered = BuildContainerListSnapshot(ctx);
             return WriteJson(ctx, ordered, PodishNativeJsonContext.Default.ListNativeContainerListItem, buffer, capacity,
                 outLen);
         }
@@ -781,7 +944,7 @@ public static class PodishNativeApi
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_container_stop", CallConvs = [typeof(CallConvCdecl)])]
-    public static int PodContainerStop(IntPtr containerHandle, int timeoutSec)
+    public static int PodContainerStop(IntPtr containerHandle, int signal, int timeoutMs)
     {
         var container = FromContainerHandle(containerHandle);
         if (container == null)
@@ -789,7 +952,7 @@ public static class PodishNativeApi
 
         try
         {
-            return container.Stop(timeoutSec) ? PodOk : PodEbusy;
+            return container.Stop(signal, timeoutMs) ? PodOk : PodEbusy;
         }
         catch (Exception ex)
         {
@@ -808,7 +971,7 @@ public static class PodishNativeApi
             return PodEbusy;
 
         if (force != 0 && container.IsRunning)
-            container.Stop(1);
+            container.Stop(15, 1000);
 
         try
         {
@@ -950,6 +1113,9 @@ public static class PodishNativeApi
         var container = FromContainerHandle(containerHandle);
         if (container == null || outTerminal == null)
             return PodEinval;
+
+        if (!container.IsRunning)
+            return SetErrorAndReturn(container.Owner, "container is not running", PodEbusy);
 
         if (!container.HasTerminal)
             return SetErrorAndReturn(container.Owner, "container has no terminal", PodEinval);
@@ -1180,6 +1346,56 @@ public static class PodishNativeApi
         }
 
         return result;
+    }
+
+    internal static List<NativeContainerListItem> BuildContainerListSnapshot(NativeContext ctx)
+    {
+        var list = ReadPersistedContainerMetadata(ctx.Context.ContainersDir)
+            .Select(m => new NativeContainerListItem(
+                Handle: string.Empty,
+                ContainerId: m.ContainerId,
+                Image: m.Image,
+                State: string.Equals(m.State, "running", StringComparison.OrdinalIgnoreCase) ? "exited" : m.State,
+                HasTerminal: m.HasTerminal,
+                Running: false,
+                ExitCode: m.ExitCode))
+            .ToDictionary(x => x.ContainerId, x => x, StringComparer.Ordinal);
+
+        foreach (var live in ctx.ContainersSnapshot())
+        {
+            var item = new NativeContainerListItem(
+                Handle: live.GetHashCode().ToString("x"),
+                ContainerId: live.ContainerId,
+                Image: live.ImageRef,
+                State: live.State,
+                HasTerminal: live.HasTerminal,
+                Running: live.IsRunning,
+                ExitCode: live.ExitCode);
+            list[live.ContainerId] = item;
+        }
+
+        return list.Values.OrderByDescending(x => x.Running).ThenBy(x => x.ContainerId).ToList();
+    }
+
+    private static NativeContainer? OpenContainerById(NativeContext ctx, string containerId)
+    {
+        var live = ctx.ContainersSnapshot().FirstOrDefault(c => string.Equals(c.ContainerId, containerId, StringComparison.Ordinal));
+        if (live != null)
+            return live;
+
+        var metadata = ReadPersistedContainerMetadata(ctx.Context.ContainersDir)
+            .FirstOrDefault(m => string.Equals(m.ContainerId, containerId, StringComparison.Ordinal));
+        if (metadata == null)
+            return null;
+
+        var container = new NativeContainer(metadata.ContainerId, metadata.CreatedAt, metadata.State, metadata.ExitCode)
+        {
+            Owner = ctx,
+            Spec = metadata.Spec
+        };
+        if (!ctx.ContainsContainer(container.ContainerId))
+            ctx.RegisterContainer(container);
+        return container;
     }
 
     private static List<NativeContainerMetadata> ReadPersistedContainerMetadata(string containersDir)

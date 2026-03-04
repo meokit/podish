@@ -149,7 +149,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         var task = sm?.Engine.Owner as FiberTask;
-        return task?.Process.TGID ?? 1000;
+        return task?.Process.TGID ?? 1;
     }
 
     private static async ValueTask<int> SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

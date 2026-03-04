@@ -25,5 +25,33 @@ struct TerminalWorkspaceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            session.onContainerList = { items in
+                DispatchQueue.main.async {
+                    store.applyContainerList(items)
+                }
+            }
+            session.onContainerStateChanged = { items in
+                DispatchQueue.main.async {
+                    store.applyContainerList(items)
+                }
+            }
+            store.onStartContainer = { containerId in
+                session.startContainer(containerId)
+            }
+            store.onStopContainer = { containerId in
+                session.stopContainer(containerId)
+            }
+            store.onAttachContainer = { containerId in
+                session.attachContainer(containerId)
+            }
+            session.refreshContainerList()
+        }
+        .onChange(of: store.selectedContainerID) { _, newId in
+            guard let newId,
+                  let container = store.containers.first(where: { $0.id == newId }),
+                  container.state == .running else { return }
+            session.attachContainer(container.containerId)
+        }
     }
 }

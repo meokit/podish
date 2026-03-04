@@ -23,9 +23,10 @@ struct ContainerRowView: View {
 struct SidebarView: View {
     @ObservedObject var store: PodishUiStore
     let onShowDetails: (PodishContainer) -> Void
+    @State private var localSelection: String?
 
     var body: some View {
-        List(selection: $store.selectedContainerID) {
+        List(selection: $localSelection) {
             Section("Actions") {
                 Button {
                 } label: {
@@ -46,6 +47,12 @@ struct SidebarView: View {
                         ContainerRowView(container: container)
                         Spacer(minLength: 4)
                         Button {
+                            store.stop(container)
+                        } label: {
+                            Image(systemName: "stop.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        Button {
                             onShowDetails(container)
                         } label: {
                             Image(systemName: "info.circle")
@@ -53,6 +60,28 @@ struct SidebarView: View {
                         .buttonStyle(.borderless)
                     }
                         .tag(container.id)
+                }
+            }
+
+            Section("Stopped") {
+                ForEach(store.containers.filter { $0.state != .running }) { container in
+                    HStack(spacing: 8) {
+                        ContainerRowView(container: container)
+                        Spacer(minLength: 4)
+                        Button {
+                            store.start(container)
+                        } label: {
+                            Image(systemName: "play.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        Button {
+                            onShowDetails(container)
+                        } label: {
+                            Image(systemName: "info.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .tag(container.id)
                 }
             }
 
@@ -65,5 +94,24 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Containers")
+        .onAppear {
+            localSelection = store.selectedContainerID
+        }
+        .onChange(of: localSelection) { _, newValue in
+            guard store.selectedContainerID != newValue else { return }
+            DispatchQueue.main.async {
+                if store.selectedContainerID != newValue {
+                    store.selectedContainerID = newValue
+                }
+            }
+        }
+        .onChange(of: store.selectedContainerID) { _, newValue in
+            guard localSelection != newValue else { return }
+            DispatchQueue.main.async {
+                if localSelection != newValue {
+                    localSelection = newValue
+                }
+            }
+        }
     }
 }

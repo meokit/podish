@@ -1,5 +1,18 @@
 import Foundation
 
+typealias PodLogCallback = @convention(c) (
+    UnsafeMutableRawPointer?,
+    Int32,
+    UnsafePointer<UInt8>?,
+    Int32
+) -> Void
+
+typealias PodContainerStateCallback = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UnsafePointer<UInt8>?,
+    Int32
+) -> Void
+
 struct PodCtxOptionsNative {
     var work_dir_utf8: UnsafePointer<CChar>?
     var log_level_utf8: UnsafePointer<CChar>?
@@ -18,6 +31,20 @@ func pod_ctx_destroy(_ ctx: UnsafeMutableRawPointer?)
 @_silgen_name("pod_ctx_last_error")
 func pod_ctx_last_error(_ ctx: UnsafeMutableRawPointer?, _ buffer: UnsafeMutablePointer<UInt8>?, _ capacity: Int32) -> Int32
 
+@_silgen_name("pod_ctx_set_log_callback")
+func pod_ctx_set_log_callback(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ callback: PodLogCallback?,
+    _ user_data: UnsafeMutableRawPointer?
+) -> Int32
+
+@_silgen_name("pod_ctx_set_container_state_callback")
+func pod_ctx_set_container_state_callback(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ callback: PodContainerStateCallback?,
+    _ user_data: UnsafeMutableRawPointer?
+) -> Int32
+
 @_silgen_name("pod_image_pull")
 func pod_image_pull(_ ctx: UnsafeMutableRawPointer?, _ image_ref_utf8: UnsafePointer<CChar>?) -> Int32
 
@@ -28,8 +55,26 @@ func pod_container_create_json(
     _ out_container: UnsafeMutablePointer<UnsafeMutableRawPointer?>
 ) -> Int32
 
+@_silgen_name("pod_container_open")
+func pod_container_open(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ container_id_utf8: UnsafePointer<CChar>?,
+    _ out_container: UnsafeMutablePointer<UnsafeMutableRawPointer?>
+) -> Int32
+
 @_silgen_name("pod_container_start")
 func pod_container_start(_ container: UnsafeMutableRawPointer?) -> Int32
+
+@_silgen_name("pod_container_stop")
+func pod_container_stop(_ container: UnsafeMutableRawPointer?, _ signal: Int32, _ timeout_ms: Int32) -> Int32
+
+@_silgen_name("pod_container_list_json")
+func pod_container_list_json(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32,
+    _ out_len: UnsafeMutablePointer<Int32>?
+) -> Int32
 
 @_silgen_name("pod_container_destroy")
 func pod_container_destroy(_ container: UnsafeMutableRawPointer?)

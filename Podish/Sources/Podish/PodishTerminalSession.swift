@@ -2,6 +2,37 @@ import Foundation
 import SwiftUI
 @preconcurrency import SwiftTerm
 
+private final class NativeCallbackBox: @unchecked Sendable {
+    let onLog: @Sendable (String) -> Void
+    let onState: @Sendable ([NativeContainerListItem]) -> Void
+
+    init(
+        onLog: @escaping @Sendable (String) -> Void,
+        onState: @escaping @Sendable ([NativeContainerListItem]) -> Void
+    ) {
+        self.onLog = onLog
+        self.onState = onState
+    }
+}
+
+private let podishLogCallbackImpl: PodLogCallback = { userData, _, data, len in
+    guard let userData, let data, len > 0 else { return }
+    let box = Unmanaged<NativeCallbackBox>.fromOpaque(userData).takeUnretainedValue()
+    let bytes = UnsafeBufferPointer(start: data, count: Int(len))
+    let line = String(decoding: bytes, as: UTF8.self)
+    if !line.isEmpty {
+        box.onLog(line)
+    }
+}
+
+private let podishContainerStateCallbackImpl: PodContainerStateCallback = { userData, data, len in
+    guard let userData, let data, len > 0 else { return }
+    let box = Unmanaged<NativeCallbackBox>.fromOpaque(userData).takeUnretainedValue()
+    let payload = Data(bytes: data, count: Int(len))
+    guard let items = try? JSONDecoder().decode([NativeContainerListItem].self, from: payload) else { return }
+    box.onState(items)
+}
+
 private struct PodishRunSpec: Codable {
     var image: String?
     var rootfs: String?
@@ -73,25 +104,92 @@ actor PodishRuntimeActor {
     private var container: UnsafeMutableRawPointer?
     private var terminal: UnsafeMutableRawPointer?
     private var readTask: Task<Void, Never>?
+    private var callbackUserData: UnsafeMutableRawPointer?
+    private var onLogLine: (@Sendable (String) -> Void)?
+    private var onContainerState: (@Sendable ([NativeContainerListItem]) -> Void)?
+
+    struct StartupState {
+        let containers: [NativeContainerListItem]
+        let attachedTerminal: Bool
+    }
 
     init(workDir: String, sink: TerminalSink) {
         self.workDir = workDir
         self.sink = sink
     }
 
-    func startDefaultShell() throws {
-        if terminal != nil { return }
+    func setObservers(
+        onLog: @escaping @Sendable (String) -> Void,
+        onContainerState: @escaping @Sendable ([NativeContainerListItem]) -> Void
+    ) {
+        self.onLogLine = onLog
+        self.onContainerState = onContainerState
+        guard ctx != nil else { return }
+        installCallbacks()
+    }
+
+    func startDefaultShell() throws -> StartupState {
+        if terminal != nil {
+            return StartupState(containers: try listContainers(), attachedTerminal: true)
+        }
 
         try ensureContext()
-        try pullImage("docker.io/i386/alpine:latest")
-        try createAndStartContainer()
-        try attachTerminal()
-        startReadLoop()
+        var containers = try listContainers()
+        var attachedTerminal = false
+
+        if containers.isEmpty {
+            try pullImage("docker.io/i386/alpine:latest")
+            try createAndStartContainer()
+            try attachTerminal()
+            startReadLoop()
+            attachedTerminal = true
+            containers = try listContainers()
+        }
+
+        return StartupState(containers: containers, attachedTerminal: attachedTerminal)
+    }
+
+    func refreshContainers() throws -> [NativeContainerListItem] {
+        try ensureContext()
+        return try listContainers()
+    }
+
+    func startContainer(containerId: String) throws -> [NativeContainerListItem] {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        defer { pod_container_destroy(handle) }
+
+        let rc = pod_container_start(handle)
+        if rc != 0 {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        return try listContainers()
+    }
+
+    func stopContainer(containerId: String) throws -> [NativeContainerListItem] {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        defer { pod_container_destroy(handle) }
+
+        let rc = pod_container_stop(handle, 15, 2000)
+        if rc != 0 {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        return try listContainers()
+    }
+
+    func attachContainer(containerId: String) throws -> [NativeContainerListItem] {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        try switchToContainer(handle)
+        return try listContainers()
     }
 
     func stop() {
         readTask?.cancel()
         readTask = nil
+
+        uninstallCallbacks()
 
         if let term = terminal {
             pod_terminal_close(term)
@@ -152,12 +250,84 @@ actor PodishRuntimeActor {
         }
 
         ctx = out
+        installCallbacks()
+    }
+
+    private func installCallbacks() {
+        guard let c = ctx else { return }
+
+        uninstallCallbacks()
+
+        let onLog = onLogLine ?? { _ in }
+        let onState = onContainerState ?? { _ in }
+        let box = NativeCallbackBox(onLog: onLog, onState: onState)
+        let retained = Unmanaged.passRetained(box)
+        let userData = retained.toOpaque()
+
+        let rcLog = pod_ctx_set_log_callback(c, podishLogCallbackImpl, userData)
+        if rcLog != 0 {
+            retained.release()
+            return
+        }
+
+        let rcState = pod_ctx_set_container_state_callback(c, podishContainerStateCallbackImpl, userData)
+        if rcState != 0 {
+            _ = pod_ctx_set_log_callback(c, nil, nil)
+            retained.release()
+            return
+        }
+
+        callbackUserData = userData
+    }
+
+    private func uninstallCallbacks() {
+        guard let c = ctx else { return }
+        _ = pod_ctx_set_log_callback(c, nil, nil)
+        _ = pod_ctx_set_container_state_callback(c, nil, nil)
+
+        if let userData = callbackUserData {
+            Unmanaged<NativeCallbackBox>.fromOpaque(userData).release()
+            callbackUserData = nil
+        }
     }
 
     private func pullImage(_ image: String) throws {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
         let rc = image.withCString { pod_image_pull(c, $0) }
         if rc != 0 {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+    }
+
+    private func listContainers() throws -> [NativeContainerListItem] {
+        guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
+
+        var capacity = 16 * 1024
+        while true {
+            var buffer = [UInt8](repeating: 0, count: capacity)
+            var outLen: Int32 = 0
+            let rc = buffer.withUnsafeMutableBufferPointer { ptr in
+                pod_container_list_json(c, ptr.baseAddress, Int32(ptr.count), &outLen)
+            }
+
+            if rc == 0 {
+                let n = max(0, Int(outLen))
+                if n == 0 {
+                    return []
+                }
+                let data = Data(buffer.prefix(n))
+                return try JSONDecoder().decode([NativeContainerListItem].self, from: data)
+            }
+
+            // ERANGE
+            if rc == 34 {
+                capacity *= 2
+                if capacity > 1_048_576 {
+                    throw PodishRuntimeError.native(code: rc, message: "container list too large")
+                }
+                continue
+            }
+
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
     }
@@ -212,6 +382,40 @@ actor PodishRuntimeActor {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
         terminal = outTerm
+    }
+
+    private func openContainer(containerId: String) throws -> UnsafeMutableRawPointer {
+        guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
+        var outContainer: UnsafeMutableRawPointer?
+        let rc = containerId.withCString { pod_container_open(c, $0, &outContainer) }
+        if rc != 0 || outContainer == nil {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        return outContainer!
+    }
+
+    private func switchToContainer(_ newContainer: UnsafeMutableRawPointer) throws {
+        if let currentTerm = terminal {
+            pod_terminal_close(currentTerm)
+            terminal = nil
+        }
+        readTask?.cancel()
+        readTask = nil
+
+        if let currentContainer = container {
+            pod_container_destroy(currentContainer)
+            container = nil
+        }
+
+        container = newContainer
+
+        var outTerm: UnsafeMutableRawPointer?
+        let rc = pod_terminal_attach(newContainer, &outTerm)
+        if rc != 0 || outTerm == nil {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        terminal = outTerm
+        startReadLoop()
     }
 
     private func startReadLoop() {
@@ -270,6 +474,10 @@ final class PodishTerminalSession: ObservableObject {
 
     @Published var startupError: String?
     private var started = false
+    var onContainerList: (([NativeContainerListItem]) -> Void)?
+    var onContainerStateChanged: (([NativeContainerListItem]) -> Void)?
+    private var attachedContainerId: String?
+    private var lastContainerSnapshot: [NativeContainerListItem] = []
 
     init() {
         terminalView = TerminalView(frame: .zero)
@@ -297,6 +505,23 @@ final class PodishTerminalSession: ObservableObject {
                 await runtime.resize(cols: cols, rows: rows)
             }
         }
+
+        Task { [weak self] in
+            guard let self else { return }
+            await runtime.setObservers(
+                onLog: { line in
+                    print("[PodishCore] \(line)")
+                },
+                onContainerState: { [weak self] items in
+                    guard let self else { return }
+                    Task { @MainActor in
+                        self.lastContainerSnapshot = items
+                        self.onContainerList?(items)
+                        self.onContainerStateChanged?(items)
+                    }
+                }
+            )
+        }
     }
 
     func startIfNeeded() {
@@ -305,9 +530,19 @@ final class PodishTerminalSession: ObservableObject {
 
         Task {
             do {
-                try await runtime.startDefaultShell()
+                let state = try await runtime.startDefaultShell()
+                DispatchQueue.main.async {
+                    self.lastContainerSnapshot = state.containers
+                    self.onContainerList?(state.containers)
+                    self.onContainerStateChanged?(state.containers)
+                    if !state.attachedTerminal && !state.containers.isEmpty {
+                        self.startupError = nil
+                    } else {
+                        self.startupError = nil
+                    }
+                }
             } catch {
-                await MainActor.run {
+                DispatchQueue.main.async {
                     self.startupError = error.localizedDescription
                 }
             }
@@ -317,6 +552,58 @@ final class PodishTerminalSession: ObservableObject {
     func stop() {
         Task {
             await runtime.stop()
+        }
+    }
+
+    func refreshContainerList() {
+        Task {
+            do {
+                let items = try await runtime.refreshContainers()
+                DispatchQueue.main.async {
+                    self.lastContainerSnapshot = items
+                    self.onContainerList?(items)
+                    self.onContainerStateChanged?(items)
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func startContainer(_ containerId: String) {
+        Task {
+            do {
+                _ = try await runtime.startContainer(containerId: containerId)
+                DispatchQueue.main.async { self.startupError = nil }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func stopContainer(_ containerId: String) {
+        Task {
+            do {
+                _ = try await runtime.stopContainer(containerId: containerId)
+                DispatchQueue.main.async { self.startupError = nil }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func attachContainer(_ containerId: String) {
+        if attachedContainerId == containerId { return }
+        Task {
+            do {
+                _ = try await runtime.attachContainer(containerId: containerId)
+                DispatchQueue.main.async {
+                    self.attachedContainerId = containerId
+                    self.startupError = nil
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
         }
     }
 

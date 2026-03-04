@@ -37,20 +37,23 @@ public sealed class PodishContainerSession
 {
     private readonly Task<int> _runTask;
     private readonly PodishTerminalBridge? _terminalBridge;
+    private readonly ContainerProcessController _processController;
 
     internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask,
-        PodishTerminalBridge? terminalBridge)
+        PodishTerminalBridge? terminalBridge, ContainerProcessController processController)
     {
         ContainerId = containerId;
         ImageRef = imageRef;
         _runTask = runTask;
         _terminalBridge = terminalBridge;
+        _processController = processController;
     }
 
     public string ContainerId { get; }
     public string ImageRef { get; }
     public bool HasTerminal => _terminalBridge != null;
     public bool IsCompleted => _runTask.IsCompleted;
+    public int? InitPid => _processController.InitPid;
 
     public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
     {
@@ -82,6 +85,66 @@ public sealed class PodishContainerSession
     public Task<int> WaitAsync()
     {
         return _runTask;
+    }
+
+    public bool SignalInitProcess(int signal)
+    {
+        return _processController.TrySignalInitProcess(signal);
+    }
+}
+
+public sealed class ContainerProcessController
+{
+    private readonly object _lock = new();
+    private Action<int>? _signalInit;
+    private readonly Queue<int> _pendingSignals = [];
+
+    public int? InitPid { get; private set; }
+
+    public void BindInitProcess(int pid, Action<int> signalInit)
+    {
+        Queue<int>? pending = null;
+        lock (_lock)
+        {
+            InitPid = pid;
+            _signalInit = signalInit;
+            if (_pendingSignals.Count > 0)
+            {
+                pending = new Queue<int>(_pendingSignals);
+                _pendingSignals.Clear();
+            }
+        }
+
+        if (pending == null) return;
+        while (pending.TryDequeue(out var sig))
+            signalInit(sig);
+    }
+
+    public void Unbind()
+    {
+        lock (_lock)
+        {
+            _signalInit = null;
+            InitPid = null;
+            _pendingSignals.Clear();
+        }
+    }
+
+    public bool TrySignalInitProcess(int signal)
+    {
+        Action<int>? target;
+        lock (_lock)
+        {
+            target = _signalInit;
+            if (target == null)
+            {
+                _pendingSignals.Enqueue(signal);
+                return false;
+            }
+        }
+
+        target(signal);
+        return true;
     }
 }
 
@@ -326,6 +389,7 @@ public sealed class PodishContext : IDisposable
         eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
+        var processController = new ContainerProcessController();
         var service = new ContainerRuntimeService(_logger, _loggerFactory);
         var runTask = Task.Run(() => service.RunAsync(new ContainerRunRequest
         {
@@ -344,10 +408,11 @@ public sealed class PodishContext : IDisposable
             LogDriver = containerLogDriver,
             EventStore = eventStore,
             TerminalBridge = bridge,
+            ProcessController = processController,
             EnableHostConsoleInput = !attachTerminalBridge
         }));
 
-        return new PodishContainerSession(containerId, imageRef, runTask, bridge);
+        return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);
     }
 
     private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)

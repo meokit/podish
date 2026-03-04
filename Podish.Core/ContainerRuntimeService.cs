@@ -28,6 +28,7 @@ public sealed class ContainerRunRequest
     public ContainerLogDriver LogDriver { get; init; } = ContainerLogDriver.JsonFile;
     public required ContainerEventStore EventStore { get; init; }
     public PodishTerminalBridge? TerminalBridge { get; init; }
+    public ContainerProcessController? ProcessController { get; init; }
     public bool EnableHostConsoleInput { get; init; } = true;
 }
 
@@ -240,6 +241,7 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!);
+            request.ProcessController?.BindInitProcess(mainTask.Process.TGID, sig => mainTask.PostSignal(sig));
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
 
@@ -309,6 +311,8 @@ public sealed class ContainerRuntimeService
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);
+
+            request.ProcessController?.Unbind();
         }
     }
 

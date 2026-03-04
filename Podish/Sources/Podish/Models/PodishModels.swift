@@ -15,8 +15,9 @@ struct PodishContainer: Identifiable, Hashable {
         }
     }
 
-    let id: UUID
+    let id: String
     var name: String
+    var containerId: String
     var image: String
     var state: State
     var cpu: Double
@@ -30,6 +31,16 @@ struct PodishImage: Identifiable, Hashable {
     var digest: String
     var size: String
     var createdAt: Date
+}
+
+struct NativeContainerListItem: Decodable, Hashable {
+    let handle: String
+    let containerId: String
+    let image: String
+    let state: String
+    let hasTerminal: Bool
+    let running: Bool
+    let exitCode: Int?
 }
 
 enum SidebarSelection: Hashable {
