@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Threading;
 
 namespace Fiberish.SilkFS;
 
@@ -39,6 +40,7 @@ public sealed class SilkMetadataStore
 
     public SilkMetadataStore(string dbPath)
     {
+        EnsureSqliteProviderInitialized();
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
@@ -534,6 +536,15 @@ public sealed class SilkMetadataStore
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
         return conn;
+    }
+
+    private static int _sqliteInit;
+
+    private static void EnsureSqliteProviderInitialized()
+    {
+        if (Interlocked.Exchange(ref _sqliteInit, 1) != 0)
+            return;
+        SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
     }
 
     private static void Exec(SqliteConnection conn, SqliteTransaction tx, string sql)

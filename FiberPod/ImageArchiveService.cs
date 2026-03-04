@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Fiberish.VFS;
+using Podish.Core;
 
 namespace FiberPod;
 

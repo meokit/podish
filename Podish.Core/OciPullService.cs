@@ -5,7 +5,7 @@ using System.IO.Compression;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
-namespace FiberPod;
+namespace Podish.Core;
 
 public class OciPullService
 {

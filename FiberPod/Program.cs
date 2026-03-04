@@ -10,6 +10,7 @@ using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
+using Podish.Core;
 
 namespace FiberPod;
 
@@ -702,263 +703,24 @@ internal class Program
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
         string containerId, string image, string containerDir, ContainerLogDriver logDriver, ContainerEventStore eventStore)
     {
-        await Task.CompletedTask; // TODO: remove async?
-
-        // 1. Create Kernel Scheduler
-        var scheduler = new KernelScheduler();
-        scheduler.LoggerFactory = Logging.LoggerFactory;
-
-        // 2. Setup TTY
-        TtyDiscipline? ttyDiag = null;
-        FileStream? stdinStream = null;
-        CancellationTokenSource? inputCts = null;
-        Task? inputTask = null;
-        PosixSignalRegistration? sigwinch = null;
-        var isInteractive = useTty && !Console.IsInputRedirected;
-
-        using var logSink = CreateContainerLogSink(logDriver, containerDir);
-        var driver = new ConsoleTtyDriver(logSink);
-        var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-        ttyDiag = new TtyDiscipline(driver, broadcaster, Logging.CreateLogger<TtyDiscipline>());
-        driver.BindTty(ttyDiag);
-        scheduler.Tty = ttyDiag;
-
-        if (isInteractive)
+        var service = new ContainerRuntimeService(Logger);
+        return await service.RunAsync(new ContainerRunRequest
         {
-            stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                var res = Fiberish.Core.VFS.TTY.MacOSTermios.EnableRawMode(0);
-                if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
-            }
-
-            inputCts = new CancellationTokenSource();
-            inputTask = Task.Run(() => InputLoop(ttyDiag, stdinStream, inputCts.Token));
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                try
-                {
-                    if (!Console.IsOutputRedirected)
-                        ttyDiag.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
-
-                    sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, context =>
-                    {
-                        context.Cancel = true;
-                        try
-                        {
-                            if (!Console.IsOutputRedirected)
-                                ttyDiag.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
-                        }
-                        catch
-                        {
-                        }
-                    });
-                }
-                catch
-                {
-                }
-            }
-        }
-
-        try
-        {
-            if (!Directory.Exists(rootfsPath))
-            {
-                Console.Error.WriteLine($"[FiberPod Error] RootFS path not found: {rootfsPath}");
-                eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
-                    "rootfs not found"));
-                return 1;
-            }
-
-            // 3. Bootstrap bare runtime, and let FiberPod assemble the rootfs.
-            var runtime = KernelRuntime.BootstrapBare(strace, ttyDiag);
-            if (useOverlay)
-            {
-                if (!TryCreateLayerLower(rootfsPath, out var layerLowerSb, out var layerProvider, out var layerError))
-                {
-                    Console.Error.WriteLine($"[FiberPod Error] {layerError}");
-                    eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
-                        layerError));
-                    return 1;
-                }
-
-                using var _ = layerProvider;
-                var silkUpperStore = Path.Combine(containerDir, "silk-upper");
-                Directory.CreateDirectory(silkUpperStore);
-                var silkType = FileSystemRegistry.Get("silkfs")
-                               ?? throw new InvalidOperationException("silkfs is not registered");
-                var overlayType = FileSystemRegistry.Get("overlay")
-                                  ?? throw new InvalidOperationException("overlay is not registered");
-
-                var upperSb = silkType.FileSystem.ReadSuper(silkType, 0, silkUpperStore, null);
-                var overlaySb = overlayType.FileSystem.ReadSuper(overlayType, 0, "root_overlay", new OverlayMountOptions
-                {
-                    Lower = layerLowerSb!,
-                    Upper = upperSb
-                });
-                runtime.Syscalls.MountRoot(overlaySb, new SyscallManager.RootMountOptions
-                {
-                    Source = "overlay",
-                    FsType = "overlay",
-                    Options = "rw,relatime,lowerdir=/,upperdir=/silk-upper,workdir=/work"
-                });
-                runtime.Syscalls.MountStandardDev(ttyDiag);
-                runtime.Syscalls.MountStandardProc();
-                runtime.Syscalls.MountStandardShm();
-                runtime.Syscalls.CreateStandardTmp();
-            }
-            else
-            {
-                var hostType = FileSystemRegistry.Get("hostfs")
-                               ?? throw new InvalidOperationException("hostfs is not registered");
-                var hostSb = hostType.FileSystem.ReadSuper(hostType, 0, rootfsPath, null);
-                runtime.Syscalls.MountRoot(hostSb, new SyscallManager.RootMountOptions
-                {
-                    Source = rootfsPath,
-                    FsType = "hostfs",
-                    Options = "rw,relatime"
-                });
-                runtime.Syscalls.MountStandardDev(ttyDiag);
-                runtime.Syscalls.MountStandardProc();
-                runtime.Syscalls.MountStandardShm();
-            }
-
-            // 4. Mount Volumes
-            foreach (var vol in volumes)
-            {
-                var parts = vol.Split(':');
-                if (parts.Length < 2)
-                {
-                    Logger.LogWarning("Invalid volume format: {Volume}. Expected /host/path:/guest/path[:ro]", vol);
-                    continue;
-                }
-                var hostPath = parts[0];
-                var guestPath = parts[1];
-                var readOnly = parts.Length > 2 && parts[2] == "ro";
-
-                if (!Directory.Exists(hostPath) && !File.Exists(hostPath))
-                {
-                    Logger.LogWarning("Host path does not exist, skipping mount: {HostPath}", hostPath);
-                    continue;
-                }
-
-                // Follow symlinks on host (e.g. /var -> /private/var on macOS)
-                // Otherwise guest processes might fail to resolve host paths correctly.
-                var hostInfo = new DirectoryInfo(hostPath);
-                if (hostInfo.LinkTarget != null)
-                {
-                    var resolved = hostInfo.ResolveLinkTarget(true);
-                    if (resolved != null)
-                    {
-                        hostPath = resolved.FullName;
-                    }
-                }
-
-                Logger.LogInformation("Mounting {HostPath} at {GuestPath} (ro: {ReadOnly})", hostPath, guestPath,
-                    readOnly);
-                runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
-            }
-
-            // 4.5. Mount DNS Configuration (/etc/resolv.conf)
-            try
-            {
-                var resolvConf = BuildResolvConfContent(dnsServers);
-                Logger.LogInformation("Mounting generated DNS configuration at /etc/resolv.conf via detached tmpfs");
-                runtime.Syscalls.MountDetachedTmpfsFile(
-                    "/etc/resolv.conf",
-                    "resolv.conf",
-                    Encoding.UTF8.GetBytes(resolvConf),
-                    readOnly: true);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Failed to mount DNS configuration. Network resolution may not work.");
-            }
-
-            var actualExe = string.IsNullOrEmpty(exe) ? "/bin/sh" : exe;
-            var fullArgs = new[] { actualExe }.Concat(exeArgs).ToArray();
-            
-            // Build strictly isolated environment
-            var finalEnvs = new List<string>
-            {
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "HOME=/root",
-                "TERM=xterm",
-                "USER=root"
-            };
-            
-            // Add user provided envs. This replaces duplicates if any.
-            foreach (var env in guestEnvs)
-            {
-                finalEnvs.Add(env);
-            }
-
-            var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
-            if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
-
-            var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs, finalEnvs.ToArray(),
-                scheduler, ttyDiag, loc.Mount!);
-            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", containerId, image));
-
-            // 5. Run Scheduler
-            scheduler.Run();
-
-            // Cleanup temp rootfs happens in the loop above
-
-            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image,
-                mainTask.ExitStatus));
-            return mainTask.ExitStatus;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogCritical(ex, "Critical Error during container emulation");
-            Console.Error.WriteLine($"[FiberPod] Error: {ex.Message}");
-            eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", containerId, image, 1,
-                ex.Message));
-            return 1;
-        }
-        finally
-        {
-            // Give pending I/O tasks a little time to flush, especially in non-interactive tests
-            try
-            {
-                Task.Delay(50).Wait();
-            }
-            catch
-            {
-            }
-
-            Console.Out.Flush();
-            Console.Error.Flush();
-
-            stdinStream?.Dispose();
-
-            if (inputCts != null)
-            {
-                inputCts.Cancel();
-                if (inputTask != null)
-                {
-                    try
-                    {
-                        Task.WhenAny(inputTask, Task.Delay(100)).Wait();
-                    }
-                    catch
-                    {
-                    }
-                }
-
-                inputCts.Dispose();
-            }
-
-            sigwinch?.Dispose();
-
-            if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);
-            }
-        }
+            RootfsPath = rootfsPath,
+            Exe = exe,
+            ExeArgs = exeArgs,
+            Volumes = volumes,
+            GuestEnvs = guestEnvs,
+            DnsServers = dnsServers,
+            UseTty = useTty,
+            Strace = strace,
+            UseOverlay = useOverlay,
+            ContainerId = containerId,
+            Image = image,
+            ContainerDir = containerDir,
+            LogDriver = logDriver,
+            EventStore = eventStore
+        });
     }
 
     private static bool TryCreateLayerLower(string ociStoreDir, out SuperBlock? lowerSb, out IDisposable? provider,

@@ -1,9 +1,9 @@
 using System.Text;
 using Fiberish.VFS;
 
-namespace FiberPod;
+namespace Podish.Core;
 
-internal static class OciLayerIndexBuilder
+public static class OciLayerIndexBuilder
 {
     public static LayerIndex BuildFromTar(Stream tarStream, string blobDigest)
     {

@@ -1,4 +1,4 @@
-namespace FiberPod;
+namespace Podish.Core;
 
 public sealed record OciStoredLayer(
     string Digest,

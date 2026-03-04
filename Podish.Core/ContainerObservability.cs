@@ -2,15 +2,15 @@ using System.Text;
 using System.Text.Json;
 using Fiberish.Core.VFS.TTY;
 
-namespace FiberPod;
+namespace Podish.Core;
 
-internal enum ContainerLogDriver
+public enum ContainerLogDriver
 {
     JsonFile,
     None
 }
 
-internal static class ContainerLogDriverParser
+public static class ContainerLogDriverParser
 {
     public static bool TryParse(string? value, out ContainerLogDriver driver)
     {
@@ -31,12 +31,12 @@ internal static class ContainerLogDriverParser
     }
 }
 
-internal interface IContainerLogSink : IDisposable
+public interface IContainerLogSink : IDisposable
 {
     void Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer);
 }
 
-internal sealed class NoneContainerLogSink : IContainerLogSink
+public sealed class NoneContainerLogSink : IContainerLogSink
 {
     public void Dispose()
     {
@@ -47,7 +47,7 @@ internal sealed class NoneContainerLogSink : IContainerLogSink
     }
 }
 
-internal sealed class JsonFileContainerLogSink : IContainerLogSink
+public sealed class JsonFileContainerLogSink : IContainerLogSink
 {
     private readonly object _gate = new();
     private readonly StreamWriter _writer;
@@ -87,9 +87,9 @@ internal sealed class JsonFileContainerLogSink : IContainerLogSink
     }
 }
 
-internal sealed record ContainerLogEntry(DateTimeOffset Time, string Stream, string Log);
+public sealed record ContainerLogEntry(DateTimeOffset Time, string Stream, string Log);
 
-internal sealed record ContainerEvent(
+public sealed record ContainerEvent(
     DateTimeOffset Time,
     string Type,
     string ContainerId,
@@ -97,7 +97,7 @@ internal sealed record ContainerEvent(
     int? ExitCode = null,
     string? Message = null);
 
-internal sealed class ContainerEventStore
+public sealed class ContainerEventStore
 {
     private readonly object _gate = new();
     private readonly string _path;
