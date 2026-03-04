@@ -38,7 +38,8 @@ public sealed class PodishContainerSession
     private readonly Task<int> _runTask;
     private readonly PodishTerminalBridge? _terminalBridge;
 
-    internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask, PodishTerminalBridge? terminalBridge)
+    internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask,
+        PodishTerminalBridge? terminalBridge)
     {
         ContainerId = containerId;
         ImageRef = imageRef;
@@ -142,10 +143,11 @@ public sealed class PodishTerminalBridge
     }
 }
 
-public sealed class PodishContext
+public sealed class PodishContext : IDisposable
 {
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly PodishFileLoggerProvider _fileLoggerProvider;
 
     public PodishContext(PodishContextOptions options)
     {
@@ -168,12 +170,12 @@ public sealed class PodishContext
         if (!TryParsePodmanLogLevel(options.LogLevel, out var level))
             throw new ArgumentException($"invalid log level: {options.LogLevel}", nameof(options));
 
+        _fileLoggerProvider = new PodishFileLoggerProvider(logFile);
         _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder.ClearProviders();
             builder.SetMinimumLevel(level);
-            if (!string.IsNullOrEmpty(logFile))
-                builder.AddProvider(new PodishFileLoggerProvider(logFile));
+            builder.AddProvider(_fileLoggerProvider);
         });
         _logger = _loggerFactory.CreateLogger<PodishContext>();
     }
@@ -185,6 +187,16 @@ public sealed class PodishContext
     public string LogsDir { get; }
     public string ContainersDir { get; }
     public ILoggerFactory LoggerFactory => _loggerFactory;
+
+    public void SetLogObserver(Action<LogLevel, string>? observer)
+    {
+        _fileLoggerProvider.SetObserver(observer);
+    }
+
+    public void Dispose()
+    {
+        _loggerFactory.Dispose();
+    }
 
     public async Task<OciStoredImage> PullImageAsync(string image)
     {
@@ -286,6 +298,9 @@ public sealed class PodishContext
     {
         switch (raw.Trim().ToLowerInvariant())
         {
+            case "trace":
+                level = LogLevel.Trace;
+                return true;
             case "debug":
                 level = LogLevel.Debug;
                 return true;
@@ -309,10 +324,11 @@ public sealed class PodishContext
     }
 }
 
-file sealed class PodishFileLoggerProvider : ILoggerProvider
+internal sealed class PodishFileLoggerProvider : ILoggerProvider
 {
     private readonly object _lock = new();
     private readonly StreamWriter _writer;
+    private Action<LogLevel, string>? _observer;
 
     public PodishFileLoggerProvider(string filePath)
     {
@@ -334,16 +350,28 @@ file sealed class PodishFileLoggerProvider : ILoggerProvider
         _writer.Dispose();
     }
 
-    public void WriteLog(string message)
+    public void SetObserver(Action<LogLevel, string>? observer)
     {
         lock (_lock)
         {
-            _writer.WriteLine(message);
+            _observer = observer;
         }
+    }
+
+    public void WriteLog(LogLevel level, string message)
+    {
+        Action<LogLevel, string>? observer;
+        lock (_lock)
+        {
+            _writer.WriteLine(message);
+            observer = _observer;
+        }
+
+        observer?.Invoke(level, message);
     }
 }
 
-file sealed class PodishFileLogger : ILogger
+internal sealed class PodishFileLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly PodishFileLoggerProvider _provider;
@@ -381,6 +409,6 @@ file sealed class PodishFileLogger : ILogger
         var message = $"[{timestamp}] [{level}] {_categoryName}: {formatter(state, exception)}";
         if (exception != null)
             message += $"\n{exception}";
-        _provider.WriteLog(message);
+        _provider.WriteLog(logLevel, message);
     }
 }

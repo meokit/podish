@@ -141,11 +141,12 @@ public sealed class ContainerRuntimeService
                                   ?? throw new InvalidOperationException("overlay is not registered");
 
                 var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, silkUpperStore, null);
-                var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "root_overlay", new OverlayMountOptions
-                {
-                    Lower = layerLowerSb!,
-                    Upper = upperSb
-                });
+                var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "root_overlay",
+                    new OverlayMountOptions
+                    {
+                        Lower = layerLowerSb!,
+                        Upper = upperSb
+                    });
                 runtime.Syscalls.MountRoot(overlaySb, new SyscallManager.RootMountOptions
                 {
                     Source = "overlay",
@@ -243,6 +244,18 @@ public sealed class ContainerRuntimeService
                 request.Image));
 
             scheduler.Run();
+
+            if (!mainTask.Exited)
+            {
+                _logger.LogError(
+                    "KernelScheduler returned but main task has not exited. status={Status} mode={Mode} pendingSyscall={HasPendingSyscall} continuation={HasContinuation}",
+                    mainTask.Status, mainTask.ExecutionMode, mainTask.PendingSyscall != null,
+                    mainTask.Continuation != null);
+                request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                    request.ContainerId, request.Image, 1,
+                    "scheduler returned before main task exited"));
+                return 1;
+            }
 
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
                 request.Image,
@@ -775,6 +788,7 @@ public sealed class ContainerRuntimeService
             catch
             {
             }
+
             _cts.Dispose();
             _hasData.Dispose();
         }

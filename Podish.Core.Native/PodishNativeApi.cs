@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Podish.Core;
 
 namespace Podish.Core.Native;
@@ -10,8 +11,11 @@ internal sealed class NativeContext
 {
     public required PodishContext Context { get; init; }
     private readonly object _errorLock = new();
+    private readonly object _logCallbackLock = new();
     private string _lastError = string.Empty;
     private readonly Dictionary<int, string> _lastErrorByThread = [];
+    private unsafe delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> _logCallback;
+    private IntPtr _logUserData;
 
     public string GetLastErrorForCurrentThread()
     {
@@ -30,6 +34,38 @@ internal sealed class NativeContext
         {
             _lastError = safe;
             _lastErrorByThread[tid] = safe;
+        }
+    }
+
+    public unsafe void SetLogCallback(delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
+        IntPtr userData)
+    {
+        lock (_logCallbackLock)
+        {
+            _logCallback = callback;
+            _logUserData = userData;
+        }
+
+        Context.SetLogObserver(callback == null ? null : OnLogLine);
+    }
+
+    private unsafe void OnLogLine(LogLevel level, string line)
+    {
+        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback;
+        IntPtr userData;
+        lock (_logCallbackLock)
+        {
+            callback = _logCallback;
+            userData = _logUserData;
+        }
+
+        if (callback == null || string.IsNullOrEmpty(line))
+            return;
+
+        var bytes = Encoding.UTF8.GetBytes(line);
+        fixed (byte* ptr = bytes)
+        {
+            callback(userData, (int)level, ptr, bytes.Length);
         }
     }
 }
@@ -97,7 +133,8 @@ public static class PodishNativeApi
 
         try
         {
-            var workDir = PtrToString(options == null ? IntPtr.Zero : options->WorkDirUtf8) ?? Directory.GetCurrentDirectory();
+            var workDir = PtrToString(options == null ? IntPtr.Zero : options->WorkDirUtf8) ??
+                          Directory.GetCurrentDirectory();
             var logLevel = PtrToString(options == null ? IntPtr.Zero : options->LogLevelUtf8) ?? "warn";
             var logFile = PtrToString(options == null ? IntPtr.Zero : options->LogFileUtf8);
 
@@ -133,14 +170,22 @@ public static class PodishNativeApi
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_ctx_destroy", CallConvs = [typeof(CallConvCdecl)])]
-    public static void PodCtxDestroy(IntPtr ctxHandle)
+    public static unsafe void PodCtxDestroy(IntPtr ctxHandle)
     {
         if (ctxHandle == IntPtr.Zero)
             return;
 
         var handle = GCHandle.FromIntPtr(ctxHandle);
         if (handle.IsAllocated)
+        {
+            if (handle.Target is NativeContext nativeContext)
+            {
+                nativeContext.SetLogCallback(null, IntPtr.Zero);
+                nativeContext.Context.Dispose();
+            }
+
             handle.Free();
+        }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_ctx_last_error", CallConvs = [typeof(CallConvCdecl)])]
@@ -160,6 +205,25 @@ public static class PodishNativeApi
             buffer[i] = bytes[i];
         buffer[copy] = 0;
         return copy;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_ctx_set_log_callback", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodCtxSetLogCallback(IntPtr ctxHandle,
+        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback, IntPtr userData)
+    {
+        var ctx = FromHandle(ctxHandle);
+        if (ctx == null)
+            return PodEinval;
+
+        try
+        {
+            ctx.SetLogCallback(callback, userData);
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
+        }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_image_pull", CallConvs = [typeof(CallConvCdecl)])]

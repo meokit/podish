@@ -17,6 +17,8 @@ int pod_ctx_create(const pod_ctx_options_t* options, void** out_ctx);
 void pod_ctx_destroy(void* ctx);
 
 int pod_ctx_last_error(void* ctx, uint8_t* buffer, int capacity);
+typedef void (*pod_log_cb)(void* user_data, int level, const uint8_t* data, int len);
+int pod_ctx_set_log_callback(void* ctx, pod_log_cb callback, void* user_data);
 
 int pod_image_pull(void* ctx, const char* image_ref_utf8);
 
