@@ -28,7 +28,7 @@ public class MemoryObjectManagerTests
     [Fact]
     public void InodePageCache_DoesNotCollide_ForDifferentInodesWithSameIno()
     {
-        var manager = MemoryObjectManager.Instance;
+        var manager = new MemoryObjectManager();
         var sb = new TestSuperBlock();
         var inodeA = new TestInode(sb, 42);
         var inodeB = new TestInode(sb, 42);
@@ -45,6 +45,31 @@ public class MemoryObjectManagerTests
             manager.ReleaseInodePageCache(inodeA);
             manager.ReleaseInodePageCache(inodeB);
             cacheA.Release();
+            cacheB.Release();
+        }
+    }
+
+    [Fact]
+    public void InodePageCache_IsIsolatedAcrossManagers()
+    {
+        var managerA = new MemoryObjectManager();
+        var managerB = new MemoryObjectManager();
+        var sb = new TestSuperBlock();
+        var inode = new TestInode(sb, 99);
+
+        var cacheA = managerA.GetOrCreateInodePageCache(inode);
+        managerA.ReleaseInodePageCache(inode);
+        cacheA.Release();
+
+        var cacheB = managerB.GetOrCreateInodePageCache(inode);
+
+        try
+        {
+            Assert.NotSame(cacheA, cacheB);
+        }
+        finally
+        {
+            managerB.ReleaseInodePageCache(inode);
             cacheB.Release();
         }
     }

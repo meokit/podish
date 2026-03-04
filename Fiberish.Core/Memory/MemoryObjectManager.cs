@@ -8,8 +8,6 @@ public sealed class MemoryObjectManager
     private readonly Dictionary<string, MemoryObject> _namedObjects = new(StringComparer.Ordinal);
     private readonly object _lock = new();
 
-    public static MemoryObjectManager Instance { get; } = new();
-
     /// <summary>
     ///     Get or create the inode's global page cache MemoryObject.
     ///     Reuses CreateOrOpenNamed (same mechanism as SysV shm).
@@ -23,6 +21,7 @@ public sealed class MemoryObjectManager
             {
                 existing.AddRef(); // caller mapping reference
                 inode.PageCache ??= existing;
+                inode.PageCacheManager ??= this;
                 return existing;
             }
 
@@ -30,6 +29,7 @@ public sealed class MemoryObjectManager
             _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
             obj.AddRef(); // caller mapping reference
             inode.PageCache = obj;
+            inode.PageCacheManager = this;
             return obj;
         }
     }
@@ -40,6 +40,7 @@ public sealed class MemoryObjectManager
         var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
         CloseNamed(key); // decrements ref; freed when count hits 0
         inode.PageCache = null;
+        inode.PageCacheManager = null;
     }
 
     public MemoryObject CreateAnonymous(bool shared)

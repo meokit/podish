@@ -46,7 +46,7 @@ public partial class SyscallManager
         BrkBase = brk;
         Tty = tty;
         Futex = new FutexManager();
-        SysVShm = new SysVShmManager();
+        SysVShm = new SysVShmManager(mem.MemoryObjects);
         SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);

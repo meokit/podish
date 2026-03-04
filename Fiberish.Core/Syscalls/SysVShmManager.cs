@@ -54,7 +54,13 @@ public class SysVShmManager
     private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
     private readonly List<SysVShmAttach> _attaches = new();
     private readonly object _lock = new();
+    private readonly MemoryObjectManager _memoryObjects;
     private int _nextShmid = 1;
+
+    public SysVShmManager(MemoryObjectManager? memoryObjects = null)
+    {
+        _memoryObjects = memoryObjects ?? new MemoryObjectManager();
+    }
 
     /// <summary>
     /// Get or create a shared memory segment.
@@ -115,7 +121,7 @@ public class SysVShmManager
                 DTime = DateTime.UtcNow,
                 NAttch = 0,
                 MarkedForDelete = false,
-                BackingObject = MemoryObjectManager.Instance.CreateAnonymous(true) // shared
+                BackingObject = _memoryObjects.CreateAnonymous(true) // shared
             };
 
             _segmentsByShmid[shmid] = segment;

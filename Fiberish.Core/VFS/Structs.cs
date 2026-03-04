@@ -102,6 +102,7 @@ public abstract class Inode
     ///     Analogous to Linux inode.i_mapping / address_space.
     /// </summary>
     public MemoryObject? PageCache { get; set; }
+    public MemoryObjectManager? PageCacheManager { get; set; }
 
     public virtual ulong Ino { get; set; }
     public virtual InodeType Type { get; set; }
@@ -142,7 +143,7 @@ public abstract class Inode
     protected virtual void Release()
     {
         // Subclasses can override to clean up resources
-        MemoryObjectManager.Instance.ReleaseInodePageCache(this);
+        PageCacheManager?.ReleaseInodePageCache(this);
     }
 
     // Operations

@@ -11,6 +11,12 @@ public class VMAManager
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
     private readonly List<VMA> _vmas = [];
     public ExternalPageManager ExternalPages { get; } = new();
+    public MemoryObjectManager MemoryObjects { get; }
+
+    public VMAManager(MemoryObjectManager? memoryObjects = null)
+    {
+        MemoryObjects = memoryObjects ?? new MemoryObjectManager();
+    }
 
     public IReadOnlyList<VMA> VMAs => _vmas;
 
@@ -65,20 +71,20 @@ public class VMAManager
         if (file == null)
         {
             // Anonymous mapping
-            memObj = MemoryObjectManager.Instance.CreateAnonymous(isShared);
+            memObj = MemoryObjects.CreateAnonymous(isShared);
         }
         else if (isShared)
         {
             // MAP_SHARED file: share the inode's global page cache
-            memObj = MemoryObjectManager.Instance.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            memObj = MemoryObjects.GetOrCreateInodePageCache(file.Dentry.Inode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
         }
         else
         {
             // MAP_PRIVATE file (including ELF_LOAD): shared inode cache as read-only source + private COW object
-            memObj = MemoryObjectManager.Instance.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            memObj = MemoryObjects.GetOrCreateInodePageCache(file.Dentry.Inode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
-            cowObj = MemoryObjectManager.Instance.CreateAnonymous(shared: false);
+            cowObj = MemoryObjects.CreateAnonymous(shared: false);
         }
 
 
@@ -114,7 +120,7 @@ public class VMAManager
 
     public VMAManager Clone()
     {
-        var newMM = new VMAManager();
+        var newMM = new VMAManager(MemoryObjects);
         foreach (var vma in _vmas) newMM._vmas.Add(vma.Clone());
         return newMM;
     }

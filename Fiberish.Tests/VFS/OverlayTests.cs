@@ -119,7 +119,7 @@ public class OverlayTests
             lowerInode.Ino = forcedIno;
             upperInode.Ino = forcedIno;
 
-            var manager = MemoryObjectManager.Instance;
+            var manager = new MemoryObjectManager();
             var lowerCache = manager.GetOrCreateInodePageCache(lowerInode);
             var upperCache = manager.GetOrCreateInodePageCache(upperInode);
 
