@@ -324,7 +324,7 @@ public abstract class Inode : IPageCacheOps
         return rc;
     }
 
-    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    protected int GenericReadPageViaRead(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
@@ -340,13 +340,11 @@ public abstract class Inode : IPageCacheOps
         return rc < 0 ? rc : 0;
     }
 
-    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
-    {
-        // Optional optimization hook; default no-op.
-        return 0;
-    }
-
-    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected int GenericWritePageViaWrite(
+        LinuxFile? linuxFile,
+        PageIoRequest request,
+        ReadOnlySpan<byte> pageBuffer,
+        bool sync)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
@@ -357,6 +355,24 @@ public abstract class Inode : IPageCacheOps
         if (rc < 0) return rc;
         if (sync) Sync(linuxFile);
         return 0;
+    }
+
+    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        // Explicitly unsupported by default: filesystems must opt in.
+        return -(int)Errno.EOPNOTSUPP;
+    }
+
+    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        // Optional optimization hook; default no-op.
+        return 0;
+    }
+
+    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        // Explicitly unsupported by default: filesystems must opt in.
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
