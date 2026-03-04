@@ -34,6 +34,46 @@ internal sealed class NativeContext
     }
 }
 
+internal sealed class NativeContainer
+{
+    private readonly object _callbackLock = new();
+    private unsafe delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> _outputCallback;
+    private IntPtr _outputUserData;
+
+    public required NativeContext Owner { get; init; }
+    public required PodishContainerSession Session { get; init; }
+
+    public unsafe void SetOutputCallback(delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
+        IntPtr userData)
+    {
+        lock (_callbackLock)
+        {
+            _outputCallback = callback;
+            _outputUserData = userData;
+            Session.SetOutputHandler(callback == null ? null : OnOutput);
+        }
+    }
+
+    private unsafe void OnOutput(Fiberish.Core.VFS.TTY.TtyEndpointKind kind, byte[] data)
+    {
+        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback;
+        IntPtr userData;
+        lock (_callbackLock)
+        {
+            callback = _outputCallback;
+            userData = _outputUserData;
+        }
+
+        if (callback == null || data.Length == 0)
+            return;
+
+        fixed (byte* ptr = data)
+        {
+            callback(userData, kind == Fiberish.Core.VFS.TTY.TtyEndpointKind.Stderr ? 2 : 1, ptr, data.Length);
+        }
+    }
+}
+
 [StructLayout(LayoutKind.Sequential)]
 public struct PodCtxOptionsNative
 {
@@ -184,6 +224,135 @@ public static class PodishNativeApi
         }
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_start_json", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodContainerStartJson(IntPtr ctxHandle, IntPtr runSpecJsonUtf8, IntPtr* outContainer)
+    {
+        var ctx = FromHandle(ctxHandle);
+        if (ctx == null || outContainer == null)
+            return PodEinval;
+
+        try
+        {
+            var json = PtrToString(runSpecJsonUtf8);
+            if (string.IsNullOrWhiteSpace(json))
+                return SetErrorAndReturn(ctx, "run spec json is required", PodEinval);
+
+            var spec = JsonSerializer.Deserialize(json, PodishRunSpecJsonContext.Default.PodishRunSpec);
+            if (spec == null)
+                return SetErrorAndReturn(ctx, "invalid run spec json", PodEinval);
+
+            var session = ctx.Context.StartAsync(spec).GetAwaiter().GetResult();
+            var container = new NativeContainer
+            {
+                Owner = ctx,
+                Session = session
+            };
+            var handle = GCHandle.Alloc(container, GCHandleType.Normal);
+            *outContainer = GCHandle.ToIntPtr(handle);
+            return PodOk;
+        }
+        catch (JsonException ex)
+        {
+            return SetErrorAndReturn(ctx, ex.Message, PodEinval);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            return SetErrorAndReturn(ctx, ex.Message, PodEnoent);
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_destroy", CallConvs = [typeof(CallConvCdecl)])]
+    public static void PodContainerDestroy(IntPtr containerHandle)
+    {
+        if (containerHandle == IntPtr.Zero)
+            return;
+
+        var handle = GCHandle.FromIntPtr(containerHandle);
+        if (handle.IsAllocated)
+            handle.Free();
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_set_output_callback", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodContainerSetOutputCallback(IntPtr containerHandle,
+        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback, IntPtr userData)
+    {
+        var container = FromContainerHandle(containerHandle);
+        if (container == null)
+            return PodEinval;
+        container.SetOutputCallback(callback, userData);
+        return PodOk;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_write_stdin", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodContainerWriteStdin(IntPtr containerHandle, byte* data, int len, int* written)
+    {
+        var container = FromContainerHandle(containerHandle);
+        if (container == null || len < 0)
+            return PodEinval;
+
+        try
+        {
+            if (len == 0 || data == null)
+            {
+                if (written != null)
+                    *written = 0;
+                return PodOk;
+            }
+
+            var span = new ReadOnlySpan<byte>(data, len);
+            var n = container.Session.WriteInput(span);
+            if (written != null)
+                *written = n;
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_resize", CallConvs = [typeof(CallConvCdecl)])]
+    public static int PodContainerResize(IntPtr containerHandle, ushort rows, ushort cols)
+    {
+        var container = FromContainerHandle(containerHandle);
+        if (container == null)
+            return PodEinval;
+
+        try
+        {
+            container.Session.Resize(rows, cols);
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_wait", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodContainerWait(IntPtr containerHandle, int* exitCode)
+    {
+        var container = FromContainerHandle(containerHandle);
+        if (container == null)
+            return PodEinval;
+
+        try
+        {
+            var rc = container.Session.WaitAsync().GetAwaiter().GetResult();
+            if (exitCode != null)
+                *exitCode = rc;
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
+        }
+    }
+
     private static NativeContext? FromHandle(IntPtr handlePtr)
     {
         if (handlePtr == IntPtr.Zero)
@@ -192,6 +361,21 @@ public static class PodishNativeApi
         {
             var handle = GCHandle.FromIntPtr(handlePtr);
             return handle.Target as NativeContext;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static NativeContainer? FromContainerHandle(IntPtr handlePtr)
+    {
+        if (handlePtr == IntPtr.Zero)
+            return null;
+        try
+        {
+            var handle = GCHandle.FromIntPtr(handlePtr);
+            return handle.Target as NativeContainer;
         }
         catch
         {
