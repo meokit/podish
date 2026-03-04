@@ -50,6 +50,7 @@ public sealed class PodishContainerSession
     public string ContainerId { get; }
     public string ImageRef { get; }
     public bool HasTerminal => _terminalBridge != null;
+    public bool IsCompleted => _runTask.IsCompleted;
 
     public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
     {
@@ -71,6 +72,13 @@ public sealed class PodishContainerSession
         return true;
     }
 
+    public int ReadOutput(Span<byte> buffer, int timeoutMs)
+    {
+        if (_terminalBridge == null)
+            return 0;
+        return _terminalBridge.ReadOutput(buffer, timeoutMs);
+    }
+
     public Task<int> WaitAsync()
     {
         return _runTask;
@@ -79,7 +87,10 @@ public sealed class PodishContainerSession
 
 public sealed class PodishTerminalBridge
 {
+    private const int MaxBufferedBytes = 64 * 1024;
     private readonly object _lock = new();
+    private readonly Queue<byte> _outputBuffer = [];
+    private readonly AutoResetEvent _outputEvent = new(false);
     private TtyDiscipline? _tty;
     private Action<TtyEndpointKind, byte[]>? _outputHandler;
 
@@ -133,6 +144,7 @@ public sealed class PodishTerminalBridge
         Action<TtyEndpointKind, byte[]>? handler;
         lock (_lock)
         {
+            EnqueueOutputLocked(data);
             handler = _outputHandler;
         }
 
@@ -140,6 +152,47 @@ public sealed class PodishTerminalBridge
             return;
 
         handler(kind, data.ToArray());
+    }
+
+    public int ReadOutput(Span<byte> buffer, int timeoutMs)
+    {
+        if (buffer.Length == 0)
+            return 0;
+
+        var copied = TryDrain(buffer);
+        if (copied > 0 || timeoutMs == 0)
+            return copied;
+
+        _outputEvent.WaitOne(timeoutMs < 0 ? Timeout.Infinite : timeoutMs);
+        return TryDrain(buffer);
+    }
+
+    private int TryDrain(Span<byte> buffer)
+    {
+        lock (_lock)
+        {
+            if (_outputBuffer.Count == 0)
+                return 0;
+            var n = Math.Min(buffer.Length, _outputBuffer.Count);
+            for (var i = 0; i < n; i++)
+                buffer[i] = _outputBuffer.Dequeue();
+            return n;
+        }
+    }
+
+    private void EnqueueOutputLocked(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0)
+            return;
+
+        var needed = data.Length;
+        while (_outputBuffer.Count + needed > MaxBufferedBytes && _outputBuffer.Count > 0)
+            _outputBuffer.Dequeue();
+
+        for (var i = 0; i < data.Length; i++)
+            _outputBuffer.Enqueue(data[i]);
+
+        _outputEvent.Set();
     }
 }
 
@@ -221,13 +274,14 @@ public sealed class PodishContext : IDisposable
         };
     }
 
-    public async Task<PodishContainerSession> StartAsync(PodishRunSpec spec)
+    public async Task<PodishContainerSession> StartAsync(PodishRunSpec spec, string? containerIdOverride = null)
     {
         using var _ = Logging.BeginScope(_loggerFactory);
-        return await StartInternalAsync(spec, attachTerminalBridge: true);
+        return await StartInternalAsync(spec, attachTerminalBridge: true, containerIdOverride);
     }
 
-    private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge)
+    private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
+        string? containerIdOverride = null)
     {
         var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
         if (!ContainerLogDriverParser.TryParse(spec.LogDriver, out var containerLogDriver))
@@ -261,7 +315,9 @@ public sealed class PodishContext : IDisposable
             image = rootfsPath;
         }
 
-        var containerId = Guid.NewGuid().ToString("N")[..12];
+        var containerId = string.IsNullOrWhiteSpace(containerIdOverride)
+            ? Guid.NewGuid().ToString("N")[..12]
+            : containerIdOverride!;
         var containerDir = Path.Combine(ContainersDir, containerId);
         Directory.CreateDirectory(containerDir);
 
