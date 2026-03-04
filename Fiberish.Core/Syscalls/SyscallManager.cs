@@ -1011,6 +1011,7 @@ public partial class SyscallManager
 
         // Update current engine context (GIL ensures safety)
         Engine = engine;
+        GlobalPageCacheManager.MaybeRunMaintenance(Mem, engine);
 
         // Get current FiberTask (New Model Only) via Engine.Owner
         var fiberTask = engine.Owner as FiberTask;

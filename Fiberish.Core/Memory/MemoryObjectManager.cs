@@ -32,6 +32,7 @@ public sealed class MemoryObjectManager
             }
 
             var obj = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+            GlobalPageCacheManager.TrackPageCache(obj);
             _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
             obj.AddRef(); // caller mapping reference
             inode.PageCache = obj;

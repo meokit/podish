@@ -731,6 +731,7 @@ public class TmpfsInode : Inode
     {
         if (PageCache != null) return PageCache;
         PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+        GlobalPageCacheManager.TrackPageCache(PageCache);
         _ownsPageCache = true;
         return PageCache;
     }

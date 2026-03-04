@@ -14,6 +14,7 @@ public sealed class MemoryObject
 {
     private readonly Dictionary<uint, IntPtr> _pages = new();
     private readonly HashSet<uint> _dirtyPages = [];
+    private readonly Dictionary<uint, long> _lastAccessTicks = new();
     private readonly object _lock = new();
     private int _refCount = 1;
 
@@ -47,7 +48,13 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            return _pages.TryGetValue(pageIndex, out var p) ? p : IntPtr.Zero;
+            if (_pages.TryGetValue(pageIndex, out var p))
+            {
+                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+                return p;
+            }
+
+            return IntPtr.Zero;
         }
     }
 
@@ -59,6 +66,7 @@ public sealed class MemoryObject
         lock (_lock)
         {
             _pages[pageIndex] = ptr;
+            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
         }
     }
 
@@ -72,6 +80,7 @@ public sealed class MemoryObject
             toRelease = _pages.Values.ToList();
             _pages.Clear();
             _dirtyPages.Clear();
+            _lastAccessTicks.Clear();
         }
 
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
@@ -112,6 +121,7 @@ public sealed class MemoryObject
             }
 
             _pages[pageIndex] = ptr;
+            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
             isNew = true;
             return ptr;
         }
@@ -122,7 +132,10 @@ public sealed class MemoryObject
         lock (_lock)
         {
             if (_pages.ContainsKey(pageIndex))
+            {
                 _dirtyPages.Add(pageIndex);
+                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+            }
         }
     }
 
@@ -199,6 +212,7 @@ public sealed class MemoryObject
                         }
 
                         clone._pages[pageIndex] = newPage;
+                        clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
                     }
                 }
                 else
@@ -206,10 +220,57 @@ public sealed class MemoryObject
                     // File-backed mappings rely on CowObject for copy-on-write
                     ExternalPageManager.AddRef(pagePtr);
                     clone._pages[pageIndex] = pagePtr;
+                    clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
                 }
             }
         }
 
         return clone;
+    }
+
+    public int PageCount
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _pages.Count;
+            }
+        }
+    }
+
+    public readonly record struct PageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks);
+
+    public IReadOnlyList<PageState> SnapshotPageStates()
+    {
+        lock (_lock)
+        {
+            if (_pages.Count == 0) return Array.Empty<PageState>();
+            var states = new List<PageState>(_pages.Count);
+            foreach (var (pageIndex, ptr) in _pages)
+            {
+                var lastAccess = _lastAccessTicks.TryGetValue(pageIndex, out var ts) ? ts : 0;
+                states.Add(new PageState(pageIndex, ptr, _dirtyPages.Contains(pageIndex), lastAccess));
+            }
+
+            return states;
+        }
+    }
+
+    public bool TryEvictCleanPage(uint pageIndex)
+    {
+        IntPtr ptr;
+        lock (_lock)
+        {
+            if (_dirtyPages.Contains(pageIndex)) return false;
+            if (!_pages.TryGetValue(pageIndex, out ptr)) return false;
+            // If referenced elsewhere (e.g. mapped by an engine), skip eviction.
+            if (ExternalPageManager.GetRefCount(ptr) > 1) return false;
+            _pages.Remove(pageIndex);
+            _lastAccessTicks.Remove(pageIndex);
+        }
+
+        ExternalPageManager.ReleasePtr(ptr);
+        return true;
     }
 }
