@@ -1,4 +1,5 @@
 build/
+.build/
 *.o
 *.dylib
 linux/x86loader
@@ -23,9 +24,12 @@ tests/linux/test_pthread
 bin/
 obj/
 *.log
+*.pdb
+.swiftpm/
 *.trace/
 benchmark/coremark/
 .cache/
+artifacts/
 *.profraw
 ia32_test
 tests/test_safe_access
