@@ -131,7 +131,9 @@ public static class LinuxConstants
     public const int SIGEV_THREAD = 2;
     public const int SIGEV_THREAD_ID = 4;
 
-    public const int TERMIOS_SIZE_I386 = 60;
+    // i386 TCGETS/TCSETS use old kernel struct termios:
+    // 4*tcflag_t + c_line(1) + c_cc[19] = 36 bytes.
+    public const int TERMIOS_SIZE_I386 = 36;
     public const int WINSIZE_SIZE = 8;
 
     public const uint MinMmapAddr = 0x10000;

@@ -58,9 +58,12 @@ public partial class SyscallManager
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static () => new Tmpfs() });
         FileSystemRegistry.TryRegister(new FileSystemType
             { Name = "overlay", Factory = static () => new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static () => new LayerFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static () => new SilkFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static () => new ProcFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "layerfs", Factory = static () => new LayerFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "silkfs", Factory = static () => new SilkFileSystem() });
+        FileSystemRegistry.TryRegister(
+            new FileSystemType { Name = "proc", Factory = static () => new ProcFileSystem() });
 
         PtyManager = new PtyManager(Logger);
         var signalBroadcaster = new SignalBroadcasterImpl(this);
@@ -163,6 +166,7 @@ public partial class SyscallManager
     ///     Mount namespace containing all mounts and lookup hash.
     /// </summary>
     private readonly MountNamespace _mountNamespace;
+
     private int _closed;
 
     /// <summary>
@@ -499,6 +503,7 @@ public partial class SyscallManager
         {
             fsCtx.SetFlag("rw");
         }
+
         fsCtx.State = FsContextState.Created;
 
         var mountRc = CreateDetachedMountFromFsContext(fsCtx, 0, out var detachedMount);
@@ -519,7 +524,8 @@ public partial class SyscallManager
         }
     }
 
-    public void MountDetachedTmpfsFile(string guestPath, string sourceName, ReadOnlySpan<byte> content, bool readOnly = true)
+    public void MountDetachedTmpfsFile(string guestPath, string sourceName, ReadOnlySpan<byte> content,
+        bool readOnly = true)
     {
         var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
@@ -595,7 +601,8 @@ public partial class SyscallManager
         _containerOwnedMounts.Clear();
     }
 
-    public Mount CreateDetachedMount(SuperBlock sb, string source, string fsType, uint flags, string? extraOptions = null)
+    public Mount CreateDetachedMount(SuperBlock sb, string source, string fsType, uint flags,
+        string? extraOptions = null)
     {
         return new Mount(sb, sb.Root)
         {
@@ -1000,121 +1007,126 @@ public partial class SyscallManager
         _activeSyscallManager.Value = this;
         try
         {
-        // Handle Breakpoint (INT 3)
-        if (vector == 3)
-        {
-            if (engine.Owner is FiberTask t) t.PendingSignals |= 1UL << (5 - 1); // SIGTRAP = 5
-            return true;
-        }
-
-        if (vector != 0x80) return false;
-
-        // Update current engine context (GIL ensures safety)
-        Engine = engine;
-        GlobalPageCacheManager.MaybeRunMaintenance(Mem, engine);
-
-        // Get current FiberTask (New Model Only) via Engine.Owner
-        var fiberTask = engine.Owner as FiberTask;
-
-        // Save EIP for potential SA_RESTART before executing syscall
-        // EIP points after 'int 0x80' (CD 80), so subtract 2 to get the syscall instruction
-        if (fiberTask != null) fiberTask.SyscallEip = engine.Eip - 2;
-
-        var eax = engine.RegRead(Reg.EAX);
-        var ebx = engine.RegRead(Reg.EBX);
-        var ecx = engine.RegRead(Reg.ECX);
-        var edx = engine.RegRead(Reg.EDX);
-        var esi = engine.RegRead(Reg.ESI);
-        var edi = engine.RegRead(Reg.EDI);
-        var ebp = engine.RegRead(Reg.EBP);
-
-        if (Strace)
-            SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
-
-        ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
-
-        if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
-            retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
-        else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
-
-        // --- Handling Async Syscalls ---
-        if (retTask.IsCompleted && retTask.Result != -(int)Errno.ERESTARTSYS)
-        {
-            var ret = retTask.Result;
-
-            // Special handling for context-restoring syscalls
-            var isSigReturn = eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn;
-
-
-            if (!isSigReturn) engine.RegWrite(Reg.EAX, (uint)ret);
-
-            if (Strace)
-                SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
-        }
-        else
-        {
-            // Async completion (Blocking) OR requires HandleAsyncSyscall (-ERESTARTSYS handling)
-            if (fiberTask != null)
+            // Handle Breakpoint (INT 3)
+            if (vector == 3)
             {
-                // Save context for TraceExit
-                fiberTask.SyscallNr = eax;
-                fiberTask.SyscallArg1 = ebx;
-                fiberTask.SyscallArg2 = ecx;
-                fiberTask.SyscallArg3 = edx;
-
-                // Suspend the task
-                fiberTask.PendingSyscall = () => retTask;
-                fiberTask.Status = FiberTaskStatus.Waiting;
-
-                // Tracing
-                if (Strace) Logger.LogTrace(" [Suspended]");
-
-                // Force yield
-                engine.Yield();
+                if (engine.Owner is FiberTask t) t.PendingSignals |= 1UL << (5 - 1); // SIGTRAP = 5
                 return true;
             }
 
-            // Should not happen in new model
-            Logger.LogError("Async syscall initiated but no FiberTask attached!");
-            engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
-        }
+            if (vector != 0x80) return false;
 
-        // Determine if we should yield
-        var shouldYield = false;
+            // Update current engine context (GIL ensures safety)
+            Engine = engine;
+            GlobalPageCacheManager.MaybeRunMaintenance(Mem, engine);
 
-        if (fiberTask != null)
-        {
-            if (fiberTask.PendingSyscall != null) shouldYield = true;
-            if (fiberTask.Exited) shouldYield = true;
-            if ((fiberTask.PendingSignals & ~fiberTask.SignalMask) != 0) shouldYield = true;
+            // Get current FiberTask (New Model Only) via Engine.Owner
+            var fiberTask = engine.Owner as FiberTask;
 
-            // Force Yield if specific syscalls
-            switch ((int)eax)
+            // Save EIP for potential SA_RESTART before executing syscall
+            // EIP points after 'int 0x80' (CD 80), so subtract 2 to get the syscall instruction
+            if (fiberTask != null) fiberTask.SyscallEip = engine.Eip - 2;
+
+            var eax = engine.RegRead(Reg.EAX);
+            var ebx = engine.RegRead(Reg.EBX);
+            var ecx = engine.RegRead(Reg.ECX);
+            var edx = engine.RegRead(Reg.EDX);
+            var esi = engine.RegRead(Reg.ESI);
+            var edi = engine.RegRead(Reg.EDI);
+            var ebp = engine.RegRead(Reg.EBP);
+
+            if (Strace)
+                SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
+
+            ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
+
+            if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
+                retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
+            else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
+
+            // --- Handling Async Syscalls ---
+            if (retTask.IsCompleted && retTask.Result != -(int)Errno.ERESTARTSYS)
             {
-                case X86SyscallNumbers.sched_yield:
-                case X86SyscallNumbers.nanosleep:
-                case X86SyscallNumbers.pause:
-                case X86SyscallNumbers.rt_sigsuspend:
-                case X86SyscallNumbers.select:
-                case X86SyscallNumbers._newselect:
-                case X86SyscallNumbers.poll:
-                case X86SyscallNumbers.exit:
-                case X86SyscallNumbers.exit_group:
-                case X86SyscallNumbers.execve:
-                case X86SyscallNumbers.kill:
-                case X86SyscallNumbers.tkill:
-                case X86SyscallNumbers.tgkill:
-                case X86SyscallNumbers.wait4:
-                case X86SyscallNumbers.waitpid:
-                case X86SyscallNumbers.waitid:
-                    shouldYield = true;
-                    break;
+                var ret = retTask.Result;
+
+                // Special handling for context-restoring syscalls
+                var isSigReturn = eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn;
+
+
+                if (!isSigReturn) engine.RegWrite(Reg.EAX, (uint)ret);
+
+                if (Strace)
+                    SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
             }
-        }
+            else
+            {
+                // Async completion (Blocking) OR requires HandleAsyncSyscall (-ERESTARTSYS handling)
+                if (fiberTask != null)
+                {
+                    Logger.LogTrace(
+                        "[Syscall] Async suspend TID={Tid} NR={Nr} IsCompleted={IsCompleted} AwaitRestart={AwaitRestart}",
+                        fiberTask.TID, eax, retTask.IsCompleted,
+                        retTask.IsCompleted && retTask.Result == -(int)Errno.ERESTARTSYS);
 
-        if (shouldYield) engine.Yield();
+                    // Save context for TraceExit
+                    fiberTask.SyscallNr = eax;
+                    fiberTask.SyscallArg1 = ebx;
+                    fiberTask.SyscallArg2 = ecx;
+                    fiberTask.SyscallArg3 = edx;
 
-        return true;
+                    // Suspend the task
+                    fiberTask.PendingSyscall = () => retTask;
+                    fiberTask.Status = FiberTaskStatus.Waiting;
+
+                    // Tracing
+                    if (Strace) Logger.LogTrace(" [Suspended]");
+
+                    // Force yield
+                    engine.Yield();
+                    return true;
+                }
+
+                // Should not happen in new model
+                Logger.LogError("Async syscall initiated but no FiberTask attached!");
+                engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
+            }
+
+            // Determine if we should yield
+            var shouldYield = false;
+
+            if (fiberTask != null)
+            {
+                if (fiberTask.PendingSyscall != null) shouldYield = true;
+                if (fiberTask.Exited) shouldYield = true;
+                if ((fiberTask.PendingSignals & ~fiberTask.SignalMask) != 0) shouldYield = true;
+
+                // Force Yield if specific syscalls
+                switch ((int)eax)
+                {
+                    case X86SyscallNumbers.sched_yield:
+                    case X86SyscallNumbers.nanosleep:
+                    case X86SyscallNumbers.pause:
+                    case X86SyscallNumbers.rt_sigsuspend:
+                    case X86SyscallNumbers.select:
+                    case X86SyscallNumbers._newselect:
+                    case X86SyscallNumbers.poll:
+                    case X86SyscallNumbers.exit:
+                    case X86SyscallNumbers.exit_group:
+                    case X86SyscallNumbers.execve:
+                    case X86SyscallNumbers.kill:
+                    case X86SyscallNumbers.tkill:
+                    case X86SyscallNumbers.tgkill:
+                    case X86SyscallNumbers.wait4:
+                    case X86SyscallNumbers.waitpid:
+                    case X86SyscallNumbers.waitid:
+                        shouldYield = true;
+                        break;
+                }
+            }
+
+            if (shouldYield) engine.Yield();
+
+            return true;
         }
         finally
         {

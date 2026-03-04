@@ -131,73 +131,43 @@ public sealed class HostSocketInode : Inode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
+        return RegisterWaitHandle(file, callback, events) != null;
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    {
         var registered = false;
         var scheduler = KernelScheduler.Current;
-        if (scheduler == null) return false;
+        if (scheduler == null) return null;
         Logger.LogTrace("Host socket RegisterWait ino={Ino} events=0x{Events:X}", Ino, events);
+        List<IDisposable>? registrations = null;
 
         if ((events & PollEvents.POLLIN) != 0)
         {
-            var saea = new SocketAsyncEventArgs();
-            // Use 1-byte + PEEK instead of 0-byte receive; 0-byte completion is unreliable on some hosts.
-            var probe = new byte[1];
-            saea.SetBuffer(probe, 0, 1);
-            saea.SocketFlags = SocketFlags.Peek;
-            saea.UserToken = new RegisterWaitToken(callback, scheduler, probe);
-            saea.Completed += OnRegisterWaitCompleted;
-
-            try
+            var reg = ArmReadWait(callback, scheduler);
+            if (reg != null)
             {
-                if (!NativeSocket.ReceiveAsync(saea))
-                {
-                    Logger.LogTrace("Host socket RegisterWait POLLIN completed synchronously ino={Ino}", Ino);
-                    scheduler.Schedule(callback);
-                    saea.Dispose();
-                }
-                else
-                {
-                    Logger.LogTrace("Host socket RegisterWait POLLIN armed async ino={Ino}", Ino);
-                    registered = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogTrace(ex, "Host socket RegisterWait POLLIN failed ino={Ino}, scheduling callback", Ino);
-                scheduler.Schedule(callback);
-                saea.Dispose();
+                registrations ??= [];
+                registrations.Add(reg);
+                registered = true;
             }
         }
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            var saea = new SocketAsyncEventArgs();
-            saea.SetBuffer(Array.Empty<byte>());
-            saea.UserToken = new RegisterWaitToken(callback, scheduler, Array.Empty<byte>());
-            saea.Completed += OnRegisterWaitCompleted;
-
-            try
+            var reg = ArmWriteWait(callback, scheduler);
+            if (reg != null)
             {
-                if (!NativeSocket.SendAsync(saea))
-                {
-                    Logger.LogTrace("Host socket RegisterWait POLLOUT completed synchronously ino={Ino}", Ino);
-                    scheduler.Schedule(callback);
-                    saea.Dispose();
-                }
-                else
-                {
-                    Logger.LogTrace("Host socket RegisterWait POLLOUT armed async ino={Ino}", Ino);
-                    registered = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogTrace(ex, "Host socket RegisterWait POLLOUT failed ino={Ino}, scheduling callback", Ino);
-                scheduler.Schedule(callback);
-                saea.Dispose();
+                registrations ??= [];
+                registrations.Add(reg);
+                registered = true;
             }
         }
 
-        return registered;
+        if (!registered) return null;
+        if (registrations == null || registrations.Count == 0) return null;
+        if (registrations.Count == 1) return registrations[0];
+        return new CompositeRegistration(registrations);
     }
 
     private void OnRegisterWaitCompleted(object? sender, SocketAsyncEventArgs e)
@@ -205,14 +175,145 @@ public sealed class HostSocketInode : Inode
         Logger.LogTrace(
             "Host socket RegisterWait completed ino={Ino} bytes={Bytes} error={Error} flags=0x{Flags:X}",
             Ino, e.BytesTransferred, e.SocketError, (int)e.SocketFlags);
-        if (e.UserToken is RegisterWaitToken token) token.Scheduler.Schedule(token.Callback);
+        if (e.UserToken is RegisterWaitToken token && token.TryComplete())
+            token.Scheduler.Schedule(token.Callback);
+        if (e.UserToken is RegisterWaitToken token2) token2.DetachSaea();
         TokenProbeClear(e.UserToken);
+        e.UserToken = null;
+        e.Completed -= OnRegisterWaitCompleted;
         e.Dispose();
     }
 
     private static void TokenProbeClear(object? tokenObj)
     {
         if (tokenObj is RegisterWaitToken token) token.ProbeBuffer[0] = 0;
+    }
+
+    private IDisposable? ArmReadWait(Action callback, KernelScheduler scheduler)
+    {
+        var saea = new SocketAsyncEventArgs();
+        var probe = new byte[1];
+        saea.SetBuffer(probe, 0, 1);
+        saea.SocketFlags = SocketFlags.Peek;
+        var token = new RegisterWaitToken(callback, scheduler, probe, saea);
+        saea.UserToken = token;
+        saea.Completed += OnRegisterWaitCompleted;
+
+        try
+        {
+            if (!NativeSocket.ReceiveAsync(saea))
+            {
+                Logger.LogTrace("Host socket RegisterWait POLLIN completed synchronously ino={Ino}", Ino);
+                token.TryComplete();
+                scheduler.Schedule(callback);
+                TokenProbeClear(token);
+                saea.Completed -= OnRegisterWaitCompleted;
+                saea.Dispose();
+                return null;
+            }
+
+            Logger.LogTrace("Host socket RegisterWait POLLIN armed async ino={Ino}", Ino);
+            return token;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogTrace(ex, "Host socket RegisterWait POLLIN failed ino={Ino}, scheduling callback", Ino);
+            token.TryComplete();
+            scheduler.Schedule(callback);
+            TokenProbeClear(token);
+            saea.Completed -= OnRegisterWaitCompleted;
+            saea.Dispose();
+            return null;
+        }
+    }
+
+    private IDisposable? ArmWriteWait(Action callback, KernelScheduler scheduler)
+    {
+        var saea = new SocketAsyncEventArgs();
+        saea.SetBuffer(Array.Empty<byte>());
+        var token = new RegisterWaitToken(callback, scheduler, Array.Empty<byte>(), saea);
+        saea.UserToken = token;
+        saea.Completed += OnRegisterWaitCompleted;
+
+        try
+        {
+            if (!NativeSocket.SendAsync(saea))
+            {
+                Logger.LogTrace("Host socket RegisterWait POLLOUT completed synchronously ino={Ino}", Ino);
+                token.TryComplete();
+                scheduler.Schedule(callback);
+                saea.Completed -= OnRegisterWaitCompleted;
+                saea.Dispose();
+                return null;
+            }
+
+            Logger.LogTrace("Host socket RegisterWait POLLOUT armed async ino={Ino}", Ino);
+            return token;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogTrace(ex, "Host socket RegisterWait POLLOUT failed ino={Ino}, scheduling callback", Ino);
+            token.TryComplete();
+            scheduler.Schedule(callback);
+            saea.Completed -= OnRegisterWaitCompleted;
+            saea.Dispose();
+            return null;
+        }
+    }
+
+    private sealed class CompositeRegistration : IDisposable
+    {
+        private List<IDisposable>? _items;
+
+        public CompositeRegistration(List<IDisposable> items)
+        {
+            _items = items;
+        }
+
+        public void Dispose()
+        {
+            var items = Interlocked.Exchange(ref _items, null);
+            if (items == null) return;
+            foreach (var item in items) item.Dispose();
+        }
+    }
+
+    private sealed class RegisterWaitToken : IDisposable
+    {
+        private int _state; // 0=pending, 1=completed, 2=canceled
+        private SocketAsyncEventArgs? _saea;
+
+        public RegisterWaitToken(Action callback, KernelScheduler scheduler, byte[] probeBuffer, SocketAsyncEventArgs saea)
+        {
+            Callback = callback;
+            Scheduler = scheduler;
+            ProbeBuffer = probeBuffer;
+            _saea = saea;
+        }
+
+        public Action Callback { get; }
+        public KernelScheduler Scheduler { get; }
+        public byte[] ProbeBuffer { get; }
+
+        public bool TryComplete()
+        {
+            return Interlocked.CompareExchange(ref _state, 1, 0) == 0;
+        }
+
+        public void DetachSaea()
+        {
+            Interlocked.Exchange(ref _saea, null);
+        }
+
+        public void Dispose()
+        {
+            // Cancellation is logical: suppress callback delivery.
+            // We let in-flight SAEA finish and be disposed by completion path.
+            if (Interlocked.CompareExchange(ref _state, 2, 0) != 0) return;
+            var saea = Interlocked.Exchange(ref _saea, null);
+            if (saea != null) saea.UserToken = null;
+            if (ProbeBuffer.Length > 0) ProbeBuffer[0] = 0;
+        }
     }
 
     // --- Async Operations using SAEA ---
@@ -579,5 +680,4 @@ public sealed class HostSocketInode : Inode
         return sb.ToString();
     }
 
-    private record RegisterWaitToken(Action Callback, KernelScheduler Scheduler, byte[] ProbeBuffer);
 }

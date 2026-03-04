@@ -75,6 +75,14 @@ public class PtySlaveInode : Inode
         return false;
     }
 
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return PtyPair.Slave.DataAvailable.RegisterCancelable(callback);
+        return null;
+    }
+
     public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
         // Delegate to TTY discipline if available
@@ -181,6 +189,18 @@ public class PtmxInode : Inode
         }
 
         return false;
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        if (linuxFile.PrivateData is not PtyPair pair)
+            return null;
+
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return pair.Master.DataAvailable.RegisterCancelable(callback);
+
+        return null;
     }
 
     public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)

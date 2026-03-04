@@ -237,10 +237,12 @@ public partial class SyscallManager
     private sealed class PauseAwaiter : INotifyCompletion
     {
         private readonly FiberTask _task;
+        private readonly FiberTask.WaitToken _token;
 
         public PauseAwaiter(FiberTask task)
         {
             _task = task;
+            _token = task.BeginWaitToken();
         }
 
         public bool IsCompleted => false;
@@ -249,7 +251,7 @@ public partial class SyscallManager
         {
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
@@ -259,9 +261,9 @@ public partial class SyscallManager
 
         public AwaitResult GetResult()
         {
-            if (_task.WakeReason != WakeReason.None)
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason != WakeReason.None)
             {
-                _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
 
@@ -435,11 +437,13 @@ public partial class SyscallManager
     {
         private readonly FiberTask _task;
         private readonly long _totalMs;
+        private readonly FiberTask.WaitToken _token;
 
         public NanosleepAwaiter(FiberTask task, long totalMs)
         {
             _task = task;
             _totalMs = totalMs;
+            _token = task.BeginWaitToken();
         }
 
         public bool IsCompleted => false;
@@ -448,20 +452,30 @@ public partial class SyscallManager
         {
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                Logger.LogInformation("[SysNanosleepAwaiter] TID={Tid} immediate wake by signal", _task.TID);
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
 
             var scheduler = KernelScheduler.Current!;
-            _task.Continuation = continuation;
-
+            Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} arm timer {DelayMs}ms", _task.TID, _totalMs);
             var timer = scheduler.ScheduleTimer(_totalMs, () =>
             {
-                if (_task.WakeReason == WakeReason.None)
+                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer callback enter wakeReason={WakeReason}",
+                    _task.TID, _task.GetWaitReason(_token));
+                if (_task.GetWaitReason(_token) != WakeReason.Signal)
                 {
-                    _task.WakeReason = WakeReason.Timer;
-                    scheduler.Schedule(_task);
+                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired", _task.TID);
+                    if (!_task.TrySetWaitReason(_token, WakeReason.Timer)) return;
+                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation from timer", _task.TID);
+                    scheduler.Schedule(continuation, _task);
+                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation done", _task.TID);
+                }
+                else
+                {
+                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired but wakeReason={WakeReason}",
+                        _task.TID, _task.GetWaitReason(_token));
                 }
             });
 
@@ -480,13 +494,15 @@ public partial class SyscallManager
             _task.BlockingTimer?.Cancel();
             _task.BlockingTimer = null;
 
-            if (_task.WakeReason != WakeReason.Timer && _task.WakeReason != WakeReason.None)
+            Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} get result wakeReason={WakeReason}",
+                _task.TID, _task.GetWaitReason(_token));
+
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason == WakeReason.Signal)
             {
-                _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
 
-            _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
 

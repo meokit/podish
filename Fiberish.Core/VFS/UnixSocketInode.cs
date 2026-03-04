@@ -94,6 +94,46 @@ public class UnixSocketInode : Inode
         return registered;
     }
 
+    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        var registrations = new List<IDisposable>(2);
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            var reg = _readWaitQueue.RegisterCancelable(callback);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            var reg = _writeWaitQueue.RegisterCancelable(callback);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private List<IDisposable>? _items;
+
+        public CompositeDisposable(List<IDisposable> items)
+        {
+            _items = items;
+        }
+
+        public void Dispose()
+        {
+            var items = Interlocked.Exchange(ref _items, null);
+            if (items == null) return;
+            foreach (var item in items) item.Dispose();
+        }
+    }
+
     public void EnqueueMessage(UnixMessage msg)
     {
         lock (_lock)

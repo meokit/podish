@@ -153,6 +153,31 @@ public class ConsoleInode : Inode
         return false;
     }
 
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        if (_discipline == null)
+            return null;
+
+        if (_isInput)
+        {
+            const short POLLIN = 0x0001;
+            if ((events & POLLIN) != 0)
+                return _discipline.DataAvailable.RegisterCancelable(callback);
+        }
+        else
+        {
+            const short POLLOUT = 0x0004;
+            if ((events & POLLOUT) != 0)
+            {
+                // Current TTY write wait registration has no cancellation API.
+                // Fallback to bool-based registration with no-op handle.
+                return _discipline.RegisterWriteWait(callback) ? NoopWaitRegistration.Instance : null;
+            }
+        }
+
+        return null;
+    }
+
     public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
         // Delegate to TTY discipline if available

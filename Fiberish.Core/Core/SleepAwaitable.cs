@@ -27,22 +27,20 @@ public readonly struct SleepAwaitable
         return new SleepAwaiter(_tickDuration, _scheduler, _task);
     }
 
-    public readonly struct SleepAwaiter(long tickDuration, KernelScheduler scheduler, FiberTask task) : INotifyCompletion
+    public readonly struct SleepAwaiter(long tickDuration, KernelScheduler scheduler, FiberTask task)
+        : INotifyCompletion
     {
         private readonly long _tickDuration = tickDuration;
         private readonly KernelScheduler _scheduler = scheduler;
         private readonly FiberTask _task = task;
+        private readonly FiberTask.WaitToken _token = task.BeginWaitToken();
 
         public bool IsCompleted => false;
 
         public AwaitResult GetResult()
         {
-            if (_task.WakeReason != WakeReason.Timer && _task.WakeReason != WakeReason.None)
-            {
-                _task.WakeReason = WakeReason.None;
-                return AwaitResult.Interrupted;
-            }
-            _task.WakeReason = WakeReason.None;
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason != WakeReason.Timer && reason != WakeReason.None) return AwaitResult.Interrupted;
             return AwaitResult.Completed;
         }
 
@@ -50,10 +48,11 @@ public readonly struct SleepAwaitable
         {
             var scheduler = _scheduler;
             var task = _task;
+            var token = _token;
 
             if (task.HasUnblockedPendingSignal())
             {
-                task.WakeReason = WakeReason.Signal;
+                task.TrySetWaitReason(token, WakeReason.Signal);
                 scheduler.Schedule(continuation, task);
                 return;
             }
@@ -62,7 +61,7 @@ public readonly struct SleepAwaitable
             // When timer fires, we schedule the task back to run queue
             scheduler.ScheduleTimer(_tickDuration, () =>
             {
-                task.WakeReason = WakeReason.Timer;
+                if (!task.TrySetWaitReason(token, WakeReason.Timer)) return;
                 task.Continuation = continuation;
                 scheduler.Schedule(task);
             });

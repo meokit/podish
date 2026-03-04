@@ -74,7 +74,8 @@ public partial class SyscallManager
 
         if (newSaPtr != 0)
         {
-            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP)
+                return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
 
             var buf = new byte[20];
             if (!sm.Engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
@@ -160,7 +161,7 @@ public partial class SyscallManager
                 {
                     if ((unblocked & (1UL << (i - 1))) != 0)
                     {
-                        task.WakeReason = WakeReason.Signal;
+                        task.TrySetActiveWaitReason(WakeReason.Signal);
                         break;
                     }
                 }
@@ -293,7 +294,7 @@ public partial class SyscallManager
         // Restore
         // ucontext.mcontext is at offset 20
         task.RestoreSigContext(ucontextAddr + 20);
-        
+
         // RT signals have full 64-bit signal mask in ucontext (offset 20 + 88 roughly, wait: ucontext layout is different)
         // Normal i386 ucontext:
         // uc_flags (4)
@@ -365,7 +366,8 @@ public partial class SyscallManager
         return -(int)Errno.EINTR;
     }
 
-    private static async ValueTask<int> SysRtSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRtSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -384,7 +386,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysRtTgSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysRtTgSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -417,9 +420,9 @@ public partial class SyscallManager
 
         var signo = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var errno = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        var code  = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-        var pid   = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
-        var uid   = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
+        var code = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
+        var pid = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+        var uid = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
         var value = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(20, 4));
 
         return new SigInfo

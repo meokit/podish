@@ -110,6 +110,14 @@ public abstract class SuperBlock
 
 public abstract class Inode : IPageCacheOps
 {
+    protected sealed class NoopWaitRegistration : IDisposable
+    {
+        public static readonly NoopWaitRegistration Instance = new();
+        public void Dispose()
+        {
+        }
+    }
+
     protected delegate int ReadBackendDelegate(LinuxFile? linuxFile, Span<byte> buffer, long offset);
     protected delegate int WriteBackendDelegate(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset);
 
@@ -485,6 +493,15 @@ public abstract class Inode : IPageCacheOps
         // No, if Poll() returned 0 (not ready) for some reason, we would wait.
         // But for regular files Poll is always ready.
         return false;
+    }
+
+    /// <summary>
+    ///     Register a callback and return a disposable handle that cancels the wait registration.
+    ///     Default implementation falls back to RegisterWait and returns a no-op handle if accepted.
+    /// </summary>
+    public virtual IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        return RegisterWait(linuxFile, callback, events) ? NoopWaitRegistration.Instance : null;
     }
 
 

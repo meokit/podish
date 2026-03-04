@@ -17,7 +17,7 @@ public class SemaphoreSet
     public int CGid { get; set; }
     public DateTime CTime { get; set; }
     public DateTime OTime { get; set; }
-    
+
     public short[] Values { get; set; } = [];
     public List<SemWaiter> Waiters { get; set; } = [];
 }
@@ -25,6 +25,7 @@ public class SemaphoreSet
 public class SemWaiter : INotifyCompletion
 {
     public FiberTask Task { get; }
+    public FiberTask.WaitToken Token { get; }
     public int SemNum { get; }
     public short Op { get; }
     public Action? Continuation { get; set; }
@@ -32,6 +33,7 @@ public class SemWaiter : INotifyCompletion
     public SemWaiter(FiberTask task, int semNum, short op)
     {
         Task = task;
+        Token = task.BeginWaitToken();
         SemNum = semNum;
         Op = op;
     }
@@ -45,11 +47,7 @@ public class SemWaiter : INotifyCompletion
 
     public AwaitResult GetResult()
     {
-        if (Task.WakeReason != WakeReason.None)
-        {
-            Task.WakeReason = WakeReason.None;
-            return AwaitResult.Interrupted;
-        }
+        if (Task.CompleteWaitToken(Token) != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
     }
 
@@ -80,7 +78,7 @@ public class SysVSemManager
 
             if (key != LinuxConstants.IPC_PRIVATE && (semflg & LinuxConstants.IPC_CREAT) == 0)
                 return -(int)Errno.ENOENT;
-                
+
             if (nsems <= 0 || nsems > 32000)
                 return -(int)Errno.EINVAL;
 
@@ -128,7 +126,7 @@ public class SysVSemManager
         {
             var canProceed = true;
             SemWaiter? blockedWaiter = null;
-            
+
             lock (_lock)
             {
                 if (!_setsBySemid.ContainsKey(semid)) return -(int)Errno.EIDRM; // Removed while waiting
@@ -204,7 +202,7 @@ public class SysVSemManager
 
                     return 0; // Success
                 }
-                
+
                 // Track we are waiting
                 set.Waiters.Add(blockedWaiter!);
             }
@@ -217,6 +215,7 @@ public class SysVSemManager
                 {
                     set.Waiters.Remove(blockedWaiter!);
                 }
+
                 return -(int)Errno.EINTR;
             }
         }
@@ -238,16 +237,18 @@ public class SysVSemManager
                     _setsBySemid.Remove(semid);
                     if (set.Key != LinuxConstants.IPC_PRIVATE)
                         _setsByKey.Remove(set.Key);
-                    
+
                     // Wake up all waiters with EIDRM
                     foreach (var waiter in set.Waiters)
                     {
-                        waiter.Task.WakeReason = WakeReason.Event; // Special wake, let them fail with EIDRM loop
+                        waiter.Task.TrySetWaitReason(waiter.Token,
+                            WakeReason.Event); // Special wake, let them fail with EIDRM loop
                         waiter.Continuation?.Invoke();
                     }
+
                     KernelScheduler.Current?.WakeUp();
                     return 0;
-                    
+
                 case LinuxConstants.IPC_STAT:
                     // Similar to SHM_STAT
                     return 0; // Stub
@@ -266,13 +267,14 @@ public class SysVSemManager
                     if (setval < 0 || setval > 32767) return -(int)Errno.ERANGE;
 
                     set.Values[semnum] = (short)setval;
-                    
+
                     // Wake up all waiters since state changed
                     foreach (var waiter in set.Waiters)
                     {
-                        waiter.Task.WakeReason = WakeReason.Event;
+                        waiter.Task.TrySetWaitReason(waiter.Token, WakeReason.Event);
                         waiter.Continuation?.Invoke();
                     }
+
                     KernelScheduler.Current?.WakeUp();
                     return 0;
 

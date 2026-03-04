@@ -98,11 +98,13 @@ public partial class SyscallManager
     {
         private readonly Fiberish.Core.Waiter _waiter;
         private readonly FiberTask _task;
+        private readonly FiberTask.WaitToken _token;
 
         public FutexAwaiter(Fiberish.Core.Waiter waiter, FiberTask task)
         {
             _waiter = waiter;
             _task = task;
+            _token = task.BeginWaitToken();
         }
 
         public bool IsCompleted => _waiter.Tcs.Task.IsCompleted;
@@ -111,7 +113,7 @@ public partial class SyscallManager
         {
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
@@ -122,9 +124,9 @@ public partial class SyscallManager
 
             _waiter.Tcs.Task.ContinueWith(_ =>
             {
-                if (_task.WakeReason == WakeReason.None)
+                if (_task.GetWaitReason(_token) == WakeReason.None)
                 {
-                    _task.WakeReason = WakeReason.Event;
+                    _task.TrySetWaitReason(_token, WakeReason.Event);
                 }
 
                 runOnce.Invoke();
@@ -133,10 +135,10 @@ public partial class SyscallManager
 
         public AwaitResult GetResult()
         {
-            if (_task.WakeReason != WakeReason.Event && _task.WakeReason != WakeReason.None)
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason != WakeReason.Event && reason != WakeReason.None)
             {
                 _waiter.Tcs.TrySetResult(false);
-                _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
 
@@ -145,7 +147,6 @@ public partial class SyscallManager
                 return AwaitResult.Interrupted;
             }
 
-            _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
 

@@ -140,11 +140,15 @@ public class KernelScheduler
 
     public Timer ScheduleTimer(long delayMs, Action callback)
     {
+        var beforeTick = _timerSystem.CurrentTick;
         var targetTick = _timerSystem.CurrentTick + delayMs;
         // Adjust for any lag between CurrentTick and real time
         var realNow = _sw.ElapsedMilliseconds;
         if (targetTick < realNow + delayMs) targetTick = realNow + delayMs;
 
+        Logger.LogTrace(
+            "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} realNow={RealNow} targetTick={TargetTick}",
+            delayMs, beforeTick, realNow, targetTick);
         var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
         // to re-evaluate our wait time.
@@ -161,6 +165,7 @@ public class KernelScheduler
     {
         Current = this;
         Logger.LogInformation("KernelScheduler started.");
+        var exitReason = "running=false";
 
         var startTick = _timerSystem.CurrentTick;
 
@@ -175,6 +180,7 @@ public class KernelScheduler
                 if (maxTicks > 0 && CurrentTick >= maxTicks)
                 {
                     Logger.LogWarning("KernelScheduler reached max ticks limit. Stopping.");
+                    exitReason = "max-ticks";
                     break;
                 }
 
@@ -195,6 +201,7 @@ public class KernelScheduler
                     {
                         Logger.LogInformation("No active tasks. Exiting loop.");
                         Running = false;
+                        exitReason = "no-active-tasks";
                         break;
                     }
 
@@ -251,8 +258,16 @@ public class KernelScheduler
                 }
             }
         }
+        catch (Exception ex)
+        {
+            exitReason = $"exception:{ex.GetType().Name}";
+            Logger.LogError(ex, "KernelScheduler crashed.");
+            throw;
+        }
         finally
         {
+            Logger.LogInformation("KernelScheduler stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
+                Running, CurrentTick);
             Current = null;
         }
     }

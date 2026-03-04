@@ -130,9 +130,43 @@ public class SignalFdInode : TmpfsInode
         return true;
     }
 
+    public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
+    {
+        lock (_lock)
+        {
+            _waiters.Add(callback);
+        }
+
+        return new CallbackRegistration(_lock, _waiters, callback);
+    }
+
     private static bool IsSignalInMask(ulong sig, ulong mask)
     {
         if (sig == 0 || sig > 64) return false;
         return (mask & (1UL << (int)(sig - 1))) != 0;
+    }
+
+    private sealed class CallbackRegistration : IDisposable
+    {
+        private readonly object _lock;
+        private List<Action>? _waiters;
+        private readonly Action _callback;
+
+        public CallbackRegistration(object @lock, List<Action> waiters, Action callback)
+        {
+            _lock = @lock;
+            _waiters = waiters;
+            _callback = callback;
+        }
+
+        public void Dispose()
+        {
+            var waiters = Interlocked.Exchange(ref _waiters, null);
+            if (waiters == null) return;
+            lock (_lock)
+            {
+                waiters.Remove(_callback);
+            }
+        }
     }
 }

@@ -274,6 +274,52 @@ public class PipeInode : Inode
         return registered;
     }
 
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        var registrations = new List<IDisposable>(2);
+
+        lock (_lock)
+        {
+            if ((events & POLLIN) != 0)
+            {
+                var reg = _readHandle.RegisterCancelable(callback);
+                if (reg != null) registrations.Add(reg);
+            }
+
+            if ((events & POLLOUT) != 0)
+            {
+                var reg = _writeHandle.RegisterCancelable(callback);
+                if (reg != null) registrations.Add(reg);
+            }
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private List<IDisposable>? _items;
+
+        public CompositeDisposable(List<IDisposable> items)
+        {
+            _items = items;
+        }
+
+        public void Dispose()
+        {
+            var items = Interlocked.Exchange(ref _items, null);
+            if (items == null) return;
+            foreach (var item in items) item.Dispose();
+        }
+    }
+
     public override void Release(LinuxFile linuxFile)
     {
         const int O_ACCMODE = 3;

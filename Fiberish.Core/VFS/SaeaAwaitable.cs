@@ -75,7 +75,7 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
         {
             if (_scheduler != null)
             {
-                if (_task != null) _task.WakeReason = WakeReason.IO;
+                _task?.TrySetActiveWaitReason(WakeReason.IO);
                 Logger.LogTrace(
                     "[SaeaAwaitable] Completed scheduling continuation: task={TaskId} scheduler={HasScheduler}",
                     _task?.TID, true);

@@ -342,6 +342,7 @@ public partial class SyscallManager
             {
                 return -(int)Errno.ENOTDIR;
             }
+
             if (mount != null && mount.IsReadOnly) return -(int)Errno.EROFS;
 
             var t = sm.Engine.Owner as FiberTask;
@@ -353,9 +354,9 @@ public partial class SyscallManager
                 var tmpName = $".tmpfile.{Guid.NewGuid():N}";
                 var anonDentry = new Dentry(tmpName, null, dentry, dentry.SuperBlock);
                 var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-                
+
                 dentry.Inode.Create(anonDentry, finalMode, uid, gid);
-                
+
                 var openFlags = flags & ~O_TMPFILE_MASK;
                 var f = new LinuxFile(anonDentry, (FileFlags)openFlags, mount ?? sm.RootMount!)
                 {
@@ -969,12 +970,14 @@ public partial class SyscallManager
         private readonly LinuxFile _file;
         private readonly bool _forRead;
         private readonly FiberTask _task;
+        private readonly FiberTask.WaitToken _token;
 
         public IOAwaiter(LinuxFile file, bool forRead, FiberTask task)
         {
             _file = file;
             _forRead = forRead;
             _task = task;
+            _token = task.BeginWaitToken();
         }
 
         public bool IsCompleted => false;
@@ -985,7 +988,7 @@ public partial class SyscallManager
                 (int)_file.Flags);
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 Logger.LogTrace("[IOAwaiter] Pending signal before wait, scheduling continuation immediately");
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
@@ -995,14 +998,14 @@ public partial class SyscallManager
 
             var registered = _file.Dentry.Inode!.RegisterWait(_file, () =>
             {
-                _task.WakeReason = WakeReason.IO;
+                if (!_task.TrySetWaitReason(_token, WakeReason.IO)) return;
                 Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", _forRead);
                 runOnce.Invoke();
             }, (short)(_forRead ? 0x0001 : 0x0004));
 
             if (!registered)
             {
-                _task.WakeReason = WakeReason.IO;
+                _task.TrySetWaitReason(_token, WakeReason.IO);
                 Logger.LogTrace("[IOAwaiter] RegisterWait returned false; invoking continuation now");
                 runOnce.Invoke();
             }
@@ -1014,13 +1017,8 @@ public partial class SyscallManager
 
         public AwaitResult GetResult()
         {
-            if (_task.WakeReason != WakeReason.IO && _task.WakeReason != WakeReason.None)
-            {
-                _task.WakeReason = WakeReason.None;
-                return AwaitResult.Interrupted;
-            }
-
-            _task.WakeReason = WakeReason.None;
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason != WakeReason.IO && reason != WakeReason.None) return AwaitResult.Interrupted;
             Logger.LogTrace("[IOAwaiter] Wait completed as IO");
             return AwaitResult.Completed;
         }

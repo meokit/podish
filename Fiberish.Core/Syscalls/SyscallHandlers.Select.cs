@@ -494,7 +494,9 @@ public partial class SyscallManager
         private int _reschedulePending;
         private int _result;
         private FiberTask _task = null!;
+        private FiberTask.WaitToken? _token;
         private Timer? _timer;
+        private readonly List<IDisposable> _waitRegistrations = [];
 
         public SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
         {
@@ -512,10 +514,11 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _task = (_sm.Engine.Owner as FiberTask)!;
+            _token = _task.BeginWaitToken();
 
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
@@ -537,6 +540,8 @@ public partial class SyscallManager
 
         public int GetResult()
         {
+            ClearWaitRegistrations();
+            if (_token != null) _task.CompleteWaitToken(_token);
             return _result;
         }
 
@@ -553,6 +558,7 @@ public partial class SyscallManager
         private void DoPoll()
         {
             if (_completed) return;
+            ClearWaitRegistrations();
 
             if (_task.HasUnblockedPendingSignal())
             {
@@ -588,6 +594,7 @@ public partial class SyscallManager
 
         private void RegisterWaits()
         {
+            if (_token == null) return;
             var intCount = (_n + NFDBITS - 1) / NFDBITS;
             if (intCount > FD_SETSIZE / 32) intCount = FD_SETSIZE / 32;
 
@@ -619,9 +626,19 @@ public partial class SyscallManager
                     if (checkEx) events |= PollEvents.POLLPRI;
 
                     if (events != 0)
-                        file.Dentry.Inode!.RegisterWait(file, ScheduleRePoll, events);
+                    {
+                        var registration = file.Dentry.Inode!.RegisterWaitHandle(file, ScheduleRePoll, events);
+                        if (registration != null) _waitRegistrations.Add(registration);
+                    }
                 }
             }
+        }
+
+        private void ClearWaitRegistrations()
+        {
+            if (_waitRegistrations.Count == 0) return;
+            foreach (var registration in _waitRegistrations) registration.Dispose();
+            _waitRegistrations.Clear();
         }
     }
 
@@ -637,7 +654,9 @@ public partial class SyscallManager
         private int _reschedulePending; // 0=false, 1=true
         private int _result;
         private FiberTask _task = null!;
+        private FiberTask.WaitToken? _token;
         private Timer? _timer;
+        private readonly List<IDisposable> _waitRegistrations = [];
 
         public PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
         {
@@ -653,10 +672,11 @@ public partial class SyscallManager
         {
             _task = (_sm.Engine.Owner as FiberTask)!;
             _continuation = continuation;
+            _token = _task.BeginWaitToken();
 
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 KernelScheduler.Current?.Schedule(continuation, _task);
                 return;
             }
@@ -680,6 +700,8 @@ public partial class SyscallManager
 
         public int GetResult()
         {
+            ClearWaitRegistrations();
+            if (_token != null) _task.CompleteWaitToken(_token);
             return _result;
         }
 
@@ -696,6 +718,7 @@ public partial class SyscallManager
         private void DoPoll()
         {
             if (_completed) return;
+            ClearWaitRegistrations();
 
             if (_task.HasUnblockedPendingSignal())
             {
@@ -739,8 +762,18 @@ public partial class SyscallManager
                 var itemAddr = _fdsAddr + i * (uint)sizeOfPollfd;
                 var pfd = ReadStruct<Pollfd>(_sm.Engine, itemAddr);
                 if (pfd.Fd >= 0 && _sm.FDs.TryGetValue(pfd.Fd, out var file))
-                    file.Dentry.Inode!.RegisterWait(file, ScheduleRePoll, pfd.Events);
+                {
+                    var registration = file.Dentry.Inode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
+                    if (registration != null) _waitRegistrations.Add(registration);
+                }
             }
+        }
+
+        private void ClearWaitRegistrations()
+        {
+            if (_waitRegistrations.Count == 0) return;
+            foreach (var registration in _waitRegistrations) registration.Dispose();
+            _waitRegistrations.Clear();
         }
     }
 }

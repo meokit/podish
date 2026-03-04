@@ -10,33 +10,66 @@ namespace Fiberish.Core;
 public class AsyncWaitQueue
 {
     private readonly object _lock = new();
+    private long _nextWaiterId;
 
     // List of continuations to resume when Signaled.
     // Each entry stores the continuation Action, FiberTask context, and the KernelScheduler reference.
     // We capture the scheduler at registration time because Signal() may be called from a
     // background thread where KernelScheduler.Current is null (AsyncLocal doesn't flow to other threads).
-    private readonly List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)> _waiters = new();
+    private readonly List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
+            Scheduler)>
+        _waiters = new();
+
+    private sealed class NoopRegistration : IDisposable
+    {
+        public static readonly NoopRegistration Instance = new();
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class WaitRegistration : IDisposable
+    {
+        private AsyncWaitQueue? _owner;
+        private readonly long _id;
+
+        public WaitRegistration(AsyncWaitQueue owner, long id)
+        {
+            _owner = owner;
+            _id = id;
+        }
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref _owner, null);
+            owner?.Unregister(_id);
+        }
+    }
 
     public bool IsSignaled { get; private set; }
 
     public void Signal()
     {
-        List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)> toWake;
+        List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler Scheduler)>
+            toWake;
         lock (_lock)
         {
             if (IsSignaled) return;
             IsSignaled = true;
             if (_waiters.Count == 0) return;
-            toWake = new List<(Action Continuation, FiberTask? Context, KernelScheduler Scheduler)>(_waiters);
+            toWake =
+                new List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
+                        Scheduler)>(
+                    _waiters);
             _waiters.Clear();
         }
 
         // Resume all waiters outside the lock
         // Use the captured scheduler reference (not KernelScheduler.Current) because
         // Signal() may be called from a background thread where Current is null
-        foreach (var (continuation, context, scheduler) in toWake)
+        foreach (var (_, continuation, context, token, scheduler) in toWake)
         {
-            if (context != null) context.WakeReason = WakeReason.Event;
+            if (context != null && token != null) context.TrySetWaitReason(token, WakeReason.Event);
             scheduler.Schedule(continuation, context);
         }
     }
@@ -61,33 +94,49 @@ public class AsyncWaitQueue
         Signal();
     }
 
-    public void Register(Action continuation)
+    public void Register(Action continuation, FiberTask.WaitToken? token = null)
     {
         var scheduler = KernelScheduler.Current;
         var context = scheduler?.CurrentTask;
-        Register(continuation, context, scheduler);
+        RegisterCancelable(continuation, context, token, scheduler);
     }
 
-    public void Register(Action continuation, FiberTask? context)
+    public void Register(Action continuation, FiberTask? context, FiberTask.WaitToken? token = null)
     {
         var scheduler = KernelScheduler.Current;
-        Register(continuation, context, scheduler);
+        RegisterCancelable(continuation, context, token, scheduler);
     }
 
-    private void Register(Action continuation, FiberTask? context, KernelScheduler? scheduler)
+    public IDisposable? RegisterCancelable(Action continuation, FiberTask? context = null, FiberTask.WaitToken? token = null)
+    {
+        var scheduler = KernelScheduler.Current;
+        return RegisterCancelable(continuation, context ?? scheduler?.CurrentTask, token, scheduler);
+    }
+
+    private IDisposable? RegisterCancelable(Action continuation, FiberTask? context, FiberTask.WaitToken? token,
+        KernelScheduler? scheduler)
     {
         lock (_lock)
         {
             if (IsSignaled)
             {
                 // If already signaled, schedule immediately
-                if (context != null) context.WakeReason = WakeReason.Event;
+                if (context != null && token != null) context.TrySetWaitReason(token, WakeReason.Event);
                 scheduler?.Schedule(continuation, context);
+                return NoopRegistration.Instance;
             }
-            else
-            {
-                _waiters.Add((continuation, context, scheduler!));
-            }
+            var id = ++_nextWaiterId;
+            _waiters.Add((id, continuation, context, token, scheduler!));
+            return new WaitRegistration(this, id);
+        }
+    }
+
+    private void Unregister(long id)
+    {
+        lock (_lock)
+        {
+            var idx = _waiters.FindIndex(x => x.Id == id);
+            if (idx >= 0) _waiters.RemoveAt(idx);
         }
     }
 
@@ -98,9 +147,15 @@ public class AsyncWaitQueue
     }
 }
 
-public readonly struct WaitQueueAwaiter(AsyncWaitQueue queue) : INotifyCompletion
+public class WaitQueueAwaiter : INotifyCompletion
 {
-    private readonly AsyncWaitQueue _queue = queue;
+    private readonly AsyncWaitQueue _queue;
+    private FiberTask.WaitToken? _token;
+
+    public WaitQueueAwaiter(AsyncWaitQueue queue)
+    {
+        _queue = queue;
+    }
 
     public bool IsCompleted => _queue.IsSignaled;
 
@@ -111,24 +166,26 @@ public readonly struct WaitQueueAwaiter(AsyncWaitQueue queue) : INotifyCompletio
 
         if (currentTask != null && currentTask.HasUnblockedPendingSignal())
         {
-            currentTask.WakeReason = WakeReason.Signal;
+            var token = currentTask.BeginWaitToken();
+            currentTask.TrySetWaitReason(token, WakeReason.Signal);
             KernelScheduler.Current?.Schedule(continuation, currentTask);
             return;
         }
 
-        _queue.Register(continuation, currentTask);
+        if (currentTask != null) _token = currentTask.BeginWaitToken();
+        _queue.Register(continuation, currentTask, _token);
     }
 
     public AwaitResult GetResult()
     {
         var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.WakeReason != WakeReason.Event && task.WakeReason != WakeReason.None)
+        if (task != null && _token != null)
         {
-            task.WakeReason = WakeReason.None;
-            return AwaitResult.Interrupted;
+            var reason = task.CompleteWaitToken(_token);
+            if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
+            return AwaitResult.Completed;
         }
 
-        if (task != null) task.WakeReason = WakeReason.None;
         return AwaitResult.Completed;
     }
 
@@ -146,9 +203,15 @@ public static class SchedulerUtils
     }
 }
 
-public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletion
+public class SelectAwaiter : INotifyCompletion
 {
-    private readonly AsyncWaitQueue[] _queues = queues;
+    private readonly AsyncWaitQueue[] _queues;
+    private FiberTask.WaitToken? _token;
+
+    public SelectAwaiter(AsyncWaitQueue[] queues)
+    {
+        _queues = queues;
+    }
 
     public bool IsCompleted
     {
@@ -169,7 +232,8 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
 
         if (currentTask != null && currentTask.HasUnblockedPendingSignal())
         {
-            currentTask.WakeReason = WakeReason.Signal;
+            var token = currentTask.BeginWaitToken();
+            currentTask.TrySetWaitReason(token, WakeReason.Signal);
             scheduler?.Schedule(continuation, currentTask);
             return;
         }
@@ -178,19 +242,20 @@ public readonly struct SelectAwaiter(AsyncWaitQueue[] queues) : INotifyCompletio
         var runOnce = new RunOnceAction(continuation);
         var action = runOnce.Invoke;
 
-        foreach (var q in _queues) q.Register(action, currentTask);
+        if (currentTask != null) _token = currentTask.BeginWaitToken();
+        foreach (var q in _queues) q.Register(action, currentTask, _token);
     }
 
     public AwaitResult GetResult()
     {
         var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.WakeReason != WakeReason.Event && task.WakeReason != WakeReason.None)
+        if (task != null && _token != null)
         {
-            task.WakeReason = WakeReason.None;
-            return AwaitResult.Interrupted;
+            var reason = task.CompleteWaitToken(_token);
+            if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
+            return AwaitResult.Completed;
         }
 
-        if (task != null) task.WakeReason = WakeReason.None;
         return AwaitResult.Completed;
     }
 
@@ -233,7 +298,7 @@ public readonly struct ChildStateAwaitable
         return new ChildStateAwaiter(_parent, _targetPid, _wantStopped, _wantContinued, _scheduler, _task);
     }
 
-    public readonly struct ChildStateAwaiter : INotifyCompletion
+    public struct ChildStateAwaiter : INotifyCompletion
     {
         private readonly Process _parent;
         private readonly int _targetPid;
@@ -241,6 +306,7 @@ public readonly struct ChildStateAwaitable
         private readonly bool _wantContinued;
         private readonly KernelScheduler _scheduler;
         private readonly FiberTask _task;
+        private FiberTask.WaitToken? _token;
 
         public ChildStateAwaiter(Process parent, int targetPid, bool wantStopped, bool wantContinued,
             KernelScheduler scheduler, FiberTask task)
@@ -277,10 +343,13 @@ public readonly struct ChildStateAwaitable
         {
             if (_task.HasUnblockedPendingSignal())
             {
-                _task.WakeReason = WakeReason.Signal;
+                _token = _task.BeginWaitToken();
+                _task.TrySetWaitReason(_token, WakeReason.Signal);
                 _scheduler.Schedule(continuation, _task);
                 return;
             }
+
+            _token = _task.BeginWaitToken();
 
             // Register on all matching children's StateChangeEvent queues
             // Only register on events that are NOT yet signaled to avoid duplicate scheduling
@@ -297,27 +366,27 @@ public readonly struct ChildStateAwaitable
                 // but we check again to avoid duplicate scheduling
                 if (childProc.StateChangeEvent.IsSignaled) continue;
 
-                childProc.StateChangeEvent.Register(runOnce.Invoke, _task);
+                childProc.StateChangeEvent.Register(runOnce.Invoke, _task, _token);
                 registered = true;
             }
 
             // If no registrations happened (all events already signaled), schedule immediately
             if (!registered)
             {
-                _task.WakeReason = WakeReason.Event;
+                if (_token != null) _task.TrySetWaitReason(_token, WakeReason.Event);
                 _scheduler.Schedule(continuation, _task);
             }
         }
 
         public AwaitResult GetResult()
         {
-            if (_task.WakeReason != WakeReason.Event && _task.WakeReason != WakeReason.None)
+            if (_token == null) return AwaitResult.Completed;
+            var reason = _task.CompleteWaitToken(_token);
+            if (reason != WakeReason.Event && reason != WakeReason.None)
             {
-                _task.WakeReason = WakeReason.None;
                 return AwaitResult.Interrupted;
             }
 
-            _task.WakeReason = WakeReason.None;
             return AwaitResult.Completed;
         }
 

@@ -43,6 +43,17 @@ public enum WakeReason
 
 public class FiberTask
 {
+    public sealed class WaitToken
+    {
+        internal WaitToken(long id)
+        {
+            Id = id;
+        }
+
+        public long Id { get; }
+        internal WakeReason Reason { get; set; } = WakeReason.None;
+    }
+
     private enum DefaultSignalAction
     {
         Ignore,
@@ -123,7 +134,28 @@ public class FiberTask
     public FiberTask? VforkParent { get; set; }
 
     public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
-    public WakeReason WakeReason { get; set; } = WakeReason.None;
+    private readonly object _waitLock = new();
+    private long _nextWaitTokenId;
+    private WaitToken? _activeWaitToken;
+
+    // Compatibility shim: now backed by current active wait token only.
+    public WakeReason WakeReason
+    {
+        get
+        {
+            lock (_waitLock)
+            {
+                return _activeWaitToken?.Reason ?? WakeReason.None;
+            }
+        }
+        set
+        {
+            lock (_waitLock)
+            {
+                if (_activeWaitToken != null) _activeWaitToken.Reason = value;
+            }
+        }
+    }
 
     // Signal that interrupted the current blocking syscall (if any)
     // Used by syscall handlers to determine SA_RESTART behavior
@@ -138,6 +170,74 @@ public class FiberTask
     // Blocking Syscall Support
     public Func<ValueTask<int>>? PendingSyscall { get; set; }
     public Timer? BlockingTimer { get; set; }
+
+    public WaitToken BeginWaitToken()
+    {
+        lock (_waitLock)
+        {
+            var token = new WaitToken(++_nextWaitTokenId);
+            _activeWaitToken = token;
+            return token;
+        }
+    }
+
+    public bool IsWaitTokenActive(WaitToken token)
+    {
+        lock (_waitLock)
+        {
+            return ReferenceEquals(_activeWaitToken, token);
+        }
+    }
+
+    public bool TrySetWaitReason(WaitToken token, WakeReason reason)
+    {
+        lock (_waitLock)
+        {
+            if (!ReferenceEquals(_activeWaitToken, token)) return false;
+            token.Reason = reason;
+            return true;
+        }
+    }
+
+    public bool TrySetActiveWaitReason(WakeReason reason)
+    {
+        lock (_waitLock)
+        {
+            if (_activeWaitToken == null) return false;
+            _activeWaitToken.Reason = reason;
+            return true;
+        }
+    }
+
+    public WakeReason GetWaitReason(WaitToken token)
+    {
+        lock (_waitLock)
+        {
+            return ReferenceEquals(_activeWaitToken, token) ? token.Reason : WakeReason.None;
+        }
+    }
+
+    public WakeReason CompleteWaitToken(WaitToken token)
+    {
+        lock (_waitLock)
+        {
+            if (!ReferenceEquals(_activeWaitToken, token)) return WakeReason.None;
+            var reason = token.Reason;
+            token.Reason = WakeReason.None;
+            _activeWaitToken = null;
+            return reason;
+        }
+    }
+
+    public void CancelWaitToken(WaitToken token)
+    {
+        lock (_waitLock)
+        {
+            if (!ReferenceEquals(_activeWaitToken, token)) return;
+            token.Reason = WakeReason.None;
+            _activeWaitToken = null;
+        }
+    }
 
     public static int NextTID()
     {
@@ -157,7 +257,8 @@ public class FiberTask
             if (depth > 1)
             {
                 // Avoid recursive fault diagnostics causing stack overflow.
-                Logger.LogWarning("Re-entrant page fault at 0x{Addr:X} ({Mode}); delivering SIGSEGV with minimal diagnostics.",
+                Logger.LogWarning(
+                    "Re-entrant page fault at 0x{Addr:X} ({Mode}); delivering SIGSEGV with minimal diagnostics.",
                     addr, isWrite ? "Write" : "Read");
                 PostSignal((int)Signal.SIGSEGV);
                 _pendingFaultFromInterrupt = true;
@@ -312,7 +413,7 @@ public class FiberTask
         if (!isBlocked && !isIgnored)
         {
             InterruptingSignal = sig;
-            WakeReason = WakeReason.Signal;
+            TrySetActiveWaitReason(WakeReason.Signal);
         }
         else
         {
@@ -948,8 +1049,19 @@ public class FiberTask
             {
                 ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
                 Status = FiberTaskStatus.Waiting;
+                Logger.LogTrace(
+                    "[RunSlice] PendingSyscall present TID={Tid} handlingAsync={Handling} status={Status} mode={Mode}",
+                    TID, _handlingAsyncSyscall, Status, ExecutionMode);
                 if (!_handlingAsyncSyscall)
+                {
+                    Logger.LogTrace("[RunSlice] Starting HandleAsyncSyscall from phase-2 TID={Tid}", TID);
                     HandleAsyncSyscall();
+                }
+                else
+                {
+                    Logger.LogTrace("[RunSlice] Skip HandleAsyncSyscall start (already handling) TID={Tid}", TID);
+                }
+
                 return;
             }
 
@@ -1008,9 +1120,21 @@ public class FiberTask
                     // Start driving it asynchronously; task parks until done.
                     ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
                     Status = FiberTaskStatus.Waiting;
-                    Logger.LogTrace("[RunSlice] Yielded with PendingSyscall, calling HandleAsyncSyscall");
+                    Logger.LogTrace(
+                        "[RunSlice] Yielded with PendingSyscall TID={Tid}, handlingAsync={Handling}, calling HandleAsyncSyscall",
+                        TID, _handlingAsyncSyscall);
                     if (!_handlingAsyncSyscall)
+                    {
+                        Logger.LogTrace("[RunSlice] Starting HandleAsyncSyscall from yield path TID={Tid}", TID);
                         HandleAsyncSyscall();
+                    }
+                    else
+                    {
+                        Logger.LogTrace(
+                            "[RunSlice] Skip HandleAsyncSyscall start from yield path (already handling) TID={Tid}",
+                            TID);
+                    }
+
                     break;
 
                 case EmuStatus.Yield when _pendingFaultFromInterrupt:
@@ -1260,18 +1384,26 @@ public class FiberTask
         }
 
         _handlingAsyncSyscall = true;
+        Logger.LogTrace("[HandleAsyncSyscall] Enter TID={Tid} pendingPresent={PendingPresent}", TID,
+            PendingSyscall != null);
         try
         {
-            if (PendingSyscall == null) return;
+            if (PendingSyscall == null)
+            {
+                Logger.LogTrace("[HandleAsyncSyscall] Exit early TID={Tid}: PendingSyscall is null", TID);
+                return;
+            }
 
             var result = 0;
             try
             {
                 var task = PendingSyscall();
                 PendingSyscall = null; // Clear immediately
+                Logger.LogTrace("[HandleAsyncSyscall] Await begin TID={Tid}", TID);
 
                 // Allow the async operation to complete (suspend this method)
                 result = await task;
+                Logger.LogTrace("[HandleAsyncSyscall] Await done TID={Tid} result={Result}", TID, result);
             }
             catch (Exception ex)
             {
@@ -1378,6 +1510,8 @@ public class FiberTask
         }
         finally
         {
+            Logger.LogTrace("[HandleAsyncSyscall] Leave TID={Tid} pendingPresent={PendingPresent} status={Status}",
+                TID, PendingSyscall != null, Status);
             _handlingAsyncSyscall = false;
         }
     }

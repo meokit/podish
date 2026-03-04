@@ -1,3 +1,6 @@
+using Fiberish.Diagnostics;
+using Microsoft.Extensions.Logging;
+
 namespace Fiberish.Core;
 
 public class Timer
@@ -20,6 +23,8 @@ public class Timer
 /// </summary>
 public class TimeWheel
 {
+    private static readonly ILogger Logger = Logging.CreateLogger<TimeWheel>();
+
     private const int TVR_BITS = 8;
     private const int TVN_BITS = 6;
     private const int TVR_SIZE = 1 << TVR_BITS;
@@ -114,7 +119,14 @@ public class TimeWheel
             while (timer != null)
             {
                 var next = timer.Next;
-                if (!timer.Canceled) timer.Callback?.Invoke();
+                if (!timer.Canceled)
+                {
+                    Logger.LogTrace(
+                        "[TimeWheel] Fire timer currentTick={CurrentTick} expiration={Expiration} callback={Callback}",
+                        CurrentTick, timer.ExpirationTick, timer.Callback?.Method.Name ?? "<null>");
+                    timer.Callback?.Invoke();
+                }
+
                 _count--;
                 timer = next;
             }
