@@ -4,6 +4,19 @@ using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
+public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
+public readonly record struct ReadaheadRequest(long StartPageIndex, int PageCount);
+public readonly record struct WritePagesRequest(long StartPageIndex, long EndPageIndex, bool Sync);
+
+public interface IPageCacheOps
+{
+    int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer);
+    int Readahead(LinuxFile? linuxFile, ReadaheadRequest request);
+    int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync);
+    int WritePages(LinuxFile? linuxFile, WritePagesRequest request);
+    int SetPageDirty(long pageIndex);
+}
+
 public enum InodeType
 {
     Unknown = 0,
@@ -95,8 +108,11 @@ public abstract class SuperBlock
     }
 }
 
-public abstract class Inode
+public abstract class Inode : IPageCacheOps
 {
+    protected delegate int ReadBackendDelegate(LinuxFile? linuxFile, Span<byte> buffer, long offset);
+    protected delegate int WriteBackendDelegate(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset);
+
     /// <summary>
     ///     Per-inode page cache. Lazily created on first file mmap.
     ///     Analogous to Linux inode.i_mapping / address_space.
@@ -219,6 +235,139 @@ public abstract class Inode
     public virtual int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        return 0;
+    }
+
+    protected int ReadWithPageCache(
+        LinuxFile? linuxFile,
+        Span<byte> buffer,
+        long offset,
+        ReadBackendDelegate backendRead)
+    {
+        if (buffer.Length == 0) return 0;
+        var pageCache = PageCache;
+        if (pageCache == null) return backendRead(linuxFile, buffer, offset);
+
+        var total = 0;
+        var cursor = offset;
+        while (total < buffer.Length)
+        {
+            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
+            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
+            var toCopy = Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset);
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr != IntPtr.Zero)
+            {
+                unsafe
+                {
+                    var src = (byte*)pagePtr + pageOffset;
+                    fixed (byte* dst = &buffer[total])
+                    {
+                        Buffer.MemoryCopy(src, dst, toCopy, toCopy);
+                    }
+                }
+
+                total += toCopy;
+                cursor += toCopy;
+                continue;
+            }
+
+            var rc = backendRead(linuxFile, buffer.Slice(total, toCopy), cursor);
+            if (rc < 0) return total > 0 ? total : rc;
+            if (rc == 0) return total;
+            total += rc;
+            cursor += rc;
+            if (rc < toCopy) return total;
+        }
+
+        return total;
+    }
+
+    protected int WriteWithPageCache(
+        LinuxFile? linuxFile,
+        ReadOnlySpan<byte> buffer,
+        long offset,
+        WriteBackendDelegate backendWrite)
+    {
+        if (buffer.Length == 0) return 0;
+        var rc = backendWrite(linuxFile, buffer, offset);
+        if (rc <= 0) return rc;
+        var written = rc;
+
+        var pageCache = PageCache;
+        if (pageCache == null) return rc;
+
+        var consumed = 0;
+        var cursor = offset;
+        while (consumed < written)
+        {
+            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
+            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
+            var chunk = Math.Min(written - consumed, LinuxConstants.PageSize - pageOffset);
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr != IntPtr.Zero)
+            {
+                unsafe
+                {
+                    fixed (byte* src = &buffer[consumed])
+                    {
+                        var dst = (byte*)pagePtr + pageOffset;
+                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    }
+                }
+            }
+
+            consumed += chunk;
+            cursor += chunk;
+        }
+
+        return rc;
+    }
+
+    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0)
+        {
+            pageBuffer.Clear();
+            return 0;
+        }
+
+        if (linuxFile == null) return -(int)Errno.EBADF;
+        pageBuffer.Clear();
+        var rc = Read(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        // Optional optimization hook; default no-op.
+        return 0;
+    }
+
+    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0) return 0;
+        if (linuxFile == null) return -(int)Errno.EBADF;
+
+        var rc = Write(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        if (rc < 0) return rc;
+        if (sync) Sync(linuxFile);
+        return 0;
+    }
+
+    public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        // Optional batch writeback hook; default no-op.
+        return 0;
+    }
+
+    public virtual int SetPageDirty(long pageIndex)
+    {
+        // Optional dirty accounting hook for filesystems.
         return 0;
     }
 

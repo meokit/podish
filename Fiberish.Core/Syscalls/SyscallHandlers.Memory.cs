@@ -154,7 +154,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -1;
         var end = addr + len;
-        foreach (var vma in sm.Mem.FindVMAsInRange(addr, end)) VMAManager.SyncVMA(vma, sm.Engine);
+        foreach (var vma in sm.Mem.FindVMAsInRange(addr, end)) VMAManager.SyncVMA(vma, sm.Engine, addr, end);
         return 0;
     }
 

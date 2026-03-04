@@ -178,4 +178,29 @@ public class LayerFsTests
         Assert.Equal(7, n);
         Assert.Equal("payload", Encoding.UTF8.GetString(buf, 0, n));
     }
+
+    [Fact]
+    public void PageCacheOps_ReadPageWorks_AndWritePageReturnsErofs()
+    {
+        var rootNode = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("x.txt", Encoding.UTF8.GetBytes("abc")));
+        var fs = new LayerFileSystem();
+        var sb = fs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer",
+            new LayerMountOptions { Root = rootNode });
+
+        var d = sb.Root.Inode!.Lookup("x.txt");
+        Assert.NotNull(d);
+        var lf = new LinuxFile(d!, FileFlags.O_RDONLY, null!);
+
+        var page = new byte[LinuxConstants.PageSize];
+        var readRc = d!.Inode!.ReadPage(lf, new PageIoRequest(0, 0, 3), page);
+        Assert.Equal(0, readRc);
+        Assert.Equal("abc", Encoding.UTF8.GetString(page, 0, 3));
+
+        var writeRc = d.Inode.WritePage(lf, new PageIoRequest(0, 0, 1), "z"u8.ToArray(), true);
+        Assert.Equal(-(int)Errno.EROFS, writeRc);
+    }
 }

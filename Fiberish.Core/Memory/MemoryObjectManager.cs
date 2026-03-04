@@ -14,6 +14,12 @@ public sealed class MemoryObjectManager
     /// </summary>
     public MemoryObject GetOrCreateInodePageCache(Inode inode)
     {
+        if (inode.PageCache != null)
+        {
+            inode.PageCache.AddRef();
+            return inode.PageCache;
+        }
+
         var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
         lock (_lock)
         {

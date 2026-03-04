@@ -1,4 +1,5 @@
 using Fiberish.Native;
+using Fiberish.Memory;
 using System.Text;
 
 namespace Fiberish.VFS;
@@ -62,7 +63,9 @@ public class TmpfsInode : Inode
 {
     private readonly HashSet<string> _childNames = [];
     private readonly Dictionary<string, byte[]> _xattrs = new(StringComparer.Ordinal);
-    private byte[]? _data = [];
+    private readonly HashSet<long> _dirtyPageIndexes = [];
+    private byte[]? _symlinkData;
+    private bool _ownsPageCache;
 
     // Track open file handles to prevent data loss on unlink-while-open
     private int _openCount = 0;
@@ -359,8 +362,8 @@ public class TmpfsInode : Inode
             inode.Mode = 0x1FF; // 777
             inode.Uid = uid;
             inode.Gid = gid;
-            inode._data = Encoding.UTF8.GetBytes(target);
-            inode.Size = (ulong)inode._data.Length;
+            inode._symlinkData = Encoding.UTF8.GetBytes(target);
+            inode.Size = (ulong)inode._symlinkData.Length;
 
             dentry.Instantiate(inode);
 
@@ -414,22 +417,38 @@ public class TmpfsInode : Inode
     {
         lock (Lock)
         {
-            if (Type != InodeType.Symlink || _data == null) throw new InvalidOperationException("Not a symlink");
-            return Encoding.UTF8.GetString(_data);
+            if (Type != InodeType.Symlink || _symlinkData == null) throw new InvalidOperationException("Not a symlink");
+            return Encoding.UTF8.GetString(_symlinkData);
+        }
+    }
+
+    private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        lock (Lock)
+        {
+            if (Type == InodeType.Directory) return 0;
+            if (Type == InodeType.Symlink)
+            {
+                if (_symlinkData == null || offset >= _symlinkData.Length) return 0;
+                var n = Math.Min(buffer.Length, _symlinkData.Length - (int)offset);
+                _symlinkData.AsSpan((int)offset, n).CopyTo(buffer);
+                return n;
+            }
+
+            if (offset < 0) return -(int)Errno.EINVAL;
+            var fileSize = (long)Size;
+            if (offset >= fileSize) return 0;
+
+            var count = Math.Min(buffer.Length, (int)(fileSize - offset));
+            var pageCache = EnsurePageCacheLocked();
+            ReadFromPageCacheLocked(pageCache, offset, buffer[..count]);
+            return count;
         }
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        lock (Lock)
-        {
-            if (Type == InodeType.Directory) return 0;
-            if (_data == null || offset >= _data.Length) return 0;
-
-            var count = Math.Min(buffer.Length, _data.Length - (int)offset);
-            _data.AsSpan((int)offset, count).CopyTo(buffer);
-            return count;
-        }
+        return BackendRead(linuxFile, buffer, offset);
     }
 
     public override int Flock(LinuxFile linuxFile, int operation)
@@ -490,28 +509,106 @@ public class TmpfsInode : Inode
         }
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         lock (Lock)
         {
-            if (Type == InodeType.Directory) return 0;
+            if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+            if (Type == InodeType.Symlink) return -(int)Errno.EINVAL;
+            if (offset < 0) return -(int)Errno.EINVAL;
 
+            var pageCache = EnsurePageCacheLocked();
+            WriteToPageCacheLocked(pageCache, offset, buffer);
             var end = offset + buffer.Length;
-            if (_data == null || end > _data.Length) Array.Resize(ref _data, (int)end);
-
-            buffer.CopyTo(_data.AsSpan((int)offset));
-            Size = (ulong)_data.Length;
+            if (end > (long)Size) Size = (ulong)end;
             MTime = DateTime.Now;
             return buffer.Length;
         }
     }
 
+    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return BackendWrite(linuxFile, buffer, offset);
+    }
+
+    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        // tmpfs is already memory resident; no read-ahead needed.
+        return 0;
+    }
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0)
+        {
+            lock (Lock) _dirtyPageIndexes.Remove(request.PageIndex);
+            return 0;
+        }
+
+        var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        if (rc < 0) return rc;
+        lock (Lock) _dirtyPageIndexes.Remove(request.PageIndex);
+        return 0;
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        if (!request.Sync) return 0;
+        lock (Lock)
+        {
+            _dirtyPageIndexes.RemoveWhere(i => i >= request.StartPageIndex && i <= request.EndPageIndex);
+        }
+
+        return 0;
+    }
+
+    public override int SetPageDirty(long pageIndex)
+    {
+        lock (Lock)
+        {
+            _dirtyPageIndexes.Add(pageIndex);
+        }
+
+        return 0;
+    }
+
     public override int Truncate(long size)
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
-        Array.Resize(ref _data, (int)size);
-        Size = (ulong)size;
-        MTime = DateTime.Now;
+        if (size < 0) return -(int)Errno.EINVAL;
+
+        lock (Lock)
+        {
+            if (Type == InodeType.Symlink)
+            {
+                Array.Resize(ref _symlinkData, (int)size);
+                Size = (ulong)size;
+                MTime = DateTime.Now;
+                return 0;
+            }
+
+            if (PageCache != null)
+            {
+                PageCache.TruncateToSize(size);
+                var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+                _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+            }
+
+            Size = (ulong)size;
+            MTime = DateTime.Now;
+        }
         return 0;
     }
 
@@ -604,7 +701,8 @@ public class TmpfsInode : Inode
         // OverlayFS not forwarding Get/Put to underlying inodes.
         if (_openCount == 0)
         {
-            _data = null;
+            if (Type == InodeType.Symlink) _symlinkData = null;
+            ReleaseOwnedPageCache();
             _childNames.Clear();
         }
     }
@@ -620,9 +718,92 @@ public class TmpfsInode : Inode
         // clean up the data now.
         if (_openCount == 0 && Dentries.Count == 0)
         {
-            _data = null;
+            if (Type == InodeType.Symlink) _symlinkData = null;
+            ReleaseOwnedPageCache();
         }
 
         base.Release(linuxFile);
+    }
+
+    private MemoryObject EnsurePageCacheLocked()
+    {
+        if (PageCache != null) return PageCache;
+        PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+        _ownsPageCache = true;
+        return PageCache;
+    }
+
+    private void ReleaseOwnedPageCache()
+    {
+        if (!_ownsPageCache || PageCache == null) return;
+        PageCache.Release();
+        PageCache = null;
+        _ownsPageCache = false;
+        _dirtyPageIndexes.Clear();
+    }
+
+    private static void ReadFromPageCacheLocked(MemoryObject pageCache, long offset, Span<byte> destination)
+    {
+        var copied = 0;
+        while (copied < destination.Length)
+        {
+            var absolute = offset + copied;
+            var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+            var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+            var chunk = Math.Min(destination.Length - copied, LinuxConstants.PageSize - pageOffset);
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr == IntPtr.Zero)
+            {
+                destination.Slice(copied, chunk).Clear();
+            }
+            else
+            {
+                unsafe
+                {
+                    var src = (byte*)pagePtr + pageOffset;
+                    fixed (byte* dst = &destination[copied])
+                    {
+                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    }
+                }
+            }
+
+            copied += chunk;
+        }
+    }
+
+    private static void WriteToPageCacheLocked(MemoryObject pageCache, long offset, ReadOnlySpan<byte> source)
+    {
+        var consumed = 0;
+        while (consumed < source.Length)
+        {
+            var absolute = offset + consumed;
+            var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+            var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+            var chunk = Math.Min(source.Length - consumed, LinuxConstants.PageSize - pageOffset);
+            var pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
+            {
+                unsafe
+                {
+                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                }
+
+                return true;
+            }, out _);
+
+            if (pagePtr == IntPtr.Zero)
+                throw new OutOfMemoryException("Failed to allocate tmpfs page cache page");
+
+            unsafe
+            {
+                fixed (byte* src = &source[consumed])
+                {
+                    var dst = (byte*)pagePtr + pageOffset;
+                    Buffer.MemoryCopy(src, dst, chunk, chunk);
+                }
+            }
+
+            consumed += chunk;
+        }
     }
 }

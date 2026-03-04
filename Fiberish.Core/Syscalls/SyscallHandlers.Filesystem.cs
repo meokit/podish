@@ -1174,6 +1174,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
+        sm.Mem.SyncAllMappedSharedFiles(sm.Engine);
         foreach (var file in sm.FDs.Values) file?.Dentry.Inode?.Sync(file);
         return 0;
     }
@@ -1184,6 +1185,7 @@ public partial class SyscallManager
         if (sm == null) return -1;
         var file = sm.GetFD((int)a1);
         if (file == null) return -(int)Errno.EBADF;
+        sm.Mem.SyncMappedFile(file, sm.Engine);
         file.Dentry.Inode!.Sync(file);
         return 0;
     }

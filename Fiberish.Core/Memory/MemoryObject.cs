@@ -1,4 +1,5 @@
 using Fiberish.VFS;
+using Fiberish.Native;
 
 namespace Fiberish.Memory;
 
@@ -12,6 +13,7 @@ public enum MemoryObjectKind
 public sealed class MemoryObject
 {
     private readonly Dictionary<uint, IntPtr> _pages = new();
+    private readonly HashSet<uint> _dirtyPages = [];
     private readonly object _lock = new();
     private int _refCount = 1;
 
@@ -69,6 +71,7 @@ public sealed class MemoryObject
             if (_refCount > 0) return;
             toRelease = _pages.Values.ToList();
             _pages.Clear();
+            _dirtyPages.Clear();
         }
 
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
@@ -112,6 +115,68 @@ public sealed class MemoryObject
             isNew = true;
             return ptr;
         }
+    }
+
+    public void MarkDirty(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            if (_pages.ContainsKey(pageIndex))
+                _dirtyPages.Add(pageIndex);
+        }
+    }
+
+    public bool IsDirty(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            return _dirtyPages.Contains(pageIndex);
+        }
+    }
+
+    public void ClearDirty(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            _dirtyPages.Remove(pageIndex);
+        }
+    }
+
+    public void TruncateToSize(long size)
+    {
+        if (size < 0) size = 0;
+        List<IntPtr>? toRelease = null;
+        lock (_lock)
+        {
+            var keepPageIndex = (uint)(size / LinuxConstants.PageSize);
+            var tailBytes = (int)(size % LinuxConstants.PageSize);
+
+            if (tailBytes > 0 && _pages.TryGetValue(keepPageIndex, out var tailPage))
+            {
+                unsafe
+                {
+                    var span = new Span<byte>((void*)tailPage, LinuxConstants.PageSize);
+                    span[tailBytes..].Clear();
+                }
+            }
+
+            var removeFrom = tailBytes == 0 ? keepPageIndex : keepPageIndex + 1;
+            if (_pages.Count == 0) return;
+
+            var keysToDrop = _pages.Keys.Where(k => k >= removeFrom).ToArray();
+            if (keysToDrop.Length == 0) return;
+
+            toRelease = new List<IntPtr>(keysToDrop.Length);
+            foreach (var key in keysToDrop)
+            {
+                toRelease.Add(_pages[key]);
+                _pages.Remove(key);
+                _dirtyPages.Remove(key);
+            }
+        }
+
+        if (toRelease == null) return;
+        foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
     }
 
     public MemoryObject ForkCloneForPrivate()

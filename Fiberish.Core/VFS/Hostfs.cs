@@ -594,6 +594,8 @@ internal static partial class HostfsOwnershipMapper
 public partial class HostInode : Inode
 {
     private readonly object _xattrLock = new();
+    private readonly object _dirtyPageLock = new();
+    private readonly HashSet<long> _dirtyPageIndexes = [];
     private Dictionary<string, byte[]>? _xattrs;
 
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type)
@@ -952,7 +954,7 @@ public partial class HostInode : Inode
             RandomAccess.FlushToDisk(handle);
     }
 
-    public override int Read(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return 0;
 
@@ -968,10 +970,15 @@ public partial class HostInode : Inode
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
-    public override int Write(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int Read(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
+    }
+
+    private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
-        var append = (linuxFile?.Flags ?? 0 & FileFlags.O_APPEND) != 0;
+        var append = ((linuxFile?.Flags ?? 0) & FileFlags.O_APPEND) != 0;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)
         {
@@ -1012,6 +1019,87 @@ public partial class HostInode : Inode
         }
 
         return buffer.Length;
+    }
+
+    public override int Write(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
+    }
+
+    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        if (request.PageCount <= 0 || PageCache == null) return 0;
+        var page = new byte[LinuxConstants.PageSize];
+        for (var i = 0; i < request.PageCount; i++)
+        {
+            var pageIndex = request.StartPageIndex + i;
+            if (PageCache.GetPage((uint)pageIndex) != IntPtr.Zero) continue;
+
+            var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
+            {
+                var n = BackendRead(linuxFile, page, pageIndex * LinuxConstants.PageSize);
+                unsafe
+                {
+                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                    dst.Clear();
+                    if (n > 0) page.AsSpan(0, n).CopyTo(dst);
+                }
+
+                return n >= 0;
+            }, out _);
+
+            if (ptr == IntPtr.Zero) return -(int)Errno.EIO;
+        }
+
+        return 0;
+    }
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0)
+        {
+            lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
+            return 0;
+        }
+
+        var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        if (rc < 0) return rc;
+        lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
+        if (sync && linuxFile != null) Sync(linuxFile);
+        return 0;
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        if (request.Sync && linuxFile != null) Sync(linuxFile);
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.RemoveWhere(i => i >= request.StartPageIndex && i <= request.EndPageIndex);
+        }
+
+        return 0;
+    }
+
+    public override int SetPageDirty(long pageIndex)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Add(pageIndex);
+        }
+
+        return 0;
     }
 
     public override int Truncate(long size)

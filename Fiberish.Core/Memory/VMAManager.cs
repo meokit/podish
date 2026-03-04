@@ -146,10 +146,6 @@ public class VMAManager
     public void Munmap(uint addr, uint length, Engine engine)
     {
         if (length == 0) return;
-        engine.InvalidateRange(addr, length);
-        engine.MemUnmap(addr, length);
-        ExternalPages.ReleaseRange(addr, length);
-
         var end = addr + length;
         for (var i = 0; i < _vmas.Count; i++)
         {
@@ -162,7 +158,7 @@ public class VMAManager
             // Full removal
             if (addr <= vma.Start && end >= vma.End)
             {
-                SyncVMA(vma, engine);
+                SyncVMA(vma, engine, vma.Start, vma.End);
                 vma.MemoryObject.Release();
                 vma.CowObject?.Release();
                 _vmas.RemoveAt(i--);
@@ -172,6 +168,7 @@ public class VMAManager
             // Split (Middle removal)
             if (addr > vma.Start && end < vma.End)
             {
+                SyncVMA(vma, engine, addr, end);
                 var tailStart = end;
                 var tailEnd = vma.End;
                 long tailOffset = 0;
@@ -218,6 +215,7 @@ public class VMAManager
             // Head removal
             if (addr <= vma.Start && end < vma.End)
             {
+                SyncVMA(vma, engine, vma.Start, end);
                 var diff = end - vma.Start;
                 vma.Start = end;
                 vma.ViewPageOffset += diff / LinuxConstants.PageSize;
@@ -236,6 +234,7 @@ public class VMAManager
             // Tail removal
             if (addr > vma.Start && end >= vma.End)
             {
+                SyncVMA(vma, engine, addr, vma.End);
                 vma.End = addr;
                 if (vma.File != null)
                 {
@@ -245,6 +244,10 @@ public class VMAManager
                 }
             }
         }
+
+        engine.InvalidateRange(addr, length);
+        engine.MemUnmap(addr, length);
+        ExternalPages.ReleaseRange(addr, length);
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine)
@@ -537,11 +540,9 @@ public class VMAManager
                         unsafe
                         {
                             Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-                            buf.Clear(); // Critical: Ensure partial reads don't leak uninitialized memory
-                            if (readLen > 0)
-                            {
-                                vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], absoluteFileOffset);
-                            }
+                            var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
+                            var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                            if (rc < 0) return false;
                         }
 
                         return true;
@@ -638,11 +639,9 @@ public class VMAManager
             unsafe
             {
                 Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-                buf.Clear(); // Zero-fill before partial read to prevent heap garbage
-                if (readLen > 0)
-                {
-                    vma.File.Dentry.Inode!.Read(vma.File, buf[..readLen], absoluteFileOffset);
-                }
+                var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
+                var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                if (rc < 0) return false;
             }
 
             return true;
@@ -693,33 +692,95 @@ public class VMAManager
 
     public static void SyncVMA(VMA vma, Engine engine)
     {
+        SyncVMA(vma, engine, vma.Start, vma.End);
+    }
+
+    public void SyncMappedFile(LinuxFile file, Engine engine)
+    {
+        if (file.Dentry.Inode == null) return;
+        var inode = file.Dentry.Inode;
+        var snapshot = _vmas.ToArray();
+        foreach (var vma in snapshot)
+        {
+            if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
+            if (!ReferenceEquals(vma.File.Dentry.Inode, inode)) continue;
+            SyncVMA(vma, engine);
+        }
+    }
+
+    public void SyncAllMappedSharedFiles(Engine engine)
+    {
+        var snapshot = _vmas.ToArray();
+        foreach (var vma in snapshot)
+        {
+            if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
+            SyncVMA(vma, engine);
+        }
+    }
+
+    public static void SyncVMA(VMA vma, Engine engine, uint rangeStart, uint rangeEnd)
+    {
         if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
             return;
 
-        for (var page = vma.Start; page < vma.End; page += LinuxConstants.PageSize)
+        var syncStart = Math.Max(vma.Start, rangeStart);
+        var syncEnd = Math.Min(vma.End, rangeEnd);
+        if (syncStart >= syncEnd) return;
+        var inode = vma.File.Dentry.Inode;
+        if (inode == null) return;
+
+        var startPage = syncStart & LinuxConstants.PageMask;
+        var endPage = (syncEnd + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        if (endPage < startPage) return;
+        var startPageIndex = vma.ViewPageOffset + ((startPage - vma.Start) / LinuxConstants.PageSize);
+        var endPageIndex = endPage <= startPage
+            ? startPageIndex
+            : vma.ViewPageOffset + ((endPage - vma.Start) / LinuxConstants.PageSize) - 1;
+
+        for (var page = startPage; page < endPage; page += LinuxConstants.PageSize)
+        {
+            var pageIndex = vma.ViewPageOffset + ((page - vma.Start) / LinuxConstants.PageSize);
             if (engine.IsDirty(page))
             {
-                // Write back dirty page
-                var data = new byte[LinuxConstants.PageSize];
-                if (!engine.CopyFromUser(page, data)) continue; // Skip if fault? Or handle error?
-
-                // 1. Relative coordinate (Relative to VMA Start)
-                long vmaRelativeOffset = page - vma.Start;
-                // 2. Absolute coordinate (Absolute within the File)
-                var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
-
-                var writeLen = LinuxConstants.PageSize;
-                if (vma.FileBackingLength > 0)
-                {
-                    var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
-                    if (remainingBackingBytes <= 0)
-                        writeLen = 0;
-                    else if (remainingBackingBytes < LinuxConstants.PageSize)
-                        writeLen = (int)remainingBackingBytes;
-                }
-
-                if (writeLen > 0) vma.File.Dentry.Inode!.Write(vma.File, data.AsSpan(0, writeLen), absoluteFileOffset);
+                vma.MemoryObject.MarkDirty(pageIndex);
+                inode.SetPageDirty(pageIndex);
             }
+
+            if (!vma.MemoryObject.IsDirty(pageIndex)) continue;
+            var pagePtr = vma.MemoryObject.GetPage(pageIndex);
+            if (pagePtr == IntPtr.Zero) continue;
+
+            // 1. Relative coordinate (Relative to VMA Start)
+            long vmaRelativeOffset = page - vma.Start;
+            // 2. Absolute coordinate (Absolute within the File)
+            var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
+
+            var writeLen = LinuxConstants.PageSize;
+            if (vma.FileBackingLength > 0)
+            {
+                var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
+                if (remainingBackingBytes <= 0)
+                    writeLen = 0;
+                else if (remainingBackingBytes < LinuxConstants.PageSize)
+                    writeLen = (int)remainingBackingBytes;
+            }
+
+            if (writeLen <= 0)
+            {
+                vma.MemoryObject.ClearDirty(pageIndex);
+                continue;
+            }
+
+            unsafe
+            {
+                ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
+                var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen), pageData, true);
+                if (rc == 0)
+                    vma.MemoryObject.ClearDirty(pageIndex);
+            }
+        }
+
+        inode.WritePages(vma.File, new WritePagesRequest(startPageIndex, endPageIndex, true));
     }
 
     public void LogVMAs()

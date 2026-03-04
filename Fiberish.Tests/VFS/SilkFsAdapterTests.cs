@@ -3,6 +3,7 @@ using Fiberish.Memory;
 using Fiberish.SilkFS;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Fiberish.Native;
 using System.Linq;
 using Xunit;
 
@@ -244,6 +245,97 @@ public class SilkFsAdapterTests
             Assert.Empty(objectFiles);
 
             sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_MapSharedWriteback_PersistsAcrossRemount()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-mmap-writeback-{Guid.NewGuid():N}");
+
+        try
+        {
+            using (var engine = new Engine())
+            {
+                var mm = new VMAManager();
+                var sm = new SyscallManager(engine, mm, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+                var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+                var file = new Dentry("map.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+                var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+                var payload = "hello"u8.ToArray();
+                Assert.Equal(payload.Length, file.Inode!.Write(wf, payload, 0));
+                wf.Close();
+
+                var fileLoc = sm.PathWalkWithFlags("/mnt/map.txt", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var mappedFile = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDWR, fileLoc.Mount!);
+                const uint mapAddr = 0x4C000000;
+                mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                Assert.True(mm.HandleFault(mapAddr, true, engine));
+                Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
+                var vma = mm.FindVMA(mapAddr);
+                Assert.NotNull(vma);
+                VMAManager.SyncVMA(vma!, engine, mapAddr, mapAddr + LinuxConstants.PageSize);
+                mappedFile.Close();
+                sm.Close();
+            }
+
+            using (var engine = new Engine())
+            {
+                var mm = new VMAManager();
+                var sm = new SyscallManager(engine, mm, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var fileLoc = sm.PathWalkWithFlags("/mnt/map.txt", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
+                var buf = new byte[16];
+                var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
+                rf.Close();
+                Assert.Equal(5, n);
+                Assert.Equal("hZZlo", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+                sm.Close();
+            }
         }
         finally
         {

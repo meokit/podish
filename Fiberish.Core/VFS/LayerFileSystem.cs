@@ -301,9 +301,9 @@ public class LayerInode : Inode
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
+        if (offset < 0) return -(int)Errno.EINVAL;
         if (_entry.Type != InodeType.File) return 0;
-        var sb = (LayerSuperBlock)SuperBlock;
-        return sb.ContentProvider.TryRead(_entry, offset, buffer, out var n) ? n : -(int)Errno.EIO;
+        return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
 
     public override string Readlink()
@@ -313,6 +313,64 @@ public class LayerInode : Inode
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return -(int)Errno.EROFS;
+    }
+
+    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        if (_entry.Type != InodeType.File) return 0;
+        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        if (_entry.Type != InodeType.File || request.PageCount <= 0 || PageCache == null) return 0;
+
+        var sb = (LayerSuperBlock)SuperBlock;
+        var page = new byte[LinuxConstants.PageSize];
+        for (var i = 0; i < request.PageCount; i++)
+        {
+            var pageIndex = request.StartPageIndex + i;
+            if (PageCache.GetPage((uint)pageIndex) != IntPtr.Zero) continue;
+
+            var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
+            {
+                page.AsSpan().Clear();
+                var fileOffset = pageIndex * LinuxConstants.PageSize;
+                if (!sb.ContentProvider.TryRead(_entry, fileOffset, page, out var readLen)) return false;
+                unsafe
+                {
+                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                    dst.Clear();
+                    if (readLen > 0) page.AsSpan(0, readLen).CopyTo(dst);
+                }
+
+                return true;
+            }, out _);
+
+            if (ptr == IntPtr.Zero) return -(int)Errno.EIO;
+        }
+
+        return 0;
+    }
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        return -(int)Errno.EROFS;
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        return -(int)Errno.EROFS;
+    }
+
+    public override int SetPageDirty(long pageIndex)
     {
         return -(int)Errno.EROFS;
     }
@@ -343,5 +401,11 @@ public class LayerInode : Inode
         }
 
         return entries;
+    }
+
+    private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        var sb = (LayerSuperBlock)SuperBlock;
+        return sb.ContentProvider.TryRead(_entry, offset, buffer, out var n) ? n : -(int)Errno.EIO;
     }
 }

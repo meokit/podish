@@ -121,6 +121,8 @@ public sealed class SilkInode : TmpfsInode
 {
     private readonly SilkRepository _repository;
     private readonly SilkMetadataStore _metadata;
+    private bool _hasPendingPageWriteback;
+    private readonly object _persistLock = new();
 
     public SilkInode(ulong ino, SuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -331,6 +333,51 @@ public sealed class SilkInode : TmpfsInode
             SyncSelf();
             PersistData();
         }
+        return rc;
+    }
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        var rc = base.WritePage(linuxFile, request, pageBuffer, sync);
+        if (rc == 0 && request.Length > 0)
+        {
+            lock (_persistLock)
+            {
+                _hasPendingPageWriteback = true;
+            }
+        }
+
+        return rc;
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        var rc = base.WritePages(linuxFile, request);
+        if (rc < 0) return rc;
+        if (!request.Sync) return 0;
+
+        lock (_persistLock)
+        {
+            if (!_hasPendingPageWriteback) return 0;
+            SyncSelf();
+            PersistData();
+            _hasPendingPageWriteback = false;
+        }
+
+        return 0;
+    }
+
+    public override int SetPageDirty(long pageIndex)
+    {
+        var rc = base.SetPageDirty(pageIndex);
+        if (rc == 0)
+        {
+            lock (_persistLock)
+            {
+                _hasPendingPageWriteback = true;
+            }
+        }
+
         return rc;
     }
 

@@ -565,22 +565,59 @@ public class OverlayInode : Inode
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        // Read from Upper if exists, else Lower.
-        if (UpperInode != null) return UpperInode.Read(linuxFile, buffer, offset);
-        if (LowerInode != null) return LowerInode.Read(linuxFile, buffer, offset);
-        return 0;
+        return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        // Write to Upper.
+        return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
+    }
+
+    public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        var source = UpperInode ?? LowerInode;
+        if (source == null) return 0;
+        return source.Readahead(linuxFile, request);
+    }
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0) return 0;
+        if (linuxFile == null) return -(int)Errno.EBADF;
+
         if (UpperInode == null)
         {
             var res = CopyUp(linuxFile);
             if (res < 0) return res;
         }
 
-        return UpperInode!.Write(linuxFile, buffer, offset);
+        return UpperInode!.WritePage(linuxFile, request, pageBuffer, sync);
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        if (UpperInode != null) return UpperInode.WritePages(linuxFile, request);
+        if (LowerInode != null) return LowerInode.WritePages(linuxFile, request);
+        return 0;
+    }
+
+    public override int SetPageDirty(long pageIndex)
+    {
+        if (UpperInode != null) return UpperInode.SetPageDirty(pageIndex);
+        if (LowerInode != null) return LowerInode.SetPageDirty(pageIndex);
+        return 0;
     }
 
     public override void Open(LinuxFile linuxFile)
@@ -657,6 +694,25 @@ public class OverlayInode : Inode
         }
 
         return null;
+    }
+
+    private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        if (UpperInode != null) return UpperInode.Read(linuxFile!, buffer, offset);
+        if (LowerInode != null) return LowerInode.Read(linuxFile!, buffer, offset);
+        return 0;
+    }
+
+    private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        if (linuxFile == null) return -(int)Errno.EBADF;
+        if (UpperInode == null)
+        {
+            var res = CopyUp(linuxFile);
+            if (res < 0) return res;
+        }
+
+        return UpperInode!.Write(linuxFile, buffer, offset);
     }
 
     private string GetDirectoryKey()
