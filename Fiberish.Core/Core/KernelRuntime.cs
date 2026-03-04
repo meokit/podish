@@ -9,19 +9,22 @@ namespace Fiberish.Core;
 /// </summary>
 public sealed class KernelRuntime
 {
-    private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls)
+    private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls, Configuration configuration)
     {
         Engine = engine;
         Memory = memory;
         Syscalls = syscalls;
+        Configuration = configuration;
     }
 
     public Engine Engine { get; }
     public VMAManager Memory { get; }
     public SyscallManager Syscalls { get; }
+    public Configuration Configuration { get; }
 
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
     {
+        var configuration = new Configuration();
         var engine = new Engine();
         var mm = new VMAManager();
 
@@ -30,7 +33,7 @@ public sealed class KernelRuntime
             Strace = strace
         };
 
-        return new KernelRuntime(engine, mm, sys);
+        return new KernelRuntime(engine, mm, sys, configuration);
     }
 
     public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)
