@@ -19,4 +19,8 @@
     <PodishStaticNative>true</PodishStaticNative>
   </PropertyGroup>
 
+  <ItemGroup>
+    <DirectPInvoke Include="fibercpu" />
+  </ItemGroup>
+
 </Project>

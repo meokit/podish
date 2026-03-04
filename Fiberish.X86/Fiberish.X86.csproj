@@ -20,10 +20,6 @@
         <Exec Command="cmake --build build_native --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
     </Target>
 
-    <PropertyGroup Condition="'$(PublishAot)' == 'true'">
-        <DefineConstants>$(DefineConstants);NATIVE_AOT</DefineConstants>
-    </PropertyGroup>
-
     <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('OSX'))">
         <NativeLibrary Include="build_native/libfibercpu.a"/>
     </ItemGroup>
