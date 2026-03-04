@@ -27,7 +27,7 @@ def openssl_rootfs(
                 "dotnet",
                 "run",
                 "--project",
-                str(project_root / "FiberPod" / "FiberPod.csproj"),
+                str(project_root / "Podish.Cli" / "Podish.Cli.csproj"),
                 "--no-build",
                 "--",
                 "pull",

@@ -17,8 +17,8 @@ from typing import Literal
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FIBERPOD_PROJECT = PROJECT_ROOT / "FiberPod"
-FIBERPOD_DLL = FIBERPOD_PROJECT / "bin" / "Debug" / "net8.0" / "FiberPod.dll"
+FIBERPOD_PROJECT = PROJECT_ROOT / "Podish.Cli"
+FIBERPOD_DLL = FIBERPOD_PROJECT / "bin" / "Debug" / "net8.0" / "Podish.Cli.dll"
 
 
 @pytest.fixture(scope="session")

@@ -43,7 +43,7 @@ def _fiberpod_cmd(
     cmd = [
         "dotnet",
         "run",
-        "--project", f"{project_root}/FiberPod/FiberPod.csproj",
+        "--project", f"{project_root}/Podish.Cli/Podish.Cli.csproj",
         "--no-build",
         "--",
         "run",
@@ -90,7 +90,7 @@ def run_case(
         project_root: Repository root path
         assets_dir: Directory containing test binaries
         case: Test case configuration
-        fiberpod_dll: Path to FiberPod.dll (required for fiberpod mode)
+        fiberpod_dll: Path to Podish.Cli.dll (required for fiberpod mode)
         alpine_image: Alpine image name (required for fiberpod mode without rootfs)
 
     Returns:
@@ -220,7 +220,7 @@ def run_interactive_case(
         project_root: Repository root path
         rootfs_or_image: Rootfs path or OCI image name
         command: Command to run in the container
-        fiberpod_dll: Path to FiberPod.dll
+        fiberpod_dll: Path to Podish.Cli.dll
         expect_prompt: Prompt pattern to expect
         test_commands: List of (command, expected_output) tuples
         timeout: Timeout in seconds
