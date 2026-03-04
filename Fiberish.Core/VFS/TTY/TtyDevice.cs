@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace Fiberish.Core.VFS.TTY;
 
 /// <summary>
@@ -14,8 +12,13 @@ namespace Fiberish.Core.VFS.TTY;
 /// </summary>
 public class TtyDevice
 {
-    // Thread-safe hardware buffer (background thread writes, kernel reads)
-    private readonly ConcurrentQueue<byte[]> _hardwareBuffer = new();
+    public const int DefaultInputCapacityBytes = 64 * 1024;
+
+    private readonly object _lock = new();
+    private readonly byte[] _hardwareBuffer;
+    private int _head;
+    private int _tail;
+    private int _count;
 
     // Volatile flag: indicates if new data is available
     // This avoids calling TryDequeue on every tick
@@ -33,7 +36,16 @@ public class TtyDevice
     /// <summary>
     ///     Get the approximate number of items in the buffer.
     /// </summary>
-    public int Count => _hardwareBuffer.Count;
+    public int Count
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _count;
+            }
+        }
+    }
 
     // Event raised when input is enqueued (allows waking up sleeping scheduler)
     public event Action? OnInputEnqueued;
@@ -42,12 +54,37 @@ public class TtyDevice
     ///     Called by InputLoop (background thread) to enqueue input data.
     ///     This is the ONLY method called from the background thread.
     /// </summary>
-    public void EnqueueInput(byte[] data)
+    public TtyDevice(int inputCapacityBytes = DefaultInputCapacityBytes)
     {
-        if (data.Length == 0) return;
-        _hardwareBuffer.Enqueue(data);
-        _interruptFlag = true; // Raise interrupt line
+        if (inputCapacityBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(inputCapacityBytes));
+        _hardwareBuffer = new byte[inputCapacityBytes];
+    }
+
+    public int EnqueueInput(byte[] data)
+    {
+        if (data.Length == 0) return 0;
+        var enqueued = 0;
+        lock (_lock)
+        {
+            var space = _hardwareBuffer.Length - _count;
+            enqueued = Math.Min(data.Length, space);
+            if (enqueued <= 0)
+                return 0;
+
+            var first = Math.Min(enqueued, _hardwareBuffer.Length - _tail);
+            data.AsSpan(0, first).CopyTo(_hardwareBuffer.AsSpan(_tail, first));
+            var second = enqueued - first;
+            if (second > 0)
+                data.AsSpan(first, second).CopyTo(_hardwareBuffer.AsSpan(0, second));
+
+            _tail = (_tail + enqueued) % _hardwareBuffer.Length;
+            _count += enqueued;
+            _interruptFlag = true; // Raise interrupt line
+        }
+
         OnInputEnqueued?.Invoke();
+        return enqueued;
     }
 
     /// <summary>
@@ -69,13 +106,26 @@ public class TtyDevice
     {
         if (!_interruptFlag) return null;
 
-        var result = new List<byte[]>();
-        while (_hardwareBuffer.TryDequeue(out var data)) result.Add(data);
+        lock (_lock)
+        {
+            if (_count == 0)
+            {
+                _interruptFlag = false;
+                return null;
+            }
 
-        // Clear interrupt flag after consuming all data
-        _interruptFlag = false;
+            var chunk = new byte[_count];
+            var first = Math.Min(_count, _hardwareBuffer.Length - _head);
+            _hardwareBuffer.AsSpan(_head, first).CopyTo(chunk.AsSpan(0, first));
+            var second = _count - first;
+            if (second > 0)
+                _hardwareBuffer.AsSpan(0, second).CopyTo(chunk.AsSpan(first, second));
 
-        return result.Count > 0 ? result : null;
+            _head = (_head + _count) % _hardwareBuffer.Length;
+            _count = 0;
+            _interruptFlag = false;
+            return new List<byte[]> { chunk };
+        }
     }
 
     /// <summary>

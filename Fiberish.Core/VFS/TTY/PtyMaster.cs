@@ -204,6 +204,13 @@ public class PtySlaveDriver : ITtyDriver
         return _master.OutputBuffer.Write(buffer);
     }
 
+    public bool CanWrite => true;
+
+    public bool RegisterWriteWait(Action callback)
+    {
+        return false;
+    }
+
     public void Flush()
     {
         // No-op for PTY

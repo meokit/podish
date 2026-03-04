@@ -112,8 +112,18 @@ public class ConsoleInode : Inode
         }
         else
         {
-            // Output - stdout is always writable
-            if ((events & POLLOUT) != 0) revents |= POLLOUT;
+            if ((events & POLLOUT) != 0)
+            {
+                if (_discipline != null)
+                {
+                    if (_discipline.CanWriteOutput) revents |= POLLOUT;
+                }
+                else
+                {
+                    // Output - stdout is always writable
+                    revents |= POLLOUT;
+                }
+            }
         }
 
         return revents;
@@ -121,7 +131,10 @@ public class ConsoleInode : Inode
 
     public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
-        if (_isInput && _discipline != null)
+        if (_discipline == null)
+            return false;
+
+        if (_isInput)
         {
             const short POLLIN = 0x0001;
             if ((events & POLLIN) != 0)
@@ -129,6 +142,12 @@ public class ConsoleInode : Inode
                 _discipline.DataAvailable.Register(callback);
                 return true;
             }
+        }
+        else
+        {
+            const short POLLOUT = 0x0004;
+            if ((events & POLLOUT) != 0)
+                return _discipline.RegisterWriteWait(callback);
         }
 
         return false;

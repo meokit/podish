@@ -143,6 +143,7 @@ public class TtyDiscipline
     public int BytesAvailable => _inq.Count;
 
     public AsyncWaitQueue DataAvailable => _inq.DataAvailable;
+    public bool CanWriteOutput => _driver.CanWrite;
 
     private void InitializeDefaults()
     {
@@ -271,6 +272,11 @@ public class TtyDiscipline
         if (bgCheck < 0) return bgCheck;
 
         return OutputProcess(TtyEndpointKind.Stdout, buffer);
+    }
+
+    public bool RegisterWriteWait(Action callback)
+    {
+        return _driver.RegisterWriteWait(callback);
     }
 
     private int CheckBackgroundJob(bool isRead)
@@ -490,9 +496,9 @@ public class TtyDiscipline
     ///     This ensures thread safety - complex TTY logic (echo, signals, canonical mode)
     ///     only runs on the scheduler thread.
     /// </summary>
-    public void Input(byte[] input)
+    public int Input(byte[] input)
     {
-        Device.EnqueueInput(input);
+        return Device.EnqueueInput(input);
     }
 
     /// <summary>

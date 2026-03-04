@@ -434,6 +434,60 @@ public class TtyDisciplineTests
         }
     }
 
+    [Fact]
+    public void ConsolePoll_output_reflects_tty_writability()
+    {
+        var driver = new ControlledWriteTtyDriver();
+        var broadcaster = new MockSignalBroadcaster();
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, false, tty);
+        var file = new LinuxFile(new Dentry("stdout", inode, null, sb), FileFlags.O_WRONLY, null!);
+
+        try
+        {
+            const short POLLOUT = 0x0004;
+            driver.SetWritable(false);
+            Assert.Equal(0, inode.Poll(file, POLLOUT));
+
+            driver.SetWritable(true);
+            Assert.Equal(POLLOUT, inode.Poll(file, POLLOUT));
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    [Fact]
+    public void ConsoleRegisterWait_output_wakes_when_writable()
+    {
+        var driver = new ControlledWriteTtyDriver();
+        var broadcaster = new MockSignalBroadcaster();
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, false, tty);
+        var file = new LinuxFile(new Dentry("stdout", inode, null, sb), FileFlags.O_WRONLY, null!);
+
+        try
+        {
+            driver.SetWritable(false);
+            var fired = false;
+            const short POLLOUT = 0x0004;
+            var registered = inode.RegisterWait(file, () => fired = true, POLLOUT);
+            Assert.True(registered);
+            Assert.False(fired);
+
+            driver.SetWritable(true);
+            driver.NotifyWritable();
+            Assert.True(fired);
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
     #endregion
 
     #region Flow Control Tests (IXON/IXOFF)
@@ -908,6 +962,36 @@ public class TtyDisciplineTests
         Assert.Equal("abc\n", Encoding.ASCII.GetString(buffer, 0, read));
     }
 
+    [Fact]
+    public void Input_is_bounded_by_64k_ring_buffer()
+    {
+        // Switch to raw mode so input queue reflects bytes directly.
+        var termios = new byte[60];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        var payload = new byte[TtyDevice.DefaultInputCapacityBytes + 1024];
+        Array.Fill(payload, (byte)'x');
+
+        var accepted = _tty.Input(payload);
+        Assert.Equal(TtyDevice.DefaultInputCapacityBytes, accepted);
+
+        var totalRead = 0;
+        var readBuf = new byte[8192];
+        while (true)
+        {
+            var n = _tty.Read(readBuf, FileFlags.O_NONBLOCK);
+            if (n <= 0)
+                break;
+            totalRead += n;
+        }
+
+        Assert.Equal(TtyDevice.DefaultInputCapacityBytes, totalRead);
+    }
+
     #endregion
 
     #region Helper Classes
@@ -924,6 +1008,49 @@ public class TtyDisciplineTests
 
         public void Flush()
         {
+        }
+
+        public bool CanWrite => true;
+
+        public bool RegisterWriteWait(Action callback)
+        {
+            return false;
+        }
+    }
+
+    private sealed class ControlledWriteTtyDriver : ITtyDriver
+    {
+        private volatile bool _writable = true;
+        private Action? _waiter;
+
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            return _writable ? buffer.Length : -(int)Errno.EAGAIN;
+        }
+
+        public void Flush()
+        {
+        }
+
+        public bool CanWrite => _writable;
+
+        public bool RegisterWriteWait(Action callback)
+        {
+            if (_writable)
+                return false;
+            _waiter = callback;
+            return true;
+        }
+
+        public void SetWritable(bool writable)
+        {
+            _writable = writable;
+        }
+
+        public void NotifyWritable()
+        {
+            _waiter?.Invoke();
+            _waiter = null;
         }
     }
 

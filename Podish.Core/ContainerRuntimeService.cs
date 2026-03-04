@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
+using Fiberish.Native;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Syscalls;
@@ -26,6 +27,8 @@ public sealed class ContainerRunRequest
     public required string ContainerDir { get; init; }
     public ContainerLogDriver LogDriver { get; init; } = ContainerLogDriver.JsonFile;
     public required ContainerEventStore EventStore { get; init; }
+    public PodishTerminalBridge? TerminalBridge { get; init; }
+    public bool EnableHostConsoleInput { get; init; } = true;
 }
 
 public sealed class ContainerRuntimeService
@@ -51,13 +54,18 @@ public sealed class ContainerRuntimeService
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
         PosixSignalRegistration? sigwinch = null;
-        var isInteractive = request.UseTty && !Console.IsInputRedirected;
+        var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir);
-        var driver = new ConsoleTtyDriver(logSink);
+        ITtyDriver driver = request.TerminalBridge != null
+            ? new BridgeTtyDriver(request.TerminalBridge, logSink)
+            : new ConsoleTtyDriver(logSink);
         var broadcaster = new SchedulerSignalBroadcaster(scheduler);
         ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>());
-        driver.BindTty(ttyDiag);
+        if (driver is ConsoleTtyDriver consoleDriver)
+            consoleDriver.BindTty(ttyDiag);
+        if (request.TerminalBridge != null)
+            request.TerminalBridge.BindTty(ttyDiag);
         scheduler.Tty = ttyDiag;
 
         if (isInteractive)
@@ -283,6 +291,8 @@ public sealed class ContainerRuntimeService
             }
 
             sigwinch?.Dispose();
+            if (driver is IDisposable driverDisposable)
+                driverDisposable.Dispose();
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);
@@ -641,9 +651,132 @@ public sealed class ContainerRuntimeService
             _stderr.Flush();
         }
 
+        public bool CanWrite => true;
+
+        public bool RegisterWriteWait(Action callback)
+        {
+            return false;
+        }
+
         public void BindTty(TtyDiscipline tty)
         {
             _tty = tty;
+        }
+    }
+
+    private sealed class BridgeTtyDriver : ITtyDriver, IDisposable
+    {
+        private readonly object _lock = new();
+        private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
+        private readonly AsyncWaitQueue _writeReady = new();
+        private readonly AutoResetEvent _hasData = new(false);
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _pumpTask;
+        private readonly PodishTerminalBridge _bridge;
+        private readonly IContainerLogSink _containerLogSink;
+        private int _queuedBytes;
+        private const int OutputQueueCapacityBytes = 64 * 1024;
+
+        public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink)
+        {
+            _bridge = bridge;
+            _containerLogSink = containerLogSink;
+            _pumpTask = Task.Run(PumpLoop);
+        }
+
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length == 0)
+                return 0;
+
+            int written;
+            var payload = Array.Empty<byte>();
+            lock (_lock)
+            {
+                var space = OutputQueueCapacityBytes - _queuedBytes;
+                if (space <= 0)
+                {
+                    _writeReady.Reset();
+                    return -(int)Errno.EAGAIN;
+                }
+
+                written = Math.Min(space, buffer.Length);
+                payload = buffer[..written].ToArray();
+                _queue.Enqueue((kind, payload));
+                _queuedBytes += written;
+                if (_queuedBytes >= OutputQueueCapacityBytes)
+                    _writeReady.Reset();
+            }
+
+            _containerLogSink.Write(kind, payload);
+            _hasData.Set();
+            return written;
+        }
+
+        public void Flush()
+        {
+        }
+
+        public bool CanWrite
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _queuedBytes < OutputQueueCapacityBytes;
+                }
+            }
+        }
+
+        public bool RegisterWriteWait(Action callback)
+        {
+            if (CanWrite)
+                return false;
+            _writeReady.Register(callback);
+            return true;
+        }
+
+        private void PumpLoop()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                _hasData.WaitOne(50);
+                while (true)
+                {
+                    (TtyEndpointKind Kind, byte[] Data) item;
+                    var becameWritable = false;
+                    lock (_lock)
+                    {
+                        if (_queue.Count == 0)
+                            break;
+
+                        var wasFull = _queuedBytes >= OutputQueueCapacityBytes;
+                        item = _queue.Dequeue();
+                        _queuedBytes -= item.Data.Length;
+                        becameWritable = wasFull && _queuedBytes < OutputQueueCapacityBytes;
+                    }
+
+                    if (becameWritable)
+                        _writeReady.Signal();
+
+                    _bridge.EmitOutput(item.Kind, item.Data);
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _hasData.Set();
+            try
+            {
+                _pumpTask.Wait(200);
+            }
+            catch
+            {
+            }
+            _cts.Dispose();
+            _hasData.Dispose();
         }
     }
 

@@ -1,4 +1,5 @@
 using Fiberish.Diagnostics;
+using Fiberish.Core.VFS.TTY;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
@@ -30,6 +31,115 @@ public sealed class PodishRunResult
     public required string ContainerId { get; init; }
     public required string ImageRef { get; init; }
     public required int ExitCode { get; init; }
+}
+
+public sealed class PodishContainerSession
+{
+    private readonly Task<int> _runTask;
+    private readonly PodishTerminalBridge? _terminalBridge;
+
+    internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask, PodishTerminalBridge? terminalBridge)
+    {
+        ContainerId = containerId;
+        ImageRef = imageRef;
+        _runTask = runTask;
+        _terminalBridge = terminalBridge;
+    }
+
+    public string ContainerId { get; }
+    public string ImageRef { get; }
+    public bool HasTerminal => _terminalBridge != null;
+
+    public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
+    {
+        _terminalBridge?.SetOutputHandler(handler);
+    }
+
+    public int WriteInput(ReadOnlySpan<byte> data)
+    {
+        if (_terminalBridge == null)
+            return 0;
+        return _terminalBridge.WriteInput(data);
+    }
+
+    public bool Resize(ushort rows, ushort cols)
+    {
+        if (_terminalBridge == null)
+            return false;
+        _terminalBridge.Resize(rows, cols);
+        return true;
+    }
+
+    public Task<int> WaitAsync()
+    {
+        return _runTask;
+    }
+}
+
+public sealed class PodishTerminalBridge
+{
+    private readonly object _lock = new();
+    private TtyDiscipline? _tty;
+    private Action<TtyEndpointKind, byte[]>? _outputHandler;
+
+    public void BindTty(TtyDiscipline tty)
+    {
+        lock (_lock)
+        {
+            _tty = tty;
+        }
+    }
+
+    public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
+    {
+        lock (_lock)
+        {
+            _outputHandler = handler;
+        }
+    }
+
+    public int WriteInput(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0)
+            return 0;
+
+        TtyDiscipline? tty;
+        lock (_lock)
+        {
+            tty = _tty;
+        }
+
+        if (tty == null)
+            return 0;
+
+        tty.Input(data.ToArray());
+        return data.Length;
+    }
+
+    public void Resize(ushort rows, ushort cols)
+    {
+        TtyDiscipline? tty;
+        lock (_lock)
+        {
+            tty = _tty;
+        }
+
+        tty?.Device.EnqueueResize(rows, cols);
+    }
+
+    public void EmitOutput(TtyEndpointKind kind, ReadOnlySpan<byte> data)
+    {
+        Action<TtyEndpointKind, byte[]>? handler;
+        lock (_lock)
+        {
+            handler = _outputHandler;
+        }
+
+        if (handler == null)
+            return;
+
+        handler(kind, data.ToArray());
+    }
 }
 
 public sealed class PodishContext
@@ -88,6 +198,25 @@ public sealed class PodishContext
     public async Task<PodishRunResult> RunAsync(PodishRunSpec spec)
     {
         using var _ = Logging.BeginScope(_loggerFactory);
+        var session = await StartInternalAsync(spec, attachTerminalBridge: false);
+        var exitCode = await session.WaitAsync();
+
+        return new PodishRunResult
+        {
+            ContainerId = session.ContainerId,
+            ImageRef = session.ImageRef,
+            ExitCode = exitCode
+        };
+    }
+
+    public async Task<PodishContainerSession> StartAsync(PodishRunSpec spec)
+    {
+        using var _ = Logging.BeginScope(_loggerFactory);
+        return await StartInternalAsync(spec, attachTerminalBridge: true);
+    }
+
+    private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge)
+    {
         var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
         if (!ContainerLogDriverParser.TryParse(spec.LogDriver, out var containerLogDriver))
             throw new InvalidOperationException($"invalid log driver: {spec.LogDriver}");
@@ -128,8 +257,9 @@ public sealed class PodishContext
         var eventStore = new ContainerEventStore(Path.Combine(FiberpodDir, "events.jsonl"));
         eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
+        var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
         var service = new ContainerRuntimeService(_logger, _loggerFactory);
-        var exitCode = await service.RunAsync(new ContainerRunRequest
+        var runTask = Task.Run(() => service.RunAsync(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
             Exe = spec.Exe ?? string.Empty,
@@ -144,15 +274,12 @@ public sealed class PodishContext
             Image = imageRef,
             ContainerDir = containerDir,
             LogDriver = containerLogDriver,
-            EventStore = eventStore
-        });
+            EventStore = eventStore,
+            TerminalBridge = bridge,
+            EnableHostConsoleInput = !attachTerminalBridge
+        }));
 
-        return new PodishRunResult
-        {
-            ContainerId = containerId,
-            ImageRef = imageRef,
-            ExitCode = exitCode
-        };
+        return new PodishContainerSession(containerId, imageRef, runTask, bridge);
     }
 
     private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
