@@ -83,6 +83,13 @@ public class OciPullService
 
     public async Task<OciStoredImage> PullAndStoreImageAsync(string imageReference, string storeDirectory)
     {
+        var storeName = Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(storeName))
+            storeName = "oci-store";
+        var lockDir = Path.GetDirectoryName(storeDirectory) ?? storeDirectory;
+        var lockPath = Path.Combine(lockDir, $".{storeName}.pull.lock");
+        using var storeLock = CooperativeFileLock.Acquire(lockPath, TimeSpan.FromMinutes(10));
+
         var parsed = ParseImageReference(imageReference);
         var registry = parsed.Registry;
         var repository = parsed.Repository;

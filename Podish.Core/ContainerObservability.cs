@@ -100,11 +100,13 @@ public sealed record ContainerEvent(
 public sealed class ContainerEventStore
 {
     private readonly object _gate = new();
+    private readonly string _lockPath;
     private readonly string _path;
 
     public ContainerEventStore(string path)
     {
         _path = path;
+        _lockPath = path + ".lock";
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         if (!File.Exists(path)) File.WriteAllText(path, string.Empty);
@@ -113,6 +115,7 @@ public sealed class ContainerEventStore
     public void Append(ContainerEvent evt)
     {
         var json = JsonSerializer.Serialize(evt, PodishJsonContext.Default.ContainerEvent);
+        using var fileLock = CooperativeFileLock.Acquire(_lockPath);
         lock (_gate)
         {
             File.AppendAllText(_path, json + Environment.NewLine);

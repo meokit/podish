@@ -9,7 +9,29 @@ namespace Podish.Core.Native;
 internal sealed class NativeContext
 {
     public required PodishContext Context { get; init; }
-    public string LastError { get; set; } = string.Empty;
+    private readonly object _errorLock = new();
+    private string _lastError = string.Empty;
+    private readonly Dictionary<int, string> _lastErrorByThread = [];
+
+    public string GetLastErrorForCurrentThread()
+    {
+        var tid = Environment.CurrentManagedThreadId;
+        lock (_errorLock)
+        {
+            return _lastErrorByThread.TryGetValue(tid, out var msg) ? msg : _lastError;
+        }
+    }
+
+    public void SetLastErrorForCurrentThread(string message)
+    {
+        var safe = message ?? string.Empty;
+        var tid = Environment.CurrentManagedThreadId;
+        lock (_errorLock)
+        {
+            _lastError = safe;
+            _lastErrorByThread[tid] = safe;
+        }
+    }
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -88,7 +110,7 @@ public static class PodishNativeApi
             return 0;
 
         var ctx = FromHandle(ctxHandle);
-        var message = ctx?.LastError ?? string.Empty;
+        var message = ctx?.GetLastErrorForCurrentThread() ?? string.Empty;
         var bytes = Encoding.UTF8.GetBytes(message);
         if (buffer == null || capacity <= 0)
             return bytes.Length;
@@ -179,7 +201,7 @@ public static class PodishNativeApi
 
     private static int SetErrorAndReturn(NativeContext ctx, string message, int code)
     {
-        ctx.LastError = message;
+        ctx.SetLastErrorForCurrentThread(message);
         return code;
     }
 
@@ -189,7 +211,7 @@ public static class PodishNativeApi
             return;
         var ctx = FromHandle(*outCtx);
         if (ctx != null)
-            ctx.LastError = message;
+            ctx.SetLastErrorForCurrentThread(message);
     }
 
     private static unsafe string? PtrToString(IntPtr ptr)
