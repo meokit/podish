@@ -1032,6 +1032,8 @@ public static class PodishNativeApi
                 {
                     container.ForceDestroy(1000);
                     container.Owner.UnregisterContainer(container);
+                    var snapshot = BuildContainerListSnapshot(container.Owner);
+                    container.Owner.EmitContainerStateChanged(snapshot);
                     return PodOk;
                 }
                 catch (Exception ex)
@@ -1045,6 +1047,8 @@ public static class PodishNativeApi
         {
             container.DeleteMetadataAndData();
             container.Owner.UnregisterContainer(container);
+            var snapshot = BuildContainerListSnapshot(container.Owner);
+            container.Owner.EmitContainerStateChanged(snapshot);
         }
         catch (Exception ex)
         {

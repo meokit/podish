@@ -48,6 +48,21 @@ func pod_ctx_set_container_state_callback(
 @_silgen_name("pod_image_pull")
 func pod_image_pull(_ ctx: UnsafeMutableRawPointer?, _ image_ref_utf8: UnsafePointer<CChar>?) -> Int32
 
+@_silgen_name("pod_image_list_json")
+func pod_image_list_json(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32,
+    _ out_len: UnsafeMutablePointer<Int32>?
+) -> Int32
+
+@_silgen_name("pod_image_remove")
+func pod_image_remove(
+    _ ctx: UnsafeMutableRawPointer?,
+    _ image_ref_utf8: UnsafePointer<CChar>?,
+    _ force: Int32
+) -> Int32
+
 @_silgen_name("pod_container_create_json")
 func pod_container_create_json(
     _ ctx: UnsafeMutableRawPointer?,

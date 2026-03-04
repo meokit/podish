@@ -26,11 +26,20 @@ struct PodishContainer: Identifiable, Hashable {
 }
 
 struct PodishImage: Identifiable, Hashable {
-    let id: UUID
+    let id: String
     var repoTag: String
     var digest: String
     var size: String
     var createdAt: Date
+}
+
+struct NativeImageListItem: Decodable, Hashable {
+    let imageReference: String
+    let manifestDigest: String
+    let layerCount: Int
+    let storeDirectory: String
+    let tag: String?
+    let repository: String?
 }
 
 struct NativeContainerListItem: Decodable, Hashable {

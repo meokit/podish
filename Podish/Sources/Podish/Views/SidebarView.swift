@@ -29,12 +29,7 @@ struct SidebarView: View {
         List(selection: $localSelection) {
             Section("Actions") {
                 Button {
-                } label: {
-                    Label("Pull Image", systemImage: "arrow.down.circle")
-                }
-                .buttonStyle(.plain)
-
-                Button {
+                    store.showNewContainer()
                 } label: {
                     Label("New Container", systemImage: "plus.rectangle.on.rectangle")
                 }

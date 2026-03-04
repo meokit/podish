@@ -3,11 +3,7 @@ import SwiftUI
 @MainActor
 final class PodishUiStore: ObservableObject {
     @Published var containers: [PodishContainer] = []
-
-    @Published var images: [PodishImage] = [
-        .init(id: UUID(), repoTag: "docker.io/i386/alpine:latest", digest: "sha256:a76a...cb9e", size: "7.1 MB", createdAt: .now.addingTimeInterval(-86000)),
-        .init(id: UUID(), repoTag: "docker.io/library/python:3.12-alpine", digest: "sha256:45c2...8ad1", size: "57.3 MB", createdAt: .now.addingTimeInterval(-43000))
-    ]
+    @Published var images: [PodishImage] = []
 
     @Published var events: [String] = [
         "container-start alpine-shell",
@@ -20,6 +16,10 @@ final class PodishUiStore: ObservableObject {
     var onStopContainer: ((String) -> Void)?
     var onRemoveContainer: ((String) -> Void)?
     var onAttachContainer: ((String) -> Void)?
+    var onCreateContainer: ((String) -> Void)?
+    var onPullImage: ((String) -> Void)?
+    var onRemoveImage: ((String) -> Void)?
+    var onShowNewContainer: (() -> Void)?
 
     var runningContainers: [PodishContainer] { containers.filter { $0.state == .running } }
 
@@ -78,6 +78,22 @@ final class PodishUiStore: ObservableObject {
         }
     }
 
+    func applyImageList(_ items: [NativeImageListItem]) {
+        let mapped = items.map { item in
+            PodishImage(
+                id: item.imageReference,
+                repoTag: item.imageReference,
+                digest: item.manifestDigest,
+                size: "\(item.layerCount) layers",
+                createdAt: .now
+            )
+        }
+
+        if images != mapped {
+            images = mapped
+        }
+    }
+
     func start(_ container: PodishContainer) {
         onStartContainer?(container.containerId)
     }
@@ -92,5 +108,21 @@ final class PodishUiStore: ObservableObject {
 
     func remove(_ container: PodishContainer) {
         onRemoveContainer?(container.containerId)
+    }
+
+    func createContainer(fromImage imageRef: String) {
+        onCreateContainer?(imageRef)
+    }
+
+    func pullImage(_ imageRef: String) {
+        onPullImage?(imageRef)
+    }
+
+    func removeImage(_ imageRef: String) {
+        onRemoveImage?(imageRef)
+    }
+
+    func showNewContainer() {
+        onShowNewContainer?()
     }
 }

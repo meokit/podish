@@ -32,6 +32,11 @@ struct TerminalWorkspaceView: View {
                     store.applyContainerList(items)
                 }
             }
+            session.onImageList = { items in
+                DispatchQueue.main.async {
+                    store.applyImageList(items)
+                }
+            }
             session.onContainerStateChanged = { items in
                 DispatchQueue.main.async {
                     store.applyContainerList(items)
@@ -51,10 +56,20 @@ struct TerminalWorkspaceView: View {
             store.onRemoveContainer = { containerId in
                 session.removeContainer(containerId)
             }
+            store.onCreateContainer = { imageRef in
+                session.createContainer(from: imageRef)
+            }
+            store.onPullImage = { imageRef in
+                session.pullImage(imageRef)
+            }
+            store.onRemoveImage = { imageRef in
+                session.removeImage(imageRef)
+            }
             store.onAttachContainer = { containerId in
                 session.attachContainer(containerId)
             }
             session.refreshContainerList()
+            session.refreshImageList()
         }
         .onChange(of: store.selectedContainerID) { _, newId in
             guard let newId,

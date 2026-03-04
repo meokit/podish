@@ -124,8 +124,8 @@ actor PodishRuntimeActor {
         var attached: String?
 
         if containers.isEmpty {
-            try pullImage("docker.io/i386/alpine:latest")
-            try createAndStartContainer()
+            try pullImageInternal("docker.io/i386/alpine:latest")
+            _ = try createAndStartContainer(imageRef: "docker.io/i386/alpine:latest")
             containers = try listContainers()
             attached = containers.first(where: { $0.running })?.containerId ?? containers.first?.containerId
             if let attached {
@@ -139,6 +139,31 @@ actor PodishRuntimeActor {
     func refreshContainers() throws -> [NativeContainerListItem] {
         try ensureContext()
         return try listContainers()
+    }
+
+    func refreshImages() throws -> [NativeImageListItem] {
+        try ensureContext()
+        return try listImages()
+    }
+
+    func pullImage(imageRef: String) throws -> [NativeImageListItem] {
+        try ensureContext()
+        try pullImageInternal(imageRef)
+        return try listImages()
+    }
+
+    func removeImage(imageRef: String) throws -> [NativeImageListItem] {
+        try ensureContext()
+        let rc = imageRef.withCString { pod_image_remove(ctx, $0, 1) }
+        if rc != 0 {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        return try listImages()
+    }
+
+    func createContainer(imageRef: String) throws -> String {
+        try ensureContext()
+        return try createAndStartContainer(imageRef: imageRef)
     }
 
     func startContainer(containerId: String) throws -> [NativeContainerListItem] {
@@ -342,7 +367,7 @@ actor PodishRuntimeActor {
         }
     }
 
-    private func pullImage(_ image: String) throws {
+    private func pullImageInternal(_ image: String) throws {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
         let rc = image.withCString { pod_image_pull(c, $0) }
         if rc != 0 {
@@ -382,13 +407,46 @@ actor PodishRuntimeActor {
         }
     }
 
-    private func createAndStartContainer() throws {
+    private func listImages() throws -> [NativeImageListItem] {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
+
+        var capacity = 16 * 1024
+        while true {
+            var buffer = [UInt8](repeating: 0, count: capacity)
+            var outLen: Int32 = 0
+            let rc = buffer.withUnsafeMutableBufferPointer { ptr in
+                pod_image_list_json(c, ptr.baseAddress, Int32(ptr.count), &outLen)
+            }
+
+            if rc == 0 {
+                let n = max(0, Int(outLen))
+                if n == 0 {
+                    return []
+                }
+                let data = Data(buffer.prefix(n))
+                return try JSONDecoder().decode([NativeImageListItem].self, from: data)
+            }
+
+            if rc == 34 {
+                capacity *= 2
+                if capacity > 1_048_576 {
+                    throw PodishRuntimeError.native(code: rc, message: "image list too large")
+                }
+                continue
+            }
+
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+    }
+
+    private func createAndStartContainer(imageRef: String) throws -> String {
+        guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
+        let beforeIds = Set(try listContainers().map(\.containerId))
         let spec = PodishRunSpec(
-            image: "docker.io/i386/alpine:latest",
+            image: imageRef,
             rootfs: nil,
-            exe: "/bin/ash",
-            exeArgs: [],
+            exe: "/bin/sh",
+            exeArgs: ["-i"],
             volumes: [],
             env: [],
             dns: [],
@@ -416,6 +474,16 @@ actor PodishRuntimeActor {
         if rcStart != 0 {
             throw PodishRuntimeError.native(code: rcStart, message: lastError())
         }
+
+        let after = try listContainers()
+        if let created = after.first(where: { !beforeIds.contains($0.containerId) }) {
+            return created.containerId
+        }
+        if let running = after.first(where: { $0.running && $0.image == imageRef }) {
+            return running.containerId
+        }
+
+        throw PodishRuntimeError.native(code: -1, message: "failed to resolve created container id")
     }
 
     private func openContainer(containerId: String) throws -> UnsafeMutableRawPointer {
@@ -450,6 +518,7 @@ final class PodishTerminalSession: ObservableObject {
     private var started = false
     var onContainerList: (([NativeContainerListItem]) -> Void)?
     var onContainerStateChanged: (([NativeContainerListItem]) -> Void)?
+    var onImageList: (([NativeImageListItem]) -> Void)?
     private var lastContainerSnapshot: [NativeContainerListItem] = []
 
     var currentTerminalView: TerminalView {
@@ -504,11 +573,13 @@ final class PodishTerminalSession: ObservableObject {
         Task {
             do {
                 let state = try await runtime.startDefaultShell()
+                let images = try await runtime.refreshImages()
                 DispatchQueue.main.async {
                     self.lastContainerSnapshot = state.containers
                     self.reconcileRunningSessions(state.containers)
                     self.onContainerList?(state.containers)
                     self.onContainerStateChanged?(state.containers)
+                    self.onImageList?(images)
                     if let attached = state.attachedContainerId {
                         self.attachContainer(attached)
                     }
@@ -537,6 +608,20 @@ final class PodishTerminalSession: ObservableObject {
                     self.reconcileRunningSessions(items)
                     self.onContainerList?(items)
                     self.onContainerStateChanged?(items)
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func refreshImageList() {
+        Task {
+            do {
+                let items = try await runtime.refreshImages()
+                DispatchQueue.main.async {
+                    self.onImageList?(items)
+                    self.startupError = nil
                 }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }
@@ -580,6 +665,64 @@ final class PodishTerminalSession: ObservableObject {
                     }
                     self.terminalViews.removeValue(forKey: containerId)
                     self.terminalDelegates.removeValue(forKey: containerId)
+                    self.startupError = nil
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func pullImage(_ imageRef: String) {
+        Task {
+            do {
+                let items = try await runtime.pullImage(imageRef: imageRef)
+                DispatchQueue.main.async {
+                    self.onImageList?(items)
+                    self.startupError = nil
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func removeImage(_ imageRef: String) {
+        Task {
+            do {
+                let items = try await runtime.removeImage(imageRef: imageRef)
+                DispatchQueue.main.async {
+                    self.onImageList?(items)
+                    self.startupError = nil
+                }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func createContainer(from imageRef: String) {
+        Task {
+            do {
+                let previousActiveId = await MainActor.run { self.activeContainerId }
+                let containerId = try await runtime.createContainer(imageRef: imageRef)
+                let containers = try await runtime.refreshContainers()
+                let keepCurrentActive = previousActiveId != nil
+                    && containers.contains(where: { $0.containerId == previousActiveId && $0.running })
+
+                if !keepCurrentActive {
+                    try await runtime.ensureTerminalSession(containerId: containerId)
+                }
+
+                DispatchQueue.main.async {
+                    self.lastContainerSnapshot = containers
+                    self.reconcileRunningSessions(containers)
+                    self.onContainerList?(containers)
+                    self.onContainerStateChanged?(containers)
+                    if !keepCurrentActive {
+                        self.ensureTerminalView(containerId: containerId)
+                        self.activeContainerId = containerId
+                    }
                     self.startupError = nil
                 }
             } catch {
