@@ -18,6 +18,7 @@ final class PodishUiStore: ObservableObject {
     @Published var selectedContainerID: String?
     var onStartContainer: ((String) -> Void)?
     var onStopContainer: ((String) -> Void)?
+    var onRemoveContainer: ((String) -> Void)?
     var onAttachContainer: ((String) -> Void)?
 
     var runningContainers: [PodishContainer] { containers.filter { $0.state == .running } }
@@ -87,5 +88,9 @@ final class PodishUiStore: ObservableObject {
 
     func attach(_ container: PodishContainer) {
         onAttachContainer?(container.containerId)
+    }
+
+    func remove(_ container: PodishContainer) {
+        onRemoveContainer?(container.containerId)
     }
 }

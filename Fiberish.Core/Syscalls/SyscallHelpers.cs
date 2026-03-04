@@ -1,6 +1,8 @@
 using System.Text;
+using System.Linq;
 using Fiberish.Core;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
@@ -142,6 +144,79 @@ public partial class SyscallManager
     public void FreeFD(int fd)
     {
         if (FDs.Remove(fd, out var f)) f.Close();
+    }
+
+    public void CloseAllFileDescriptors()
+    {
+        var fds = FDs.Keys.ToList();
+        foreach (var fd in fds)
+            FreeFD(fd);
+    }
+
+    /// <summary>
+    ///     Best-effort container-wide writeback.
+    ///     Flushes shared mmap dirty pages, open-file sync paths, and mounted superblock page caches.
+    /// </summary>
+    public void SyncContainerPageCache()
+    {
+        var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
+        var managers = new HashSet<SyscallManager>();
+        if (scheduler != null)
+            foreach (var process in scheduler.GetProcessesSnapshot())
+                if (process.Syscalls != null)
+                    managers.Add(process.Syscalls);
+
+        if (managers.Count == 0)
+            managers.Add(this);
+
+        foreach (var manager in managers)
+            try
+            {
+                manager.Mem.SyncAllMappedSharedFiles(manager.Engine);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "SyncAllMappedSharedFiles failed for one process");
+            }
+
+        foreach (var manager in managers)
+            foreach (var file in manager.FDs.Values)
+                try
+                {
+                    file?.Dentry.Inode?.Sync(file);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Inode.Sync failed for one open file");
+                }
+
+        var superblocks = new HashSet<SuperBlock>();
+        foreach (var manager in managers)
+            foreach (var mount in manager.Mounts)
+                if (mount?.SB != null)
+                    superblocks.Add(mount.SB);
+
+        foreach (var sb in superblocks)
+        {
+            List<Inode> inodes;
+            lock (sb.Lock)
+            {
+                inodes = sb.Inodes.ToList();
+            }
+
+            foreach (var inode in inodes)
+            {
+                if (inode.PageCache == null) continue;
+                try
+                {
+                    _ = inode.WritePages(null, new WritePagesRequest(0, long.MaxValue, true));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "WritePages failed for one inode");
+                }
+            }
+        }
     }
 
     public (PathLocation loc, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)

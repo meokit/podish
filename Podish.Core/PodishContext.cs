@@ -91,12 +91,18 @@ public sealed class PodishContainerSession
     {
         return _processController.TrySignalInitProcess(signal);
     }
+
+    public bool ForceStop()
+    {
+        return _processController.TryForceStop();
+    }
 }
 
 public sealed class ContainerProcessController
 {
     private readonly object _lock = new();
     private Action<int>? _signalInit;
+    private Action? _forceStop;
     private readonly Queue<int> _pendingSignals = [];
 
     public int? InitPid { get; private set; }
@@ -125,8 +131,17 @@ public sealed class ContainerProcessController
         lock (_lock)
         {
             _signalInit = null;
+            _forceStop = null;
             InitPid = null;
             _pendingSignals.Clear();
+        }
+    }
+
+    public void BindRuntimeControl(Action forceStop)
+    {
+        lock (_lock)
+        {
+            _forceStop = forceStop;
         }
     }
 
@@ -144,6 +159,21 @@ public sealed class ContainerProcessController
         }
 
         target(signal);
+        return true;
+    }
+
+    public bool TryForceStop()
+    {
+        Action? stop;
+        lock (_lock)
+        {
+            stop = _forceStop;
+        }
+
+        if (stop == null)
+            return false;
+
+        stop();
         return true;
     }
 }

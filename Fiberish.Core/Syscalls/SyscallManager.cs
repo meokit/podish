@@ -179,6 +179,8 @@ public partial class SyscallManager
     public IEnumerable<MountNamespace.MountInfoEntry> MountInfoEntries =>
         _mountNamespace.GetMountInfoEntries();
 
+    public IReadOnlyList<Mount> Mounts => _mountNamespace.Mounts;
+
     /// <summary>
     ///     The root mount (for the filesystem namespace).
     /// </summary>

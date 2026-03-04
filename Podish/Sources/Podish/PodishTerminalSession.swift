@@ -157,7 +157,7 @@ actor PodishRuntimeActor {
     func startContainer(containerId: String) throws -> [NativeContainerListItem] {
         try ensureContext()
         let handle = try openContainer(containerId: containerId)
-        defer { pod_container_destroy(handle) }
+        defer { pod_container_close(handle) }
 
         let rc = pod_container_start(handle)
         if rc != 0 {
@@ -169,9 +169,21 @@ actor PodishRuntimeActor {
     func stopContainer(containerId: String) throws -> [NativeContainerListItem] {
         try ensureContext()
         let handle = try openContainer(containerId: containerId)
-        defer { pod_container_destroy(handle) }
+        defer { pod_container_close(handle) }
 
         let rc = pod_container_stop(handle, 15, 2000)
+        if rc != 0 {
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+        return try listContainers()
+    }
+
+    func removeContainer(containerId: String) throws -> [NativeContainerListItem] {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        defer { pod_container_close(handle) }
+
+        let rc = pod_container_remove(handle, 1)
         if rc != 0 {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
@@ -196,7 +208,7 @@ actor PodishRuntimeActor {
             terminal = nil
         }
         if let c = container {
-            pod_container_destroy(c)
+            pod_container_close(c)
             container = nil
         }
         if let c = ctx {
@@ -365,7 +377,7 @@ actor PodishRuntimeActor {
 
         let rcStart = pod_container_start(outContainer)
         if rcStart != 0 {
-            pod_container_destroy(outContainer)
+            pod_container_close(outContainer)
             throw PodishRuntimeError.native(code: rcStart, message: lastError())
         }
 
@@ -403,7 +415,7 @@ actor PodishRuntimeActor {
         readTask = nil
 
         if let currentContainer = container {
-            pod_container_destroy(currentContainer)
+            pod_container_close(currentContainer)
             container = nil
         }
 
@@ -480,7 +492,11 @@ final class PodishTerminalSession: ObservableObject {
     private var lastContainerSnapshot: [NativeContainerListItem] = []
 
     init() {
+        #if os(macOS)
+        terminalView = PodishTerminalView(frame: .zero)
+        #else
         terminalView = TerminalView(frame: .zero)
+        #endif
 
         let sink = TerminalSink(view: terminalView)
         let workDir = PodishTerminalSession.makeWorkDir()
@@ -585,6 +601,17 @@ final class PodishTerminalSession: ObservableObject {
         Task {
             do {
                 _ = try await runtime.stopContainer(containerId: containerId)
+                DispatchQueue.main.async { self.startupError = nil }
+            } catch {
+                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func removeContainer(_ containerId: String) {
+        Task {
+            do {
+                _ = try await runtime.removeContainer(containerId: containerId)
                 DispatchQueue.main.async { self.startupError = nil }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }

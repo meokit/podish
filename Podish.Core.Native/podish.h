@@ -40,6 +40,7 @@ int pod_container_list_json(void* ctx, uint8_t* buffer, int capacity, int* out_l
 int pod_container_inspect_json(void* container, uint8_t* buffer, int capacity, int* out_len);
 int pod_container_stop(void* container, int signal, int timeout_ms);
 int pod_container_remove(void* container, int force);
+void pod_container_close(void* container);
 void pod_container_destroy(void* container);
 int pod_container_set_output_callback(void* container, pod_terminal_output_cb callback, void* user_data);
 int pod_container_write_stdin(void* container, const uint8_t* data, int len, int* written);

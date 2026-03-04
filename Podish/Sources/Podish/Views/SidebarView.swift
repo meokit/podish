@@ -59,7 +59,23 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.borderless)
                     }
-                        .tag(container.id)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            store.remove(container)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    #if os(iOS)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            store.remove(container)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    #endif
+                    .tag(container.id)
                 }
             }
 
@@ -81,6 +97,22 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.borderless)
                     }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            store.remove(container)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    #if os(iOS)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            store.remove(container)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    #endif
                     .tag(container.id)
                 }
             }

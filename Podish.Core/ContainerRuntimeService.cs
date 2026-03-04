@@ -51,6 +51,7 @@ public sealed class ContainerRuntimeService
         scheduler.LoggerFactory = _loggerFactory;
 
         TtyDiscipline? ttyDiag = null;
+        KernelRuntime? runtime = null;
         FileStream? stdinStream = null;
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
@@ -120,7 +121,7 @@ public sealed class ContainerRuntimeService
                 return 1;
             }
 
-            var runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
+            runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
             if (request.UseOverlay)
             {
                 if (!TryCreateLayerLower(request.RootfsPath, out var layerLowerSb, out var layerProvider,
@@ -241,6 +242,21 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!);
+            request.ProcessController?.BindRuntimeControl(() =>
+            {
+                try
+                {
+                    // Best-effort container-wide writeback before forced stop.
+                    runtime.Syscalls.SyncContainerPageCache();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Force-stop writeback failed");
+                }
+
+                scheduler.Running = false;
+                scheduler.WakeUp();
+            });
             request.ProcessController?.BindInitProcess(mainTask.Process.TGID, sig => mainTask.PostSignal(sig));
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
@@ -308,6 +324,16 @@ public sealed class ContainerRuntimeService
             sigwinch?.Dispose();
             if (driver is IDisposable driverDisposable)
                 driverDisposable.Dispose();
+
+            try
+            {
+                foreach (var process in scheduler.GetProcessesSnapshot())
+                    process.Syscalls.CloseAllFileDescriptors();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to close all guest file descriptors during container teardown");
+            }
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);

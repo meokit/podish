@@ -149,6 +149,54 @@ public class HostfsPageCacheWritebackTests
         }
     }
 
+    [Fact]
+    public async Task Sync_WritesBackMappedDirtyPagesFromOtherProcessInSameContainer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-sync-container-wide-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "ABCDE");
+
+        var oldCurrent = KernelScheduler.Current;
+        try
+        {
+            using var engine1 = new Engine();
+            using var engine2 = new Engine();
+            var mm1 = new VMAManager();
+            var mm2 = new VMAManager();
+            var sm1 = new SyscallManager(engine1, mm1, 0);
+            var sm2 = new SyscallManager(engine2, mm2, 0);
+            sm1.MountRootHostfs(root);
+            sm2.MountRootHostfs(root);
+
+            var scheduler = new KernelScheduler();
+            KernelScheduler.Current = scheduler;
+            scheduler.RegisterProcess(new Process(1001, mm1, sm1));
+            scheduler.RegisterProcess(new Process(1002, mm2, sm2));
+
+            var loc2 = sm2.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc2.IsValid);
+            var file2 = new LinuxFile(loc2.Dentry!, FileFlags.O_RDWR, loc2.Mount!);
+            loc2.Dentry!.Inode!.Open(file2);
+            _ = sm2.AllocFD(file2);
+
+            const uint mapAddr = 0x45000000;
+            mm2.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file2, 0, (long)file2.Dentry.Inode!.Size, "MAP_SHARED", engine2);
+            Assert.True(mm2.HandleFault(mapAddr, true, engine2));
+            Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
+
+            var rc = await CallSys("SysSync", engine1.State);
+            Assert.Equal(0, rc);
+            Assert.Equal("AxyDE", File.ReadAllText(hostFile));
+        }
+        finally
+        {
+            KernelScheduler.Current = oldCurrent;
+            Directory.Delete(root, true);
+        }
+    }
+
     private static LinuxFile OpenHostFile(string rootDir, string relativePath)
     {
         var fsType = new FileSystemType { Name = "hostfs" };

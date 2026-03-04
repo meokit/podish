@@ -68,6 +68,9 @@ func pod_container_start(_ container: UnsafeMutableRawPointer?) -> Int32
 @_silgen_name("pod_container_stop")
 func pod_container_stop(_ container: UnsafeMutableRawPointer?, _ signal: Int32, _ timeout_ms: Int32) -> Int32
 
+@_silgen_name("pod_container_remove")
+func pod_container_remove(_ container: UnsafeMutableRawPointer?, _ force: Int32) -> Int32
+
 @_silgen_name("pod_container_list_json")
 func pod_container_list_json(
     _ ctx: UnsafeMutableRawPointer?,
@@ -78,6 +81,9 @@ func pod_container_list_json(
 
 @_silgen_name("pod_container_destroy")
 func pod_container_destroy(_ container: UnsafeMutableRawPointer?)
+
+@_silgen_name("pod_container_close")
+func pod_container_close(_ container: UnsafeMutableRawPointer?)
 
 @_silgen_name("pod_terminal_attach")
 func pod_terminal_attach(

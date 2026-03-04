@@ -1174,8 +1174,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        sm.Mem.SyncAllMappedSharedFiles(sm.Engine);
-        foreach (var file in sm.FDs.Values) file?.Dentry.Inode?.Sync(file);
+        sm.SyncContainerPageCache();
         return 0;
     }
 

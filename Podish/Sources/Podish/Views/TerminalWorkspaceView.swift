@@ -34,6 +34,11 @@ struct TerminalWorkspaceView: View {
             session.onContainerStateChanged = { items in
                 DispatchQueue.main.async {
                     store.applyContainerList(items)
+                    if let selectedId = store.selectedContainerID,
+                       let selected = store.containers.first(where: { $0.id == selectedId }),
+                       selected.state == .running {
+                        session.attachContainer(selected.containerId)
+                    }
                 }
             }
             store.onStartContainer = { containerId in
@@ -41,6 +46,9 @@ struct TerminalWorkspaceView: View {
             }
             store.onStopContainer = { containerId in
                 session.stopContainer(containerId)
+            }
+            store.onRemoveContainer = { containerId in
+                session.removeContainer(containerId)
             }
             store.onAttachContainer = { containerId in
                 session.attachContainer(containerId)

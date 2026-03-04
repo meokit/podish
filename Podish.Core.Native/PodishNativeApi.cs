@@ -155,6 +155,7 @@ internal sealed class NativeContext
 internal sealed class NativeContainer
 {
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly string _logicalId;
     private readonly DateTimeOffset _createdAt;
 
@@ -252,6 +253,9 @@ internal sealed class NativeContainer
 
     public async Task StartAsync()
     {
+        await _startGate.WaitAsync();
+        try
+        {
         PodishContainerSession? current;
         lock (_gate)
         {
@@ -290,6 +294,11 @@ internal sealed class NativeContainer
         }
         NotifyContainerStateChanged();
         _ = ObserveExitAsync(session);
+        }
+        finally
+        {
+            _startGate.Release();
+        }
     }
 
     public async Task<int> WaitAsync()
@@ -341,6 +350,50 @@ internal sealed class NativeContainer
         {
             return false;
         }
+    }
+
+    public bool ForceDestroy(int timeoutMs)
+    {
+        PodishContainerSession? session;
+        lock (_gate)
+        {
+            _removed = true;
+            session = _session;
+        }
+
+        if (session != null && !session.IsCompleted)
+        {
+            // Try graceful first, then force scheduler stop.
+            session.SignalInitProcess(15);
+            if (timeoutMs > 0)
+            {
+                try
+                {
+                    if (!session.WaitAsync().Wait(TimeSpan.FromMilliseconds(timeoutMs)))
+                    {
+                        session.ForceStop();
+                        session.WaitAsync().Wait(TimeSpan.FromMilliseconds(Math.Max(250, timeoutMs)));
+                    }
+                }
+                catch
+                {
+                    session.ForceStop();
+                }
+            }
+            else
+            {
+                session.ForceStop();
+            }
+        }
+
+        lock (_gate)
+        {
+            _persistedState = "exited";
+            PersistMetadataLocked("exited");
+        }
+
+        DeleteMetadataAndData();
+        return true;
     }
 
     public int ReadOutput(Span<byte> buffer, int timeoutMs)
@@ -614,6 +667,7 @@ public static class PodishNativeApi
         if (handle.Target is NativeContext nativeContext)
         {
             nativeContext.SetLogCallback(null, IntPtr.Zero);
+            nativeContext.SetContainerStateCallback(null, IntPtr.Zero);
             nativeContext.Context.Dispose();
         }
 
@@ -971,7 +1025,21 @@ public static class PodishNativeApi
             return PodEbusy;
 
         if (force != 0 && container.IsRunning)
-            container.Stop(15, 1000);
+        {
+            if (!container.Stop(15, 1000))
+            {
+                try
+                {
+                    container.ForceDestroy(1000);
+                    container.Owner.UnregisterContainer(container);
+                    return PodOk;
+                }
+                catch (Exception ex)
+                {
+                    return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
+                }
+            }
+        }
 
         try
         {
@@ -986,6 +1054,19 @@ public static class PodishNativeApi
         return PodOk;
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_close", CallConvs = [typeof(CallConvCdecl)])]
+    public static void PodContainerClose(IntPtr containerHandle)
+    {
+        if (containerHandle == IntPtr.Zero)
+            return;
+
+        var handle = GCHandle.FromIntPtr(containerHandle);
+        if (!handle.IsAllocated)
+            return;
+
+        handle.Free();
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "pod_container_destroy", CallConvs = [typeof(CallConvCdecl)])]
     public static void PodContainerDestroy(IntPtr containerHandle)
     {
@@ -997,7 +1078,20 @@ public static class PodishNativeApi
             return;
 
         if (handle.Target is NativeContainer container)
-            container.Owner.UnregisterContainer(container);
+        {
+            try
+            {
+                container.ForceDestroy(1000);
+            }
+            catch
+            {
+                // best-effort destroy
+            }
+            finally
+            {
+                container.Owner.UnregisterContainer(container);
+            }
+        }
 
         handle.Free();
     }
