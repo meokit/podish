@@ -82,6 +82,8 @@ public class TmpfsInode : Inode
         MTime = ATime = CTime = DateTime.Now;
     }
 
+    public override bool SupportsMmap => Type == InodeType.File;
+
     /// <summary>
     ///     Register an externally-created dentry as a child of this directory inode.
     ///     This updates _childNames AND the TmpfsSuperBlock.Dentries DCache so that

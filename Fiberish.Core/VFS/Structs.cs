@@ -324,39 +324,6 @@ public abstract class Inode : IPageCacheOps
         return rc;
     }
 
-    protected int GenericReadPageViaRead(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
-    {
-        if (request.Length < 0 || request.Length > pageBuffer.Length)
-            return -(int)Errno.EINVAL;
-        if (request.Length == 0)
-        {
-            pageBuffer.Clear();
-            return 0;
-        }
-
-        if (linuxFile == null) return -(int)Errno.EBADF;
-        pageBuffer.Clear();
-        var rc = Read(linuxFile, pageBuffer[..request.Length], request.FileOffset);
-        return rc < 0 ? rc : 0;
-    }
-
-    protected int GenericWritePageViaWrite(
-        LinuxFile? linuxFile,
-        PageIoRequest request,
-        ReadOnlySpan<byte> pageBuffer,
-        bool sync)
-    {
-        if (request.Length < 0 || request.Length > pageBuffer.Length)
-            return -(int)Errno.EINVAL;
-        if (request.Length == 0) return 0;
-        if (linuxFile == null) return -(int)Errno.EBADF;
-
-        var rc = Write(linuxFile, pageBuffer[..request.Length], request.FileOffset);
-        if (rc < 0) return rc;
-        if (sync) Sync(linuxFile);
-        return 0;
-    }
-
     public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         // Explicitly unsupported by default: filesystems must opt in.
@@ -445,6 +412,12 @@ public abstract class Inode : IPageCacheOps
     {
         return -(int)Errno.ENOSYS;
     }
+
+    /// <summary>
+    ///     Whether this inode supports file-backed mmap.
+    ///     Most inodes (devices, sockets, proc dynamic files, anon inodes) do not.
+    /// </summary>
+    public virtual bool SupportsMmap => false;
 
     public virtual int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
     {

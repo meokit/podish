@@ -288,6 +288,8 @@ public class LayerInode : Inode
         CTime = entry.CTime ?? DateTime.UnixEpoch;
     }
 
+    public override bool SupportsMmap => _entry.Type == InodeType.File;
+
     public override Dentry? Lookup(string name)
     {
         if (_entry.Type != InodeType.Directory) return null;

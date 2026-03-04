@@ -609,6 +609,7 @@ public partial class HostInode : Inode
     }
 
     public string HostPath { get; set; }
+    public override bool SupportsMmap => Type == InodeType.File;
 
     public override ulong Size
     {

@@ -96,6 +96,9 @@ public partial class SyscallManager
         {
             f = sm.GetFD(fd);
             if (f == null) return -(int)Errno.EBADF;
+            var inode = f.Dentry.Inode;
+            if (inode == null) return -(int)Errno.EBADF;
+            if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
             if (isShared && (prot & (int)Protection.Write) != 0)
             {
                 var canWrite = (f.Flags & (VFS.FileFlags.O_WRONLY | VFS.FileFlags.O_RDWR)) != 0;
