@@ -10,7 +10,8 @@ public static class ProcessFactory
         string[] envs,
         KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null)
     {
-        var proc = new Process(FiberTask.NextTID(), runtime.Memory, runtime.Syscalls)
+        var initPid = scheduler.AllocateTaskId();
+        var proc = new Process(initPid, runtime.Memory, runtime.Syscalls)
         {
             PGID = 0,
             SID = 0

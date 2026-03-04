@@ -34,6 +34,7 @@ public class KernelScheduler
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
+    private int _nextTaskId;
 
     private TtyDiscipline? _tty;
     private int _wakePending;
@@ -116,6 +117,11 @@ public class KernelScheduler
         {
             return _tasks.TryGetValue(tid, out var t) ? t : null;
         }
+    }
+
+    public int AllocateTaskId()
+    {
+        return Interlocked.Increment(ref _nextTaskId);
     }
 
     public void Schedule(FiberTask task)

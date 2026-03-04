@@ -1270,7 +1270,7 @@ public class FiberTask
 
             var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
             // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
-            newProc = new Process(NextTID(), newMem, newSys, Process.UTS)
+            newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
             {
                 PPID = Process.TGID,
                 PGID = Process.PGID,
@@ -1285,11 +1285,11 @@ public class FiberTask
                 newProc.SignalActions[kv.Key] = kv.Value;
             }
 
-            KernelScheduler.Current!.RegisterProcess(newProc);
+            CommonKernel.RegisterProcess(newProc);
         }
 
-        var newTid = cloneThread ? NextTID() : newProc.TGID;
-        var child = new FiberTask(newTid, newProc, newCpu, KernelScheduler.Current!);
+        var newTid = cloneThread ? CommonKernel.AllocateTaskId() : newProc.TGID;
+        var child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
         child.SignalMask = SignalMask;
         child.PendingSignals = 0;
         child.InterruptingSignal = null;
