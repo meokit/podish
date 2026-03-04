@@ -83,8 +83,9 @@ public sealed class ImageArchiveService
                 var imagePath = Path.Combine(storeDir, "image.json");
                 if (!File.Exists(imagePath))
                     throw new FileNotFoundException($"image metadata not found: {imagePath}");
-                var storedImage = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath))
-                                  ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
+                var storedImage =
+                    JsonSerializer.Deserialize(File.ReadAllText(imagePath), PodishJsonContext.Default.OciStoredImage)
+                    ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
 
                 var layerDescriptors = new List<OciDescriptor>(storedImage.Layers.Count);
                 var diffIds = new List<string>(storedImage.Layers.Count);
@@ -112,7 +113,7 @@ public sealed class ImageArchiveService
                     Os: "linux",
                     Rootfs: new OciRootFs("layers", diffIds),
                     History: diffIds.Select(_ => new OciHistory("fiberpod save")).ToList());
-                var configBytes = JsonSerializer.SerializeToUtf8Bytes(config, JsonOptions);
+                var configBytes = JsonSerializer.SerializeToUtf8Bytes(config, PodishJsonContext.Default.OciImageConfig);
                 var configHex = Sha256Hex(configBytes);
                 var configDigest = "sha256:" + configHex;
                 var configPath = Path.Combine(blobsRoot, configHex);
@@ -125,7 +126,8 @@ public sealed class ImageArchiveService
                     Config: new OciDescriptor("application/vnd.oci.image.config.v1+json", configDigest,
                         configBytes.LongLength),
                     Layers: layerDescriptors);
-                var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+                var manifestBytes =
+                    JsonSerializer.SerializeToUtf8Bytes(manifest, PodishJsonContext.Default.OciManifest);
                 var manifestHex = Sha256Hex(manifestBytes);
                 var manifestDigest = "sha256:" + manifestHex;
                 var manifestPath = Path.Combine(blobsRoot, manifestHex);
@@ -142,9 +144,11 @@ public sealed class ImageArchiveService
                     }));
             }
 
-            var layout = JsonSerializer.SerializeToUtf8Bytes(new OciLayout("1.0.0"), JsonOptions);
+            var layout =
+                JsonSerializer.SerializeToUtf8Bytes(new OciLayout("1.0.0"), PodishJsonContext.Default.OciLayout);
             File.WriteAllBytes(Path.Combine(layoutRoot, "oci-layout"), layout);
-            var index = JsonSerializer.SerializeToUtf8Bytes(new OciIndex(2, indexDescriptors), JsonOptions);
+            var index = JsonSerializer.SerializeToUtf8Bytes(new OciIndex(2, indexDescriptors),
+                PodishJsonContext.Default.OciIndex);
             File.WriteAllBytes(Path.Combine(layoutRoot, "index.json"), index);
 
             CreateTarFromDirectory(layoutRoot, archivePath);
@@ -164,7 +168,7 @@ public sealed class ImageArchiveService
     private IReadOnlyList<string> LoadOciArchiveExtracted(string extractedRoot)
     {
         var indexPath = Path.Combine(extractedRoot, "index.json");
-        var index = JsonSerializer.Deserialize<OciIndex>(File.ReadAllText(indexPath))
+        var index = JsonSerializer.Deserialize(File.ReadAllText(indexPath), PodishJsonContext.Default.OciIndex)
                     ?? throw new InvalidOperationException("invalid OCI index.json");
         if (index.Manifests == null || index.Manifests.Count == 0)
             throw new InvalidOperationException("OCI archive has no manifests");
@@ -178,8 +182,9 @@ public sealed class ImageArchiveService
                 : $"imported:{DigestHex(manifestDesc.Digest)[..12]}";
 
             var manifestBlobPath = OciBlobPath(extractedRoot, manifestDesc.Digest);
-            var manifest = JsonSerializer.Deserialize<OciManifest>(File.ReadAllText(manifestBlobPath))
-                           ?? throw new InvalidOperationException($"invalid manifest blob {manifestDesc.Digest}");
+            var manifest =
+                JsonSerializer.Deserialize(File.ReadAllText(manifestBlobPath), PodishJsonContext.Default.OciManifest)
+                ?? throw new InvalidOperationException($"invalid manifest blob {manifestDesc.Digest}");
 
             var safeName = ToSafeImageName(refName);
             var storeDir = Path.Combine(_ociImagesDir, safeName);
@@ -207,7 +212,8 @@ public sealed class ImageArchiveService
                         var persistedEntries = layerIndex.Entries.Values
                             .Select(e => e with { InlineData = null })
                             .ToList();
-                        File.WriteAllText(indexFile, JsonSerializer.Serialize(persistedEntries, JsonOptions));
+                        File.WriteAllText(indexFile,
+                            JsonSerializer.Serialize(persistedEntries, PodishJsonContext.Default.ListLayerIndexEntry));
                     }
 
                     layers.Add(new OciStoredLayer(
@@ -241,7 +247,8 @@ public sealed class ImageArchiveService
                 manifestDesc.Digest,
                 storeDir,
                 layers);
-            File.WriteAllText(Path.Combine(storeDir, "image.json"), JsonSerializer.Serialize(stored, JsonOptions));
+            File.WriteAllText(Path.Combine(storeDir, "image.json"),
+                JsonSerializer.Serialize(stored, PodishJsonContext.Default.OciStoredImage));
             loaded.Add(refName);
         }
 
@@ -274,7 +281,8 @@ public sealed class ImageArchiveService
             using (var tarStream = File.OpenRead(blobPath))
                 index = OciLayerIndexBuilder.BuildFromTar(tarStream, digest);
             var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
-            File.WriteAllText(indexPath, JsonSerializer.Serialize(index.Entries.Values.ToList(), JsonOptions));
+            File.WriteAllText(indexPath,
+                JsonSerializer.Serialize(index.Entries.Values.ToList(), PodishJsonContext.Default.ListLayerIndexEntry));
 
             var (registry, repository, tag) = ParseImageReference(imageReference);
             var layerSize = new FileInfo(blobPath).Length;
@@ -296,7 +304,7 @@ public sealed class ImageArchiveService
                 });
 
             File.WriteAllText(Path.Combine(storeDir, "image.json"),
-                JsonSerializer.Serialize(image, JsonOptions));
+                JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
             return image.ImageReference;
         }
         finally
@@ -377,7 +385,7 @@ public sealed class ImageArchiveService
         var imagePath = Path.Combine(storeDir, "image.json");
         if (!File.Exists(imagePath))
             throw new InvalidOperationException($"container image metadata missing: {imagePath}");
-        var image = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath))
+        var image = JsonSerializer.Deserialize(File.ReadAllText(imagePath), PodishJsonContext.Default.OciStoredImage)
                     ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
 
         var (lowerSb, lowerProvider) = BuildLowerSuperBlock(image);
@@ -413,7 +421,8 @@ public sealed class ImageArchiveService
                 throw new InvalidOperationException($"missing layer index file: {layer.IndexPath}");
             if (!File.Exists(layer.BlobPath))
                 throw new InvalidOperationException($"missing layer blob file: {layer.BlobPath}");
-            var entries = JsonSerializer.Deserialize<List<LayerIndexEntry>>(File.ReadAllText(layer.IndexPath))
+            var entries = JsonSerializer.Deserialize(File.ReadAllText(layer.IndexPath),
+                              PodishJsonContext.Default.ListLayerIndexEntry)
                           ?? throw new InvalidOperationException($"invalid layer index JSON: {layer.IndexPath}");
             layerIndexes.Add(entries);
             digestToBlobPath[layer.Digest] = layer.BlobPath;
@@ -538,7 +547,7 @@ public sealed class ImageArchiveService
             ContainerEvent? evt;
             try
             {
-                evt = JsonSerializer.Deserialize<ContainerEvent>(line);
+                evt = JsonSerializer.Deserialize(line, PodishJsonContext.Default.ContainerEvent);
             }
             catch
             {

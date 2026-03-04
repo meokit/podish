@@ -279,7 +279,7 @@ internal sealed class HostfsMetadataStore
         try
         {
             var json = File.ReadAllText(metaPath);
-            var parsed = JsonSerializer.Deserialize<HostfsMetaRecord>(json);
+            var parsed = JsonSerializer.Deserialize(json, HostfsJsonContext.Default.HostfsMetaRecord);
             if (parsed == null)
             {
                 record = default!;
@@ -302,7 +302,7 @@ internal sealed class HostfsMetadataStore
         var normalizedPath = Path.GetFullPath(hostPath);
         var metaPath = GetMetaPath(normalizedPath);
         var toSave = record with { Path = normalizedPath };
-        File.WriteAllText(metaPath, JsonSerializer.Serialize(toSave, JsonOptions));
+        File.WriteAllText(metaPath, JsonSerializer.Serialize(toSave, HostfsJsonContext.Default.HostfsMetaRecord));
     }
 
     public void Remove(string hostPath)
@@ -403,7 +403,7 @@ internal sealed class HostfsMetadataStore
             HostfsMetaRecord? record = null;
             try
             {
-                record = JsonSerializer.Deserialize<HostfsMetaRecord>(File.ReadAllText(file));
+                record = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsMetaRecord);
             }
             catch
             {

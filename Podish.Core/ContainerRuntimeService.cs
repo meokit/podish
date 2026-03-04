@@ -305,7 +305,8 @@ public sealed class ContainerRuntimeService
         OciStoredImage? storedImage;
         try
         {
-            storedImage = System.Text.Json.JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath));
+            storedImage = System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(imagePath),
+                PodishJsonContext.Default.OciStoredImage);
         }
         catch (Exception ex)
         {
@@ -338,8 +339,8 @@ public sealed class ContainerRuntimeService
             try
             {
                 var entries =
-                    System.Text.Json.JsonSerializer.Deserialize<List<LayerIndexEntry>>(
-                        File.ReadAllText(layer.IndexPath));
+                    System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(layer.IndexPath),
+                        PodishJsonContext.Default.ListLayerIndexEntry);
                 if (entries == null)
                 {
                     error = $"invalid layer index JSON: {layer.IndexPath}";

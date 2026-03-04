@@ -121,7 +121,8 @@ public class OciPullService
                 var persistedEntries = index.Entries.Values
                     .Select(e => e with { InlineData = null })
                     .ToList();
-                await File.WriteAllTextAsync(indexPath, JsonSerializer.Serialize(persistedEntries, JsonOptions));
+                await File.WriteAllTextAsync(indexPath,
+                    JsonSerializer.Serialize(persistedEntries, PodishJsonContext.Default.ListLayerIndexEntry));
             }
 
             storedLayers.Add(new OciStoredLayer(
@@ -141,7 +142,7 @@ public class OciPullService
             storeDirectory,
             storedLayers);
         await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
-            JsonSerializer.Serialize(image, JsonOptions));
+            JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
 
         _logger.LogInformation("Stored image {ImageReference} in OCI store {StoreDir} with {LayerCount} layers",
             imageReference, storeDirectory, storedLayers.Count);

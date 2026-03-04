@@ -580,8 +580,8 @@ public static class SyscallTracer
         try
         {
             // Read string from memory, limit to 256 chars
-            var str = sys.Engine.ReadStringSafe(addr, 256);
-            return JsonSerializer.Serialize(str, JsonOptions);
+            var str = sys.Engine.ReadStringSafe(addr, 256) ?? string.Empty;
+            return JsonSerializer.Serialize(str, SyscallTracerJsonContext.Default.String);
         }
         catch
         {
@@ -616,7 +616,7 @@ public static class SyscallTracer
             if (isPrintable)
             {
                 var str = Encoding.UTF8.GetString(buffer);
-                var json = JsonSerializer.Serialize(str, JsonOptions);
+                var json = JsonSerializer.Serialize(str, SyscallTracerJsonContext.Default.String);
                 if (len > displayLen) json = json.Substring(0, json.Length - 1) + "...\"\"";
                 return json;
             }

@@ -78,7 +78,7 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
             DateTimeOffset.UtcNow,
             kind == TtyEndpointKind.Stderr ? "stderr" : "stdout",
             Encoding.UTF8.GetString(buffer));
-        var json = JsonSerializer.Serialize(entry);
+        var json = JsonSerializer.Serialize(entry, PodishJsonContext.Default.ContainerLogEntry);
 
         lock (_gate)
         {
@@ -112,7 +112,7 @@ public sealed class ContainerEventStore
 
     public void Append(ContainerEvent evt)
     {
-        var json = JsonSerializer.Serialize(evt);
+        var json = JsonSerializer.Serialize(evt, PodishJsonContext.Default.ContainerEvent);
         lock (_gate)
         {
             File.AppendAllText(_path, json + Environment.NewLine);
@@ -130,7 +130,7 @@ public sealed class ContainerEventStore
             ContainerEvent? evt;
             try
             {
-                evt = JsonSerializer.Deserialize<ContainerEvent>(line);
+                evt = JsonSerializer.Deserialize(line, PodishJsonContext.Default.ContainerEvent);
             }
             catch
             {
