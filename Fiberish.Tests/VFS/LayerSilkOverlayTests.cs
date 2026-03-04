@@ -26,7 +26,7 @@ public class LayerSilkOverlayTests
             var sm = new SyscallManager(engine, new VMAManager(), 0);
 
             var layerType = FileSystemRegistry.Get("layerfs")!;
-            var lowerSb = layerType.FileSystem.ReadSuper(layerType, 0, "test-lower",
+            var lowerSb = layerType.CreateFileSystem().ReadSuper(layerType, 0, "test-lower",
                 new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
             sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
 

@@ -33,6 +33,7 @@ public partial class SyscallManager
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
+    private readonly FileSystemType _devptsFsType;
 
     internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
 
@@ -52,22 +53,22 @@ public partial class SyscallManager
         RegisterHandlers();
 
         // Register default filesystems
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", FileSystem = new LayerFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", FileSystem = new SilkFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new ProcFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = static () => new Hostfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static () => new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "overlay", Factory = static () => new OverlayFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static () => new LayerFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static () => new SilkFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static () => new ProcFileSystem() });
 
         PtyManager = new PtyManager(Logger);
         var signalBroadcaster = new SignalBroadcasterImpl(this);
-        FileSystemRegistry.TryRegister(new FileSystemType
-            { Name = "devpts", FileSystem = new DevPtsFileSystem(PtyManager, signalBroadcaster, Logger) });
+        _devptsFsType = CreateDevPtsFileSystemType(signalBroadcaster);
 
         // Default memfd superblock
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        MemfdSuperBlock = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "memfd", null);
+        MemfdSuperBlock = tmpFsType.CreateFileSystem().ReadSuper(tmpFsType, 0, "memfd", null);
 
         // Anonymous inode mount (like Linux's anon_inodefs)
         // Used for timerfd, eventfd, epoll, socket, etc.
@@ -110,6 +111,7 @@ public partial class SyscallManager
 
         // Share mount namespace
         _mountNamespace = mountNamespace;
+        _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl(this));
 
         Root.Dentry!.Inode!.Get();
         CurrentWorkingDirectory.Dentry!.Inode!.Get();
@@ -228,7 +230,7 @@ public partial class SyscallManager
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var sb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostPath, null);
+        var sb = hostFsType.CreateFileSystem().ReadSuper(hostFsType, 0, hostPath, null);
         MountRoot(sb, new RootMountOptions
         {
             Source = hostPath,
@@ -247,7 +249,7 @@ public partial class SyscallManager
         string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var lowerSb = hostFsType.FileSystem.ReadSuper(hostFsType, 0, hostRoot, null);
+        var lowerSb = hostFsType.CreateFileSystem().ReadSuper(hostFsType, 0, hostRoot, null);
         MountRootOverlayWithLower(lowerSb, upperFsType, upperSource, options);
     }
 
@@ -257,10 +259,10 @@ public partial class SyscallManager
         var upperType = FileSystemRegistry.Get(upperFsType) ??
                         throw new Exception($"Upper filesystem not registered: {upperFsType}");
         var overlayFsType = FileSystemRegistry.Get("overlay")!;
-        var upperSb = upperType.FileSystem.ReadSuper(upperType, 0, upperSource, null);
+        var upperSb = upperType.CreateFileSystem().ReadSuper(upperType, 0, upperSource, null);
 
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-        var overlaySb = overlayFsType.FileSystem.ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
+        var overlaySb = overlayFsType.CreateFileSystem().ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
 
         MountRoot(overlaySb, new RootMountOptions
         {
@@ -274,7 +276,7 @@ public partial class SyscallManager
     {
         var devLoc = ensureMountPoint ? EnsureDirectory(Root, "dev") : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
-        var devSb = devFsType.FileSystem.ReadSuper(devFsType, 0, "dev", null);
+        var devSb = devFsType.CreateFileSystem().ReadSuper(devFsType, 0, "dev", null);
 
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
@@ -296,8 +298,7 @@ public partial class SyscallManager
         if (mountedDevLoc.IsValid && mountedDevLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var ptsLoc = EnsureDirectory(mountedDevLoc, "pts");
-            var devptsFsType = FileSystemRegistry.Get("devpts")!;
-            var devptsSb = devptsFsType.FileSystem.ReadSuper(devptsFsType, 0, "devpts", null);
+            var devptsSb = _devptsFsType.CreateFileSystem().ReadSuper(_devptsFsType, 0, "devpts", null);
             var devptsMount = CreateDetachedMount(devptsSb, "devpts", "devpts", 0, "gid=5,mode=620");
             var attachRc = AttachDetachedMount(devptsMount, ptsLoc);
             if (attachRc != 0)
@@ -309,13 +310,22 @@ public partial class SyscallManager
         }
     }
 
+    private FileSystemType CreateDevPtsFileSystemType(ISignalBroadcaster signalBroadcaster)
+    {
+        return new FileSystemType
+        {
+            Name = "devpts",
+            Factory = () => new DevPtsFileSystem(PtyManager, signalBroadcaster, Logger)
+        };
+    }
+
     public void MountStandardProc(bool ensureMountPoint = true)
     {
         var procLoc = ensureMountPoint ? EnsureDirectory(Root, "proc") : PathWalk("/proc");
         if (procLoc.IsValid && procLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
-            var procSb = procFsType.FileSystem.ReadSuper(procFsType, 0, "proc", this);
+            var procSb = procFsType.CreateFileSystem().ReadSuper(procFsType, 0, "proc", this);
             var procMount = CreateDetachedMount(procSb, "proc", "proc", 0);
             var attachRc = AttachDetachedMount(procMount, procLoc);
             if (attachRc != 0)
@@ -330,7 +340,7 @@ public partial class SyscallManager
     public void MountStandardShm()
     {
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        var shmSb = tmpFsType.FileSystem.ReadSuper(tmpFsType, 0, "shm", null);
+        var shmSb = tmpFsType.CreateFileSystem().ReadSuper(tmpFsType, 0, "shm", null);
 
         // Resolve through the mounted /dev to avoid creating shm under a detached devtmpfs root.
         var devLoc = PathWalk("/dev");
@@ -695,7 +705,7 @@ public partial class SyscallManager
 
         try
         {
-            sb = fsType.FileSystem.ReadSuper(fsType, readSuperFlags, source!, readSuperData);
+            sb = fsType.CreateFileSystem().ReadSuper(fsType, readSuperFlags, source!, readSuperData);
         }
         catch
         {

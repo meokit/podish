@@ -41,8 +41,14 @@ public abstract class FileSystem
 
 public class FileSystemType
 {
-    public string Name { get; set; } = "";
-    public FileSystem FileSystem { get; set; } = null!;
+    public string Name { get; init; } = "";
+    public Func<FileSystem> Factory { get; init; } = static () =>
+        throw new InvalidOperationException("FileSystem factory is not configured.");
+
+    public FileSystem CreateFileSystem()
+    {
+        return Factory();
+    }
 }
 
 public abstract class SuperBlock

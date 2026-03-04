@@ -401,8 +401,8 @@ public sealed class ImageArchiveService
         var overlayType = FileSystemRegistry.Get("overlay")
                           ?? throw new InvalidOperationException("overlay is not registered");
 
-        var upperSb = silkType.FileSystem.ReadSuper(silkType, 0, upperStore, null);
-        var overlaySb = overlayType.FileSystem.ReadSuper(overlayType, 0, "export-overlay", new OverlayMountOptions
+        var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, upperStore, null);
+        var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "export-overlay", new OverlayMountOptions
         {
             Lower = lowerSb,
             Upper = upperSb
@@ -433,7 +433,7 @@ public sealed class ImageArchiveService
         if (layerType == null)
             throw new InvalidOperationException("layerfs is not registered");
         var provider = new TarBlobLayerContentProvider(digestToBlobPath);
-        var lowerSb = layerType.FileSystem.ReadSuper(layerType, 0, "layer-lower",
+        var lowerSb = layerType.CreateFileSystem().ReadSuper(layerType, 0, "layer-lower",
             new LayerMountOptions { Index = merged, ContentProvider = provider });
         return (lowerSb, provider);
     }
@@ -860,13 +860,14 @@ public sealed class ImageArchiveService
 
     private static void EnsureFileSystemsRegistered()
     {
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", FileSystem = new Hostfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", FileSystem = new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", FileSystem = new ProcFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "overlay", FileSystem = new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", FileSystem = new LayerFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", FileSystem = new SilkFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = static () => new Hostfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static () => new Tmpfs() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static () => new ProcFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "overlay", Factory = static () => new OverlayFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static () => new LayerFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static () => new SilkFileSystem() });
     }
 }
 

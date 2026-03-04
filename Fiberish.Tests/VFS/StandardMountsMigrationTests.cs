@@ -15,7 +15,7 @@ public class StandardMountsMigrationTests
         var vma = new VMAManager();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -52,6 +52,57 @@ public class StandardMountsMigrationTests
         finally
         {
             sm.Close();
+        }
+    }
+
+    [Fact]
+    public void DevPts_IsolatedPerSyscallManagerInstance()
+    {
+        using var engine1 = new Engine();
+        using var engine2 = new Engine();
+        var sm1 = new SyscallManager(engine1, new VMAManager(), 0);
+        var sm2 = new SyscallManager(engine2, new VMAManager(), 0);
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+
+        var rootSb1 = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root-1", null);
+        var rootMount1 = new Mount(rootSb1, rootSb1.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+        sm1.InitializeRoot(rootSb1.Root, rootMount1);
+
+        var rootSb2 = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root-2", null);
+        var rootMount2 = new Mount(rootSb2, rootSb2.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+        sm2.InitializeRoot(rootSb2.Root, rootMount2);
+
+        try
+        {
+            sm1.MountStandardDev();
+            sm2.MountStandardDev();
+
+            var ptmx1 = sm1.PathWalkWithFlags("/dev/ptmx", LookupFlags.FollowSymlink);
+            var ptmx2 = sm2.PathWalkWithFlags("/dev/ptmx", LookupFlags.FollowSymlink);
+            Assert.True(ptmx1.IsValid);
+            Assert.True(ptmx2.IsValid);
+
+            var file1 = new LinuxFile(ptmx1.Dentry!, FileFlags.O_RDWR, ptmx1.Mount!);
+            var file2 = new LinuxFile(ptmx2.Dentry!, FileFlags.O_RDWR, ptmx2.Mount!);
+
+            try
+            {
+                var pair1 = Assert.IsType<Fiberish.Core.VFS.TTY.PtyPair>(file1.PrivateData);
+                var pair2 = Assert.IsType<Fiberish.Core.VFS.TTY.PtyPair>(file2.PrivateData);
+
+                Assert.Equal(0, pair1.Index);
+                Assert.Equal(0, pair2.Index);
+            }
+            finally
+            {
+                file1.Close();
+                file2.Close();
+            }
+        }
+        finally
+        {
+            sm1.Close();
+            sm2.Close();
         }
     }
 }

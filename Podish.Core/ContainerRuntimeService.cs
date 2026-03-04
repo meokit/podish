@@ -132,8 +132,8 @@ public sealed class ContainerRuntimeService
                 var overlayType = FileSystemRegistry.Get("overlay")
                                   ?? throw new InvalidOperationException("overlay is not registered");
 
-                var upperSb = silkType.FileSystem.ReadSuper(silkType, 0, silkUpperStore, null);
-                var overlaySb = overlayType.FileSystem.ReadSuper(overlayType, 0, "root_overlay", new OverlayMountOptions
+                var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, silkUpperStore, null);
+                var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "root_overlay", new OverlayMountOptions
                 {
                     Lower = layerLowerSb!,
                     Upper = upperSb
@@ -153,7 +153,7 @@ public sealed class ContainerRuntimeService
             {
                 var hostType = FileSystemRegistry.Get("hostfs")
                                ?? throw new InvalidOperationException("hostfs is not registered");
-                var hostSb = hostType.FileSystem.ReadSuper(hostType, 0, request.RootfsPath, null);
+                var hostSb = hostType.CreateFileSystem().ReadSuper(hostType, 0, request.RootfsPath, null);
                 runtime.Syscalls.MountRoot(hostSb, new SyscallManager.RootMountOptions
                 {
                     Source = request.RootfsPath,
@@ -369,7 +369,7 @@ public sealed class ContainerRuntimeService
         }
 
         provider = new TarBlobLayerContentProvider(digestToBlobPath);
-        lowerSb = layerType.FileSystem.ReadSuper(layerType, 0, "layer-lower",
+        lowerSb = layerType.CreateFileSystem().ReadSuper(layerType, 0, "layer-lower",
             new LayerMountOptions { Index = merged, ContentProvider = (ILayerContentProvider)provider });
         return true;
     }

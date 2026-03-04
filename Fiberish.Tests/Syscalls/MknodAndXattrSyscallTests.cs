@@ -175,8 +175,8 @@ public class MknodAndXattrSyscallTests
                 var lowerSb = new HostSuperBlock(hostType, _tempLowerDir, hostOpts);
                 lowerSb.Root = lowerSb.GetDentry(_tempLowerDir, "/", null)!;
 
-                var tmpfsType = new FileSystemType { Name = "tmpfs", FileSystem = new Tmpfs() };
-                var upperSb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-overlay-upper", null);
+                var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+                var upperSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-overlay-upper", null);
 
                 var overlayFs = new OverlayFileSystem();
                 var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -196,7 +196,7 @@ public class MknodAndXattrSyscallTests
             else
             {
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var sb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-tmpfs", null);
+                var sb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
                 var mount = new Mount(sb, sb.Root)
                 {
                     Source = "tmpfs",

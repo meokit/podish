@@ -15,7 +15,7 @@ public class RootMountApiTests
         var sm = new SyscallManager(engine, new VMAManager(), 0);
 
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var sb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-root", null);
+        var sb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var root = sb.Root;
         var sub = new Dentry("sub", null, root, sb);
         root.Inode!.Mkdir(sub, 0x1FF, 0, 0);

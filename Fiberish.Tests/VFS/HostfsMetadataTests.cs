@@ -150,7 +150,7 @@ public class HostfsMetadataTests
         var vma = new VMAManager();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.FileSystem.ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
