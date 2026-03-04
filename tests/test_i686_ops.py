@@ -63,6 +63,22 @@ def case_pause():
     }
 
 @pytest.mark.i686
+def case_0f1e_nop_family():
+    """
+    ; 0F 1E /r should be treated as NOP-family.
+    ; Test both ENDBR64 (FA) and ENDBR32 (FB) encodings.
+    db 0xF3, 0x0F, 0x1E, 0xFA
+    db 0xF3, 0x0F, 0x1E, 0xFB
+    mov eax, 0x12345678
+    hlt
+    """
+    return {
+        'expected_regs': {
+            'EAX': 0x12345678
+        }
+    }
+
+@pytest.mark.i686
 def case_scas_repe():
     """
     ; Scan for 0xCC (Not present in 0x11, 0x11, 0x22)
@@ -391,6 +407,7 @@ def case_cmpxchg():
 
 def test_lods_rep(): run_test(case_lods_rep)
 def test_pause(): run_test(case_pause)
+def test_0f1e_nop_family(): run_test(case_0f1e_nop_family, check_unicorn=False)
 def test_scas_repe(): run_test(case_scas_repe)
 def test_scas_repne(): run_test(case_scas_repne)
 def test_cmps_repe(): run_test(case_cmps_repe)

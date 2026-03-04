@@ -87,6 +87,10 @@ void RegisterControlOps() {
     g_Handlers[0x11F] = DispatchWrapper<OpNop>;         // Multi-byte NOP (0F 1F)
     g_Handlers[0x1AE] = DispatchWrapper<OpGroup_0FAE>;  // 0F AE /r
     g_Handlers[0x62] = DispatchWrapper<OpBound>;        // BOUND
+
+    // 0F 1E /r: NOP-family (incl. ENDBR32/ENDBR64 encodings under CET).
+    // Emulate the whole opcode class as NOP.
+    g_Handlers[0x11E] = DispatchWrapper<OpNop>;
 }
 
 }  // namespace fiberish
