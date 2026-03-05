@@ -67,8 +67,8 @@ codesign -f -s - build/bin/libfibercpu.dylib
 ```bash
 # Copy the native library to the output directory or ensure it's in LD_LIBRARY_PATH
 dotnet build Fiberish.App/Fiberish.App.csproj
-cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net8.0/  # macOS
-# cp build/bin/libfibercpu.so Fiberish.App/bin/Debug/net8.0/     # Linux
+cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net10.0/  # macOS
+# cp build/bin/libfibercpu.so Fiberish.App/bin/Debug/net10.0/     # Linux
 ```
 
 ## Usage

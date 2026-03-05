@@ -16,7 +16,7 @@ echo "Building Bifrost emulator..."
     echo "Failed to build Bifrost!"
     exit 1
 }
-EMULATOR="$SCRIPT_DIR/../../linux/bin/Debug/net8.0/Bifrost"
+EMULATOR="$SCRIPT_DIR/../../linux/bin/Debug/net10.0/Bifrost"
 
 # Check if we need to build Busybox
 if [ -f "$ROOTFS/bin/busybox" ]; then

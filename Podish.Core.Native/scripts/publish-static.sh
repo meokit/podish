@@ -16,6 +16,16 @@ mkdir -p "$WORK_ROOT" "$OUT_ROOT"
 
 export MSBUILDDISABLENODEREUSE=1
 
+require_dotnet_10() {
+  local sdk_ver sdk_major
+  sdk_ver="$(dotnet --version)"
+  sdk_major="${sdk_ver%%.*}"
+  if [ -z "$sdk_major" ] || [ "$sdk_major" -lt 10 ]; then
+    echo "error: .NET SDK 10+ is required. current=$sdk_ver" >&2
+    exit 1
+  fi
+}
+
 find_bootstrapper_dll_obj() {
   local rid="$1"
   local pkg_base pkg_dir native_dir sdk_dir ilc_base ilc_dir
@@ -80,6 +90,8 @@ build_library_for_rid() {
   rm -rf "$rid_out"
   mkdir -p "$headers_dir"
 
+  # Restore for the concrete RID first so build/publish always resolves RID-specific assets.
+  dotnet restore "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -r "$rid" --nologo
   dotnet build "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -c Release --nologo /p:PodishStaticNative=true /p:RuntimeIdentifier="$rid"
   dotnet restore "$PROJ" -r "$rid" --nologo /p:TargetFramework="$TFM" /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
   dotnet publish "$PROJ" -f "$TFM" -c Release -r "$rid" -o "$rid_out" --nologo /p:PodishStaticNative=true /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
@@ -132,6 +144,7 @@ build_library_for_rid() {
   xcrun libtool -static -o "$static_out" $dedup_inputs
 }
 
+require_dotnet_10
 for rid in "${RIDS[@]}"; do
   build_library_for_rid "$rid"
 done
@@ -144,3 +157,5 @@ xcodebuild -create-xcframework \
 
 echo "Published multi-platform XCFramework:"
 echo "  $XCFRAMEWORK_OUT"
+echo "$TFM" > "$OUT_ROOT/.tfm"
+echo "TFM marker written to $OUT_ROOT/.tfm"
