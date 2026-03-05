@@ -2,8 +2,14 @@ import SwiftUI
 
 @MainActor
 final class PodishUiStore: ObservableObject {
+    enum PendingContainerAction {
+        case starting
+        case stopping
+    }
+
     @Published var containers: [PodishContainer] = []
     @Published var images: [PodishImage] = []
+    @Published private(set) var pendingContainerActions: [String: PendingContainerAction] = [:]
 
     @Published var events: [String] = [
         "container-start alpine-shell",
@@ -62,6 +68,29 @@ final class PodishUiStore: ObservableObject {
             containers = mapped
         }
 
+        // Resolve pending actions based on observed runtime state.
+        var nextPending = pendingContainerActions
+        let knownIds = Set(containers.map(\.containerId))
+        for container in containers {
+            guard let action = nextPending[container.containerId] else { continue }
+            switch action {
+            case .starting:
+                if container.state == .running {
+                    nextPending.removeValue(forKey: container.containerId)
+                }
+            case .stopping:
+                if container.state != .running {
+                    nextPending.removeValue(forKey: container.containerId)
+                }
+            }
+        }
+        for id in nextPending.keys where !knownIds.contains(id) {
+            nextPending.removeValue(forKey: id)
+        }
+        if nextPending != pendingContainerActions {
+            pendingContainerActions = nextPending
+        }
+
         let nextSelected: String?
         if let previous, containers.contains(where: { $0.id == previous }) {
             nextSelected = previous
@@ -95,11 +124,21 @@ final class PodishUiStore: ObservableObject {
     }
 
     func start(_ container: PodishContainer) {
+        pendingContainerActions[container.containerId] = .starting
         onStartContainer?(container.containerId)
     }
 
     func stop(_ container: PodishContainer) {
+        pendingContainerActions[container.containerId] = .stopping
         onStopContainer?(container.containerId)
+    }
+
+    func pendingAction(for containerId: String) -> PendingContainerAction? {
+        pendingContainerActions[containerId]
+    }
+
+    func clearPendingAction(for containerId: String) {
+        pendingContainerActions.removeValue(forKey: containerId)
     }
 
     func attach(_ container: PodishContainer) {

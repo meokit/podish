@@ -445,7 +445,7 @@ actor PodishRuntimeActor {
         let spec = PodishRunSpec(
             image: imageRef,
             rootfs: nil,
-            exe: "/bin/sh",
+            exe: "/bin/ash",
             exeArgs: ["-i"],
             volumes: [],
             env: [],
@@ -579,7 +579,7 @@ final class PodishTerminalSession: ObservableObject {
                     }
                 },
                 onLog: { line in
-                    print("[PodishCore] \(line)")
+                    PodishLog.core(line)
                 },
                 onContainerState: { [weak self] items in
                     guard let self else { return }
@@ -657,7 +657,7 @@ final class PodishTerminalSession: ObservableObject {
         }
     }
 
-    func startContainer(_ containerId: String) {
+    func startContainer(_ containerId: String, completion: ((Bool) -> Void)? = nil) {
         Task {
             do {
                 _ = try await runtime.startContainer(containerId: containerId)
@@ -665,20 +665,32 @@ final class PodishTerminalSession: ObservableObject {
                 DispatchQueue.main.async {
                     self.ensureTerminalView(containerId: containerId)
                     self.startupError = nil
+                    completion?(true)
                 }
             } catch {
-                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+                DispatchQueue.main.async {
+                    self.startupError = error.localizedDescription
+                    completion?(false)
+                }
             }
         }
     }
 
-    func stopContainer(_ containerId: String) {
+    func stopContainer(_ containerId: String, completion: ((Bool) -> Void)? = nil) {
         Task {
             do {
                 _ = try await runtime.stopContainer(containerId: containerId)
-                DispatchQueue.main.async { self.startupError = nil }
+                DispatchQueue.main.async {
+                    // Separate the next session prompt from the previous line content.
+                    self.terminalViews[containerId]?.feed(byteArray: ArraySlice([0x0D, 0x0A]))
+                    self.startupError = nil
+                    completion?(true)
+                }
             } catch {
-                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+                DispatchQueue.main.async {
+                    self.startupError = error.localizedDescription
+                    completion?(false)
+                }
             }
         }
     }

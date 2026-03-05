@@ -50,7 +50,14 @@ struct PodishRootView: View {
         .onAppear {
             store.onShowNewContainer = {
                 DispatchQueue.main.async {
-                    showNewContainer = true
+                    if showSidebar {
+                        showSidebar = false
+                        DispatchQueue.main.async {
+                            showNewContainer = true
+                        }
+                    } else {
+                        showNewContainer = true
+                    }
                 }
             }
         }

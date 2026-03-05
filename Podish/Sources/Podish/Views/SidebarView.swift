@@ -27,7 +27,29 @@ struct SidebarView: View {
     @State private var localSelection: String?
 
     var body: some View {
+        #if os(macOS)
+        VStack(spacing: 10) {
+            Button {
+                store.showNewContainer()
+            } label: {
+                Label("New Container", systemImage: "plus.rectangle.on.rectangle")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+
+            containerList
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        #else
+        containerList
+        #endif
+    }
+
+    private var containerList: some View {
         List(selection: $localSelection) {
+            #if !os(macOS)
             Section("Actions") {
                 Button {
                     store.showNewContainer()
@@ -36,18 +58,26 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
             }
+            #endif
 
             Section("Running") {
                 ForEach(store.runningContainers) { container in
                     HStack(spacing: 8) {
                         ContainerRowView(container: container)
                         Spacer(minLength: 4)
-                        Button {
-                            store.stop(container)
-                        } label: {
-                            Image(systemName: "stop.fill")
+                        if store.pendingAction(for: container.containerId) == .stopping {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 18, height: 18)
+                        } else {
+                            Button {
+                                store.stop(container)
+                            } label: {
+                                Image(systemName: "stop.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(store.pendingAction(for: container.containerId) != nil)
                         }
-                        .buttonStyle(.borderless)
                         Button {
                             onShowDetails(container)
                         } label: {
@@ -80,12 +110,19 @@ struct SidebarView: View {
                     HStack(spacing: 8) {
                         ContainerRowView(container: container)
                         Spacer(minLength: 4)
-                        Button {
-                            store.start(container)
-                        } label: {
-                            Image(systemName: "play.fill")
+                        if store.pendingAction(for: container.containerId) == .starting {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 18, height: 18)
+                        } else {
+                            Button {
+                                store.start(container)
+                            } label: {
+                                Image(systemName: "play.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(store.pendingAction(for: container.containerId) != nil)
                         }
-                        .buttonStyle(.borderless)
                         Button {
                             onShowDetails(container)
                         } label: {

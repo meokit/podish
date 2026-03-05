@@ -48,10 +48,14 @@ struct TerminalWorkspaceView: View {
                 }
             }
             store.onStartContainer = { containerId in
-                session.startContainer(containerId)
+                session.startContainer(containerId) { _ in
+                    store.clearPendingAction(for: containerId)
+                }
             }
             store.onStopContainer = { containerId in
-                session.stopContainer(containerId)
+                session.stopContainer(containerId) { _ in
+                    store.clearPendingAction(for: containerId)
+                }
             }
             store.onRemoveContainer = { containerId in
                 session.removeContainer(containerId)
