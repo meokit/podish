@@ -19,6 +19,7 @@
 		A0000000000000000000003A /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */; };
 		A0000000000000000000003B /* Sources/Podish/Views/PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */; };
 		A0000000000000000000003D /* Sources/Podish/PodishLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002E /* Sources/Podish/PodishLog.swift */; };
+		A0000000000000000000003E /* PodishApp/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002F /* PodishApp/Assets.xcassets */; };
 		A0000000000000000000003C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000082 /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
@@ -38,6 +39,7 @@
 		A0000000000000000000002C /* PodishApp/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/Info.plist; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002D /* PodishApp/MacInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/MacInfo.plist; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002E /* Sources/Podish/PodishLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishLog.swift; sourceTree = SOURCE_ROOT; };
+		A0000000000000000000002F /* PodishApp/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PodishApp/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 				A0000000000000000000002C /* PodishApp/Info.plist */,
 				A0000000000000000000002D /* PodishApp/MacInfo.plist */,
 				A0000000000000000000002E /* Sources/Podish/PodishLog.swift */,
+				A0000000000000000000002F /* PodishApp/Assets.xcassets */,
 			);
 			path = PodishApp;
 			sourceTree = "<group>";
@@ -153,6 +156,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A0000000000000000000003E /* PodishApp/Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -221,6 +225,7 @@
 		A000000000000000000000A0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 					ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 					CODE_SIGN_STYLE = Automatic;
 					CURRENT_PROJECT_VERSION = 1;
@@ -286,6 +291,7 @@
 		A000000000000000000000A1 /* Release */ = {
 			isa = XCBuildConfiguration;
 				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 					ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 					CODE_SIGN_STYLE = Automatic;
 					CURRENT_PROJECT_VERSION = 1;
