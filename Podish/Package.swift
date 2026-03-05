@@ -29,7 +29,7 @@ let package = Package(
         .executable(name: "Podish", targets: ["Podish"])
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
+        .package(path: "Vendor/SwiftTerm")
     ],
     targets: [
         .executableTarget(

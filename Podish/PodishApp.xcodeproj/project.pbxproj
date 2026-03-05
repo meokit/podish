@@ -520,21 +520,17 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		A00000000000000000000081 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.2.0;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		A00000000000000000000081 /* XCLocalSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/SwiftTerm;
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		A00000000000000000000082 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A00000000000000000000081 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			package = A00000000000000000000081 /* XCLocalSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */

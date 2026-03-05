@@ -38,3 +38,5 @@ Fiberish.X86/build_native
 tests/alpine-rootfs/
 tests/openssl/rootfs/
 tests/openssl/build_podman/
+*.xcuserstate
+xcuserdata/
