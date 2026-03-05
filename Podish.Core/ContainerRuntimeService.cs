@@ -78,6 +78,19 @@ public sealed class ContainerRuntimeService
             {
                 var res = Fiberish.Core.VFS.TTY.MacOSTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
+
+                // Last-resort cleanup: disable raw mode on any exit path
+                // (Ctrl-C, unhandled exception, Environment.Exit, etc.)
+                void RawModeCleanup()
+                {
+                    try { Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(0); } catch { }
+                }
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => RawModeCleanup();
+                Console.CancelKeyPress += (_, e) =>
+                {
+                    RawModeCleanup();
+                    // Don't cancel — let the default SIGINT handling terminate the process.
+                };
             }
 
             inputCts = new CancellationTokenSource();
@@ -336,7 +349,7 @@ public sealed class ContainerRuntimeService
             }
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(1);
+                Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(0);
 
             request.ProcessController?.Unbind();
         }
