@@ -12,19 +12,19 @@ Open `/Users/jiangyiheng/repos/x86emu/Podish/Package.swift` in Xcode.
 cd /Users/jiangyiheng/repos/x86emu
 dotnet restore Fiberish.sln
 cd /Users/jiangyiheng/repos/x86emu/Podish
-bash ../Podish.Core.Native/scripts/publish-static.sh osx-arm64 artifacts/podish-native/osx-arm64
+bash ../Podish.Core.Native/scripts/publish-static.sh
 swift build
 ```
 
-The publish script will run `dotnet restore/publish` for `Podish.Core.Native` and stage outputs (including `PodishCore.framework`) at:
-`/Users/jiangyiheng/repos/x86emu/Podish/artifacts/podish-native/osx-arm64`
+The publish script builds all Apple slices (`osx-arm64`, `ios-arm64`, `iossimulator-arm64`) and produces:
+`/Users/jiangyiheng/repos/x86emu/Podish/artifacts/podish-native/PodishCore.xcframework`
 
-## Build iOS native artifacts (arm64)
+## Build iOS native artifacts
 
 ```bash
 cd /Users/jiangyiheng/repos/x86emu/Podish
 dotnet workload restore ../Podish.Core.Native/Podish.Core.Native.csproj
-bash ../Podish.Core.Native/scripts/publish-static.sh ios-arm64 artifacts/podish-native/ios-arm64
+bash ../Podish.Core.Native/scripts/publish-static.sh
 ```
 
 Then build for iPhone:

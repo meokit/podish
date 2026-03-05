@@ -1,23 +1,5 @@
 // swift-tools-version: 6.0
-import Foundation
 import PackageDescription
-
-let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-let macNativeLibDir = "\(packageDir)/artifacts/podish-native/osx-arm64"
-let env = ProcessInfo.processInfo.environment
-let platformName = env["PLATFORM_NAME"] ?? env["EFFECTIVE_PLATFORM_NAME"] ?? ""
-let sdkName = env["SDK_NAME"] ?? ""
-let sdkRoot = env["SDKROOT"] ?? ""
-let isSimulatorBuild = platformName.contains("simulator")
-    || sdkName.contains("simulator")
-    || sdkRoot.contains("iPhoneSimulator")
-let isDeviceBuild = platformName.contains("iphoneos")
-    || sdkName.contains("iphoneos")
-    || sdkRoot.contains("iPhoneOS")
-// Prefer simulator when env is ambiguous.
-let defaultIosRid = isDeviceBuild && !isSimulatorBuild ? "ios-arm64" : "iossimulator-arm64"
-let iosRid = env["PODISH_IOS_RID"] ?? defaultIosRid
-let iosNativeLibDir = "\(packageDir)/artifacts/podish-native/\(iosRid)"
 
 let package = Package(
     name: "Podish",
@@ -32,23 +14,21 @@ let package = Package(
         .package(path: "Vendor/SwiftTerm")
     ],
     targets: [
+        .binaryTarget(
+            name: "PodishCoreBinary",
+            path: "artifacts/podish-native/PodishCore.xcframework"
+        ),
         .executableTarget(
             name: "Podish",
             dependencies: [
+                "PodishCoreBinary",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             linkerSettings: [
                 .unsafeFlags([
-                    "-F", macNativeLibDir
-                ], .when(platforms: [.macOS])),
-                .unsafeFlags([
-                    "-F", iosNativeLibDir
-                ], .when(platforms: [.iOS])),
-                .unsafeFlags([
                     "-Xlinker", "-u",
                     "-Xlinker", "___managed__Startup"
                 ], .when(platforms: [.macOS, .iOS])),
-                .linkedFramework("PodishCore", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Foundation", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Security", .when(platforms: [.macOS, .iOS])),

@@ -228,9 +228,13 @@
 					ENABLE_PREVIEWS = YES;
 					"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 					FRAMEWORK_SEARCH_PATHS = "$(inherited)";
-					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/osx-arm64";
-					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64";
-					"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
+					LIBRARY_SEARCH_PATHS = "$(inherited)";
+					"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
+					"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
+					"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
 					GENERATE_INFOPLIST_FILE = NO;
 					INFOPLIST_FILE = PodishApp/Info.plist;
 					"INFOPLIST_FILE[sdk=macosx*]" = PodishApp/MacInfo.plist;
@@ -247,8 +251,7 @@
 					OTHER_LDFLAGS = (
 						"$(inherited)",
 						"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework",
-					PodishCore,
+					"-lPodishCore",
 					"-framework",
 					Foundation,
 					"-framework",
@@ -267,9 +270,9 @@
 					"___managed__Startup",
 					);
 					PODISHCORE_BOOTSTRAPPER_OBJ = "";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64/podish_bootstrapper.o";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/_staging/osx-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/_staging/ios-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/_staging/iossimulator-arm64/podish_bootstrapper.o";
 					PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
 					"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = dev.podish.macapp;
 					PRODUCT_NAME = "$(TARGET_NAME)";
@@ -289,9 +292,13 @@
 					DEVELOPMENT_TEAM = 4P59922UZ6;
 					"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 					FRAMEWORK_SEARCH_PATHS = "$(inherited)";
-					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/osx-arm64";
-					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64";
-					"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
+					"FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
+					LIBRARY_SEARCH_PATHS = "$(inherited)";
+					"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
+					"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
+					"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
 					GENERATE_INFOPLIST_FILE = NO;
 					INFOPLIST_FILE = PodishApp/Info.plist;
 					"INFOPLIST_FILE[sdk=macosx*]" = PodishApp/MacInfo.plist;
@@ -308,8 +315,7 @@
 					OTHER_LDFLAGS = (
 						"$(inherited)",
 						"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework",
-					PodishCore,
+					"-lPodishCore",
 					"-framework",
 					Foundation,
 					"-framework",
@@ -328,9 +334,9 @@
 					"___managed__Startup",
 					);
 					PODISHCORE_BOOTSTRAPPER_OBJ = "";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64/podish_bootstrapper.o";
-					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/_staging/osx-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/_staging/ios-arm64/podish_bootstrapper.o";
+					"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/_staging/iossimulator-arm64/podish_bootstrapper.o";
 					PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
 					"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = dev.podish.macapp;
 					PRODUCT_NAME = "$(TARGET_NAME)";
