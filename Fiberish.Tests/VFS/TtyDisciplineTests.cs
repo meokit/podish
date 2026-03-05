@@ -50,7 +50,7 @@ public class TtyDisciplineTests
         _driver.Output.Clear();
 
         // Disable ECHO, enable ECHONL
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~8u; // ECHO off
@@ -95,7 +95,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Enable IUTF8
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x4000u; // IUTF8
@@ -162,7 +162,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Switch to raw mode
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         // ICANON is bit 1 (value 2) in lflag
         var lflag = BitConverter.ToUInt32(termios, 12);
@@ -235,7 +235,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Switch to raw mode and configure VMIN=2, VTIME=0
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~2u; // ICANON off
@@ -266,7 +266,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Switch to raw mode and configure VMIN=3, VTIME=1 (100ms)
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~2u; // ICANON off
@@ -294,7 +294,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Switch to raw mode and configure VMIN=0, VTIME=5 (500ms)
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~2u; // ICANON off
@@ -358,7 +358,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Set NOFLSH flag and add some data
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag |= 128u; // NOFLSH
@@ -624,7 +624,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Enable IGNCR
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x80u; // IGNCR
@@ -648,7 +648,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Enable INLCR, disable ICRNL
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x40u; // INLCR
@@ -677,7 +677,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Enable ISTRIP
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x20u; // ISTRIP
@@ -703,7 +703,7 @@ public class TtyDisciplineTests
         var buffer = new byte[100];
 
         // Enable IUCLC
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x200u; // IUCLC (0x200)
@@ -729,7 +729,7 @@ public class TtyDisciplineTests
         var buffer = new byte[4096]; // Read buffer
 
         // Enable IMAXBEL
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x2000u; // IMAXBEL (0x2000)
@@ -792,7 +792,7 @@ public class TtyDisciplineTests
         _driver.Output.Clear();
 
         // Enable OCRNL
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var oflag = BitConverter.ToUInt32(termios, 4);
         oflag |= 8u; // OCRNL
@@ -815,7 +815,7 @@ public class TtyDisciplineTests
         _driver.Output.Clear();
 
         // Enable ONLRET
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var oflag = BitConverter.ToUInt32(termios, 4);
         oflag |= 32u; // ONLRET
@@ -837,7 +837,7 @@ public class TtyDisciplineTests
         _driver.Output.Clear();
 
         // Enable OLCUC
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var oflag = BitConverter.ToUInt32(termios, 4);
         oflag |= 2u; // OLCUC (2)
@@ -966,7 +966,7 @@ public class TtyDisciplineTests
     public void Input_is_bounded_by_64k_ring_buffer()
     {
         // Switch to raw mode so input queue reflects bytes directly.
-        var termios = new byte[60];
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
         _tty.GetAttr(termios);
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~2u; // ICANON off

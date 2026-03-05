@@ -237,7 +237,7 @@ public partial class SyscallManager
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var sb = hostFsType.CreateFileSystem().ReadSuper(hostFsType, 0, hostPath, null);
+        var sb = hostFsType.CreateFileSystem().ReadSuper(hostFsType, 0, hostPath, options);
         MountRoot(sb, new RootMountOptions
         {
             Source = hostPath,
