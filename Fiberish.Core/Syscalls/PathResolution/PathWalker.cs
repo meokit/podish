@@ -174,7 +174,17 @@ public class PathWalker
             }
 
             var component = nd.PathString[start..nd.PathPosition];
-            var isLast = nd.PathPosition >= nd.PathString.Length;
+            
+            // A component is the last one if everything after it is just slashes
+            var isLast = true;
+            for (var i = nd.PathPosition; i < nd.PathString.Length; i++)
+            {
+                if (nd.PathString[i] != '/')
+                {
+                    isLast = false;
+                    break;
+                }
+            }
 
             // Handle the component
             if (component == "." || component == "")
