@@ -258,14 +258,12 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             _task.Continuation = continuation;
+            _task.ArmSignalSafetyNet(_token, () =>
+            {
+                _task.Continuation = continuation;
+                KernelScheduler.Current?.Schedule(_task);
+            });
         }
 
         public AwaitResult GetResult()
@@ -459,43 +457,28 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            if (_task.HasUnblockedPendingSignal())
-            {
-                Logger.LogInformation("[SysNanosleepAwaiter] TID={Tid} immediate wake by signal", _task.TID);
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             var scheduler = KernelScheduler.Current!;
             Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} arm timer {DelayMs}ms", _task.TID, _totalMs);
             var timer = scheduler.ScheduleTimer(_totalMs, () =>
             {
                 Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer callback enter wakeReason={WakeReason}",
                     _task.TID, _task.GetWaitReason(_token));
-                if (_task.GetWaitReason(_token) != WakeReason.Signal)
-                {
-                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired", _task.TID);
-                    if (!_task.TrySetWaitReason(_token, WakeReason.Timer)) return;
-                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation from timer", _task.TID);
-                    scheduler.Schedule(continuation, _task);
-                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation done", _task.TID);
-                }
-                else
-                {
-                    Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired but wakeReason={WakeReason}",
-                        _task.TID, _task.GetWaitReason(_token));
-                }
+                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired", _task.TID);
+                if (!_task.TrySetWaitReason(_token, WakeReason.Timer)) return;
+                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation from timer", _task.TID);
+                scheduler.Schedule(continuation, _task);
+                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation done", _task.TID);
             });
 
-            // Store timer in task so we can cancel it if needed (but currently FiberTask doesn't have a generic ActiveTimer).
-            // Actually, we don't strictly need to cancel it if we handle WakeReason correctly.
-            // If PostSignal wakes it up, _task.WakeReason will be Signal, and _task is scheduled.
-            // The timer will eventually fire and see WakeReason != None, or it will just be a no-op if the task continued.
-            // But wait, if the task resumes, it might start another wait. If the old timer fires, it might corrupt the new wait!
-            // We need a way to cancel it. 
-            // We can register the timer specifically for this waiter.
             _task.BlockingTimer = timer;
+
+            // ArmSignalSafetyNet: register wake continuation and re-check for prior signals.
+            _task.ArmSignalSafetyNet(_token, () =>
+            {
+                // Cancel the timer to avoid it racing after signal-wake.
+                timer.Cancel();
+                scheduler.Schedule(continuation, _task);
+            });
         }
 
         public AwaitResult GetResult()

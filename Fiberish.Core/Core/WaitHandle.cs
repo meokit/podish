@@ -164,16 +164,17 @@ public class WaitQueueAwaiter : INotifyCompletion
         // Capture current task context
         var currentTask = KernelScheduler.Current?.CurrentTask;
 
-        if (currentTask != null && currentTask.HasUnblockedPendingSignal())
-        {
-            var token = currentTask.BeginWaitToken();
-            currentTask.TrySetWaitReason(token, WakeReason.Signal);
-            KernelScheduler.Current?.Schedule(continuation, currentTask);
-            return;
-        }
-
         if (currentTask != null) _token = currentTask.BeginWaitToken();
         _queue.Register(continuation, currentTask, _token);
+
+        if (currentTask != null && _token != null)
+            currentTask.ArmSignalSafetyNet(_token, () =>
+            {
+                // Unblock: try to schedule continuation via the token wake mechanism.
+                // TrySetWaitReason is idempotent, so safe if queue already fired.
+                if (currentTask.TrySetWaitReason(_token, WakeReason.Signal))
+                    KernelScheduler.Current?.Schedule(continuation, currentTask);
+            });
     }
 
     public AwaitResult GetResult()
@@ -230,20 +231,15 @@ public class SelectAwaiter : INotifyCompletion
         var scheduler = KernelScheduler.Current;
         var currentTask = scheduler?.CurrentTask;
 
-        if (currentTask != null && currentTask.HasUnblockedPendingSignal())
-        {
-            var token = currentTask.BeginWaitToken();
-            currentTask.TrySetWaitReason(token, WakeReason.Signal);
-            scheduler?.Schedule(continuation, currentTask);
-            return;
-        }
-
         // We use a shared state to ensure only one invocation
         var runOnce = new RunOnceAction(continuation);
         var action = runOnce.Invoke;
 
         if (currentTask != null) _token = currentTask.BeginWaitToken();
         foreach (var q in _queues) q.Register(action, currentTask, _token);
+
+        if (currentTask != null && _token != null)
+            currentTask.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
     }
 
     public AwaitResult GetResult()
@@ -341,14 +337,6 @@ public readonly struct ChildStateAwaitable
 
         public void OnCompleted(Action continuation)
         {
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _token = _task.BeginWaitToken();
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                _scheduler.Schedule(continuation, _task);
-                return;
-            }
-
             _token = _task.BeginWaitToken();
 
             // Register on all matching children's StateChangeEvent queues
@@ -375,7 +363,11 @@ public readonly struct ChildStateAwaitable
             {
                 if (_token != null) _task.TrySetWaitReason(_token, WakeReason.Event);
                 _scheduler.Schedule(continuation, _task);
+                return; // already scheduled, no need for safety net
             }
+
+            // ArmSignalSafetyNet: re-check for signals that arrived before BeginWaitToken.
+            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
         }
 
         public AwaitResult GetResult()

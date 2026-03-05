@@ -15,6 +15,7 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
     private volatile bool _isCompleted;
     private KernelScheduler? _scheduler;
     private FiberTask? _task;
+    private FiberTask.WaitToken? _waitToken;
 
     public SaeaAwaitable()
     {
@@ -26,18 +27,10 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         _scheduler = KernelScheduler.Current;
-        _task = _scheduler?.CurrentTask;
+        if (_task == null) _task = _scheduler?.CurrentTask;
         Logger.LogTrace(
             "[SaeaAwaitable] OnCompleted register: task={TaskId} scheduler={HasScheduler} isCompleted={IsCompleted} bytes={Bytes} error={Error}",
             _task?.TID, _scheduler != null, _isCompleted, BytesTransferred, SocketError);
-
-        if (_task != null && _task.HasUnblockedPendingSignal())
-        {
-            Logger.LogTrace("[SaeaAwaitable] OnCompleted immediate schedule due to pending signal: task={TaskId}",
-                _task.TID);
-            _scheduler!.Schedule(continuation, _task);
-            return;
-        }
 
         var prev = Interlocked.CompareExchange(ref _continuation, continuation, null);
         if (ReferenceEquals(prev, CompletedSentinel))
@@ -46,12 +39,27 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
                 "[SaeaAwaitable] OnCompleted saw CompletedSentinel, scheduling continuation immediately: task={TaskId}",
                 _task?.TID);
             _scheduler?.Schedule(continuation, _task);
+            return;
+        }
+
+        // ArmSignalSafetyNet: registers the continuation AND re-checks for signals that
+        // arrived before BeginWait() was called — TOCTOU-safe.
+        if (_task != null && _waitToken != null)
+        {
+            Logger.LogTrace("[SaeaAwaitable] Arming signal safety net: task={TaskId}", _task.TID);
+            _task.ArmSignalSafetyNet(_waitToken, () =>
+            {
+                // Atomically steal the continuation so only one path (signal or SAEA completion) wins.
+                var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
+                if (c != null && !ReferenceEquals(c, CompletedSentinel))
+                    _scheduler?.Schedule(c, _task);
+            });
         }
         else
         {
             Logger.LogTrace(
-                "[SaeaAwaitable] OnCompleted stored continuation: task={TaskId} prevWasNull={PrevNull}",
-                _task?.TID, prev == null);
+                "[SaeaAwaitable] OnCompleted stored continuation (no token): task={TaskId}",
+                _task?.TID);
         }
     }
 
@@ -90,12 +98,24 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
         }
     }
 
+    /// <summary>
+    /// Must be called immediately after ResetState() and before the async socket call,
+    /// so that signals can interrupt this wait via <see cref="FiberTask.SetWaitContinuation"/>.
+    /// </summary>
+    public void BeginWait(FiberTask task)
+    {
+        _task = task;
+        _scheduler = KernelScheduler.Current;
+        _waitToken = task.BeginWaitToken();
+    }
+
     public void ResetState()
     {
         _isCompleted = false;
         _continuation = null;
         _scheduler = null;
         _task = null;
+        _waitToken = null;
         SetBuffer(null, 0, 0);
         AcceptSocket = null;
         RemoteEndPoint = null;

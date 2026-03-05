@@ -986,13 +986,6 @@ public partial class SyscallManager
         {
             Logger.LogTrace("[IOAwaiter] OnCompleted fd wait start forRead={ForRead} flags=0x{Flags:X}", _forRead,
                 (int)_file.Flags);
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                Logger.LogTrace("[IOAwaiter] Pending signal before wait, scheduling continuation immediately");
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
 
             var runOnce = new RunOnceAction(continuation, _task);
 
@@ -1008,11 +1001,13 @@ public partial class SyscallManager
                 _task.TrySetWaitReason(_token, WakeReason.IO);
                 Logger.LogTrace("[IOAwaiter] RegisterWait returned false; invoking continuation now");
                 runOnce.Invoke();
+                return;
             }
-            else
-            {
-                Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}", _forRead);
-            }
+
+            // ArmSignalSafetyNet: registers the continuation AND atomically re-checks for
+            // signals that arrived before BeginWaitToken was called (TOCTOU-safe).
+            Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}, arming safety net", _forRead);
+            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
         }
 
         public AwaitResult GetResult()

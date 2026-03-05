@@ -173,13 +173,6 @@ public class EpollInode : TmpfsInode
             _continuation = continuation;
             _token = _task.BeginWaitToken();
 
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             if (_timeoutMs > 0)
             {
                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
@@ -190,6 +183,13 @@ public class EpollInode : TmpfsInode
             }
 
             DoPoll();
+
+            // ArmSignalSafetyNet: re-check for signals that arrived before BeginWaitToken.
+            // DoPoll may have completed synchronously (set _completed=true, invoked _continuation
+            // inline); ArmSignalSafetyNet is a no-op in that case because the token is already
+            // consumed (TrySetWaitReason returns false on an inactive token).
+            if (!_completed)
+                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
         }
 
         public EpollAwaiter GetAwaiter() => this;

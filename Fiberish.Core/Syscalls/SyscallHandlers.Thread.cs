@@ -111,13 +111,6 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             var runOnce = new RunOnceAction(continuation, _task);
 
             _task.Continuation = runOnce.Invoke;
@@ -131,6 +124,8 @@ public partial class SyscallManager
 
                 runOnce.Invoke();
             });
+
+            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
         }
 
         public AwaitResult GetResult()

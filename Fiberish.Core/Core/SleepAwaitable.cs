@@ -50,18 +50,19 @@ public readonly struct SleepAwaitable
             var task = _task;
             var token = _token;
 
-            if (task.HasUnblockedPendingSignal())
-            {
-                task.TrySetWaitReason(token, WakeReason.Signal);
-                scheduler.Schedule(continuation, task);
-                return;
-            }
-
-            // Register timer callback
-            // When timer fires, we schedule the task back to run queue
-            scheduler.ScheduleTimer(_tickDuration, () =>
+            // Register timer callback: when timer fires, schedule the task back to run queue.
+            var timer = scheduler.ScheduleTimer(_tickDuration, () =>
             {
                 if (!task.TrySetWaitReason(token, WakeReason.Timer)) return;
+                task.Continuation = continuation;
+                scheduler.Schedule(task);
+            });
+
+            // ArmSignalSafetyNet: register wake continuation and re-check for signals that
+            // arrived before BeginWaitToken was called — TOCTOU-safe.
+            task.ArmSignalSafetyNet(token, () =>
+            {
+                timer.Cancel();
                 task.Continuation = continuation;
                 scheduler.Schedule(task);
             });

@@ -137,6 +137,7 @@ public class FiberTask
     private readonly object _waitLock = new();
     private long _nextWaitTokenId;
     private WaitToken? _activeWaitToken;
+    private Action? _activeWaitContinuation;
 
     // Compatibility shim: now backed by current active wait token only.
     public WakeReason WakeReason
@@ -181,32 +182,101 @@ public class FiberTask
         }
     }
 
-    public bool IsWaitTokenActive(WaitToken token)
-    {
-        lock (_waitLock)
-        {
-            return ReferenceEquals(_activeWaitToken, token);
-        }
-    }
-
     public bool TrySetWaitReason(WaitToken token, WakeReason reason)
     {
+        Action? continuationToRun = null;
         lock (_waitLock)
         {
             if (!ReferenceEquals(_activeWaitToken, token)) return false;
+            if (token.Reason != WakeReason.None) return false;
+            
             token.Reason = reason;
-            return true;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                _activeWaitContinuation = null;
+            }
         }
+        if (continuationToRun != null)
+        {
+            CommonKernel?.Schedule(continuationToRun, this);
+        }
+        return true;
     }
 
     public bool TrySetActiveWaitReason(WakeReason reason)
     {
+        Action? continuationToRun = null;
         lock (_waitLock)
         {
             if (_activeWaitToken == null) return false;
+            if (_activeWaitToken.Reason != WakeReason.None) return false;
+            
             _activeWaitToken.Reason = reason;
-            return true;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                _activeWaitContinuation = null;
+            }
         }
+        if (continuationToRun != null)
+        {
+            CommonKernel?.Schedule(continuationToRun, this);
+        }
+        return true;
+    }
+
+    private void SetWaitContinuation(WaitToken token, Action continuation)
+    {
+        Action? runNow = null;
+        lock (_waitLock)
+        {
+            if (ReferenceEquals(_activeWaitToken, token))
+            {
+                if (token.Reason != WakeReason.None)
+                {
+                    // Already completed or interrupted, run immediately
+                    runNow = continuation;
+                }
+                else
+                {
+                    // Still waiting
+                    _activeWaitContinuation = continuation;
+                }
+            }
+            else
+            {
+                // Token already inactive/completed
+                runNow = continuation;
+            }
+        }
+        
+        if (runNow != null)
+        {
+            CommonKernel?.Schedule(runNow, this);
+        }
+    }
+
+    /// <summary>
+    /// Call this at the END of every awaiter's OnCompleted(), AFTER all wait registrations
+    /// (RegisterWait, timer, TCS ContinueWith, etc.) are in place.
+    ///
+    /// It atomically registers <paramref name="wakeAction"/> as the signal-interruptible
+    /// continuation for this token, then re-checks whether a signal arrived in the window
+    /// between the start of the syscall and the registration. If a signal is already pending,
+    /// it immediately sets the WakeReason and schedules the action — no race possible.
+    ///
+    /// This replaces the ad-hoc "HasUnblockedPendingSignal pre-check" pattern that every
+    /// awaiter previously duplicated with a TOCTOU vulnerability.
+    /// </summary>
+    public void ArmSignalSafetyNet(WaitToken token, Action wakeAction)
+    {
+        SetWaitContinuation(token, wakeAction);
+        // Re-check in case a signal arrived before BeginWaitToken was called
+        // (e.g. SIGWINCH sent by TTY driver during syscall entry, or SIGPIPE).
+        // TrySetWaitReason is idempotent — if the token was already woken it's a no-op.
+        if (HasUnblockedPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
     }
 
     public WakeReason GetWaitReason(WaitToken token)
@@ -223,21 +293,12 @@ public class FiberTask
         {
             if (!ReferenceEquals(_activeWaitToken, token)) return WakeReason.None;
             var reason = token.Reason;
-            token.Reason = WakeReason.None;
+            _activeWaitContinuation = null;
             _activeWaitToken = null;
             return reason;
         }
     }
 
-    public void CancelWaitToken(WaitToken token)
-    {
-        lock (_waitLock)
-        {
-            if (!ReferenceEquals(_activeWaitToken, token)) return;
-            token.Reason = WakeReason.None;
-            _activeWaitToken = null;
-        }
-    }
 
     public static int NextTID()
     {
@@ -1402,7 +1463,7 @@ public class FiberTask
             try
             {
                 var task = PendingSyscall();
-                PendingSyscall = null; // Clear immediately
+                // do NOT clear PendingSyscall until it finishes, so RunSlice doesn't run ProcessPendingSignals!
                 Logger.LogTrace("[HandleAsyncSyscall] Await begin TID={Tid}", TID);
 
                 // Allow the async operation to complete (suspend this method)
@@ -1524,6 +1585,9 @@ public class FiberTask
                 // Clear interrupting signal if syscall completed normally
                 InterruptingSignal = null;
             }
+
+            // We safely clear PendingSyscall here since the wait is truly over
+            PendingSyscall = null;
 
             // Resume: write result to EAX
             CPU.RegWrite(Reg.EAX, (uint)result);

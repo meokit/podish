@@ -344,6 +344,8 @@ public sealed class HostSocketInode : Inode
         _readSaea.ResetState();
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
         _readSaea.SocketFlags = (SocketFlags)flags;
+        var currentTask = KernelScheduler.Current?.CurrentTask;
+        if (currentTask != null) _readSaea.BeginWait(currentTask);
 
         Logger.LogTrace("Host socket recv async start ino={Ino} len={Len}", Ino, buffer.Length);
         if (!NativeSocket.ReceiveAsync(_readSaea))
@@ -393,6 +395,8 @@ public sealed class HostSocketInode : Inode
         _readSaea.SetBuffer(buffer, 0, buffer.Length);
         _readSaea.SocketFlags = (SocketFlags)flags;
         _readSaea.RemoteEndPoint = remoteEpTemplate;
+        var currentTask2 = KernelScheduler.Current?.CurrentTask;
+        if (currentTask2 != null) _readSaea.BeginWait(currentTask2);
 
         if (!NativeSocket.ReceiveFromAsync(_readSaea))
         {
@@ -441,6 +445,8 @@ public sealed class HostSocketInode : Inode
         _writeSaea.ResetState();
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
         _writeSaea.SocketFlags = (SocketFlags)flags;
+        var currentTask3 = KernelScheduler.Current?.CurrentTask;
+        if (currentTask3 != null) _writeSaea.BeginWait(currentTask3);
 
         Logger.LogTrace("Host socket send async start ino={Ino} len={Len}", Ino, segment.Count);
         if (!NativeSocket.SendAsync(_writeSaea))
@@ -489,6 +495,8 @@ public sealed class HostSocketInode : Inode
         _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
         _writeSaea.SocketFlags = (SocketFlags)flags;
         _writeSaea.RemoteEndPoint = remoteEp;
+        var currentTask4 = KernelScheduler.Current?.CurrentTask;
+        if (currentTask4 != null) _writeSaea.BeginWait(currentTask4);
 
         if (!NativeSocket.SendToAsync(_writeSaea))
         {
@@ -532,6 +540,8 @@ public sealed class HostSocketInode : Inode
 
         _writeSaea.ResetState();
         _writeSaea.RemoteEndPoint = endpoint;
+        var currentTask5 = KernelScheduler.Current?.CurrentTask;
+        if (currentTask5 != null) _writeSaea.BeginWait(currentTask5);
 
         if (!NativeSocket.ConnectAsync(_writeSaea))
         {
@@ -567,6 +577,8 @@ public sealed class HostSocketInode : Inode
 
         _readSaea.ResetState();
         _readSaea.AcceptSocket = null;
+        var currentTask6 = KernelScheduler.Current?.CurrentTask;
+        if (currentTask6 != null) _readSaea.BeginWait(currentTask6);
 
         if (!NativeSocket.AcceptAsync(_readSaea))
         {

@@ -516,13 +516,6 @@ public partial class SyscallManager
             _task = (_sm.Engine.Owner as FiberTask)!;
             _token = _task.BeginWaitToken();
 
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             if (_timeoutMs > 0)
                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
                 {
@@ -531,6 +524,9 @@ public partial class SyscallManager
                 });
 
             DoPoll();
+
+            if (!_completed)
+                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
         }
 
         public SelectAwaiter GetAwaiter()
@@ -674,13 +670,6 @@ public partial class SyscallManager
             _continuation = continuation;
             _token = _task.BeginWaitToken();
 
-            if (_task.HasUnblockedPendingSignal())
-            {
-                _task.TrySetWaitReason(_token, WakeReason.Signal);
-                KernelScheduler.Current?.Schedule(continuation, _task);
-                return;
-            }
-
             if (_timeoutMs > 0)
                 // Schedule timeout
                 _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
@@ -691,6 +680,9 @@ public partial class SyscallManager
 
             // Initial Poll
             DoPoll();
+
+            if (!_completed)
+                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
         }
 
         public PollAwaiter GetAwaiter()

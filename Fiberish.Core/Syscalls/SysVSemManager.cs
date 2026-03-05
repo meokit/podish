@@ -43,6 +43,10 @@ public class SemWaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         Continuation = continuation;
+        Task.ArmSignalSafetyNet(Token, () =>
+        {
+            Continuation?.Invoke();
+        });
     }
 
     public AwaitResult GetResult()
