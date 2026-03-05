@@ -377,28 +377,59 @@ public sealed class ContainerRuntimeService
 
         var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
         var layerIndexes = new List<IReadOnlyList<LayerIndexEntry>>(storedImage.Layers.Count);
+        var normalizedLayers = new List<OciStoredLayer>(storedImage.Layers.Count);
+        var metadataChanged = !string.Equals(storedImage.StoreDirectory, OciStorePath.RelativeStoreDirectory,
+            StringComparison.Ordinal);
         foreach (var layer in storedImage.Layers)
         {
-            if (!File.Exists(layer.IndexPath))
+            var blobPath = OciStorePath.Resolve(ociStoreDir, layer.BlobPath);
+            var indexPath = OciStorePath.Resolve(ociStoreDir, layer.IndexPath);
+
+            if (!File.Exists(blobPath))
             {
-                error = $"missing layer index file: {layer.IndexPath}";
+                error = $"missing layer blob file: {blobPath}";
                 return false;
             }
 
-            if (!File.Exists(layer.BlobPath))
+            if (!File.Exists(indexPath))
             {
-                error = $"missing layer blob file: {layer.BlobPath}";
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(indexPath) ?? ociStoreDir);
+                    using var tarStream = File.OpenRead(blobPath);
+                    var rebuilt = OciLayerIndexBuilder.BuildFromTar(tarStream, layer.Digest);
+                    var persistedEntries = rebuilt.Entries.Values
+                        .Select(e => e with { InlineData = null })
+                        .ToList();
+                    File.WriteAllText(indexPath,
+                        System.Text.Json.JsonSerializer.Serialize(persistedEntries,
+                            PodishJsonContext.Default.ListLayerIndexEntry));
+                    _logger.LogWarning(
+                        "Rebuilt missing layer index '{IndexPath}' from blob '{BlobPath}' for digest {Digest}",
+                        indexPath, blobPath, layer.Digest);
+                    metadataChanged = true;
+                }
+                catch (Exception ex)
+                {
+                    error = $"missing layer index file: {layer.IndexPath}; rebuild failed: {ex.Message}";
+                    return false;
+                }
+            }
+
+            if (!File.Exists(indexPath))
+            {
+                error = $"missing layer index file: {indexPath}";
                 return false;
             }
 
             try
             {
                 var entries =
-                    System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(layer.IndexPath),
+                    System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(indexPath),
                         PodishJsonContext.Default.ListLayerIndexEntry);
                 if (entries == null)
                 {
-                    error = $"invalid layer index JSON: {layer.IndexPath}";
+                    error = $"invalid layer index JSON: {indexPath}";
                     return false;
                 }
 
@@ -406,11 +437,34 @@ public sealed class ContainerRuntimeService
             }
             catch (Exception ex)
             {
-                error = $"failed to parse layer index '{layer.IndexPath}': {ex.Message}";
+                error = $"failed to parse layer index '{indexPath}': {ex.Message}";
                 return false;
             }
 
-            digestToBlobPath[layer.Digest] = layer.BlobPath;
+            digestToBlobPath[layer.Digest] = blobPath;
+            var storedBlobPath = OciStorePath.ToStoredPath(ociStoreDir, blobPath);
+            var storedIndexPath = OciStorePath.ToStoredPath(ociStoreDir, indexPath);
+            if (!string.Equals(layer.BlobPath, storedBlobPath, StringComparison.Ordinal) ||
+                !string.Equals(layer.IndexPath, storedIndexPath, StringComparison.Ordinal))
+                metadataChanged = true;
+            normalizedLayers.Add(layer with { BlobPath = storedBlobPath, IndexPath = storedIndexPath });
+        }
+
+        if (metadataChanged)
+        {
+            try
+            {
+                var repaired = storedImage with
+                {
+                    StoreDirectory = OciStorePath.RelativeStoreDirectory, Layers = normalizedLayers
+                };
+                File.WriteAllText(imagePath,
+                    System.Text.Json.JsonSerializer.Serialize(repaired, PodishJsonContext.Default.OciStoredImage));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to persist repaired OCI image metadata at {ImagePath}", imagePath);
+            }
         }
 
         var merged = MergeLayerIndexes(layerIndexes);

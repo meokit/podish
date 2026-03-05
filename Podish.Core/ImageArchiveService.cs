@@ -91,16 +91,17 @@ public sealed class ImageArchiveService
                 var diffIds = new List<string>(storedImage.Layers.Count);
                 foreach (var layer in storedImage.Layers)
                 {
-                    if (!File.Exists(layer.BlobPath))
-                        throw new FileNotFoundException($"layer blob missing: {layer.BlobPath}");
+                    var blobPath = OciStorePath.Resolve(storeDir, layer.BlobPath);
+                    if (!File.Exists(blobPath))
+                        throw new FileNotFoundException($"layer blob missing: {blobPath}");
 
-                    var layerHex = Sha256HexOfFile(layer.BlobPath);
+                    var layerHex = Sha256HexOfFile(blobPath);
                     var layerDigest = "sha256:" + layerHex;
                     var dstBlob = Path.Combine(blobsRoot, layerHex);
                     if (writtenBlobs.Add(layerHex))
-                        File.Copy(layer.BlobPath, dstBlob, overwrite: true);
+                        File.Copy(blobPath, dstBlob, overwrite: true);
 
-                    var size = new FileInfo(layer.BlobPath).Length;
+                    var size = new FileInfo(blobPath).Length;
                     layerDescriptors.Add(new OciDescriptor(
                         "application/vnd.oci.image.layer.v1.tar",
                         layerDigest,
@@ -220,8 +221,8 @@ public sealed class ImageArchiveService
                         tarDigest,
                         "application/vnd.oci.image.layer.v1.tar",
                         new FileInfo(dstBlob).Length,
-                        dstBlob,
-                        indexFile));
+                        OciStorePath.ToStoredPath(storeDir, dstBlob),
+                        OciStorePath.ToStoredPath(storeDir, indexFile)));
                 }
                 finally
                 {
@@ -245,7 +246,7 @@ public sealed class ImageArchiveService
                 repository,
                 tag,
                 manifestDesc.Digest,
-                storeDir,
+                OciStorePath.RelativeStoreDirectory,
                 layers);
             File.WriteAllText(Path.Combine(storeDir, "image.json"),
                 JsonSerializer.Serialize(stored, PodishJsonContext.Default.OciStoredImage));
@@ -292,15 +293,15 @@ public sealed class ImageArchiveService
                 repository,
                 tag,
                 digest,
-                storeDir,
+                OciStorePath.RelativeStoreDirectory,
                 new[]
                 {
                     new OciStoredLayer(
                         digest,
                         "application/vnd.oci.image.layer.v1.tar",
                         layerSize,
-                        blobPath,
-                        indexPath)
+                        OciStorePath.ToStoredPath(storeDir, blobPath),
+                        OciStorePath.ToStoredPath(storeDir, indexPath))
                 });
 
             File.WriteAllText(Path.Combine(storeDir, "image.json"),
@@ -388,7 +389,7 @@ public sealed class ImageArchiveService
         var image = JsonSerializer.Deserialize(File.ReadAllText(imagePath), PodishJsonContext.Default.OciStoredImage)
                     ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
 
-        var (lowerSb, lowerProvider) = BuildLowerSuperBlock(image);
+        var (lowerSb, lowerProvider) = BuildLowerSuperBlock(image, storeDir);
 
         if (!Directory.Exists(upperStore))
         {
@@ -411,21 +412,23 @@ public sealed class ImageArchiveService
         return (overlaySb.Root, mountOverlay, new CompositeDisposable(lowerProvider));
     }
 
-    private (SuperBlock Lower, IDisposable Provider) BuildLowerSuperBlock(OciStoredImage image)
+    private (SuperBlock Lower, IDisposable Provider) BuildLowerSuperBlock(OciStoredImage image, string storeDir)
     {
         var layerIndexes = new List<IReadOnlyList<LayerIndexEntry>>(image.Layers.Count);
         var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var layer in image.Layers)
         {
-            if (!File.Exists(layer.IndexPath))
-                throw new InvalidOperationException($"missing layer index file: {layer.IndexPath}");
-            if (!File.Exists(layer.BlobPath))
-                throw new InvalidOperationException($"missing layer blob file: {layer.BlobPath}");
-            var entries = JsonSerializer.Deserialize(File.ReadAllText(layer.IndexPath),
+            var indexPath = OciStorePath.Resolve(storeDir, layer.IndexPath);
+            var blobPath = OciStorePath.Resolve(storeDir, layer.BlobPath);
+            if (!File.Exists(indexPath))
+                throw new InvalidOperationException($"missing layer index file: {indexPath}");
+            if (!File.Exists(blobPath))
+                throw new InvalidOperationException($"missing layer blob file: {blobPath}");
+            var entries = JsonSerializer.Deserialize(File.ReadAllText(indexPath),
                               PodishJsonContext.Default.ListLayerIndexEntry)
-                          ?? throw new InvalidOperationException($"invalid layer index JSON: {layer.IndexPath}");
+                          ?? throw new InvalidOperationException($"invalid layer index JSON: {indexPath}");
             layerIndexes.Add(entries);
-            digestToBlobPath[layer.Digest] = layer.BlobPath;
+            digestToBlobPath[layer.Digest] = blobPath;
         }
 
         var merged = MergeLayerIndexes(layerIndexes);

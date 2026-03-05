@@ -136,8 +136,8 @@ public class OciPullService
                 layer.Digest,
                 layer.MediaType,
                 layer.Size,
-                tarBlobPath,
-                indexPath));
+                OciStorePath.ToStoredPath(storeDirectory, tarBlobPath),
+                OciStorePath.ToStoredPath(storeDirectory, indexPath)));
         }
 
         var image = new OciStoredImage(
@@ -146,7 +146,7 @@ public class OciPullService
             repository,
             tag,
             manifestDigest,
-            storeDirectory,
+            OciStorePath.RelativeStoreDirectory,
             storedLayers);
         await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
             JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
