@@ -357,6 +357,7 @@ public class FiberTask
 
         var mask = 1UL << (sig - 1);
         bool isIgnored = false;
+        bool isBlocked = false;
         lock (this)
         {
             if (sig != 9 && sig != 19)
@@ -403,23 +404,26 @@ public class FiberTask
                     q.Add(info);
                 }
             });
-        }
+            // Check if we should interrupt syscall (inside lock for atomicity with PendingSignals)
+            // SIGKILL(9) and SIGSTOP(19) cannot be blocked
+            isBlocked = (SignalMask & mask) != 0;
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
 
-        // Check if we should interrupt syscall
-        // SIGKILL(9) and SIGSTOP(19) cannot be blocked
-        var isBlocked = (SignalMask & mask) != 0;
-        if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
+            if (!isBlocked)
+            {
+                InterruptingSignal = sig;
+            }
+            else
+            {
+                Logger.LogDebug(
+                    "[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.",
+                    sig, SignalMask);
+            }
+        }
 
         if (!isBlocked && !isIgnored)
         {
-            InterruptingSignal = sig;
             TrySetActiveWaitReason(WakeReason.Signal);
-        }
-        else
-        {
-            Logger.LogDebug(
-                "[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.",
-                sig, SignalMask);
         }
 
         if (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped)
@@ -1422,6 +1426,30 @@ public class FiberTask
             {
                 var sig = InterruptingSignal;
                 InterruptingSignal = null;
+
+                // Fallback: if InterruptingSignal was overwritten by a second signal or
+                // not set due to timing, find the first unblocked pending signal.
+                if (!sig.HasValue)
+                {
+                    lock (this)
+                    {
+                        var unblocked = PendingSignals & ~SignalMask;
+                        // SIGKILL/SIGSTOP are never blocked
+                        unblocked |= PendingSignals & ((1UL << 8) | (1UL << 18));
+                        if (unblocked != 0)
+                        {
+                            for (int i = 0; i < 64; i++)
+                            {
+                                if ((unblocked & (1UL << i)) != 0)
+                                {
+                                    sig = i + 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
 
                 if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))

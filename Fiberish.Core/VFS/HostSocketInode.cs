@@ -544,7 +544,7 @@ public sealed class HostSocketInode : Inode
 
         var task = KernelScheduler.Current?.CurrentTask;
         if (task != null && task.HasUnblockedPendingSignal())
-            return -(int)Errno.EINTR;
+            return -(int)Errno.ERESTARTSYS;
 
         if (_writeSaea.SocketError != SocketError.Success)
             return MapSocketError(_writeSaea.SocketError);

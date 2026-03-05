@@ -256,6 +256,10 @@ public partial class SyscallManager
         }
         catch (SocketException ex)
         {
+            // Signal-interrupted accept should return ERESTARTSYS so HandleAsyncSyscall
+            // can apply SA_RESTART logic, rather than unconditionally returning EINTR.
+            if (ex.SocketErrorCode == SocketError.Interrupted)
+                return -(int)Errno.ERESTARTSYS;
             return -LinuxToWindowsSocketError(ex.SocketErrorCode);
         }
     }
