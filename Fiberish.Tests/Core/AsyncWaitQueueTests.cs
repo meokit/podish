@@ -1,4 +1,5 @@
 using Fiberish.Core;
+using Fiberish.Native;
 using Fiberish.X86.Native;
 using Xunit;
 
@@ -69,6 +70,38 @@ public class AsyncWaitQueueTests
 
         Assert.Equal(0, firedA);
         Assert.Equal(1, firedB);
+    }
+
+    [Fact]
+    public void WaitQueueAwaiter_PendingSignal_StillSchedulesContinuation()
+    {
+        var scheduler = new KernelScheduler();
+        KernelScheduler.Current = scheduler;
+        var process = new Process(300, null!, null!);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue();
+        var resumed = false;
+        var task = new FiberTask(301, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            var awaiter = queue.GetAwaiter();
+            awaiter.OnCompleted(() =>
+            {
+                resumed = true;
+                task.Exited = true;
+                task.Status = FiberTaskStatus.Terminated;
+            });
+
+            task.PostSignal((int)Signal.SIGUSR1);
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.True(resumed);
     }
 
     private sealed class MockEngine : Engine

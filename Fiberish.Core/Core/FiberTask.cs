@@ -1475,6 +1475,7 @@ public class FiberTask
                 Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
                 // Return EFAULT or similar?
                 CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
+                PendingSyscall = null;
                 CommonKernel.Schedule(this);
                 return;
             }
@@ -1525,6 +1526,7 @@ public class FiberTask
                         // Ignored signal — just restart
                         CPU.Eip = SyscallEip;
                         ExecutionMode = TaskExecutionMode.RunningGuest;
+                        PendingSyscall = null;
                         CommonKernel.Schedule(this);
                         return;
                     }
@@ -1552,6 +1554,7 @@ public class FiberTask
                         DeliverSignalForRestart(sig.Value, action);
 
                         ExecutionMode = TaskExecutionMode.RunningGuest;
+                        PendingSyscall = null;
                         CommonKernel.Schedule(this);
                         return;
                     }
@@ -1572,6 +1575,7 @@ public class FiberTask
                         "[HandleAsyncSyscall] Signal {Sig} is default-ignored; restarting syscall", sig);
                     CPU.Eip = SyscallEip;
                     ExecutionMode = TaskExecutionMode.RunningGuest;
+                    PendingSyscall = null;
                     CommonKernel.Schedule(this);
                     return;
                 }

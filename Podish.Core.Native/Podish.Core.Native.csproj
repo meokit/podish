@@ -5,18 +5,18 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <OutputType>Library</OutputType>
     <AssemblyName>podishcore</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <PublishAot>true</PublishAot>
-    <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
-    <NativeLib>Static</NativeLib>
-    <SelfContained>true</SelfContained>
-    <StripSymbols>true</StripSymbols>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot Condition="'$(TargetFramework)' == 'net10.0'">true</PublishAot>
+    <PublishAotUsingRuntimePack Condition="'$(TargetFramework)' == 'net10.0'">true</PublishAotUsingRuntimePack>
+    <NativeLib Condition="'$(TargetFramework)' == 'net10.0'">Static</NativeLib>
+    <SelfContained Condition="'$(TargetFramework)' == 'net10.0'">true</SelfContained>
+    <StripSymbols Condition="'$(TargetFramework)' == 'net10.0'">true</StripSymbols>
+    <InvariantGlobalization Condition="'$(TargetFramework)' == 'net10.0'">true</InvariantGlobalization>
     <PodishStaticNative>true</PodishStaticNative>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>

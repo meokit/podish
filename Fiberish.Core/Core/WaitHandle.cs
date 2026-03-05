@@ -170,10 +170,8 @@ public class WaitQueueAwaiter : INotifyCompletion
         if (currentTask != null && _token != null)
             currentTask.ArmSignalSafetyNet(_token, () =>
             {
-                // Unblock: try to schedule continuation via the token wake mechanism.
-                // TrySetWaitReason is idempotent, so safe if queue already fired.
-                if (currentTask.TrySetWaitReason(_token, WakeReason.Signal))
-                    KernelScheduler.Current?.Schedule(continuation, currentTask);
+                // WakeReason has already been set by ArmSignalSafetyNet.
+                KernelScheduler.Current?.Schedule(continuation, currentTask);
             });
     }
 
