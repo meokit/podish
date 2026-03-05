@@ -19,8 +19,12 @@ struct PodishApp: App {
 
     var body: some Scene {
         WindowGroup("Podish") {
+            #if os(macOS)
             PodishRootView()
                 .frame(minWidth: 1200, minHeight: 760)
+            #else
+            PodishRootView()
+            #endif
         }
     }
 }

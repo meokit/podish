@@ -23,6 +23,7 @@ struct ContainerRowView: View {
 struct SidebarView: View {
     @ObservedObject var store: PodishUiStore
     let onShowDetails: (PodishContainer) -> Void
+    var onSelected: (() -> Void)? = nil
     @State private var localSelection: String?
 
     var body: some View {
@@ -129,6 +130,7 @@ struct SidebarView: View {
             DispatchQueue.main.async {
                 if store.selectedContainerID != newValue {
                     store.selectedContainerID = newValue
+                    onSelected?()
                 }
             }
         }
