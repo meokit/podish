@@ -7,6 +7,7 @@ RID="${1:-osx-arm64}"
 OUT_DIR="${2:-$ROOT_DIR/artifacts/podish-native/$RID}"
 NUGET_ROOT="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
 TFM="net10.0"
+echo "Publishing Podish.Core.Native for RID=$RID TFM=$TFM"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/include"
@@ -74,9 +75,10 @@ if [ -z "$BOOTSTRAPPER_OBJ" ]; then
   fi
 fi
 if [ -z "$BOOTSTRAPPER_OBJ" ]; then
-  echo "error: libbootstrapperdll.o not found for RID '$RID'." >&2
+  echo "error: libbootstrapper.o/libbootstrapperdll.o not found for RID '$RID'." >&2
   exit 1
 fi
+cp "$BOOTSTRAPPER_OBJ" "$OUT_DIR/podish_bootstrapper.o"
 
 FRAMEWORK_DIR="$OUT_DIR/PodishCore.framework"
 mkdir -p "$FRAMEWORK_DIR/Headers" "$FRAMEWORK_DIR/Modules"
@@ -120,8 +122,7 @@ fi
 # Build a static framework binary (archive payload), no extra dynamic relink step.
 rm -f "$FRAMEWORK_DIR/PodishCore"
 # shellcheck disable=SC2086
-libtool -static -o "$FRAMEWORK_DIR/PodishCore" $DEDUP_ARCHIVES
-cp "$BOOTSTRAPPER_OBJ" "$OUT_DIR/libbootstrapperdll.o"
+libtool -static -o "$FRAMEWORK_DIR/PodishCore" $DEDUP_ARCHIVES "$BOOTSTRAPPER_OBJ"
 
 cat > "$FRAMEWORK_DIR/Modules/module.modulemap" <<'MMAP'
 framework module PodishCore {

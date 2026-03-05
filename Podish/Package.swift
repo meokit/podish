@@ -6,7 +6,16 @@ let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().pat
 let macNativeLibDir = "\(packageDir)/artifacts/podish-native/osx-arm64"
 let env = ProcessInfo.processInfo.environment
 let platformName = env["PLATFORM_NAME"] ?? env["EFFECTIVE_PLATFORM_NAME"] ?? ""
-let defaultIosRid = platformName.contains("simulator") ? "iossimulator-arm64" : "ios-arm64"
+let sdkName = env["SDK_NAME"] ?? ""
+let sdkRoot = env["SDKROOT"] ?? ""
+let isSimulatorBuild = platformName.contains("simulator")
+    || sdkName.contains("simulator")
+    || sdkRoot.contains("iPhoneSimulator")
+let isDeviceBuild = platformName.contains("iphoneos")
+    || sdkName.contains("iphoneos")
+    || sdkRoot.contains("iPhoneOS")
+// Prefer simulator when env is ambiguous.
+let defaultIosRid = isDeviceBuild && !isSimulatorBuild ? "ios-arm64" : "iossimulator-arm64"
 let iosRid = env["PODISH_IOS_RID"] ?? defaultIosRid
 let iosNativeLibDir = "\(packageDir)/artifacts/podish-native/\(iosRid)"
 
@@ -33,14 +42,12 @@ let package = Package(
                     "-F", macNativeLibDir
                 ], .when(platforms: [.macOS])),
                 .unsafeFlags([
-                    "\(macNativeLibDir)/libbootstrapperdll.o"
-                ], .when(platforms: [.macOS])),
-                .unsafeFlags([
                     "-F", iosNativeLibDir
                 ], .when(platforms: [.iOS])),
                 .unsafeFlags([
-                    "\(iosNativeLibDir)/libbootstrapperdll.o"
-                ], .when(platforms: [.iOS])),
+                    "-Xlinker", "-u",
+                    "-Xlinker", "___managed__Startup"
+                ], .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("PodishCore", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Foundation", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
