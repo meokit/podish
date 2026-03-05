@@ -3,52 +3,52 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A00000000000000000000031 /* PodishApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* PodishApp.swift */; };
-		A00000000000000000000032 /* PodishNativeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* PodishNativeBridge.swift */; };
-		A00000000000000000000033 /* PodishTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* PodishTerminalSession.swift */; };
-		A00000000000000000000034 /* PodishModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* PodishModels.swift */; };
-		A00000000000000000000035 /* PodishUiStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* PodishUiStore.swift */; };
-		A00000000000000000000036 /* PodishRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* PodishRootView.swift */; };
-		A00000000000000000000037 /* NewContainerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* NewContainerSheetView.swift */; };
-		A00000000000000000000038 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* SidebarView.swift */; };
-		A00000000000000000000039 /* ContainerDetailsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* ContainerDetailsSheetView.swift */; };
-		A0000000000000000000003A /* TerminalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* TerminalWorkspaceView.swift */; };
-		A0000000000000000000003B /* PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* PodishTerminalView.swift */; };
+		A00000000000000000000031 /* Sources/Podish/PodishApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* Sources/Podish/PodishApp.swift */; };
+		A00000000000000000000032 /* Sources/Podish/PodishNativeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* Sources/Podish/PodishNativeBridge.swift */; };
+		A00000000000000000000033 /* Sources/Podish/PodishTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* Sources/Podish/PodishTerminalSession.swift */; };
+		A00000000000000000000034 /* Sources/Podish/Models/PodishModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* Sources/Podish/Models/PodishModels.swift */; };
+		A00000000000000000000035 /* Sources/Podish/Store/PodishUiStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* Sources/Podish/Store/PodishUiStore.swift */; };
+		A00000000000000000000036 /* Sources/Podish/Views/PodishRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* Sources/Podish/Views/PodishRootView.swift */; };
+		A00000000000000000000037 /* Sources/Podish/Views/NewContainerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* Sources/Podish/Views/NewContainerSheetView.swift */; };
+		A00000000000000000000038 /* Sources/Podish/Views/SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* Sources/Podish/Views/SidebarView.swift */; };
+		A00000000000000000000039 /* Sources/Podish/Views/ContainerDetailsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* Sources/Podish/Views/ContainerDetailsSheetView.swift */; };
+		A0000000000000000000003A /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */; };
+		A0000000000000000000003B /* Sources/Podish/Views/PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */; };
 		A0000000000000000000003C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000082 /* SwiftTerm */; };
-		A000000000000000000000C1 /* PodishApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* PodishApp.swift */; };
-		A000000000000000000000C2 /* PodishNativeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* PodishNativeBridge.swift */; };
-		A000000000000000000000C3 /* PodishTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* PodishTerminalSession.swift */; };
-		A000000000000000000000C4 /* PodishModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* PodishModels.swift */; };
-		A000000000000000000000C5 /* PodishUiStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* PodishUiStore.swift */; };
-		A000000000000000000000C6 /* PodishRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* PodishRootView.swift */; };
-		A000000000000000000000C7 /* NewContainerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* NewContainerSheetView.swift */; };
-		A000000000000000000000C8 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* SidebarView.swift */; };
-		A000000000000000000000C9 /* ContainerDetailsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* ContainerDetailsSheetView.swift */; };
-		A000000000000000000000CA /* TerminalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* TerminalWorkspaceView.swift */; };
-		A000000000000000000000CB /* PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* PodishTerminalView.swift */; };
+		A000000000000000000000C1 /* Sources/Podish/PodishApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* Sources/Podish/PodishApp.swift */; };
+		A000000000000000000000C2 /* Sources/Podish/PodishNativeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* Sources/Podish/PodishNativeBridge.swift */; };
+		A000000000000000000000C3 /* Sources/Podish/PodishTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* Sources/Podish/PodishTerminalSession.swift */; };
+		A000000000000000000000C4 /* Sources/Podish/Models/PodishModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* Sources/Podish/Models/PodishModels.swift */; };
+		A000000000000000000000C5 /* Sources/Podish/Store/PodishUiStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* Sources/Podish/Store/PodishUiStore.swift */; };
+		A000000000000000000000C6 /* Sources/Podish/Views/PodishRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* Sources/Podish/Views/PodishRootView.swift */; };
+		A000000000000000000000C7 /* Sources/Podish/Views/NewContainerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* Sources/Podish/Views/NewContainerSheetView.swift */; };
+		A000000000000000000000C8 /* Sources/Podish/Views/SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* Sources/Podish/Views/SidebarView.swift */; };
+		A000000000000000000000C9 /* Sources/Podish/Views/ContainerDetailsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* Sources/Podish/Views/ContainerDetailsSheetView.swift */; };
+		A000000000000000000000CA /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */; };
+		A000000000000000000000CB /* Sources/Podish/Views/PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */; };
 		A000000000000000000000CC /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000082 /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A00000000000000000000011 /* PodishApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PodishApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000012 /* PodishMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PodishMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A00000000000000000000021 /* PodishApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishApp.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000022 /* PodishNativeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishNativeBridge.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000023 /* PodishTerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishTerminalSession.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000024 /* PodishModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Models/PodishModels.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000025 /* PodishUiStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Store/PodishUiStore.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000026 /* PodishRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/PodishRootView.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000027 /* NewContainerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/NewContainerSheetView.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000028 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/SidebarView.swift; sourceTree = SOURCE_ROOT; };
-		A00000000000000000000029 /* ContainerDetailsSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/ContainerDetailsSheetView.swift; sourceTree = SOURCE_ROOT; };
-		A0000000000000000000002A /* TerminalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/TerminalWorkspaceView.swift; sourceTree = SOURCE_ROOT; };
-		A0000000000000000000002B /* PodishTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/PodishTerminalView.swift; sourceTree = SOURCE_ROOT; };
-		A0000000000000000000002C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/Info.plist; sourceTree = SOURCE_ROOT; };
-		A0000000000000000000002D /* MacInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/MacInfo.plist; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000021 /* Sources/Podish/PodishApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishApp.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000022 /* Sources/Podish/PodishNativeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishNativeBridge.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000023 /* Sources/Podish/PodishTerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishTerminalSession.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000024 /* Sources/Podish/Models/PodishModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Models/PodishModels.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000025 /* Sources/Podish/Store/PodishUiStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Store/PodishUiStore.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000026 /* Sources/Podish/Views/PodishRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/PodishRootView.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000027 /* Sources/Podish/Views/NewContainerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/NewContainerSheetView.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000028 /* Sources/Podish/Views/SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/SidebarView.swift; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000029 /* Sources/Podish/Views/ContainerDetailsSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/ContainerDetailsSheetView.swift; sourceTree = SOURCE_ROOT; };
+		A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/TerminalWorkspaceView.swift; sourceTree = SOURCE_ROOT; };
+		A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Views/PodishTerminalView.swift; sourceTree = SOURCE_ROOT; };
+		A0000000000000000000002C /* PodishApp/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/Info.plist; sourceTree = SOURCE_ROOT; };
+		A0000000000000000000002D /* PodishApp/MacInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/MacInfo.plist; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,19 +82,19 @@
 		A00000000000000000000002 /* PodishApp */ = {
 			isa = PBXGroup;
 			children = (
-				A00000000000000000000021 /* PodishApp.swift */,
-				A00000000000000000000022 /* PodishNativeBridge.swift */,
-				A00000000000000000000023 /* PodishTerminalSession.swift */,
-				A00000000000000000000024 /* PodishModels.swift */,
-				A00000000000000000000025 /* PodishUiStore.swift */,
-				A00000000000000000000026 /* PodishRootView.swift */,
-				A00000000000000000000027 /* NewContainerSheetView.swift */,
-				A00000000000000000000028 /* SidebarView.swift */,
-				A00000000000000000000029 /* ContainerDetailsSheetView.swift */,
-				A0000000000000000000002A /* TerminalWorkspaceView.swift */,
-				A0000000000000000000002B /* PodishTerminalView.swift */,
-				A0000000000000000000002C /* Info.plist */,
-				A0000000000000000000002D /* MacInfo.plist */,
+				A00000000000000000000021 /* Sources/Podish/PodishApp.swift */,
+				A00000000000000000000022 /* Sources/Podish/PodishNativeBridge.swift */,
+				A00000000000000000000023 /* Sources/Podish/PodishTerminalSession.swift */,
+				A00000000000000000000024 /* Sources/Podish/Models/PodishModels.swift */,
+				A00000000000000000000025 /* Sources/Podish/Store/PodishUiStore.swift */,
+				A00000000000000000000026 /* Sources/Podish/Views/PodishRootView.swift */,
+				A00000000000000000000027 /* Sources/Podish/Views/NewContainerSheetView.swift */,
+				A00000000000000000000028 /* Sources/Podish/Views/SidebarView.swift */,
+				A00000000000000000000029 /* Sources/Podish/Views/ContainerDetailsSheetView.swift */,
+				A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */,
+				A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */,
+				A0000000000000000000002C /* PodishApp/Info.plist */,
+				A0000000000000000000002D /* PodishApp/MacInfo.plist */,
 			);
 			path = PodishApp;
 			sourceTree = "<group>";
@@ -213,17 +213,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00000000000000000000031 /* PodishApp.swift in Sources */,
-				A00000000000000000000032 /* PodishNativeBridge.swift in Sources */,
-				A00000000000000000000033 /* PodishTerminalSession.swift in Sources */,
-				A00000000000000000000034 /* PodishModels.swift in Sources */,
-				A00000000000000000000035 /* PodishUiStore.swift in Sources */,
-				A00000000000000000000036 /* PodishRootView.swift in Sources */,
-				A00000000000000000000037 /* NewContainerSheetView.swift in Sources */,
-				A00000000000000000000038 /* SidebarView.swift in Sources */,
-				A00000000000000000000039 /* ContainerDetailsSheetView.swift in Sources */,
-				A0000000000000000000003A /* TerminalWorkspaceView.swift in Sources */,
-				A0000000000000000000003B /* PodishTerminalView.swift in Sources */,
+				A00000000000000000000031 /* Sources/Podish/PodishApp.swift in Sources */,
+				A00000000000000000000032 /* Sources/Podish/PodishNativeBridge.swift in Sources */,
+				A00000000000000000000033 /* Sources/Podish/PodishTerminalSession.swift in Sources */,
+				A00000000000000000000034 /* Sources/Podish/Models/PodishModels.swift in Sources */,
+				A00000000000000000000035 /* Sources/Podish/Store/PodishUiStore.swift in Sources */,
+				A00000000000000000000036 /* Sources/Podish/Views/PodishRootView.swift in Sources */,
+				A00000000000000000000037 /* Sources/Podish/Views/NewContainerSheetView.swift in Sources */,
+				A00000000000000000000038 /* Sources/Podish/Views/SidebarView.swift in Sources */,
+				A00000000000000000000039 /* Sources/Podish/Views/ContainerDetailsSheetView.swift in Sources */,
+				A0000000000000000000003A /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */,
+				A0000000000000000000003B /* Sources/Podish/Views/PodishTerminalView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -231,17 +231,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A000000000000000000000C1 /* PodishApp.swift in Sources */,
-				A000000000000000000000C2 /* PodishNativeBridge.swift in Sources */,
-				A000000000000000000000C3 /* PodishTerminalSession.swift in Sources */,
-				A000000000000000000000C4 /* PodishModels.swift in Sources */,
-				A000000000000000000000C5 /* PodishUiStore.swift in Sources */,
-				A000000000000000000000C6 /* PodishRootView.swift in Sources */,
-				A000000000000000000000C7 /* NewContainerSheetView.swift in Sources */,
-				A000000000000000000000C8 /* SidebarView.swift in Sources */,
-				A000000000000000000000C9 /* ContainerDetailsSheetView.swift in Sources */,
-				A000000000000000000000CA /* TerminalWorkspaceView.swift in Sources */,
-				A000000000000000000000CB /* PodishTerminalView.swift in Sources */,
+				A000000000000000000000C1 /* Sources/Podish/PodishApp.swift in Sources */,
+				A000000000000000000000C2 /* Sources/Podish/PodishNativeBridge.swift in Sources */,
+				A000000000000000000000C3 /* Sources/Podish/PodishTerminalSession.swift in Sources */,
+				A000000000000000000000C4 /* Sources/Podish/Models/PodishModels.swift in Sources */,
+				A000000000000000000000C5 /* Sources/Podish/Store/PodishUiStore.swift in Sources */,
+				A000000000000000000000C6 /* Sources/Podish/Views/PodishRootView.swift in Sources */,
+				A000000000000000000000C7 /* Sources/Podish/Views/NewContainerSheetView.swift in Sources */,
+				A000000000000000000000C8 /* Sources/Podish/Views/SidebarView.swift in Sources */,
+				A000000000000000000000C9 /* Sources/Podish/Views/ContainerDetailsSheetView.swift in Sources */,
+				A000000000000000000000CA /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */,
+				A000000000000000000000CB /* Sources/Podish/Views/PodishTerminalView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -291,7 +291,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4P59922UZ6;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
@@ -307,22 +307,30 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework", "PodishCore",
-					"-framework", "Foundation",
-					"-framework", "CoreFoundation",
-					"-framework", "Security",
-					"-framework", "Network",
-					"-framework", "GSS",
+					"-framework",
+					PodishCore,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					Security,
+					"-framework",
+					Network,
+					"-framework",
+					GSS,
 					"-lc++",
 					"-lz",
-					"-Xlinker", "-u",
-					"-Xlinker", "___managed__Startup",
+					"-Xlinker",
+					"-u",
+					"-Xlinker",
+					"___managed__Startup",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
 				PODISHCORE_BOOTSTRAPPER_OBJ = "";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64/podish_bootstrapper.o";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
@@ -336,7 +344,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4P59922UZ6;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
 				"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64";
@@ -351,22 +359,30 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework", "PodishCore",
-					"-framework", "Foundation",
-					"-framework", "CoreFoundation",
-					"-framework", "Security",
-					"-framework", "Network",
-					"-framework", "GSS",
+					"-framework",
+					PodishCore,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					Security,
+					"-framework",
+					Network,
+					"-framework",
+					GSS,
 					"-lc++",
 					"-lz",
-					"-Xlinker", "-u",
-					"-Xlinker", "___managed__Startup",
+					"-Xlinker",
+					"-u",
+					"-Xlinker",
+					"___managed__Startup",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
 				PODISHCORE_BOOTSTRAPPER_OBJ = "";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/ios-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/iossimulator-arm64/podish_bootstrapper.o";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
@@ -395,20 +411,28 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework", "PodishCore",
-					"-framework", "Foundation",
-					"-framework", "CoreFoundation",
-					"-framework", "Security",
-					"-framework", "Network",
-					"-framework", "GSS",
+					"-framework",
+					PodishCore,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					Security,
+					"-framework",
+					Network,
+					"-framework",
+					GSS,
 					"-lc++",
 					"-lz",
-					"-Xlinker", "-u",
-					"-Xlinker", "___managed__Startup",
+					"-Xlinker",
+					"-u",
+					"-Xlinker",
+					"___managed__Startup",
 				);
+				PODISHCORE_BOOTSTRAPPER_OBJ = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.macapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PODISHCORE_BOOTSTRAPPER_OBJ = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
@@ -436,20 +460,28 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-framework", "PodishCore",
-					"-framework", "Foundation",
-					"-framework", "CoreFoundation",
-					"-framework", "Security",
-					"-framework", "Network",
-					"-framework", "GSS",
+					"-framework",
+					PodishCore,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					Security,
+					"-framework",
+					Network,
+					"-framework",
+					GSS,
 					"-lc++",
 					"-lz",
-					"-Xlinker", "-u",
-					"-Xlinker", "___managed__Startup",
+					"-Xlinker",
+					"-u",
+					"-Xlinker",
+					"___managed__Startup",
 				);
+				PODISHCORE_BOOTSTRAPPER_OBJ = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
 				PRODUCT_BUNDLE_IDENTIFIER = dev.podish.macapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PODISHCORE_BOOTSTRAPPER_OBJ = "$(SRCROOT)/artifacts/podish-native/osx-arm64/podish_bootstrapper.o";
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
