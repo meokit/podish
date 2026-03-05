@@ -3,12 +3,18 @@ import Foundation
 import PackageDescription
 
 let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-let nativeLibDir = "\(packageDir)/artifacts/podish-native/osx-arm64"
+let macNativeLibDir = "\(packageDir)/artifacts/podish-native/osx-arm64"
+let env = ProcessInfo.processInfo.environment
+let platformName = env["PLATFORM_NAME"] ?? env["EFFECTIVE_PLATFORM_NAME"] ?? ""
+let defaultIosRid = platformName.contains("simulator") ? "iossimulator-arm64" : "ios-arm64"
+let iosRid = env["PODISH_IOS_RID"] ?? defaultIosRid
+let iosNativeLibDir = "\(packageDir)/artifacts/podish-native/\(iosRid)"
 
 let package = Package(
     name: "Podish",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
+        .iOS(.v16)
     ],
     products: [
         .executable(name: "Podish", targets: ["Podish"])
@@ -24,27 +30,25 @@ let package = Package(
             ],
             linkerSettings: [
                 .unsafeFlags([
-                    "-L", nativeLibDir,
-                    "\(nativeLibDir)/libbootstrapperdll.o"
-                ]),
-                .linkedLibrary("podishcore"),
-                .linkedLibrary("Runtime.WorkstationGC"),
-                .linkedLibrary("eventpipe-disabled"),
-                .linkedLibrary("stdc++compat"),
-                .linkedLibrary("System.Native"),
-                .linkedLibrary("System.IO.Compression.Native"),
-                .linkedLibrary("System.Net.Security.Native"),
-                .linkedLibrary("System.Security.Cryptography.Native.Apple"),
-                .linkedLibrary("System.Security.Cryptography.Native.OpenSsl"),
-                .linkedLibrary("z"),
-                .linkedLibrary("c++"),
-                .linkedLibrary("resolv"),
-                .linkedLibrary("iconv"),
-                .linkedFramework("Foundation"),
-                .linkedFramework("Security"),
-                .linkedFramework("CoreFoundation"),
-                .linkedFramework("CoreServices"),
-                .linkedFramework("GSS")
+                    "-F", macNativeLibDir
+                ], .when(platforms: [.macOS])),
+                .unsafeFlags([
+                    "\(macNativeLibDir)/libbootstrapperdll.o"
+                ], .when(platforms: [.macOS])),
+                .unsafeFlags([
+                    "-F", iosNativeLibDir
+                ], .when(platforms: [.iOS])),
+                .unsafeFlags([
+                    "\(iosNativeLibDir)/libbootstrapperdll.o"
+                ], .when(platforms: [.iOS])),
+                .linkedFramework("PodishCore", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Foundation", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Security", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Network", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("GSS", .when(platforms: [.macOS, .iOS])),
+                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+                .linkedLibrary("z", .when(platforms: [.macOS, .iOS])),
             ]
         )
     ]

@@ -39,7 +39,7 @@ struct NewContainerSheetView: View {
                     selectedImageId = store.images.first?.id
                 }
             }
-            .onChange(of: store.images) { _, newImages in
+            .onChange(of: store.images) { newImages in
                 if let selectedImageId,
                    newImages.contains(where: { $0.id == selectedImageId }) {
                     return
@@ -79,7 +79,21 @@ struct NewContainerSheetView: View {
                 .font(.headline)
 
             if store.images.isEmpty {
-                ContentUnavailableView("No Images", systemImage: "shippingbox", description: Text("Pull an image to continue."))
+                if #available(iOS 17.0, macOS 14.0, *) {
+                    ContentUnavailableView("No Images", systemImage: "shippingbox", description: Text("Pull an image to continue."))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "shippingbox")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text("No Images")
+                            .font(.headline)
+                        Text("Pull an image to continue.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 160)
+                }
             } else {
                 List(selection: $selectedImageId) {
                     ForEach(store.images) { image in

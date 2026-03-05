@@ -11,43 +11,48 @@
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild">
         <Message Text="Building libfibercpu with CMake..." Importance="High"/>
         <PropertyGroup>
+            <NativeBuildDir Condition="'$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
+            <NativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
             <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">true</BuildFibercpuStatic>
             <BuildFibercpuStatic Condition="'$(BuildFibercpuStatic)' == ''">false</BuildFibercpuStatic>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">$(CMakeArgs) -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphoneos</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('iossimulator-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphonesimulator</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DCMAKE_BUILD_TYPE=Release</CMakeArgs>
         </PropertyGroup>
-        <Exec Command="cmake -S ../libfibercpu -B build_native $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
-        <Exec Command="cmake --build build_native --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
     </Target>
 
     <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('OSX'))">
-        <NativeLibrary Include="build_native/libfibercpu.a"/>
+        <NativeLibrary Include="$(NativeBuildDir)/libfibercpu.a"/>
     </ItemGroup>
 
     <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('Linux'))">
-        <NativeLibrary Include="build_native/libfibercpu.a"/>
+        <NativeLibrary Include="$(NativeBuildDir)/libfibercpu.a"/>
     </ItemGroup>
 
     <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('Windows'))">
-        <NativeLibrary Include="build_native/Release/fibercpu.lib"/>
+        <NativeLibrary Include="$(NativeBuildDir)/Release/fibercpu.lib"/>
     </ItemGroup>
 
     <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
-        <Content Include="build_native/libfibercpu.dylib">
+        <Content Include="$(NativeBuildDir)/libfibercpu.dylib">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>libfibercpu.dylib</Link>
         </Content>
     </ItemGroup>
 
     <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
-        <Content Include="build_native/libfibercpu.so">
+        <Content Include="$(NativeBuildDir)/libfibercpu.so">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>libfibercpu.so</Link>
         </Content>
     </ItemGroup>
 
     <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
-        <Content Include="build_native/Release/fibercpu.dll">
+        <Content Include="$(NativeBuildDir)/Release/fibercpu.dll">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>fibercpu.dll</Link>
         </Content>

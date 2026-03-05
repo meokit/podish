@@ -71,7 +71,7 @@ struct TerminalWorkspaceView: View {
             session.refreshContainerList()
             session.refreshImageList()
         }
-        .onChange(of: store.selectedContainerID) { _, newId in
+        .onChange(of: store.selectedContainerID) { newId in
             guard let newId,
                   let container = store.containers.first(where: { $0.id == newId }),
                   container.state == .running else { return }

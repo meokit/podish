@@ -124,7 +124,7 @@ struct SidebarView: View {
         .onAppear {
             localSelection = store.selectedContainerID
         }
-        .onChange(of: localSelection) { _, newValue in
+        .onChange(of: localSelection) { newValue in
             guard store.selectedContainerID != newValue else { return }
             DispatchQueue.main.async {
                 if store.selectedContainerID != newValue {
@@ -132,7 +132,7 @@ struct SidebarView: View {
                 }
             }
         }
-        .onChange(of: store.selectedContainerID) { _, newValue in
+        .onChange(of: store.selectedContainerID) { newValue in
             guard localSelection != newValue else { return }
             DispatchQueue.main.async {
                 if localSelection != newValue {
