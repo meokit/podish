@@ -41,6 +41,7 @@ CPMAddPackage(
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
 option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
 option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
+option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 
 set(PGO_MODE "OFF" CACHE STRING "PGO build mode (OFF, GENERATE, USE)")
 set_property(CACHE PGO_MODE PROPERTY STRINGS "OFF" "GENERATE" "USE")
@@ -111,13 +112,24 @@ if(FIBERCPU_BUILD_STATIC)
     target_compile_definitions(fibercpu PUBLIC FIBERCPU_STATIC_BUILD=1)
 endif()
 
-include(CheckIPOSupported)
-check_ipo_supported(RESULT result OUTPUT error)
-if(result)
-    message(STATUS "LTO: Interprocedural Optimization (LTO) enabled for fibercpu")
-    set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+# Static archives are consumed by xcodebuild -create-xcframework in Podish's pack pipeline.
+# Enabling IPO there can emit LLVM bitcode wrapper objects that break architecture detection.
+if(FIBERCPU_BUILD_STATIC AND FIBERCPU_ENABLE_LTO)
+    message(STATUS "LTO: disabling for static fibercpu archive packaging compatibility")
+    set(FIBERCPU_ENABLE_LTO OFF)
+endif()
+
+if(FIBERCPU_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT result OUTPUT error)
+    if(result)
+        message(STATUS "LTO: Interprocedural Optimization (LTO) enabled for fibercpu")
+        set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(WARNING "LTO: Interprocedural Optimization (LTO) is NOT supported: ${error}")
+    endif()
 else()
-    message(WARNING "LTO: Interprocedural Optimization (LTO) is NOT supported: ${error}")
+    message(STATUS "LTO: disabled for fibercpu")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")

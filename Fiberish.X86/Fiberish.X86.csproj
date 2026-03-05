@@ -15,7 +15,7 @@
             <NativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
             <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">true</BuildFibercpuStatic>
             <BuildFibercpuStatic Condition="'$(BuildFibercpuStatic)' == ''">false</BuildFibercpuStatic>
-            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON -DFIBERCPU_ENABLE_LTO=OFF</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">$(CMakeArgs) -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphoneos</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('iossimulator-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphonesimulator</CMakeArgs>
