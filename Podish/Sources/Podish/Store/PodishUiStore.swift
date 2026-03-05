@@ -22,7 +22,7 @@ final class PodishUiStore: ObservableObject {
     var onStopContainer: ((String) -> Void)?
     var onRemoveContainer: ((String) -> Void)?
     var onAttachContainer: ((String) -> Void)?
-    var onCreateContainer: ((String) -> Void)?
+    var onCreateContainer: ((String, String?) -> Void)?
     var onPullImage: ((String) -> Void)?
     var onRemoveImage: ((String) -> Void)?
     var onShowNewContainer: (() -> Void)?
@@ -52,9 +52,10 @@ final class PodishUiStore: ObservableObject {
             }
 
             let shortId = String(item.containerId.prefix(12))
+            let displayName = item.name.isEmpty ? shortId : item.name
             return PodishContainer(
                 id: item.containerId,
-                name: shortId,
+                name: displayName,
                 containerId: item.containerId,
                 image: item.image,
                 state: state,
@@ -149,8 +150,8 @@ final class PodishUiStore: ObservableObject {
         onRemoveContainer?(container.containerId)
     }
 
-    func createContainer(fromImage imageRef: String) {
-        onCreateContainer?(imageRef)
+    func createContainer(fromImage imageRef: String, name: String?) {
+        onCreateContainer?(imageRef, name)
     }
 
     func pullImage(_ imageRef: String) {

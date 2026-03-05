@@ -60,8 +60,8 @@ struct TerminalWorkspaceView: View {
             store.onRemoveContainer = { containerId in
                 session.removeContainer(containerId)
             }
-            store.onCreateContainer = { imageRef in
-                session.createContainer(from: imageRef)
+            store.onCreateContainer = { imageRef, name in
+                session.createContainer(from: imageRef, name: name)
             }
             store.onPullImage = { imageRef in
                 session.pullImage(imageRef)

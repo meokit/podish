@@ -45,6 +45,7 @@ struct NativeImageListItem: Decodable, Hashable {
 struct NativeContainerListItem: Decodable, Hashable {
     let handle: String
     let containerId: String
+    let name: String
     let image: String
     let state: String
     let hasTerminal: Bool

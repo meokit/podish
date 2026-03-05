@@ -34,6 +34,7 @@ private let podishContainerStateCallbackImpl: PodContainerStateCallback = { user
 }
 
 private struct PodishRunSpec: Codable {
+    var name: String?
     var image: String?
     var rootfs: String?
     var exe: String?
@@ -125,7 +126,7 @@ actor PodishRuntimeActor {
 
         if containers.isEmpty {
             try pullImageInternal("docker.io/i386/alpine:latest")
-            _ = try createAndStartContainer(imageRef: "docker.io/i386/alpine:latest")
+            _ = try createAndStartContainer(imageRef: "docker.io/i386/alpine:latest", name: nil)
             containers = try listContainers()
             attached = containers.first(where: { $0.running })?.containerId ?? containers.first?.containerId
             if let attached {
@@ -161,9 +162,9 @@ actor PodishRuntimeActor {
         return try listImages()
     }
 
-    func createContainer(imageRef: String) throws -> String {
+    func createContainer(imageRef: String, name: String?) throws -> String {
         try ensureContext()
-        return try createAndStartContainer(imageRef: imageRef)
+        return try createAndStartContainer(imageRef: imageRef, name: name)
     }
 
     func startContainer(containerId: String) throws -> [NativeContainerListItem] {
@@ -439,10 +440,11 @@ actor PodishRuntimeActor {
         }
     }
 
-    private func createAndStartContainer(imageRef: String) throws -> String {
+    private func createAndStartContainer(imageRef: String, name: String?) throws -> String {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
         let beforeIds = Set(try listContainers().map(\.containerId))
         let spec = PodishRunSpec(
+            name: name,
             image: imageRef,
             rootfs: nil,
             exe: "/bin/ash",
@@ -745,11 +747,11 @@ final class PodishTerminalSession: ObservableObject {
         }
     }
 
-    func createContainer(from imageRef: String) {
+    func createContainer(from imageRef: String, name: String?) {
         Task {
             do {
                 let previousActiveId = await MainActor.run { self.activeContainerId }
-                let containerId = try await runtime.createContainer(imageRef: imageRef)
+                let containerId = try await runtime.createContainer(imageRef: imageRef, name: name)
                 let containers = try await runtime.refreshContainers()
                 let keepCurrentActive = previousActiveId != nil
                     && containers.contains(where: { $0.containerId == previousActiveId && $0.running })

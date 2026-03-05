@@ -6,11 +6,13 @@ struct NewContainerSheetView: View {
 
     @State private var pullImageRef = "docker.io/i386/alpine:latest"
     @State private var selectedImageId: String?
+    @State private var containerName = ""
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
                 pullSection
+                nameSection
                 imageListSection
             }
             .padding()
@@ -27,7 +29,8 @@ struct NewContainerSheetView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         if let imageRef = selectedImageRef {
-                            store.createContainer(fromImage: imageRef)
+                            let trimmed = containerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            store.createContainer(fromImage: imageRef, name: trimmed.isEmpty ? nil : trimmed)
                             dismiss()
                         }
                     }
@@ -120,6 +123,17 @@ struct NewContainerSheetView: View {
                 }
                 .listStyle(.inset)
             }
+        }
+    }
+
+    private var nameSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Container Name (Optional)")
+                .font(.headline)
+            TextField("my-container", text: $containerName)
+                #if os(macOS)
+                .textFieldStyle(.roundedBorder)
+                #endif
         }
     }
 
