@@ -162,7 +162,13 @@ public class ConsoleInode : Inode
         {
             const short POLLIN = 0x0001;
             if ((events & POLLIN) != 0)
+            {
+                // Fix busy-wait: if no data is available but IsSignaled is still true
+                // (stale signal from previous data), reset it to prevent immediate callback
+                if (!_discipline.HasDataAvailable && _discipline.DataAvailable.IsSignaled)
+                    _discipline.DataAvailable.Reset();
                 return _discipline.DataAvailable.RegisterCancelable(callback);
+            }
         }
         else
         {
