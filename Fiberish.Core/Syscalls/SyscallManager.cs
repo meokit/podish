@@ -6,6 +6,7 @@ using Fiberish.Native;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using System.IO;
 using System.Threading;
 
 namespace Fiberish.Syscalls;
@@ -1003,6 +1004,19 @@ public partial class SyscallManager
         if (nr < MaxSyscalls) _syscallHandlers[nr] = handler;
     }
 
+    private static int MapSyscallExceptionToErrno(Exception ex)
+    {
+        return ex switch
+        {
+            PlatformNotSupportedException => -(int)Errno.ENOSYS,
+            NotImplementedException => -(int)Errno.ENOSYS,
+            UnauthorizedAccessException => -(int)Errno.EPERM,
+            ArgumentException => -(int)Errno.EINVAL,
+            IOException => -(int)Errno.EIO,
+            _ => -(int)Errno.EFAULT
+        };
+    }
+
     public bool Handle(Engine engine, uint vector)
     {
         var previous = _activeSyscallManager.Value;
@@ -1043,13 +1057,51 @@ public partial class SyscallManager
             ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
 
             if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
-                retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
+            {
+                try
+                {
+                    retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
+                }
+                catch (Exception ex)
+                {
+                    var ret = MapSyscallExceptionToErrno(ex);
+                    Logger.LogError(ex, "Syscall handler threw before returning task. nr={Nr} tid={Tid} ret={Ret}",
+                        eax, fiberTask?.TID ?? 0, ret);
+                    engine.RegWrite(Reg.EAX, unchecked((uint)ret));
+                    if (Strace)
+                        SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                    return true;
+                }
+            }
             else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
 
             // --- Handling Async Syscalls ---
-            if (retTask.IsCompleted && retTask.Result != -(int)Errno.ERESTARTSYS)
+            int completedRet;
+            if (retTask.IsCompleted)
             {
-                var ret = retTask.Result;
+                try
+                {
+                    completedRet = retTask.Result;
+                }
+                catch (Exception ex)
+                {
+                    var ret = MapSyscallExceptionToErrno(ex);
+                    Logger.LogError(ex, "Syscall task completed with exception. nr={Nr} tid={Tid} ret={Ret}",
+                        eax, fiberTask?.TID ?? 0, ret);
+                    engine.RegWrite(Reg.EAX, unchecked((uint)ret));
+                    if (Strace)
+                        SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                    return true;
+                }
+            }
+            else
+            {
+                completedRet = 0;
+            }
+
+            if (retTask.IsCompleted && completedRet != -(int)Errno.ERESTARTSYS)
+            {
+                var ret = completedRet;
 
                 // Special handling for context-restoring syscalls
                 var isSigReturn = eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn;

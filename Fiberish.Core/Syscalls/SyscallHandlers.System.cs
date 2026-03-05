@@ -9,7 +9,6 @@ using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
-using Process = System.Diagnostics.Process;
 
 namespace Fiberish.Syscalls;
 
@@ -18,6 +17,7 @@ public partial class SyscallManager
     private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
     private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
     private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
+    private static readonly long SysinfoUptimeStartTimestamp = Stopwatch.GetTimestamp();
 
     private static long GetVirtualCpuCycles()
     {
@@ -34,6 +34,15 @@ public partial class SyscallManager
         var cycles = GetVirtualCpuCycles();
         var ticks = cycles / (VirtualCpuHz / UserHz);
         return unchecked((int)ticks);
+    }
+
+    private static int GetSysinfoUptimeSeconds()
+    {
+        var elapsed = Stopwatch.GetTimestamp() - SysinfoUptimeStartTimestamp;
+        if (elapsed <= 0) return 0;
+        var seconds = elapsed / Stopwatch.Frequency;
+        if (seconds > int.MaxValue) return int.MaxValue;
+        return (int)seconds;
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
@@ -109,7 +118,7 @@ public partial class SyscallManager
 
         var info = new SysInfo
         {
-            Uptime = (int)(DateTime.UtcNow - Process.GetCurrentProcess().StartTime).TotalSeconds,
+            Uptime = GetSysinfoUptimeSeconds(),
             Loads = [65536, 65536, 65536],
             TotalRam = 256 * 1024 * 1024,
             FreeRam = 128 * 1024 * 1024,
