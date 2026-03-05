@@ -12,9 +12,13 @@ internal static class OciStorePath
         var normalized = storedPath.Replace('\\', Path.DirectorySeparatorChar)
             .Replace('/', Path.DirectorySeparatorChar);
         if (Path.IsPathRooted(normalized))
-            return Path.GetFullPath(normalized);
+            throw new InvalidOperationException($"absolute OCI stored path is not supported: {storedPath}");
 
-        return Path.GetFullPath(Path.Combine(storeDir, normalized));
+        var resolved = Path.GetFullPath(Path.Combine(storeDir, normalized));
+        var storeRoot = EnsureTrailingSeparator(Path.GetFullPath(storeDir));
+        if (!resolved.StartsWith(storeRoot, StringComparison.Ordinal))
+            throw new InvalidOperationException($"OCI stored path escapes store root: {storedPath}");
+        return resolved;
     }
 
     public static string ToStoredPath(string storeDir, string fullPath)
@@ -31,8 +35,8 @@ internal static class OciStorePath
             return relative.Replace('\\', '/');
         }
 
-        // Keep absolute path if not under store root (compat edge case).
-        return absolute.Replace('\\', '/');
+        throw new InvalidOperationException(
+            $"resolved OCI path must stay under store root. store='{storeDir}', path='{fullPath}'");
     }
 
     private static string EnsureTrailingSeparator(string path)

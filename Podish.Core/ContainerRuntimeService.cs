@@ -382,12 +382,23 @@ public sealed class ContainerRuntimeService
             StringComparison.Ordinal);
         foreach (var layer in storedImage.Layers)
         {
-            var blobPath = OciStorePath.Resolve(ociStoreDir, layer.BlobPath);
-            var indexPath = OciStorePath.Resolve(ociStoreDir, layer.IndexPath);
+            string blobPath;
+            string indexPath;
+            try
+            {
+                blobPath = OciStorePath.Resolve(ociStoreDir, layer.BlobPath);
+                indexPath = OciStorePath.Resolve(ociStoreDir, layer.IndexPath);
+            }
+            catch (Exception ex)
+            {
+                error =
+                    $"invalid layer stored path for digest {layer.Digest}: blob='{layer.BlobPath}', index='{layer.IndexPath}', store='{ociStoreDir}', error='{ex.Message}'";
+                return false;
+            }
 
             if (!File.Exists(blobPath))
             {
-                error = $"missing layer blob file: {blobPath}";
+                error = $"missing layer blob file: stored='{layer.BlobPath}', resolved='{blobPath}'";
                 return false;
             }
 
@@ -418,7 +429,7 @@ public sealed class ContainerRuntimeService
 
             if (!File.Exists(indexPath))
             {
-                error = $"missing layer index file: {indexPath}";
+                error = $"missing layer index file: stored='{layer.IndexPath}', resolved='{indexPath}'";
                 return false;
             }
 

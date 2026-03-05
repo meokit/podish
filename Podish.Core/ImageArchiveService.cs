@@ -418,12 +418,24 @@ public sealed class ImageArchiveService
         var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var layer in image.Layers)
         {
-            var indexPath = OciStorePath.Resolve(storeDir, layer.IndexPath);
-            var blobPath = OciStorePath.Resolve(storeDir, layer.BlobPath);
+            string indexPath;
+            string blobPath;
+            try
+            {
+                indexPath = OciStorePath.Resolve(storeDir, layer.IndexPath);
+                blobPath = OciStorePath.Resolve(storeDir, layer.BlobPath);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"invalid layer stored path for digest {layer.Digest}: blob='{layer.BlobPath}', index='{layer.IndexPath}', store='{storeDir}', error='{ex.Message}'");
+            }
             if (!File.Exists(indexPath))
-                throw new InvalidOperationException($"missing layer index file: {indexPath}");
+                throw new InvalidOperationException(
+                    $"missing layer index file: stored='{layer.IndexPath}', resolved='{indexPath}'");
             if (!File.Exists(blobPath))
-                throw new InvalidOperationException($"missing layer blob file: {blobPath}");
+                throw new InvalidOperationException(
+                    $"missing layer blob file: stored='{layer.BlobPath}', resolved='{blobPath}'");
             var entries = JsonSerializer.Deserialize(File.ReadAllText(indexPath),
                               PodishJsonContext.Default.ListLayerIndexEntry)
                           ?? throw new InvalidOperationException($"invalid layer index JSON: {indexPath}");
