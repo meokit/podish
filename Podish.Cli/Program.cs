@@ -20,7 +20,7 @@ internal class Program
         var logLevelOption = new Option<string>(
             new[] { "--log-level", "-l" },
             () => "warn",
-            "Log messages above specified level: debug, info, warn, error, fatal, panic");
+            "Log messages above specified level: trace, debug, info, warn, error, fatal, panic");
         var logFileOption = new Option<string?>(
             new[] { "--log-file" },
             () => null,
@@ -66,6 +66,9 @@ internal class Program
             new[] { "--log-driver" },
             () => "json-file",
             "Container log driver (json-file|none)");
+        var containerNameOption = new Option<string?>(
+            new[] { "--name" },
+            "Assign a name to the container");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -82,6 +85,7 @@ internal class Program
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
+        runCommand.AddOption(containerNameOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async (context) =>
@@ -94,6 +98,7 @@ internal class Program
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
+            var containerName = context.ParseResult.GetValueForOption(containerNameOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -142,7 +147,7 @@ internal class Program
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
-                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use trace|debug|info|warn|error|fatal|panic");
                 context.ExitCode = 125;
                 return;
             }
@@ -157,6 +162,22 @@ internal class Program
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
+
+            if (!PodishContainerMetadataStore.IsValidName(containerName))
+            {
+                Console.Error.WriteLine("[Podish.Cli] invalid --name. Allowed: [a-zA-Z0-9][a-zA-Z0-9_.-]*");
+                context.ExitCode = 125;
+                return;
+            }
+
+            var existing = PodishContainerMetadataStore.ReadAll(containersDir);
+            if (!string.IsNullOrWhiteSpace(containerName) &&
+                existing.Any(x => string.Equals(x.Name, containerName, StringComparison.Ordinal)))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] container name already exists: {containerName}");
+                context.ExitCode = 125;
+                return;
+            }
 
             var containerId = Guid.NewGuid().ToString("N")[..12];
             var containerDir = Path.Combine(containersDir, containerId);
@@ -217,7 +238,41 @@ internal class Program
                 Logger.LogInformation("Env: {Envs}", string.Join(", ", guestEnvs));
             }
 
+            var now = DateTimeOffset.UtcNow;
+            var spec = new PodishRunSpec
+            {
+                Name = containerName,
+                Image = image,
+                Rootfs = rootfs,
+                Exe = exe,
+                ExeArgs = exeArgs,
+                Volumes = volumes,
+                Env = guestEnvs,
+                Dns = dnsServers,
+                Interactive = interactive,
+                Tty = tty,
+                Strace = strace,
+                LogDriver = containerLogDriver.ToCliValue()
+            };
+            var metadata = new PodishContainerMetadata
+            {
+                ContainerId = containerId,
+                Name = containerName,
+                Image = imageRef,
+                State = "created",
+                ExitCode = null,
+                HasTerminal = interactive && tty,
+                Running = false,
+                CreatedAt = now,
+                UpdatedAt = now,
+                Spec = spec
+            };
+            PodishContainerMetadataStore.Write(containersDir, metadata);
             eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
+            metadata.State = "running";
+            metadata.Running = true;
+            metadata.UpdatedAt = DateTimeOffset.UtcNow;
+            PodishContainerMetadataStore.Write(containersDir, metadata);
 
             var exitCode = await RunContainer(
                 rootfsPath,
@@ -235,6 +290,146 @@ internal class Program
                 containerDir,
                 containerLogDriver,
                 eventStore);
+            metadata.State = "exited";
+            metadata.Running = false;
+            metadata.ExitCode = exitCode;
+            metadata.UpdatedAt = DateTimeOffset.UtcNow;
+            PodishContainerMetadataStore.Write(containersDir, metadata);
+            context.ExitCode = exitCode;
+        });
+
+        // --- Start Command ---
+        var startCommand = new Command("start", "Start an existing container by name or ID");
+        var startContainerArgument = new Argument<string>("container", "Container name or ID");
+        startCommand.AddArgument(startContainerArgument);
+        startCommand.SetHandler(async (context) =>
+        {
+            var containerId = context.ParseResult.GetValueForArgument(startContainerArgument);
+            var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
+            var logFile = context.ParseResult.GetValueForOption(logFileOption);
+
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var imagesDir = Path.Combine(fiberpodDir, "images");
+            var ociStoreImagesDir = Path.Combine(fiberpodDir, "oci", "images");
+            var logsDir = Path.Combine(fiberpodDir, "logs");
+            var containersDir = Path.Combine(fiberpodDir, "containers");
+            Directory.CreateDirectory(imagesDir);
+            Directory.CreateDirectory(ociStoreImagesDir);
+            Directory.CreateDirectory(logsDir);
+            Directory.CreateDirectory(containersDir);
+
+            if (logFile == null)
+                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
+            {
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid --log-level value: {logLevelRaw}. Use debug|info|warn|error|fatal|panic");
+                context.ExitCode = 125;
+                return;
+            }
+
+            SetupLogging(logLevel, logFile);
+            using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
+
+            var metadata = PodishContainerMetadataStore.Resolve(containersDir, containerId);
+            if (metadata == null)
+            {
+                Console.Error.WriteLine($"[Podish.Cli] container not found: {containerId}");
+                context.ExitCode = 125;
+                return;
+            }
+            containerId = metadata.ContainerId;
+            var containerDir = Path.Combine(containersDir, containerId);
+
+            if (metadata?.Spec == null)
+            {
+                Console.Error.WriteLine("[Podish.Cli] container metadata is missing run spec");
+                context.ExitCode = 125;
+                return;
+            }
+
+            if (!ContainerLogDriverParser.TryParse(metadata.Spec.LogDriver, out var containerLogDriver))
+            {
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid log driver in container metadata: {metadata.Spec.LogDriver}");
+                context.ExitCode = 125;
+                return;
+            }
+
+            var spec = metadata.Spec;
+            var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
+            var imageRef = metadata.Image ?? spec.Image ?? spec.Rootfs ?? "<unknown>";
+            var rootfsPath = spec.Rootfs ?? spec.Image ?? string.Empty;
+            var safeImageName = imageRef.Replace("/", "_").Replace(":", "_");
+            var ociStoreDir = Path.Combine(ociStoreImagesDir, safeImageName);
+            var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
+
+            if (!useRootfs)
+            {
+                if (string.IsNullOrWhiteSpace(spec.Image))
+                {
+                    Console.Error.WriteLine("[Podish.Cli] invalid container metadata: image is required");
+                    context.ExitCode = 125;
+                    return;
+                }
+
+                if (!Directory.Exists(rootfsPath) && Directory.Exists(ociStoreDir))
+                {
+                    rootfsPath = ociStoreDir;
+                }
+                else if (!Directory.Exists(rootfsPath))
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] Unable to find image '{spec.Image}' locally");
+                    Console.Error.WriteLine($"[Podish.Cli] Trying to pull {spec.Image}...");
+                    var pullService = new OciPullService(Logger);
+                    try
+                    {
+                        await pullService.PullAndStoreImageAsync(spec.Image, ociStoreDir);
+                        rootfsPath = ociStoreDir;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[Podish.Cli Error] Failed to pull image: {ex.Message}");
+                        context.ExitCode = 1;
+                        return;
+                    }
+                }
+            }
+            else if (!Directory.Exists(rootfsPath))
+            {
+                Console.Error.WriteLine($"[Podish.Cli Error] --rootfs path not found: {rootfsPath}");
+                context.ExitCode = 1;
+                return;
+            }
+
+            Logger.LogInformation("Starting existing container {ContainerId}", containerId);
+            metadata.State = "running";
+            metadata.Running = true;
+            metadata.ExitCode = null;
+            metadata.UpdatedAt = DateTimeOffset.UtcNow;
+            PodishContainerMetadataStore.Write(containersDir, metadata);
+            var exitCode = await RunContainer(
+                rootfsPath,
+                spec.Exe ?? string.Empty,
+                spec.ExeArgs,
+                spec.Volumes,
+                spec.Env,
+                spec.Dns,
+                spec.Interactive && spec.Tty,
+                spec.Strace,
+                !useRootfs,
+                containersDir,
+                containerId,
+                imageRef,
+                containerDir,
+                containerLogDriver,
+                eventStore);
+            metadata.State = "exited";
+            metadata.Running = false;
+            metadata.ExitCode = exitCode;
+            metadata.UpdatedAt = DateTimeOffset.UtcNow;
+            PodishContainerMetadataStore.Write(containersDir, metadata);
             context.ExitCode = exitCode;
         });
 
@@ -491,22 +686,233 @@ internal class Program
             }
         });
 
+        // --- PS Command ---
+        var psCommand = new Command("ps", "List containers");
+        var psAllOption = new Option<bool>(new[] { "--all", "-a" }, "Show all containers (default: only running)");
+        var psFormatOption = new Option<string>(
+            new[] { "--format" },
+            () => "table",
+            "Output format (table|json)");
+        psCommand.AddOption(psAllOption);
+        psCommand.AddOption(psFormatOption);
+        psCommand.SetHandler((context) =>
+        {
+            var showAll = context.ParseResult.GetValueForOption(psAllOption);
+            var format = context.ParseResult.GetValueForOption(psFormatOption) ?? "table";
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var containersDir = Path.Combine(fiberpodDir, "containers");
+            var rows = PodishContainerMetadataStore.ReadAll(containersDir)
+                .Where(x => showAll || string.Equals(x.State, "running", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(x => x.UpdatedAt)
+                .ToList();
+
+            if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(JsonSerializer.Serialize(rows));
+                return;
+            }
+
+            if (!string.Equals(format, "table", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] invalid --format value: {format}. Use table|json");
+                context.ExitCode = 125;
+                return;
+            }
+
+            Console.WriteLine("CONTAINER ID   NAME                 IMAGE                           STATE     EXIT");
+            foreach (var c in rows)
+            {
+                var id = (c.ContainerId ?? string.Empty).PadRight(14).Substring(0, 14);
+                var name = (c.Name ?? string.Empty).PadRight(20).Substring(0, 20);
+                var image = (c.Image ?? string.Empty).PadRight(32).Substring(0, 32);
+                var state = (c.State ?? "unknown").PadRight(9).Substring(0, 9);
+                var exit = c.ExitCode?.ToString() ?? "";
+                Console.WriteLine($"{id} {name} {image} {state} {exit}");
+            }
+        });
+
+        // --- Rename Command ---
+        var renameCommand = new Command("rename", "Rename a container");
+        var renameOldArgument = new Argument<string>("container", "Container name or ID");
+        var renameNewArgument = new Argument<string>("new-name", "New container name");
+        renameCommand.AddArgument(renameOldArgument);
+        renameCommand.AddArgument(renameNewArgument);
+        renameCommand.SetHandler((context) =>
+        {
+            var oldQuery = context.ParseResult.GetValueForArgument(renameOldArgument);
+            var newName = context.ParseResult.GetValueForArgument(renameNewArgument);
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var containersDir = Path.Combine(fiberpodDir, "containers");
+
+            if (!PodishContainerMetadataStore.IsValidName(newName))
+            {
+                Console.Error.WriteLine("[Podish.Cli] invalid new name. Allowed: [a-zA-Z0-9][a-zA-Z0-9_.-]*");
+                context.ExitCode = 125;
+                return;
+            }
+
+            var all = PodishContainerMetadataStore.ReadAll(containersDir);
+            var existing = all.FirstOrDefault(x =>
+                string.Equals(x.Name, newName, StringComparison.Ordinal) ||
+                string.Equals(x.ContainerId, newName, StringComparison.Ordinal));
+            if (existing != null)
+            {
+                Console.Error.WriteLine($"[Podish.Cli] name already exists: {newName}");
+                context.ExitCode = 125;
+                return;
+            }
+
+            var target = PodishContainerMetadataStore.Resolve(containersDir, oldQuery);
+            if (target == null)
+            {
+                Console.Error.WriteLine($"[Podish.Cli] container not found: {oldQuery}");
+                context.ExitCode = 125;
+                return;
+            }
+
+            target.Name = newName;
+            target.UpdatedAt = DateTimeOffset.UtcNow;
+            PodishContainerMetadataStore.Write(containersDir, target);
+            Console.WriteLine($"{target.ContainerId} {target.Name}");
+        });
+
+        // --- RM Command ---
+        var rmCommand = new Command("rm", "Remove container(s) by name or ID");
+        var rmContainersArgument = new Argument<string[]>("containers", "Container names or IDs")
+        {
+            Arity = ArgumentArity.OneOrMore
+        };
+        var rmForceOption = new Option<bool>(new[] { "--force", "-f" }, "Force remove running container metadata");
+        rmCommand.AddArgument(rmContainersArgument);
+        rmCommand.AddOption(rmForceOption);
+        rmCommand.SetHandler((context) =>
+        {
+            var targets = context.ParseResult.GetValueForArgument(rmContainersArgument) ?? Array.Empty<string>();
+            var force = context.ParseResult.GetValueForOption(rmForceOption);
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var containersDir = Path.Combine(fiberpodDir, "containers");
+            var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
+
+            foreach (var query in targets)
+            {
+                var metadata = PodishContainerMetadataStore.Resolve(containersDir, query);
+                if (metadata == null)
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] container not found: {query}");
+                    context.ExitCode = 1;
+                    continue;
+                }
+
+                if (!force && string.Equals(metadata.State, "running", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine(
+                        $"[Podish.Cli] refusing to remove running container {query}; use rm -f");
+                    context.ExitCode = 1;
+                    continue;
+                }
+
+                PodishContainerMetadataStore.Delete(containersDir, metadata.ContainerId);
+
+                eventStore.Append(new ContainerEvent(
+                    DateTimeOffset.UtcNow,
+                    "container-remove",
+                    metadata.ContainerId,
+                    metadata.Image ?? string.Empty));
+                Console.WriteLine(metadata.ContainerId);
+            }
+        });
+
+        // --- Images Command ---
+        var imagesCommand = new Command("images", "List local images");
+        imagesCommand.SetHandler((context) =>
+        {
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var ociStoreImagesDir = Path.Combine(fiberpodDir, "oci", "images");
+            if (!Directory.Exists(ociStoreImagesDir))
+                return;
+
+            Console.WriteLine("REPOSITORY                    TAG                 DIGEST                             LAYERS");
+            foreach (var dir in Directory.GetDirectories(ociStoreImagesDir).OrderBy(x => x, StringComparer.Ordinal))
+            {
+                var imagePath = Path.Combine(dir, "image.json");
+                if (!File.Exists(imagePath))
+                    continue;
+
+                try
+                {
+                    var image = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (image == null)
+                        continue;
+
+                    var (repo, tag) = SplitImageReference(image.ImageReference);
+                    var digest = image.ManifestDigest ?? string.Empty;
+                    Console.WriteLine(
+                        $"{repo.PadRight(29).Substring(0, 29)} {tag.PadRight(19).Substring(0, 19)} {digest.PadRight(34).Substring(0, 34)} {image.Layers.Count}");
+                }
+                catch
+                {
+                    // ignore malformed metadata
+                }
+            }
+        });
+
+        // --- Image Command ---
+        var imageCommand = new Command("image", "Manage images");
+        var imageRmCommand = new Command("rm", "Remove image(s)");
+        var imageRmTargets = new Argument<string[]>("images", "Image references")
+        {
+            Arity = ArgumentArity.OneOrMore
+        };
+        imageRmCommand.AddArgument(imageRmTargets);
+        imageRmCommand.SetHandler((context) =>
+        {
+            var targets = context.ParseResult.GetValueForArgument(imageRmTargets) ?? Array.Empty<string>();
+            var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var ociStoreImagesDir = Path.Combine(fiberpodDir, "oci", "images");
+            var imagesDir = Path.Combine(fiberpodDir, "images");
+            foreach (var target in targets)
+            {
+                var safe = target.Replace("/", "_").Replace(":", "_");
+                var direct = Path.Combine(ociStoreImagesDir, safe);
+                var matched = Directory.Exists(direct)
+                    ? direct
+                    : FindImageDirectoryByReference(ociStoreImagesDir, target);
+                if (matched == null)
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] image not found: {target}");
+                    context.ExitCode = 1;
+                    continue;
+                }
+
+                Directory.Delete(matched, true);
+                var extractedDir = Path.Combine(imagesDir, Path.GetFileName(matched));
+                if (Directory.Exists(extractedDir))
+                    Directory.Delete(extractedDir, true);
+                Console.WriteLine(target);
+            }
+        });
+        imageCommand.AddCommand(imageRmCommand);
+
         // --- Logs Command ---
         var logsCommand = new Command("logs", "Fetch container logs");
-        var logsContainerArgument = new Argument<string>("container", "Container ID");
+        var logsContainerArgument = new Argument<string>("container", "Container name or ID");
         var logsTimestampsOption = new Option<bool>(new[] { "--timestamps" }, "Show timestamps");
         logsCommand.AddArgument(logsContainerArgument);
         logsCommand.AddOption(logsTimestampsOption);
         logsCommand.SetHandler((context) =>
         {
-            var containerId = context.ParseResult.GetValueForArgument(logsContainerArgument);
+            var containerQuery = context.ParseResult.GetValueForArgument(logsContainerArgument);
             var showTimestamps = context.ParseResult.GetValueForOption(logsTimestampsOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
+            var containersDir = Path.Combine(fiberpodDir, "containers");
+            var container = PodishContainerMetadataStore.Resolve(containersDir, containerQuery);
+            var containerId = container?.ContainerId ?? containerQuery;
             var logPath = Path.Combine(fiberpodDir, "containers", containerId, "ctr.log");
             if (!File.Exists(logPath))
             {
-                Console.Error.WriteLine($"[Podish.Cli] log file not found for container {containerId}");
+                Console.Error.WriteLine($"[Podish.Cli] log file not found for container {containerQuery}");
                 context.ExitCode = 1;
                 return;
             }
@@ -562,6 +968,12 @@ internal class Program
         });
 
         rootCommand.AddCommand(runCommand);
+        rootCommand.AddCommand(startCommand);
+        rootCommand.AddCommand(psCommand);
+        rootCommand.AddCommand(rmCommand);
+        rootCommand.AddCommand(renameCommand);
+        rootCommand.AddCommand(imagesCommand);
+        rootCommand.AddCommand(imageCommand);
         rootCommand.AddCommand(pullCommand);
         rootCommand.AddCommand(saveCommand);
         rootCommand.AddCommand(loadCommand);
@@ -587,32 +999,6 @@ internal class Program
             }
         });
         Logger = ProgramLoggerFactory.CreateLogger<Program>();
-    }
-
-    private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
-    {
-        switch (raw.Trim().ToLowerInvariant())
-        {
-            case "debug":
-                level = LogLevel.Debug;
-                return true;
-            case "info":
-                level = LogLevel.Information;
-                return true;
-            case "warn":
-                level = LogLevel.Warning;
-                return true;
-            case "error":
-                level = LogLevel.Error;
-                return true;
-            case "fatal":
-            case "panic":
-                level = LogLevel.Critical;
-                return true;
-            default:
-                level = LogLevel.Warning;
-                return false;
-        }
     }
 
     private static string[] NormalizeRunArgsForPodman(string[] args)
@@ -642,7 +1028,8 @@ internal class Program
             "--env",
             "--dns",
             "--log-driver",
-            "--rootfs"
+            "--rootfs",
+            "--name"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -700,6 +1087,48 @@ internal class Program
         return rewritten.ToArray();
     }
 
+    private static (string Repository, string Tag) SplitImageReference(string imageRef)
+    {
+        if (string.IsNullOrWhiteSpace(imageRef))
+            return ("<none>", "<none>");
+        var idx = imageRef.LastIndexOf(':');
+        if (idx <= 0 || idx == imageRef.Length - 1 || imageRef[(idx - 1)..].Contains('/'))
+            return (imageRef, "latest");
+        return (imageRef[..idx], imageRef[(idx + 1)..]);
+    }
+
+    private static string? FindImageDirectoryByReference(string ociStoreImagesDir, string imageRef)
+    {
+        if (!Directory.Exists(ociStoreImagesDir))
+            return null;
+
+        foreach (var dir in Directory.GetDirectories(ociStoreImagesDir))
+        {
+            var imagePath = Path.Combine(dir, "image.json");
+            if (!File.Exists(imagePath))
+                continue;
+
+            try
+            {
+                var image = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath),
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (image != null && string.Equals(image.ImageReference, imageRef, StringComparison.Ordinal))
+                    return dir;
+            }
+            catch
+            {
+                // ignore malformed metadata
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
+    {
+        return PodishContext.TryParsePodmanLogLevel(raw, out level);
+    }
+
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
         string containerId, string image, string containerDir, ContainerLogDriver logDriver,
@@ -724,6 +1153,14 @@ internal class Program
             LogDriver = logDriver,
             EventStore = eventStore
         });
+    }
+}
+
+internal static class ContainerLogDriverExtensions
+{
+    public static string ToCliValue(this ContainerLogDriver driver)
+    {
+        return driver == ContainerLogDriver.None ? "none" : "json-file";
     }
 }
 

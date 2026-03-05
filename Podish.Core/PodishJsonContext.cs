@@ -16,6 +16,9 @@ namespace Podish.Core;
 [JsonSerializable(typeof(List<OciDescriptor>))]
 [JsonSerializable(typeof(OciManifest))]
 [JsonSerializable(typeof(OciImageConfig))]
+[JsonSerializable(typeof(PodishRunSpec))]
+[JsonSerializable(typeof(PodishContainerMetadata))]
+[JsonSerializable(typeof(List<PodishContainerMetadata>))]
 internal partial class PodishJsonContext : JsonSerializerContext
 {
 }

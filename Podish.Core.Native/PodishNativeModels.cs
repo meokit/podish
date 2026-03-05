@@ -14,6 +14,7 @@ internal sealed record NativeImageListItem(
 internal sealed record NativeContainerListItem(
     string Handle,
     string ContainerId,
+    string Name,
     string Image,
     string State,
     bool HasTerminal,
@@ -23,22 +24,12 @@ internal sealed record NativeContainerListItem(
 internal sealed record NativeContainerInspect(
     string Handle,
     string ContainerId,
+    string Name,
     string Image,
     string State,
     bool HasTerminal,
     bool Running,
     int? ExitCode,
-    PodishRunSpec Spec);
-
-internal sealed record NativeContainerMetadata(
-    string ContainerId,
-    string Image,
-    string State,
-    bool HasTerminal,
-    bool Running,
-    int? ExitCode,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
     PodishRunSpec Spec);
 
 internal sealed record NativeEventsChunk(string Cursor, IReadOnlyList<ContainerEvent> Events);
@@ -51,8 +42,8 @@ internal sealed record NativeJobPollResponse(string Status, string? Error, strin
 [JsonSerializable(typeof(List<NativeImageListItem>))]
 [JsonSerializable(typeof(List<NativeContainerListItem>))]
 [JsonSerializable(typeof(NativeContainerInspect))]
-[JsonSerializable(typeof(NativeContainerMetadata))]
-[JsonSerializable(typeof(List<NativeContainerMetadata>))]
+[JsonSerializable(typeof(PodishContainerMetadata))]
+[JsonSerializable(typeof(List<PodishContainerMetadata>))]
 [JsonSerializable(typeof(NativeEventsChunk))]
 [JsonSerializable(typeof(NativeLogsChunk))]
 [JsonSerializable(typeof(ContainerLogEntry))]

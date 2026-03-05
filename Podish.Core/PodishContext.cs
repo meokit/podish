@@ -13,6 +13,7 @@ public sealed class PodishContextOptions
 
 public sealed class PodishRunSpec
 {
+    public string? Name { get; init; }
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
     public string? Exe { get; init; }
@@ -445,7 +446,7 @@ public sealed class PodishContext : IDisposable
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);
     }
 
-    private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
+    public static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
     {
         switch (raw.Trim().ToLowerInvariant())
         {

@@ -158,6 +158,7 @@ internal sealed class NativeContainer
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly string _logicalId;
     private readonly DateTimeOffset _createdAt;
+    private string? _name;
 
     private PodishContainerSession? _session;
     private int? _exitCode;
@@ -175,11 +176,13 @@ internal sealed class NativeContainer
         _logicalId = Guid.NewGuid().ToString("N")[..12];
         _createdAt = DateTimeOffset.UtcNow;
         _persistedState = "created";
+        _name = null;
     }
 
-    public NativeContainer(string containerId, DateTimeOffset createdAt, string state, int? exitCode)
+    public NativeContainer(string containerId, string? name, DateTimeOffset createdAt, string state, int? exitCode)
     {
         _logicalId = containerId;
+        _name = string.IsNullOrWhiteSpace(name) ? null : name;
         _createdAt = createdAt;
         _persistedState = string.IsNullOrWhiteSpace(state) ? "created" : state;
         _exitCode = exitCode;
@@ -201,6 +204,19 @@ internal sealed class NativeContainer
             {
                 if (_session != null) return _session.ImageRef;
                 return Spec.Image ?? Spec.Rootfs ?? string.Empty;
+            }
+        }
+    }
+
+    public string? Name
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (!string.IsNullOrWhiteSpace(_name))
+                    return _name;
+                return Spec.Name;
             }
         }
     }
@@ -479,7 +495,18 @@ internal sealed class NativeContainer
         lock (_gate)
         {
             _persistedState = "created";
+            if (string.IsNullOrWhiteSpace(_name))
+                _name = Spec.Name;
             PersistMetadataLocked("created");
+        }
+    }
+
+    public void Rename(string? newName)
+    {
+        lock (_gate)
+        {
+            _name = string.IsNullOrWhiteSpace(newName) ? null : newName;
+            PersistMetadataLocked(_persistedState);
         }
     }
 
@@ -490,46 +517,45 @@ internal sealed class NativeContainer
             _removed = true;
         }
 
-        var dir = ContainerDir;
-        if (Directory.Exists(dir))
-            Directory.Delete(dir, true);
+        PodishContainerMetadataStore.Delete(Owner.Context.ContainersDir, _logicalId);
     }
 
-    public NativeContainerMetadata BuildMetadataSnapshot()
+    public PodishContainerMetadata BuildMetadataSnapshot()
     {
         lock (_gate)
         {
-            return new NativeContainerMetadata(
-                ContainerId: _logicalId,
-                Image: ImageRef,
-                State: State,
-                HasTerminal: HasTerminal,
-                Running: IsRunning,
-                ExitCode: _exitCode,
-                CreatedAt: _createdAt,
-                UpdatedAt: DateTimeOffset.UtcNow,
-                Spec: Spec);
+            return new PodishContainerMetadata
+            {
+                ContainerId = _logicalId,
+                Name = Name,
+                Image = ImageRef,
+                State = State,
+                HasTerminal = HasTerminal,
+                Running = IsRunning,
+                ExitCode = _exitCode,
+                CreatedAt = _createdAt,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Spec = Spec
+            };
         }
     }
 
-    private string ContainerDir => Path.Combine(Owner.Context.ContainersDir, _logicalId);
-    private string MetadataPath => Path.Combine(ContainerDir, "container.json");
-
     private void PersistMetadataLocked(string forcedState)
     {
-        Directory.CreateDirectory(ContainerDir);
-        var metadata = new NativeContainerMetadata(
-            ContainerId: _logicalId,
-            Image: ImageRef,
-            State: forcedState,
-            HasTerminal: HasTerminal,
-            Running: forcedState == "running",
-            ExitCode: _exitCode,
-            CreatedAt: _createdAt,
-            UpdatedAt: DateTimeOffset.UtcNow,
-            Spec: Spec);
-        var json = JsonSerializer.Serialize(metadata, PodishNativeJsonContext.Default.NativeContainerMetadata);
-        File.WriteAllText(MetadataPath, json);
+        var metadata = new PodishContainerMetadata
+        {
+            ContainerId = _logicalId,
+            Name = Name,
+            Image = ImageRef,
+            State = forcedState,
+            HasTerminal = HasTerminal,
+            Running = forcedState == "running",
+            ExitCode = _exitCode,
+            CreatedAt = _createdAt,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Spec = Spec
+        };
+        PodishContainerMetadataStore.Write(Owner.Context.ContainersDir, metadata);
     }
 
     private async Task ObserveExitAsync(PodishContainerSession session)
@@ -907,6 +933,16 @@ public static class PodishNativeApi
             if (!TryParseRunSpec(ctx, runSpecJsonUtf8, out var spec, out var err))
                 return SetErrorAndReturn(ctx, err, PodEinval);
 
+            if (!PodishContainerMetadataStore.IsValidName(spec!.Name))
+                return SetErrorAndReturn(ctx, "invalid container name", PodEinval);
+
+            if (!string.IsNullOrWhiteSpace(spec.Name))
+            {
+                var snapshot = BuildContainerListSnapshot(ctx);
+                if (snapshot.Any(x => string.Equals(x.Name, spec.Name, StringComparison.Ordinal)))
+                    return SetErrorAndReturn(ctx, "container name already exists", PodEbusy);
+            }
+
             var container = new NativeContainer
             {
                 Owner = ctx,
@@ -981,6 +1017,7 @@ public static class PodishNativeApi
             var inspect = new NativeContainerInspect(
                 Handle: container.GetHashCode().ToString("x"),
                 ContainerId: container.ContainerId,
+                Name: container.Name ?? string.Empty,
                 Image: container.ImageRef,
                 State: container.State,
                 HasTerminal: container.HasTerminal,
@@ -1011,6 +1048,41 @@ public static class PodishNativeApi
         catch (Exception ex)
         {
             return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "pod_container_rename", CallConvs = [typeof(CallConvCdecl)])]
+    public static int PodContainerRename(IntPtr containerHandle, IntPtr nameUtf8)
+    {
+        var container = FromContainerHandle(containerHandle);
+        if (container == null)
+            return PodEinval;
+
+        var newName = PtrToString(nameUtf8);
+        if (!PodishContainerMetadataStore.IsValidName(newName))
+            return SetErrorAndReturn(container.Owner, "invalid container name", PodEinval);
+
+        var owner = container.Owner;
+        if (!string.IsNullOrWhiteSpace(newName))
+        {
+            var snapshot = BuildContainerListSnapshot(owner);
+            if (snapshot.Any(x =>
+                    string.Equals(x.Name, newName, StringComparison.Ordinal) &&
+                    !string.Equals(x.ContainerId, container.ContainerId, StringComparison.Ordinal)))
+            {
+                return SetErrorAndReturn(owner, "container name already exists", PodEbusy);
+            }
+        }
+
+        try
+        {
+            container.Rename(newName);
+            owner.EmitContainerStateChanged(BuildContainerListSnapshot(owner));
+            return PodOk;
+        }
+        catch (Exception ex)
+        {
+            return SetErrorAndReturn(owner, ex.ToString(), PodEinternal);
         }
     }
 
@@ -1448,10 +1520,11 @@ public static class PodishNativeApi
 
     internal static List<NativeContainerListItem> BuildContainerListSnapshot(NativeContext ctx)
     {
-        var list = ReadPersistedContainerMetadata(ctx.Context.ContainersDir)
+        var list = PodishContainerMetadataStore.ReadAll(ctx.Context.ContainersDir)
             .Select(m => new NativeContainerListItem(
                 Handle: string.Empty,
                 ContainerId: m.ContainerId,
+                Name: m.Name ?? string.Empty,
                 Image: m.Image,
                 State: string.Equals(m.State, "running", StringComparison.OrdinalIgnoreCase) ? "exited" : m.State,
                 HasTerminal: m.HasTerminal,
@@ -1464,6 +1537,7 @@ public static class PodishNativeApi
             var item = new NativeContainerListItem(
                 Handle: live.GetHashCode().ToString("x"),
                 ContainerId: live.ContainerId,
+                Name: live.Name ?? string.Empty,
                 Image: live.ImageRef,
                 State: live.State,
                 HasTerminal: live.HasTerminal,
@@ -1477,16 +1551,22 @@ public static class PodishNativeApi
 
     private static NativeContainer? OpenContainerById(NativeContext ctx, string containerId)
     {
-        var live = ctx.ContainersSnapshot().FirstOrDefault(c => string.Equals(c.ContainerId, containerId, StringComparison.Ordinal));
+        var live = ctx.ContainersSnapshot().FirstOrDefault(c =>
+            string.Equals(c.ContainerId, containerId, StringComparison.Ordinal) ||
+            string.Equals(c.Name, containerId, StringComparison.Ordinal));
         if (live != null)
             return live;
 
-        var metadata = ReadPersistedContainerMetadata(ctx.Context.ContainersDir)
-            .FirstOrDefault(m => string.Equals(m.ContainerId, containerId, StringComparison.Ordinal));
+        var metadata = PodishContainerMetadataStore.Resolve(ctx.Context.ContainersDir, containerId);
         if (metadata == null)
             return null;
 
-        var container = new NativeContainer(metadata.ContainerId, metadata.CreatedAt, metadata.State, metadata.ExitCode)
+        var container = new NativeContainer(
+            metadata.ContainerId,
+            metadata.Name,
+            metadata.CreatedAt,
+            metadata.State,
+            metadata.ExitCode)
         {
             Owner = ctx,
             Spec = metadata.Spec
@@ -1494,33 +1574,6 @@ public static class PodishNativeApi
         if (!ctx.ContainsContainer(container.ContainerId))
             ctx.RegisterContainer(container);
         return container;
-    }
-
-    private static List<NativeContainerMetadata> ReadPersistedContainerMetadata(string containersDir)
-    {
-        var result = new List<NativeContainerMetadata>();
-        if (!Directory.Exists(containersDir))
-            return result;
-
-        foreach (var dir in Directory.GetDirectories(containersDir))
-        {
-            var path = Path.Combine(dir, "container.json");
-            if (!File.Exists(path))
-                continue;
-            try
-            {
-                var metadata =
-                    JsonSerializer.Deserialize(File.ReadAllText(path), PodishNativeJsonContext.Default.NativeContainerMetadata);
-                if (metadata != null)
-                    result.Add(metadata);
-            }
-            catch
-            {
-                // ignore malformed metadata
-            }
-        }
-
-        return result;
     }
 
     private static List<ContainerLogEntry> ReadContainerLogs(string logPath, int offset, int maxEntries, out int nextCursor)
