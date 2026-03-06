@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Fiberish.Core.VFS.TTY;
+using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
 
@@ -51,9 +52,11 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
 {
     private readonly object _gate = new();
     private readonly StreamWriter _writer;
+    private readonly ILogger? _logger;
 
-    public JsonFileContainerLogSink(string logPath)
+    public JsonFileContainerLogSink(string logPath, ILogger? logger = null)
     {
+        _logger = logger;
         var dir = Path.GetDirectoryName(logPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         _writer = new StreamWriter(File.Open(logPath, FileMode.Create, FileAccess.Write, FileShare.Read))
@@ -64,10 +67,12 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
 
     public void Dispose()
     {
+        _logger?.LogDebug("Disposing json-file container log sink");
         lock (_gate)
         {
             _writer.Dispose();
         }
+        _logger?.LogDebug("Disposed json-file container log sink");
     }
 
     public void Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
@@ -84,6 +89,8 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
         {
             _writer.WriteLine(json);
         }
+
+        _logger?.LogTrace("Wrote container log entry stream={Stream} bytes={Bytes}", entry.Stream, buffer.Length);
     }
 }
 

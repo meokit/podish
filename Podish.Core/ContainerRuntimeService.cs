@@ -58,7 +58,7 @@ public sealed class ContainerRuntimeService
         PosixSignalRegistration? sigwinch = null;
         var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
 
-        using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir);
+        using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
         ITtyDriver driver = request.TerminalBridge != null
             ? new BridgeTtyDriver(request.TerminalBridge, logSink)
             : new ConsoleTtyDriver(logSink);
@@ -274,7 +274,14 @@ public sealed class ContainerRuntimeService
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
 
+            _logger.LogDebug(
+                "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver}",
+                request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty, request.Volumes.Length,
+                request.LogDriver);
             scheduler.Run();
+            _logger.LogDebug(
+                "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
+                request.ContainerId, mainTask.Exited);
 
             if (!mainTask.Exited)
             {
@@ -296,14 +303,15 @@ public sealed class ContainerRuntimeService
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "Critical Error during container emulation");
-            Console.Error.WriteLine($"[Podish] Error: {ex.Message}");
+            Console.Error.WriteLine($"[Podish] Error: {ex}");
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
                 request.Image, 1,
-                ex.Message));
+                ex.ToString()));
             return 1;
         }
         finally
         {
+            _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
             try
             {
                 Task.Delay(50).Wait();
@@ -312,18 +320,22 @@ public sealed class ContainerRuntimeService
             {
             }
 
+            _logger.LogTrace("Container teardown flushing stdio containerId={ContainerId}", request.ContainerId);
             Console.Out.Flush();
             Console.Error.Flush();
 
+            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}", request.ContainerId);
             stdinStream?.Dispose();
 
             if (inputCts != null)
             {
+                _logger.LogTrace("Container teardown cancelling input loop containerId={ContainerId}", request.ContainerId);
                 inputCts.Cancel();
                 if (inputTask != null)
                 {
                     try
                     {
+                        _logger.LogTrace("Container teardown waiting for input loop containerId={ContainerId}", request.ContainerId);
                         Task.WhenAny(inputTask, Task.Delay(100)).Wait();
                     }
                     catch
@@ -334,12 +346,19 @@ public sealed class ContainerRuntimeService
                 inputCts.Dispose();
             }
 
+            _logger.LogTrace("Container teardown disposing SIGWINCH registration containerId={ContainerId}", request.ContainerId);
             sigwinch?.Dispose();
             if (driver is IDisposable driverDisposable)
+            {
+                _logger.LogTrace("Container teardown disposing tty driver type={DriverType} containerId={ContainerId}",
+                    driver.GetType().Name, request.ContainerId);
                 driverDisposable.Dispose();
+            }
 
             try
             {
+                _logger.LogTrace("Container teardown closing guest file descriptors containerId={ContainerId}",
+                    request.ContainerId);
                 foreach (var process in scheduler.GetProcessesSnapshot())
                     process.Syscalls.CloseAllFileDescriptors();
             }
@@ -349,9 +368,14 @@ public sealed class ContainerRuntimeService
             }
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}", request.ContainerId);
                 Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(0);
+            }
 
+            _logger.LogTrace("Container teardown unbinding controller containerId={ContainerId}", request.ContainerId);
             request.ProcessController?.Unbind();
+            _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }
     }
 
@@ -735,11 +759,13 @@ public sealed class ContainerRuntimeService
         }
     }
 
-    private static IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir)
+    private IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir,
+        ILoggerFactory loggerFactory)
     {
         return driver switch
         {
-            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log")),
+            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log"),
+                loggerFactory.CreateLogger<JsonFileContainerLogSink>()),
             ContainerLogDriver.None => new NoneContainerLogSink(),
             _ => new NoneContainerLogSink()
         };
