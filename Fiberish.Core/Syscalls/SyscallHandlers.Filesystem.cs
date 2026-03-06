@@ -60,9 +60,9 @@ public partial class SyscallManager
             dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
             return 0;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return -(int)Errno.EIO;
+            return MapFsExceptionToErrno(ex, Errno.EIO);
         }
     }
 
@@ -116,9 +116,9 @@ public partial class SyscallManager
             dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
             return 0;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return -(int)Errno.EIO;
+            return MapFsExceptionToErrno(ex, Errno.EIO);
         }
     }
 
@@ -177,9 +177,9 @@ public partial class SyscallManager
             parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.EACCES;
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
         }
     }
 
@@ -302,9 +302,9 @@ public partial class SyscallManager
             parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
-            return -(int)Errno.EACCES;
+            return MapFsExceptionToErrno(ex, Errno.EACCES);
         }
     }
 
