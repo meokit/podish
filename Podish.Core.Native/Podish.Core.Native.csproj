@@ -15,7 +15,7 @@
     <PublishAotUsingRuntimePack Condition="'$(TargetFramework)' == 'net10.0'">true</PublishAotUsingRuntimePack>
     <NativeLib Condition="'$(TargetFramework)' == 'net10.0'">Static</NativeLib>
     <SelfContained Condition="'$(TargetFramework)' == 'net10.0'">true</SelfContained>
-    <StripSymbols Condition="'$(TargetFramework)' == 'net10.0'">true</StripSymbols>
+    <StripSymbols Condition="'$(TargetFramework)' == 'net10.0'">false</StripSymbols>
     <InvariantGlobalization Condition="'$(TargetFramework)' == 'net10.0'">true</InvariantGlobalization>
     <PodishStaticNative>true</PodishStaticNative>
     <IsAotCompatible>true</IsAotCompatible>

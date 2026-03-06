@@ -1,15 +1,25 @@
 using System.Buffers.Binary;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
 public class WaitSyscallTests
 {
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct PollFd
+    {
+        public int Fd;
+        public short Events;
+        public short Revents;
+    }
+
     private static ValueTask<int> Invoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -96,8 +106,87 @@ public class WaitSyscallTests
         Assert.Equal(0, rc);
     }
 
+    [Fact]
+    public async Task Ppoll_EventFdWake_CompletesAndSetsRevents()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x18000;
+        const uint tsPtr = 0x19000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        var eventFd = new EventFdInode(10, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd
+        {
+            Fd = fd,
+            Events = LinuxConstants.POLLIN,
+            Revents = 0
+        });
+
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
+        env.Write(tsPtr, ts);
+
+        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        Assert.Equal(8, eventFd.Write(file, payload, 0));
+        env.DrainEvents();
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, rc);
+
+        var pfd = env.ReadStruct<PollFd>(pollfdPtr);
+        Assert.Equal(LinuxConstants.POLLIN, pfd.Revents);
+    }
+
+    [Fact]
+    public async Task EpollPwait2_ReadyEvent_ReturnsOneAndWritesEvent()
+    {
+        using var env = new TestEnv();
+        const uint eventsPtr = 0x1A000;
+        const uint epollEventPtr = 0x1B000;
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(epollEventPtr);
+
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var eventFd = new EventFdInode(11, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4), LinuxConstants.EPOLLIN);
+        BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0x1122334455667788UL);
+        env.Write(epollEventPtr, epollEvent);
+
+        var ctl = await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd, epollEventPtr, 0, 0);
+        Assert.Equal(0, ctl);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        Assert.Equal(8, eventFd.Write(file, payload, 0));
+
+        var rc = await Invoke(env, "SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0);
+        Assert.Equal(1, rc);
+        Assert.Equal(LinuxConstants.EPOLLIN, BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+        Assert.Equal(0x1122334455667788UL, BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
+    }
+
     private sealed class TestEnv : IDisposable
     {
+        private static readonly MethodInfo DrainEventsMethod =
+            typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
         public TestEnv()
         {
             Engine = new Engine();
@@ -135,6 +224,48 @@ public class WaitSyscallTests
         public void Write(uint addr, ReadOnlySpan<byte> data)
         {
             Assert.True(Engine.CopyToUser(addr, data));
+        }
+
+        public byte[] Read(uint addr, int count)
+        {
+            var buffer = new byte[count];
+            Assert.True(Engine.CopyFromUser(addr, buffer));
+            return buffer;
+        }
+
+        public void WriteStruct<T>(uint addr, T value) where T : struct
+        {
+            var size = Marshal.SizeOf<T>();
+            var buffer = new byte[size];
+            var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                Marshal.StructureToPtr(value, handle.AddrOfPinnedObject(), false);
+            }
+            finally
+            {
+                handle.Free();
+            }
+            Write(addr, buffer);
+        }
+
+        public T ReadStruct<T>(uint addr) where T : struct
+        {
+            var buffer = Read(addr, Marshal.SizeOf<T>());
+            var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                return Marshal.PtrToStructure<T>(handle.AddrOfPinnedObject());
+            }
+            finally
+            {
+                handle.Free();
+            }
+        }
+
+        public void DrainEvents()
+        {
+            _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
     }
 }

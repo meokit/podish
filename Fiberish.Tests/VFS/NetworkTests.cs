@@ -69,7 +69,7 @@ public class NetworkTests
         int readEvents = 0;
 
         // Since eventfd is already signaled, wait should complete immediately
-        var awaiter = epoll.WaitAsync(buffer, 1, 0);
+        var awaiter = epoll.WaitAsync(buffer, 1, 0).GetAwaiter();
         awaiter.OnCompleted(() => { readEvents = awaiter.GetResult(); });
 
         Assert.Equal(1, readEvents);

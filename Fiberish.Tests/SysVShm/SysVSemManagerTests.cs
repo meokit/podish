@@ -99,9 +99,62 @@ public class SysVSemManagerTests
         Assert.Equal(2, ctx.Manager.SemCtl(semid, 0, LinuxConstants.GETVAL, 0, ctx.Engine, 0, 0));
     }
 
+    [Fact]
+    public async Task SemOp_BlockingWait_CompletesAfterSetVal()
+    {
+        using var ctx = new TestContext();
+        var semid = ctx.Manager.SemGet(LinuxConstants.IPC_PRIVATE, 1, 0x1FF, 0, 0);
+
+        const uint sopsPtr = 0x41000;
+        ctx.MapUserPage(sopsPtr);
+
+        var waitForOne = new byte[6];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
+        ctx.Engine.CopyToUser(sopsPtr, waitForOne);
+
+        var pending = ctx.Manager.SemOp(semid, sopsPtr, 1, ctx.Engine).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        Assert.Equal(0, ctx.Manager.SemCtl(semid, 0, LinuxConstants.SETVAL, 1, ctx.Engine, 0, 0));
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(0, rc);
+        Assert.Equal(0, ctx.Manager.SemCtl(semid, 0, LinuxConstants.GETVAL, 0, ctx.Engine, 0, 0));
+    }
+
+    [Fact]
+    public async Task SemOp_BlockingWait_InterruptedBySignal_ReturnsEintr()
+    {
+        using var ctx = new TestContext();
+        var semid = ctx.Manager.SemGet(LinuxConstants.IPC_PRIVATE, 1, 0x1FF, 0, 0);
+
+        const uint sopsPtr = 0x42000;
+        ctx.MapUserPage(sopsPtr);
+
+        var waitForOne = new byte[6];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
+        ctx.Engine.CopyToUser(sopsPtr, waitForOne);
+
+        var pending = ctx.Manager.SemOp(semid, sopsPtr, 1, ctx.Engine).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        ctx.Task.PostSignal((int)Signal.SIGUSR1);
+        ctx.DrainEvents();
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(-(int)Errno.EINTR, rc);
+    }
+
     private sealed class TestContext : IDisposable
     {
         private readonly FiberTask _task;
+        private readonly KernelScheduler _kernel;
+        private static readonly System.Reflection.MethodInfo DrainEventsMethod =
+            typeof(KernelScheduler).GetMethod("DrainEvents",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
 
         public TestContext(SysVSemManager? manager = null, int processId = 2000)
         {
@@ -109,18 +162,20 @@ public class SysVSemManagerTests
             Vma = new VMAManager();
             Manager = manager ?? new SysVSemManager();
 
-            var kernel = new KernelScheduler();
+            _kernel = new KernelScheduler();
+            KernelScheduler.Current = _kernel;
             var process = new Process(processId, Vma, null!)
             {
                 EUID = 0,
                 EGID = 0
             };
-            _task = new FiberTask(processId, process, Engine, kernel);
+            _task = new FiberTask(processId, process, Engine, _kernel);
         }
 
         public Engine Engine { get; }
         public VMAManager Vma { get; }
         public SysVSemManager Manager { get; }
+        public FiberTask Task => _task;
 
         public void MapUserPage(uint addr)
         {
@@ -132,7 +187,13 @@ public class SysVSemManagerTests
 
         public void Dispose()
         {
+            KernelScheduler.Current = null;
             GC.KeepAlive(_task);
+        }
+
+        public void DrainEvents()
+        {
+            _ = (bool)DrainEventsMethod.Invoke(_kernel, null)!;
         }
     }
 }
