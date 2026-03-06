@@ -919,8 +919,10 @@ public partial class SyscallManager
         uint flags)
     {
         // TODO: add full renameat2 semantics for RENAME_EXCHANGE and RENAME_WHITEOUT.
-        var supportedFlags = LinuxConstants.RENAME_NOREPLACE;
+        var supportedFlags = LinuxConstants.RENAME_NOREPLACE | LinuxConstants.RENAME_EXCHANGE;
         if ((flags & ~supportedFlags) != 0)
+            return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0 && (flags & LinuxConstants.RENAME_EXCHANGE) != 0)
             return -(int)Errno.EINVAL;
 
         PathLocation? oldStart = null;
@@ -953,16 +955,115 @@ public partial class SyscallManager
             return newErr;
         }
 
+        var oldLoc = oldStart.HasValue
+            ? sm.PathWalkWithFlags(oldPath, oldStart.Value, LookupFlags.None)
+            : sm.PathWalkWithFlags(oldPath, LookupFlags.None);
+        if (!oldLoc.IsValid || oldLoc.Dentry?.Inode == null)
+            return -(int)Errno.ENOENT;
+
         if (!ReferenceEquals(oldParentLoc.Mount, newParentLoc.Mount))
             return -(int)Errno.EXDEV;
+        if (!ReferenceEquals(oldParentLoc.Mount, oldLoc.Mount))
+            return -(int)Errno.EBUSY;
+
+        var targetLoc = newStart.HasValue
+            ? sm.PathWalkWithFlags(newPath, newStart.Value, LookupFlags.None)
+            : sm.PathWalkWithFlags(newPath, LookupFlags.None);
+        var targetExists = targetLoc.IsValid && targetLoc.Dentry?.Inode != null;
+        if (targetExists && !ReferenceEquals(newParentLoc.Mount, targetLoc.Mount))
+            return -(int)Errno.EBUSY;
 
         if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0)
         {
-            var targetLoc = newStart.HasValue
-                ? sm.PathWalkWithFlags(newPath, newStart.Value, LookupFlags.None)
-                : sm.PathWalkWithFlags(newPath, LookupFlags.None);
-            if (targetLoc.IsValid && targetLoc.Dentry?.Inode != null)
+            if (targetExists)
                 return -(int)Errno.EEXIST;
+        }
+
+        if ((flags & LinuxConstants.RENAME_EXCHANGE) != 0)
+        {
+            if (!targetExists)
+                return -(int)Errno.ENOENT;
+
+            var tempName = $".rename-exchange-{Guid.NewGuid():N}";
+
+            try
+            {
+                oldParentLoc.Dentry!.Inode!.Rename(oldName, oldParentLoc.Dentry.Inode, tempName);
+                try
+                {
+                    newParentLoc.Dentry!.Inode!.Rename(newName, oldParentLoc.Dentry.Inode!, oldName);
+                    try
+                    {
+                        oldParentLoc.Dentry.Inode!.Rename(tempName, newParentLoc.Dentry.Inode!, newName);
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            oldParentLoc.Dentry.Inode!.Rename(oldName, newParentLoc.Dentry.Inode!, newName);
+                        }
+                        catch
+                        {
+                        }
+
+                        throw;
+                    }
+                }
+                catch
+                {
+                    try
+                    {
+                        oldParentLoc.Dentry.Inode!.Rename(tempName, oldParentLoc.Dentry.Inode, oldName);
+                    }
+                    catch
+                    {
+                    }
+
+                    throw;
+                }
+
+                foreach (var pDentry in oldParentLoc.Dentry.Inode!.Dentries.ToList())
+                {
+                    pDentry.Children.Remove(oldName);
+                    pDentry.Children.Remove(tempName);
+                }
+
+                foreach (var pDentry in newParentLoc.Dentry!.Inode!.Dentries.ToList())
+                    pDentry.Children.Remove(newName);
+
+                if (!ReferenceEquals(oldParentLoc.Dentry.Inode, newParentLoc.Dentry.Inode))
+                {
+                    foreach (var pDentry in oldParentLoc.Dentry.Inode.Dentries.ToList())
+                        pDentry.Children.Remove(newName);
+                    foreach (var pDentry in newParentLoc.Dentry.Inode.Dentries.ToList())
+                        pDentry.Children.Remove(oldName);
+                }
+
+                return 0;
+            }
+            catch (FileNotFoundException)
+            {
+                return -(int)Errno.ENOENT;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return -(int)Errno.ENOENT;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Logger.LogInformation($"[RenameExchange] UnauthorizedAccessException: {ex.Message}");
+                return -(int)Errno.EACCES;
+            }
+            catch (IOException ex)
+            {
+                Logger.LogInformation($"[RenameExchange] IOException: {ex.Message}");
+                return -(int)Errno.EIO;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogInformation($"[RenameExchange] Exception: {ex.Message}");
+                return -(int)Errno.EACCES;
+            }
         }
 
         try

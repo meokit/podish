@@ -114,10 +114,67 @@ public class CrossMountBehaviorTests
         env.CreateFile("/mnt/source.txt");
 
         var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x1D000, LinuxConstants.AT_FDCWD, 0x1E000,
-            LinuxConstants.RENAME_EXCHANGE);
+            LinuxConstants.RENAME_WHITEOUT);
         Assert.Equal(-(int)Errno.EINVAL, rc);
         Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
         Assert.False(env.SyscallManager.PathWalkWithFlags("/mnt/target.txt", LookupFlags.None).IsValid);
+    }
+
+    [Fact]
+    public async Task RenameAt2_Exchange_SwapsEntriesWithinDirectory()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x1F000);
+        env.MapUserPage(0x20000);
+        env.WriteCString(0x1F000, "/mnt/left.txt");
+        env.WriteCString(0x20000, "/mnt/right.txt");
+
+        env.CreateFile("/mnt/left.txt", "L");
+        env.CreateFile("/mnt/right.txt", "R");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x1F000, LinuxConstants.AT_FDCWD, 0x20000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(0, rc);
+        Assert.Equal("R", env.ReadFile("/mnt/left.txt"));
+        Assert.Equal("L", env.ReadFile("/mnt/right.txt"));
+    }
+
+    [Fact]
+    public async Task RenameAt2_Exchange_SwapsEntriesAcrossParents()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.WriteCString(0x30000, "/mnt/a/left.txt");
+        env.WriteCString(0x31000, "/mnt/b/right.txt");
+
+        env.CreateDirectory("/mnt/a");
+        env.CreateDirectory("/mnt/b");
+        env.CreateFile("/mnt/a/left.txt", "L");
+        env.CreateFile("/mnt/b/right.txt", "R");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x30000, LinuxConstants.AT_FDCWD, 0x31000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(0, rc);
+        Assert.Equal("R", env.ReadFile("/mnt/a/left.txt"));
+        Assert.Equal("L", env.ReadFile("/mnt/b/right.txt"));
+    }
+
+    [Fact]
+    public async Task RenameAt2_Exchange_TargetMissing_ReturnsEnoent()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x32000);
+        env.MapUserPage(0x33000);
+        env.WriteCString(0x32000, "/mnt/source.txt");
+        env.WriteCString(0x33000, "/mnt/missing.txt");
+
+        env.CreateFile("/mnt/source.txt");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x32000, LinuxConstants.AT_FDCWD, 0x33000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(-(int)Errno.ENOENT, rc);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
     }
 
     [Fact]
@@ -197,6 +254,24 @@ public class CrossMountBehaviorTests
         var loc = env.SyscallManager.PathWalkWithFlags("/mnt", LookupFlags.None);
         Assert.True(loc.IsValid);
         Assert.NotSame(env.SyscallManager.RootMount, loc.Mount);
+    }
+
+    [Fact]
+    public async Task Rename_MountPoint_ReturnsEbusy_AndPreservesMount()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x29000);
+        env.MapUserPage(0x2A000);
+        env.WriteCString(0x29000, "/mnt");
+        env.WriteCString(0x2A000, "/renamed");
+
+        var rc = await env.Call("SysRename", 0x29000, 0x2A000);
+        Assert.Equal(-(int)Errno.EBUSY, rc);
+
+        var loc = env.SyscallManager.PathWalkWithFlags("/mnt", LookupFlags.None);
+        Assert.True(loc.IsValid);
+        Assert.NotSame(env.SyscallManager.RootMount, loc.Mount);
+        Assert.False(env.SyscallManager.PathWalkWithFlags("/renamed", LookupFlags.None).IsValid);
     }
 
     [Fact]
@@ -296,7 +371,7 @@ public class CrossMountBehaviorTests
             Assert.True(Engine.CopyToUser(addr, bytes));
         }
 
-        public void CreateFile(string path)
+        public void CreateFile(string path, string contents = "")
         {
             var loc = SyscallManager.PathWalkWithFlags(path, LookupFlags.None);
             Assert.False(loc.IsValid);
@@ -304,7 +379,35 @@ public class CrossMountBehaviorTests
             var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            parentLoc.Dentry.Inode!.Create(dentry, 0x1A4, 0, 0);
+            var created = parentLoc.Dentry.Inode!.Create(dentry, 0x1A4, 0, 0);
+            if (!string.IsNullOrEmpty(contents))
+            {
+                var file = new LinuxFile(created, FileFlags.O_RDWR, parentLoc.Mount!);
+                var bytes = Encoding.UTF8.GetBytes(contents);
+                Assert.True(created.Inode!.Write(file, bytes, 0) >= 0);
+            }
+        }
+
+        public void CreateDirectory(string path)
+        {
+            var loc = SyscallManager.PathWalkWithFlags(path, LookupFlags.None);
+            Assert.False(loc.IsValid);
+
+            var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
+            Assert.Equal(0, err);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+            parentLoc.Dentry.Inode!.Mkdir(dentry, 0x1ED, 0, 0);
+        }
+
+        public string ReadFile(string path)
+        {
+            var loc = SyscallManager.PathWalkWithFlags(path, LookupFlags.None);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            var buffer = new byte[64];
+            var read = loc.Dentry!.Inode!.Read(file, buffer, 0);
+            Assert.True(read >= 0);
+            return Encoding.UTF8.GetString(buffer, 0, read);
         }
 
         public async ValueTask<int> Call(string methodName, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0,
