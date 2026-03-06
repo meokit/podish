@@ -255,6 +255,7 @@ public partial class SyscallManager
         var targetLoc = sm.PathWalkWithFlags(path, LookupFlags.None);
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
 
         // Check if empty (only . and .. entries)
         var entries = targetLoc.Dentry.Inode.GetEntries();
@@ -629,6 +630,7 @@ public partial class SyscallManager
         if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
         {
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+            if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
             try
             {
                 parentLoc.Dentry!.Inode!.Rmdir(name);
@@ -945,6 +947,8 @@ public partial class SyscallManager
             return newErr;
         }
 
+        if (!ReferenceEquals(oldParentLoc.Mount, newParentLoc.Mount))
+            return -(int)Errno.EXDEV;
 
         try
         {
