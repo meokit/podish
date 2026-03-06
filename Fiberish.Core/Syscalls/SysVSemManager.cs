@@ -19,10 +19,10 @@ public class SemaphoreSet
     public DateTime OTime { get; set; }
 
     public short[] Values { get; set; } = [];
-    public List<SemWaiter> Waiters { get; set; } = [];
+    public List<SemWaitState> Waiters { get; set; } = [];
 }
 
-public class SemWaiter : INotifyCompletion
+public sealed class SemWaitState
 {
     public FiberTask Task { get; }
     public FiberTask.WaitToken Token { get; }
@@ -30,32 +30,54 @@ public class SemWaiter : INotifyCompletion
     public short Op { get; }
     public Action? Continuation { get; set; }
 
-    public SemWaiter(FiberTask task, int semNum, short op)
+    public SemWaitState(FiberTask task, int semNum, short op)
     {
         Task = task;
         Token = task.BeginWaitToken();
         SemNum = semNum;
         Op = op;
     }
+}
+
+public readonly struct SemWaitAwaitable
+{
+    private readonly SemWaitState _state;
+
+    public SemWaitAwaitable(SemWaitState state)
+    {
+        _state = state;
+    }
+
+    public SemWaitAwaiter GetAwaiter() => new(_state);
+}
+
+public readonly struct SemWaitAwaiter : INotifyCompletion
+{
+    private readonly SemWaitState _state;
+
+    public SemWaitAwaiter(SemWaitState state)
+    {
+        _state = state;
+    }
 
     public bool IsCompleted => false;
 
     public void OnCompleted(Action continuation)
     {
-        Continuation = continuation;
-        Task.ArmSignalSafetyNet(Token, () =>
+        var state = _state;
+        state.Continuation = continuation;
+        state.Task.ArmSignalSafetyNet(state.Token, () =>
         {
-            Continuation?.Invoke();
+            state.Continuation?.Invoke();
         });
     }
 
     public AwaitResult GetResult()
     {
-        if (Task.CompleteWaitToken(Token) != WakeReason.None) return AwaitResult.Interrupted;
+        var reason = _state.Task.CompleteWaitToken(_state.Token);
+        if (reason != WakeReason.None && reason != WakeReason.Event) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
     }
-
-    public SemWaiter GetAwaiter() => this;
 }
 
 public class SysVSemManager
@@ -129,7 +151,7 @@ public class SysVSemManager
         while (true)
         {
             var canProceed = true;
-            SemWaiter? blockedWaiter = null;
+            SemWaitState? blockedWaiter = null;
 
             lock (_lock)
             {
@@ -157,7 +179,7 @@ public class SysVSemManager
                         if (set.Values[semNum] < -semOp)
                         {
                             canProceed = false;
-                            blockedWaiter = new SemWaiter(task, semNum, semOp);
+                            blockedWaiter = new SemWaitState(task, semNum, semOp);
                             if ((semFlg & LinuxConstants.IPC_NOWAIT) != 0) return -(int)Errno.EAGAIN;
                             break;
                         }
@@ -167,7 +189,7 @@ public class SysVSemManager
                         if (set.Values[semNum] != 0)
                         {
                             canProceed = false;
-                            blockedWaiter = new SemWaiter(task, semNum, semOp);
+                            blockedWaiter = new SemWaitState(task, semNum, semOp);
                             if ((semFlg & LinuxConstants.IPC_NOWAIT) != 0) return -(int)Errno.EAGAIN;
                             break;
                         }
@@ -212,7 +234,7 @@ public class SysVSemManager
             }
 
             // Await execution
-            var res = await blockedWaiter!;
+            var res = await new SemWaitAwaitable(blockedWaiter!);
             if (res == AwaitResult.Interrupted)
             {
                 lock (_lock)
@@ -243,7 +265,7 @@ public class SysVSemManager
                         _setsByKey.Remove(set.Key);
 
                     // Wake up all waiters with EIDRM
-                    foreach (var waiter in set.Waiters)
+                    foreach (var waiter in set.Waiters.ToList())
                     {
                         waiter.Task.TrySetWaitReason(waiter.Token,
                             WakeReason.Event); // Special wake, let them fail with EIDRM loop
@@ -273,7 +295,7 @@ public class SysVSemManager
                     set.Values[semnum] = (short)setval;
 
                     // Wake up all waiters since state changed
-                    foreach (var waiter in set.Waiters)
+                    foreach (var waiter in set.Waiters.ToList())
                     {
                         waiter.Task.TrySetWaitReason(waiter.Token, WakeReason.Event);
                         waiter.Continuation?.Invoke();

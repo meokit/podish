@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
@@ -7,9 +8,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
-internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
+internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
 {
-    private static readonly ILogger Logger = Logging.CreateLogger<SaeaAwaitable>();
+    private static readonly ILogger Logger = Logging.CreateLogger<SaeaOperation>();
     private static readonly Action CompletedSentinel = () => { };
     private Action? _continuation;
     private volatile bool _isCompleted;
@@ -17,7 +18,7 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
     private FiberTask? _task;
     private FiberTask.WaitToken? _waitToken;
 
-    public SaeaAwaitable()
+    public SaeaOperation()
     {
         Completed += OnCompletedEvent;
     }
@@ -65,7 +66,7 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
 
     public SaeaAwaitable GetAwaiter()
     {
-        return this;
+        return new SaeaAwaitable(this);
     }
 
     public void GetResult()
@@ -124,19 +125,73 @@ internal class SaeaAwaitable : SocketAsyncEventArgs, INotifyCompletion
     }
 }
 
+internal readonly struct SaeaAwaitable
+{
+    private readonly SaeaOperation _operation;
+
+    public SaeaAwaitable(SaeaOperation operation)
+    {
+        _operation = operation;
+    }
+
+    public void BeginWait(FiberTask task) => _operation.BeginWait(task);
+    public void ResetState() => _operation.ResetState();
+    public void SetBuffer(byte[]? buffer, int offset, int count) => _operation.SetBuffer(buffer, offset, count);
+
+    public SocketFlags SocketFlags
+    {
+        get => _operation.SocketFlags;
+        set => _operation.SocketFlags = value;
+    }
+
+    public EndPoint? RemoteEndPoint
+    {
+        get => _operation.RemoteEndPoint;
+        set => _operation.RemoteEndPoint = value;
+    }
+
+    public Socket? AcceptSocket
+    {
+        get => _operation.AcceptSocket;
+        set => _operation.AcceptSocket = value;
+    }
+
+    public int BytesTransferred => _operation.BytesTransferred;
+    public SocketError SocketError => _operation.SocketError;
+
+    public SaeaAwaiter GetAwaiter() => new(_operation);
+
+    public static implicit operator SocketAsyncEventArgs(SaeaAwaitable value) => value._operation;
+    internal SaeaOperation Operation => _operation;
+}
+
+internal readonly struct SaeaAwaiter : INotifyCompletion
+{
+    private readonly SaeaOperation _operation;
+
+    public SaeaAwaiter(SaeaOperation operation)
+    {
+        _operation = operation;
+    }
+
+    public bool IsCompleted => _operation.IsCompleted;
+    public void OnCompleted(Action continuation) => _operation.OnCompleted(continuation);
+    public void GetResult() => _operation.GetResult();
+}
+
 internal static class SaeaPool
 {
-    private static readonly ConcurrentQueue<SaeaAwaitable> _pool = new();
+    private static readonly ConcurrentQueue<SaeaOperation> _pool = new();
 
     public static SaeaAwaitable Rent()
     {
-        if (_pool.TryDequeue(out var item)) return item;
-        return new SaeaAwaitable();
+        if (_pool.TryDequeue(out var item)) return new SaeaAwaitable(item);
+        return new SaeaAwaitable(new SaeaOperation());
     }
 
     public static void Return(SaeaAwaitable item)
     {
         item.ResetState();
-        _pool.Enqueue(item);
+        _pool.Enqueue(item.Operation);
     }
 }

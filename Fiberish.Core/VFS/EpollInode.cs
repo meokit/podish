@@ -134,18 +134,48 @@ public class EpollInode : TmpfsInode
         }
     }
 
-    public EpollAwaiter WaitAsync(byte[] eventsBuffer, int maxEvents, int timeout)
+    public EpollAwaitable WaitAsync(byte[] eventsBuffer, int maxEvents, int timeout)
     {
-        return new EpollAwaiter(this, eventsBuffer, maxEvents, timeout);
+        return new EpollAwaitable(this, eventsBuffer, maxEvents, timeout);
     }
 
-    public class EpollAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    public readonly struct EpollAwaitable
+    {
+        private readonly EpollAwaitState _state;
+
+        public EpollAwaitable(EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        {
+            _state = new EpollAwaitState(inode, buffer, maxEvents, timeoutMs);
+        }
+
+        public EpollAwaiter GetAwaiter() => new(_state);
+    }
+
+    public readonly struct EpollAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    {
+        private readonly EpollAwaitState _state;
+
+        internal EpollAwaiter(EpollAwaitState state)
+        {
+            _state = state;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _state.OnCompleted(continuation);
+        }
+
+        public int GetResult() => _state.GetResult();
+    }
+
+    internal sealed class EpollAwaitState
     {
         private readonly EpollInode _inode;
         private readonly byte[] _buffer;
         private readonly int _maxEvents;
         private readonly int _timeoutMs;
-
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
@@ -156,26 +186,24 @@ public class EpollInode : TmpfsInode
         private Fiberish.Core.Timer? _timer;
         private IDisposable? _queueWaitRegistration;
 
-        public EpollAwaiter(EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        public EpollAwaitState(EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
         {
             _inode = inode;
             _buffer = buffer;
             _maxEvents = maxEvents;
             _timeoutMs = timeoutMs;
-            _completed = false;
         }
-
-        public bool IsCompleted => false;
 
         public void OnCompleted(Action continuation)
         {
-            _task = (KernelScheduler.Current?.CurrentTask)!;
+            var scheduler = KernelScheduler.Current!;
+            _task = scheduler.CurrentTask!;
             _continuation = continuation;
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
             {
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
+                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();
@@ -184,15 +212,9 @@ public class EpollInode : TmpfsInode
 
             DoPoll();
 
-            // ArmSignalSafetyNet: re-check for signals that arrived before BeginWaitToken.
-            // DoPoll may have completed synchronously (set _completed=true, invoked _continuation
-            // inline); ArmSignalSafetyNet is a no-op in that case because the token is already
-            // consumed (TrySetWaitReason returns false on an inactive token).
             if (!_completed)
                 _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
         }
-
-        public EpollAwaiter GetAwaiter() => this;
 
         public int GetResult()
         {
@@ -232,14 +254,9 @@ public class EpollInode : TmpfsInode
             int ready;
             lock (_inode._lock)
             {
-                if (_inode._readyList.Count > 0)
-                {
-                    ready = _inode.HarvestEventsLocked(_buffer, _maxEvents);
-                }
-                else
-                {
-                    ready = 0;
-                }
+                ready = _inode._readyList.Count > 0
+                    ? _inode.HarvestEventsLocked(_buffer, _maxEvents)
+                    : 0;
             }
 
             if (ready > 0)
@@ -259,7 +276,6 @@ public class EpollInode : TmpfsInode
                 return;
             }
 
-            // Not ready, wait for Signal
             _queueWaitRegistration = _inode._waitQueue.RegisterCancelable(ScheduleRePoll, _task, _token);
         }
     }

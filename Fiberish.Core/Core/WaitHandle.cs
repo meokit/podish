@@ -83,9 +83,9 @@ public class AsyncWaitQueue
         }
     }
 
-    public WaitQueueAwaiter WaitAsync()
+    public WaitQueueAwaitable WaitAsync()
     {
-        return new WaitQueueAwaiter(this);
+        return new WaitQueueAwaitable(this);
     }
 
     // For compatibility with previous WaitHandle usage
@@ -147,7 +147,22 @@ public class AsyncWaitQueue
     }
 }
 
-public class WaitQueueAwaiter : INotifyCompletion
+public readonly struct WaitQueueAwaitable
+{
+    private readonly AsyncWaitQueue _queue;
+
+    public WaitQueueAwaitable(AsyncWaitQueue queue)
+    {
+        _queue = queue;
+    }
+
+    public WaitQueueAwaiter GetAwaiter()
+    {
+        return new WaitQueueAwaiter(_queue);
+    }
+}
+
+public struct WaitQueueAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue _queue;
     private FiberTask.WaitToken? _token;
@@ -161,48 +176,57 @@ public class WaitQueueAwaiter : INotifyCompletion
 
     public void OnCompleted(Action continuation)
     {
-        // Capture current task context
         var currentTask = KernelScheduler.Current?.CurrentTask;
-
-        if (currentTask != null) _token = currentTask.BeginWaitToken();
-        _queue.Register(continuation, currentTask, _token);
-
-        if (currentTask != null && _token != null)
+        if (currentTask != null)
+        {
+            _token = currentTask.BeginWaitToken();
+            _queue.Register(continuation, currentTask, _token);
             currentTask.ArmSignalSafetyNet(_token, () =>
             {
-                // WakeReason has already been set by ArmSignalSafetyNet.
-                KernelScheduler.Current?.Schedule(continuation, currentTask);
+                currentTask.Continuation = continuation;
+                KernelScheduler.Current?.Schedule(currentTask);
             });
+            return;
+        }
+
+        _queue.Register(continuation);
     }
 
     public AwaitResult GetResult()
     {
         var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && _token != null)
-        {
-            var reason = task.CompleteWaitToken(_token);
-            if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
-            return AwaitResult.Completed;
-        }
+        if (task == null || _token == null) return AwaitResult.Completed;
 
+        var reason = task.CompleteWaitToken(_token);
+        if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
-    }
-
-    public WaitQueueAwaiter GetAwaiter()
-    {
-        return this;
     }
 }
 
 public static class SchedulerUtils
 {
-    public static SelectAwaiter WaitAny(params AsyncWaitQueue[] queues)
+    public static SelectAwaitable WaitAny(params AsyncWaitQueue[] queues)
     {
-        return new SelectAwaiter(queues);
+        return new SelectAwaitable(queues);
     }
 }
 
-public class SelectAwaiter : INotifyCompletion
+public readonly struct SelectAwaitable
+{
+    private readonly AsyncWaitQueue[] _queues;
+
+    public SelectAwaitable(AsyncWaitQueue[] queues)
+    {
+        _queues = queues;
+    }
+
+    public SelectAwaiter GetAwaiter()
+    {
+        return new SelectAwaiter(_queues);
+    }
+}
+
+public struct SelectAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue[] _queues;
     private FiberTask.WaitToken? _token;
@@ -225,19 +249,19 @@ public class SelectAwaiter : INotifyCompletion
 
     public void OnCompleted(Action continuation)
     {
-        // Capture scheduler and task context at registration time
-        var scheduler = KernelScheduler.Current;
-        var currentTask = scheduler?.CurrentTask;
-
-        // We use a shared state to ensure only one invocation
+        var currentTask = KernelScheduler.Current?.CurrentTask;
         var runOnce = new RunOnceAction(continuation);
         var action = runOnce.Invoke;
 
-        if (currentTask != null) _token = currentTask.BeginWaitToken();
-        foreach (var q in _queues) q.Register(action, currentTask, _token);
-
-        if (currentTask != null && _token != null)
+        if (currentTask != null)
+        {
+            _token = currentTask.BeginWaitToken();
+            foreach (var q in _queues) q.Register(action, currentTask, _token);
             currentTask.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
+            return;
+        }
+
+        foreach (var q in _queues) q.Register(action);
     }
 
     public AwaitResult GetResult()
@@ -253,7 +277,7 @@ public class SelectAwaiter : INotifyCompletion
         return AwaitResult.Completed;
     }
 
-    private class RunOnceAction(Action action)
+    private sealed class RunOnceAction(Action action)
     {
         private int _called;
 

@@ -48,7 +48,7 @@ public partial class SyscallManager
                 Logger.LogInformation(
                     "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
                     task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
-                var result = await new FutexAwaiter(waiter, task);
+                var result = await new FutexAwaitable(waiter, task);
                 Logger.LogInformation(
                     "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
                     task.TID, result, task.WakeReason, task.PendingSignals);
@@ -94,7 +94,21 @@ public partial class SyscallManager
         return -(int)Errno.ENOSYS;
     }
 
-    private sealed class FutexAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    private readonly struct FutexAwaitable
+    {
+        private readonly Fiberish.Core.Waiter _waiter;
+        private readonly FiberTask _task;
+
+        public FutexAwaitable(Fiberish.Core.Waiter waiter, FiberTask task)
+        {
+            _waiter = waiter;
+            _task = task;
+        }
+
+        public FutexAwaiter GetAwaiter() => new(_waiter, _task);
+    }
+
+    private readonly struct FutexAwaiter : System.Runtime.CompilerServices.INotifyCompletion
     {
         private readonly Fiberish.Core.Waiter _waiter;
         private readonly FiberTask _task;
@@ -111,21 +125,23 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
+            var task = _task;
+            var token = _token;
             var runOnce = new RunOnceAction(continuation, _task);
 
-            _task.Continuation = runOnce.Invoke;
+            task.Continuation = runOnce.Invoke;
 
             _waiter.Tcs.Task.ContinueWith(_ =>
             {
-                if (_task.GetWaitReason(_token) == WakeReason.None)
+                if (task.GetWaitReason(token) == WakeReason.None)
                 {
-                    _task.TrySetWaitReason(_token, WakeReason.Event);
+                    task.TrySetWaitReason(token, WakeReason.Event);
                 }
 
                 runOnce.Invoke();
             });
 
-            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
+            task.ArmSignalSafetyNet(token, () => runOnce.Invoke());
         }
 
         public AwaitResult GetResult()
@@ -145,9 +161,7 @@ public partial class SyscallManager
             return AwaitResult.Completed;
         }
 
-        public FutexAwaiter GetAwaiter() => this;
-
-        private class RunOnceAction
+        private sealed class RunOnceAction
         {
             private readonly Action _action;
             private readonly FiberTask _task;

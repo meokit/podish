@@ -106,7 +106,7 @@ public partial class SyscallManager
                         if (totalWritten > 0) break;
                         if ((inFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
                         if (sm.Engine.Owner is not FiberTask fiberTask) return (-(int)Errno.EAGAIN, null);
-                        if (await new IOAwaiter(inFile, true, fiberTask) == AwaitResult.Interrupted)
+                        if (await new IOAwaitable(inFile, true, fiberTask) == AwaitResult.Interrupted)
                             return (-(int)Errno.ERESTARTSYS, null);
                         continue;
                     }
@@ -129,7 +129,7 @@ public partial class SyscallManager
                         if ((outFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
                         if (sm.Engine.Owner is FiberTask fiberTask)
                         {
-                            if (await new IOAwaiter(outFile, false, fiberTask) == AwaitResult.Interrupted)
+                            if (await new IOAwaitable(outFile, false, fiberTask) == AwaitResult.Interrupted)
                                 // We read data but were interrupted before writing.
                                 // If we don't handle this perfectly, bytes are technically lost. For now, return ERESTARTSYS.
                                 return (-(int)Errno.ERESTARTSYS, null);
@@ -590,7 +590,7 @@ public partial class SyscallManager
                         if (sm.Engine.Owner is not FiberTask fiberTask)
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        if (await new IOAwaiter(f, true, fiberTask) == AwaitResult.Interrupted)
+                        if (await new IOAwaitable(f, true, fiberTask) == AwaitResult.Interrupted)
                             return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
                         continue;
                     }
@@ -674,7 +674,7 @@ public partial class SyscallManager
                         if (sm.Engine.Owner is not FiberTask fiberTask)
                             return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
 
-                        if (await new IOAwaiter(f, false, fiberTask) == AwaitResult.Interrupted)
+                        if (await new IOAwaitable(f, false, fiberTask) == AwaitResult.Interrupted)
                             return totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS;
                         continue;
                     }
@@ -965,7 +965,26 @@ public partial class SyscallManager
 
 
     // --- IO Awaiter ---
-    public class IOAwaiter : INotifyCompletion
+    public readonly struct IOAwaitable
+    {
+        private readonly LinuxFile _file;
+        private readonly bool _forRead;
+        private readonly FiberTask _task;
+
+        public IOAwaitable(LinuxFile file, bool forRead, FiberTask task)
+        {
+            _file = file;
+            _forRead = forRead;
+            _task = task;
+        }
+
+        public IOAwaiter GetAwaiter()
+        {
+            return new IOAwaiter(_file, _forRead, _task);
+        }
+    }
+
+    public readonly struct IOAwaiter : INotifyCompletion
     {
         private readonly LinuxFile _file;
         private readonly bool _forRead;
@@ -984,21 +1003,25 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            Logger.LogTrace("[IOAwaiter] OnCompleted fd wait start forRead={ForRead} flags=0x{Flags:X}", _forRead,
-                (int)_file.Flags);
+            var file = _file;
+            var forRead = _forRead;
+            var task = _task;
+            var token = _token;
+            Logger.LogTrace("[IOAwaiter] OnCompleted fd wait start forRead={ForRead} flags=0x{Flags:X}", forRead,
+                (int)file.Flags);
 
-            var runOnce = new RunOnceAction(continuation, _task);
+            var runOnce = new RunOnceAction(continuation, task);
 
-            var registered = _file.Dentry.Inode!.RegisterWait(_file, () =>
+            var registered = file.Dentry.Inode!.RegisterWait(file, () =>
             {
-                if (!_task.TrySetWaitReason(_token, WakeReason.IO)) return;
-                Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", _forRead);
+                if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
+                Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
                 runOnce.Invoke();
-            }, (short)(_forRead ? 0x0001 : 0x0004));
+            }, (short)(forRead ? 0x0001 : 0x0004));
 
             if (!registered)
             {
-                _task.TrySetWaitReason(_token, WakeReason.IO);
+                task.TrySetWaitReason(token, WakeReason.IO);
                 Logger.LogTrace("[IOAwaiter] RegisterWait returned false; invoking continuation now");
                 runOnce.Invoke();
                 return;
@@ -1006,8 +1029,8 @@ public partial class SyscallManager
 
             // ArmSignalSafetyNet: registers the continuation AND atomically re-checks for
             // signals that arrived before BeginWaitToken was called (TOCTOU-safe).
-            Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}, arming safety net", _forRead);
-            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
+            Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}, arming safety net", forRead);
+            task.ArmSignalSafetyNet(token, () => runOnce.Invoke());
         }
 
         public AwaitResult GetResult()
@@ -1018,12 +1041,7 @@ public partial class SyscallManager
             return AwaitResult.Completed;
         }
 
-        public IOAwaiter GetAwaiter()
-        {
-            return this;
-        }
-
-        private class RunOnceAction(Action action, FiberTask task)
+        private sealed class RunOnceAction(Action action, FiberTask task)
         {
             private int _called;
 

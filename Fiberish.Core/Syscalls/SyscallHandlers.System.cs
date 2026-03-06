@@ -238,15 +238,30 @@ public partial class SyscallManager
 
         Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
 
-        if (await new PauseAwaiter(task) == AwaitResult.Interrupted)
+        if (await new PauseAwaitable(task) == AwaitResult.Interrupted)
             return -(int)Errno.ERESTARTSYS;
         return -(int)Errno.EINTR;
     }
 
-    private sealed class PauseAwaiter : INotifyCompletion
+    private readonly struct PauseAwaitable
     {
         private readonly FiberTask _task;
-        private readonly FiberTask.WaitToken _token;
+
+        public PauseAwaitable(FiberTask task)
+        {
+            _task = task;
+        }
+
+        public PauseAwaiter GetAwaiter()
+        {
+            return new PauseAwaiter(_task);
+        }
+    }
+
+    private struct PauseAwaiter : INotifyCompletion
+    {
+        private readonly FiberTask _task;
+        private FiberTask.WaitToken _token;
 
         public PauseAwaiter(FiberTask task)
         {
@@ -258,11 +273,13 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            _task.Continuation = continuation;
-            _task.ArmSignalSafetyNet(_token, () =>
+            var task = _task;
+            var token = _token;
+            task.Continuation = continuation;
+            task.ArmSignalSafetyNet(token, () =>
             {
-                _task.Continuation = continuation;
-                KernelScheduler.Current?.Schedule(_task);
+                task.Continuation = continuation;
+                KernelScheduler.Current?.Schedule(task);
             });
         }
 
@@ -275,11 +292,6 @@ public partial class SyscallManager
             }
 
             return AwaitResult.Completed;
-        }
-
-        public PauseAwaiter GetAwaiter()
-        {
-            return this;
         }
     }
 
@@ -400,7 +412,7 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var res = await new NanosleepAwaiter(fiberTask, totalMs);
+        var res = await new SleepAwaitable(totalMs, KernelScheduler.Current!, fiberTask);
 
         if (res == AwaitResult.Interrupted)
             return -(int)Errno.ERESTARTSYS;
@@ -432,76 +444,12 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var res = await new NanosleepAwaiter(fiberTask, totalMs);
+        var res = await new SleepAwaitable(totalMs, KernelScheduler.Current!, fiberTask);
 
         if (res == AwaitResult.Interrupted)
             return -(int)Errno.ERESTARTSYS;
 
         return 0;
-    }
-
-    private sealed class NanosleepAwaiter : INotifyCompletion
-    {
-        private readonly FiberTask _task;
-        private readonly long _totalMs;
-        private readonly FiberTask.WaitToken _token;
-
-        public NanosleepAwaiter(FiberTask task, long totalMs)
-        {
-            _task = task;
-            _totalMs = totalMs;
-            _token = task.BeginWaitToken();
-        }
-
-        public bool IsCompleted => false;
-
-        public void OnCompleted(Action continuation)
-        {
-            var scheduler = KernelScheduler.Current!;
-            Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} arm timer {DelayMs}ms", _task.TID, _totalMs);
-            var timer = scheduler.ScheduleTimer(_totalMs, () =>
-            {
-                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer callback enter wakeReason={WakeReason}",
-                    _task.TID, _task.GetWaitReason(_token));
-                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} timer fired", _task.TID);
-                if (!_task.TrySetWaitReason(_token, WakeReason.Timer)) return;
-                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation from timer", _task.TID);
-                scheduler.Schedule(continuation, _task);
-                Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} schedule continuation done", _task.TID);
-            });
-
-            _task.BlockingTimer = timer;
-
-            // ArmSignalSafetyNet: register wake continuation and re-check for prior signals.
-            _task.ArmSignalSafetyNet(_token, () =>
-            {
-                // Cancel the timer to avoid it racing after signal-wake.
-                timer.Cancel();
-                scheduler.Schedule(continuation, _task);
-            });
-        }
-
-        public AwaitResult GetResult()
-        {
-            _task.BlockingTimer?.Cancel();
-            _task.BlockingTimer = null;
-
-            Logger.LogTrace("[SysNanosleepAwaiter] TID={Tid} get result wakeReason={WakeReason}",
-                _task.TID, _task.GetWaitReason(_token));
-
-            var reason = _task.CompleteWaitToken(_token);
-            if (reason == WakeReason.Signal)
-            {
-                return AwaitResult.Interrupted;
-            }
-
-            return AwaitResult.Completed;
-        }
-
-        public NanosleepAwaiter GetAwaiter()
-        {
-            return this;
-        }
     }
 
     private static async ValueTask<int> SysNice(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

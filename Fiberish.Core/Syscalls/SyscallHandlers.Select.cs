@@ -171,7 +171,7 @@ public partial class SyscallManager
         // 2. Await
         try
         {
-            var ret = await new SelectAwaiter(sm, n, inp, outp, exp, timeoutMs);
+            var ret = await new SelectAwaitable(sm, n, inp, outp, exp, timeoutMs);
             // If success, we assume SelectAwaiter re-scanned and returned the count?
             // Actually SelectAwaiter.GetResult() logic needs to handle re-scan or partial result.
             // But standard Select returns the count and modifies the sets.
@@ -200,7 +200,7 @@ public partial class SyscallManager
         if (ready > 0 || timeoutMs == 0) return ready;
 
         // 2. Await
-        return await new PollAwaiter(sm, fdsAddr, nfds, timeoutMs);
+        return await new PollAwaitable(sm, fdsAddr, nfds, timeoutMs);
     }
 
     private static bool TryReadPselectSigmask(SyscallManager sm, uint sigArgPtr, out bool hasMask, out ulong mask,
@@ -482,9 +482,42 @@ public partial class SyscallManager
 
     // --- Awaiters ---
 
-    public class SelectAwaiter : INotifyCompletion
+    public readonly struct SelectAwaitable
     {
-        private readonly uint _inp, _outp, _exp;
+        private readonly SelectAwaitState _state;
+
+        public SelectAwaitable(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
+        {
+            _state = new SelectAwaitState(sm, n, inp, outp, exp, timeoutMs);
+        }
+
+        public SelectAwaiter GetAwaiter() => new(_state);
+    }
+
+    public readonly struct SelectAwaiter : INotifyCompletion
+    {
+        private readonly SelectAwaitState _state;
+
+        internal SelectAwaiter(SelectAwaitState state)
+        {
+            _state = state;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _state.OnCompleted(continuation);
+        }
+
+        public int GetResult() => _state.GetResult();
+    }
+
+    internal sealed class SelectAwaitState
+    {
+        private readonly uint _inp;
+        private readonly uint _outp;
+        private readonly uint _exp;
         private readonly int _n;
         private readonly SyscallManager _sm;
         private readonly long _timeoutMs;
@@ -498,7 +531,7 @@ public partial class SyscallManager
         private Timer? _timer;
         private readonly List<IDisposable> _waitRegistrations = [];
 
-        public SelectAwaiter(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
+        public SelectAwaitState(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
         {
             _sm = sm;
             _n = n;
@@ -508,16 +541,15 @@ public partial class SyscallManager
             _timeoutMs = timeoutMs;
         }
 
-        public bool IsCompleted => false;
-
         public void OnCompleted(Action continuation)
         {
-            _continuation = continuation;
+            var scheduler = KernelScheduler.Current!;
             _task = (_sm.Engine.Owner as FiberTask)!;
+            _continuation = continuation;
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
+                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();
@@ -527,11 +559,6 @@ public partial class SyscallManager
 
             if (!_completed)
                 _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
-        }
-
-        public SelectAwaiter GetAwaiter()
-        {
-            return this;
         }
 
         public int GetResult()
@@ -565,9 +592,7 @@ public partial class SyscallManager
                 return;
             }
 
-            // Scan
-            int ready;
-            ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _);
+            var ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _);
             if (ready > 0)
             {
                 _timer?.Cancel();
@@ -579,7 +604,7 @@ public partial class SyscallManager
 
             if (_hasTimedOut)
             {
-                _result = 0;
+                _result = 0; // Timeout
                 _completed = true;
                 _continuation?.Invoke();
                 return;
@@ -638,7 +663,38 @@ public partial class SyscallManager
         }
     }
 
-    public class PollAwaiter : INotifyCompletion
+    public readonly struct PollAwaitable
+    {
+        private readonly PollAwaitState _state;
+
+        public PollAwaitable(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+        {
+            _state = new PollAwaitState(sm, fdsAddr, nfds, timeoutMs);
+        }
+
+        public PollAwaiter GetAwaiter() => new(_state);
+    }
+
+    public readonly struct PollAwaiter : INotifyCompletion
+    {
+        private readonly PollAwaitState _state;
+
+        internal PollAwaiter(PollAwaitState state)
+        {
+            _state = state;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _state.OnCompleted(continuation);
+        }
+
+        public int GetResult() => _state.GetResult();
+    }
+
+    internal sealed class PollAwaitState
     {
         private readonly uint _fdsAddr;
         private readonly uint _nfds;
@@ -647,14 +703,14 @@ public partial class SyscallManager
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
-        private int _reschedulePending; // 0=false, 1=true
+        private int _reschedulePending;
         private int _result;
         private FiberTask _task = null!;
         private FiberTask.WaitToken? _token;
         private Timer? _timer;
         private readonly List<IDisposable> _waitRegistrations = [];
 
-        public PollAwaiter(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+        public PollAwaitState(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
         {
             _sm = sm;
             _fdsAddr = fdsAddr;
@@ -662,32 +718,24 @@ public partial class SyscallManager
             _timeoutMs = timeoutMs;
         }
 
-        public bool IsCompleted => false;
-
         public void OnCompleted(Action continuation)
         {
+            var scheduler = KernelScheduler.Current!;
             _task = (_sm.Engine.Owner as FiberTask)!;
             _continuation = continuation;
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
-                // Schedule timeout
-                _timer = KernelScheduler.Current!.ScheduleTimer(_timeoutMs, () =>
+                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();
                 });
 
-            // Initial Poll
             DoPoll();
 
             if (!_completed)
                 _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
-        }
-
-        public PollAwaiter GetAwaiter()
-        {
-            return this;
         }
 
         public int GetResult()
@@ -722,7 +770,6 @@ public partial class SyscallManager
             }
 
             var ready = ScanPoll(_sm, _fdsAddr, _nfds);
-
             if (ready > 0)
             {
                 _timer?.Cancel();
@@ -734,19 +781,17 @@ public partial class SyscallManager
 
             if (_hasTimedOut)
             {
-                _result = 0; // Timeout
+                _result = 0;
                 _completed = true;
                 _continuation?.Invoke();
                 return;
             }
 
-            // Not ready, not timed out -> Register waits and suspend
             RegisterWaits();
         }
 
         private void RegisterWaits()
         {
-            // Log spam prevention: don't log here
             var sizeOfPollfd = Marshal.SizeOf<Pollfd>();
 
             for (uint i = 0; i < _nfds; i++)
