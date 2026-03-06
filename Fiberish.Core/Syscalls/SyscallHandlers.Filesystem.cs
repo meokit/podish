@@ -949,6 +949,44 @@ public partial class SyscallManager
         try
         {
             oldParentLoc.Dentry!.Inode!.Rename(oldName, newParentLoc.Dentry!.Inode!, newName);
+
+            // Update the VFS wrapper dentry cache across all views of the parent inodes.
+            // This is critical because multiple Dentries might exist for the same Inode
+            // (e.g., due to different path resolutions or OverlayFS wrapping).
+            var oldParentInode = oldParentLoc.Dentry?.Inode;
+            var newParentInode = newParentLoc.Dentry?.Inode;
+
+            if (oldParentInode != null)
+            {
+                foreach (var pDentry in oldParentInode.Dentries.ToList())
+                {
+                    pDentry.Children.Remove(oldName);
+                }
+            }
+
+            if (newParentInode != null)
+            {
+                foreach (var pDentry in newParentInode.Dentries.ToList())
+                {
+                    // If there's an existing dentry for the target name, we need to
+                    // properly clean it up to avoid inode reference leaks.
+                    if (pDentry.Children.TryGetValue(newName, out var victimDentry))
+                    {
+                        if (victimDentry.Inode != null)
+                        {
+                            victimDentry.Inode.Dentries.Remove(victimDentry);
+                            victimDentry.Inode.Put();
+                            victimDentry.Inode = null;
+                        }
+                        pDentry.Children.Remove(newName);
+                    }
+                }
+            }
+
+            // Note: We don't necessarily need to move the dentry object here; 
+            // the next Lookup will create a fresh Dentry pointing to the correct Inode.
+            // This ensures maximum correctness across all possible "views" of the FS.
+
             return 0;
         }
         catch (FileNotFoundException)
@@ -1348,7 +1386,7 @@ public partial class SyscallManager
         var uid = (uint)inode.Uid;
         var gid = (uint)inode.Gid;
 
-        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), 0x800);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), inode.Dev);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)inode.Ino); // __st_ino
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), mode);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), 1); // nlink
@@ -1381,7 +1419,7 @@ public partial class SyscallManager
         var uid = (uint)inode.Uid;
         var gid = (uint)inode.Gid;
 
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), 0x800); // st_dev
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), (ushort)inode.Dev); // st_dev
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)inode.Ino);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(8), (ushort)mode);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), 1); // nlink
@@ -1437,8 +1475,8 @@ public partial class SyscallManager
         // rdev is encoded as (major << 8) | minor, decode for statx
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x80), (inode.Rdev >> 8) & 0xFF); // rdev_major
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x84), inode.Rdev & 0xFF); // rdev_minor
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), 0x8); // dev_major (faked)
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), 0x0); // dev_minor (faked)
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), (inode.Dev >> 8) & 0xFF); // dev_major
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), inode.Dev & 0xFF); // dev_minor
 
         if (!sm.Engine.CopyToUser(addr, buf)) return;
     }

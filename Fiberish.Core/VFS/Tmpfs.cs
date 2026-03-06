@@ -303,6 +303,9 @@ public class TmpfsInode : Inode
                 }
                 else
                 {
+                    // Invalidate the old target inode's page cache BEFORE unlinking,
+                    // so any open handle still holding this inode will not serve stale data.
+                    existingDentry.Inode.PageCache = null;
                     targetParent.Unlink(newName);
                 }
             }

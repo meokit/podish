@@ -162,6 +162,7 @@ public class OverlayInode : Inode
     public override bool SupportsMmap => Type == InodeType.File && (SourceInode?.SupportsMmap ?? false);
 
     public override ulong Ino { get => SourceInode?.Ino ?? 0; set { if (SourceInode != null) SourceInode.Ino = value; } }
+    public override uint Dev => SourceInode?.Dev ?? base.Dev;
     public override InodeType Type { get => SourceInode?.Type ?? InodeType.File; set { if (SourceInode != null) SourceInode.Type = value; } }
     public override int Mode { get => SourceInode?.Mode ?? 0; set { if (SourceInode != null) SourceInode.Mode = value; } }
     public override uint Rdev { get => SourceInode?.Rdev ?? 0; set { if (SourceInode != null) SourceInode.Rdev = value; } }

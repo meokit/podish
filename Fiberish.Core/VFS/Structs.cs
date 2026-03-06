@@ -66,12 +66,21 @@ public class FileSystemType
 
 public abstract class SuperBlock
 {
+    private static int _nextDevId = 0;
+
     protected HashSet<Inode> AllInodes = [];
     public FileSystemType Type { get; set; } = null!;
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
     public object Lock { get; } = new();
+
+    /// <summary>
+    ///     Unique device ID for this superblock, encoded as (major &lt;&lt; 8) | minor.
+    ///     Used by statx/stat to report st_dev. Each superblock gets a unique minor
+    ///     number so ld-musl correctly distinguishes inodes across different layers.
+    /// </summary>
+    public uint Dev { get; } = (8u << 8) | (uint)System.Threading.Interlocked.Increment(ref _nextDevId);
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
@@ -137,6 +146,11 @@ public abstract class Inode : IPageCacheOps
     public virtual DateTime MTime { get; set; } = DateTime.Now;
     public virtual DateTime ATime { get; set; } = DateTime.Now;
     public virtual DateTime CTime { get; set; } = DateTime.Now;
+
+    /// <summary>
+    ///     Device ID for this inode. Defaults to the owning superblock's Dev.
+    /// </summary>
+    public virtual uint Dev => SuperBlock?.Dev ?? 0x800;
 
     /// <summary>
     ///     Device number (rdev) for character/block devices.

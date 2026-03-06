@@ -304,14 +304,24 @@ public sealed class SilkInode : TmpfsInode
 
     public override void Rename(string oldName, Inode newParent, string newName)
     {
+        // Capture the existing destination inode BEFORE base.Rename overwrites/unlinks it,
+        // so we can clean it up from the metadata DB afterward.
+        var overwrittenInode = newParent.Lookup(newName)?.Inode;
+
         base.Rename(oldName, newParent, newName);
         _metadata.RemoveDentry((long)Ino, oldName);
+
         if (newParent.Lookup(newName) is { Inode: not null } moved)
         {
             var parentIno = (long)newParent.Ino;
             var ino = (long)moved.Inode.Ino;
             _metadata.UpsertDentry(parentIno, newName, ino);
         }
+
+        // If the rename overwrote an existing file, purge its stale data from the DB.
+        // Without this, re-opening the file path after rename would reload old content.
+        if (overwrittenInode != null && overwrittenInode != newParent.Lookup(newName)?.Inode)
+            CleanupOrphan(overwrittenInode);
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
