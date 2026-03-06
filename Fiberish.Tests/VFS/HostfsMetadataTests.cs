@@ -215,4 +215,72 @@ public class HostfsMetadataTests
             if (Directory.Exists(hostDir)) Directory.Delete(hostDir, true);
         }
     }
+
+    [Fact]
+    public void Hostfs_Lookup_DropsStaleCachedEntry_AfterHostDelete()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        var hostFile = Path.Combine(tempRoot, "ghost.txt");
+        File.WriteAllText(hostFile, "ghost");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var first = rootInode.Lookup("ghost.txt");
+            Assert.NotNull(first);
+
+            File.Delete(hostFile);
+
+            var second = rootInode.Lookup("ghost.txt");
+            Assert.Null(second);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_RenameDirectory_UpdatesCachedDescendantPaths()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var oldDir = Path.Combine(tempRoot, "dir");
+        var oldSubDir = Path.Combine(oldDir, "sub");
+        Directory.CreateDirectory(oldSubDir);
+        File.WriteAllText(Path.Combine(oldSubDir, "file.txt"), "data");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var dir = rootInode.Lookup("dir");
+            Assert.NotNull(dir);
+            var sub = Assert.IsType<HostInode>(dir!.Inode).Lookup("sub");
+            Assert.NotNull(sub);
+            var file = Assert.IsType<HostInode>(sub!.Inode).Lookup("file.txt");
+            Assert.NotNull(file);
+
+            rootInode.Rename("dir", rootInode, "dir2");
+
+            var renamedDir = rootInode.Lookup("dir2");
+            Assert.NotNull(renamedDir);
+            Assert.Equal(Path.Combine(tempRoot, "dir2"), Assert.IsType<HostInode>(renamedDir!.Inode).HostPath);
+            Assert.Equal(Path.Combine(tempRoot, "dir2", "sub"), Assert.IsType<HostInode>(sub.Inode).HostPath);
+            Assert.Equal(Path.Combine(tempRoot, "dir2", "sub", "file.txt"), Assert.IsType<HostInode>(file!.Inode).HostPath);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
 }
