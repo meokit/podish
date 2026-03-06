@@ -88,6 +88,76 @@ public class CrossMountBehaviorTests
     }
 
     [Fact]
+    public async Task LinkAt_UnsupportedFlags_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x1B000);
+        env.MapUserPage(0x1C000);
+        env.WriteCString(0x1B000, "/mnt/source.txt");
+        env.WriteCString(0x1C000, "/linked.txt");
+
+        env.CreateFile("/mnt/source.txt");
+
+        var rc = await env.Call("SysLinkat", LinuxConstants.AT_FDCWD, 0x1B000, LinuxConstants.AT_FDCWD, 0x1C000, 0x1);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task RenameAt2_UnsupportedFlags_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x1D000);
+        env.MapUserPage(0x1E000);
+        env.WriteCString(0x1D000, "/mnt/source.txt");
+        env.WriteCString(0x1E000, "/mnt/target.txt");
+
+        env.CreateFile("/mnt/source.txt");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x1D000, LinuxConstants.AT_FDCWD, 0x1E000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
+        Assert.False(env.SyscallManager.PathWalkWithFlags("/mnt/target.txt", LookupFlags.None).IsValid);
+    }
+
+    [Fact]
+    public async Task RenameAt2_Noreplace_ReturnsEexist_WhenTargetExists()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x21000);
+        env.MapUserPage(0x22000);
+        env.WriteCString(0x21000, "/mnt/source.txt");
+        env.WriteCString(0x22000, "/mnt/target.txt");
+
+        env.CreateFile("/mnt/source.txt");
+        env.CreateFile("/mnt/target.txt");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x21000, LinuxConstants.AT_FDCWD, 0x22000,
+            LinuxConstants.RENAME_NOREPLACE);
+        Assert.Equal(-(int)Errno.EEXIST, rc);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/target.txt", LookupFlags.None).IsValid);
+    }
+
+    [Fact]
+    public async Task RenameAt2_Noreplace_Succeeds_WhenTargetMissing()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x23000);
+        env.MapUserPage(0x24000);
+        env.WriteCString(0x23000, "/mnt/source.txt");
+        env.WriteCString(0x24000, "/mnt/target.txt");
+
+        env.CreateFile("/mnt/source.txt");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x23000, LinuxConstants.AT_FDCWD, 0x24000,
+            LinuxConstants.RENAME_NOREPLACE);
+        Assert.Equal(0, rc);
+        Assert.False(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/target.txt", LookupFlags.None).IsValid);
+    }
+
+    [Fact]
     public void PathWalk_DotDotFromMountRoot_AscendsToParentMountPoint()
     {
         using var env = new TestEnv();

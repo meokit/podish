@@ -76,6 +76,7 @@ public partial class SyscallManager
         var newdirfd = (int)a3;
         var newpath = sm.ReadString(a4);
         var flags = (int)a5;
+        if ((flags & ~LinuxConstants.AT_SYMLINK_FOLLOW) != 0) return -(int)Errno.EINVAL;
 
         PathLocation oldStartLoc = default;
         if (olddirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !oldpath.StartsWith("/"))
@@ -917,6 +918,11 @@ public partial class SyscallManager
     private static int ImplRename(SyscallManager sm, int oldDirFd, string oldPath, int newDirFd, string newPath,
         uint flags)
     {
+        // TODO: add full renameat2 semantics for RENAME_EXCHANGE and RENAME_WHITEOUT.
+        var supportedFlags = LinuxConstants.RENAME_NOREPLACE;
+        if ((flags & ~supportedFlags) != 0)
+            return -(int)Errno.EINVAL;
+
         PathLocation? oldStart = null;
         if (oldDirFd != -100 && !oldPath.StartsWith("/"))
         {
@@ -949,6 +955,15 @@ public partial class SyscallManager
 
         if (!ReferenceEquals(oldParentLoc.Mount, newParentLoc.Mount))
             return -(int)Errno.EXDEV;
+
+        if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0)
+        {
+            var targetLoc = newStart.HasValue
+                ? sm.PathWalkWithFlags(newPath, newStart.Value, LookupFlags.None)
+                : sm.PathWalkWithFlags(newPath, LookupFlags.None);
+            if (targetLoc.IsValid && targetLoc.Dentry?.Inode != null)
+                return -(int)Errno.EEXIST;
+        }
 
         try
         {

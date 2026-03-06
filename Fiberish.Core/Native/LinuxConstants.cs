@@ -263,6 +263,11 @@ public static class LinuxConstants
     public const uint AT_SYMLINK_NOFOLLOW = 0x100;
     public const uint AT_REMOVEDIR = 0x200;
     public const uint AT_SYMLINK_FOLLOW = 0x400;
+
+    // renameat2 flags
+    public const uint RENAME_NOREPLACE = 1;
+    public const uint RENAME_EXCHANGE = 2;
+    public const uint RENAME_WHITEOUT = 4;
     public const uint AT_NO_AUTOMOUNT = 0x800;
     public const uint AT_EMPTY_PATH = 0x1000;
     public const uint AT_STATX_SYNC_TYPE = 0x6000;
