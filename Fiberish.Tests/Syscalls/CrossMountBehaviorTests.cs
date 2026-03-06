@@ -161,6 +161,75 @@ public class CrossMountBehaviorTests
     }
 
     [Fact]
+    public async Task RenameAt2_Exchange_SamePath_IsNoOp()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x34000);
+        env.WriteCString(0x34000, "/mnt/same.txt");
+
+        env.CreateFile("/mnt/same.txt", "S");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x34000, LinuxConstants.AT_FDCWD, 0x34000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(0, rc);
+        Assert.Equal("S", env.ReadFile("/mnt/same.txt"));
+    }
+
+    [Fact]
+    public async Task RenameAt2_Exchange_FileAndSymlink_SwapsEntries()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x35000);
+        env.MapUserPage(0x36000);
+        env.WriteCString(0x35000, "/mnt/file.txt");
+        env.WriteCString(0x36000, "/mnt/link.txt");
+
+        env.CreateFile("/mnt/file.txt", "F");
+        env.CreateSymlink("/mnt/link.txt", "file.txt");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x35000, LinuxConstants.AT_FDCWD, 0x36000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(0, rc);
+
+        var fileLoc = env.SyscallManager.PathWalkWithFlags("/mnt/file.txt", LookupFlags.None);
+        var linkLoc = env.SyscallManager.PathWalkWithFlags("/mnt/link.txt", LookupFlags.None);
+        Assert.True(fileLoc.IsValid);
+        Assert.True(linkLoc.IsValid);
+        Assert.Equal(InodeType.Symlink, fileLoc.Dentry!.Inode!.Type);
+        Assert.Equal("file.txt", fileLoc.Dentry.Inode.Readlink());
+        Assert.Equal(InodeType.File, linkLoc.Dentry!.Inode!.Type);
+        Assert.Equal("F", env.ReadFile("/mnt/link.txt"));
+    }
+
+    [Fact]
+    public async Task RenameAt2_Exchange_NonEmptyDirectoryAndSymlink_SwapsEntries()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x37000);
+        env.MapUserPage(0x38000);
+        env.WriteCString(0x37000, "/mnt/dir");
+        env.WriteCString(0x38000, "/mnt/link.txt");
+
+        env.CreateDirectory("/mnt/dir");
+        env.CreateFile("/mnt/dir/child.txt", "D");
+        env.CreateSymlink("/mnt/link.txt", "dir");
+
+        var rc = await env.Call("SysRenameAt2", LinuxConstants.AT_FDCWD, 0x37000, LinuxConstants.AT_FDCWD, 0x38000,
+            LinuxConstants.RENAME_EXCHANGE);
+        Assert.Equal(0, rc);
+
+        var dirLoc = env.SyscallManager.PathWalkWithFlags("/mnt/dir", LookupFlags.None);
+        var linkLoc = env.SyscallManager.PathWalkWithFlags("/mnt/link.txt", LookupFlags.None);
+        Assert.True(dirLoc.IsValid);
+        Assert.True(linkLoc.IsValid);
+        Assert.Equal(InodeType.Symlink, dirLoc.Dentry!.Inode!.Type);
+        Assert.Equal("dir", dirLoc.Dentry.Inode.Readlink());
+        Assert.Equal(InodeType.Directory, linkLoc.Dentry!.Inode!.Type);
+        Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/link.txt/child.txt", LookupFlags.FollowSymlink).IsValid);
+        Assert.Equal("D", env.ReadFile("/mnt/link.txt/child.txt"));
+    }
+
+    [Fact]
     public async Task RenameAt2_Exchange_TargetMissing_ReturnsEnoent()
     {
         using var env = new TestEnv();
@@ -397,6 +466,17 @@ public class CrossMountBehaviorTests
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
             parentLoc.Dentry.Inode!.Mkdir(dentry, 0x1ED, 0, 0);
+        }
+
+        public void CreateSymlink(string path, string target)
+        {
+            var loc = SyscallManager.PathWalkWithFlags(path, LookupFlags.None);
+            Assert.False(loc.IsValid);
+
+            var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
+            Assert.Equal(0, err);
+            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+            parentLoc.Dentry.Inode!.Symlink(dentry, target, 0, 0);
         }
 
         public string ReadFile(string path)
