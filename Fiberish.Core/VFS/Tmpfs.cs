@@ -6,14 +6,14 @@ namespace Fiberish.VFS;
 
 public class Tmpfs : FileSystem
 {
-    public Tmpfs()
+    public Tmpfs(DeviceNumberManager? devManager = null) : base(devManager)
     {
         Name = "tmpfs";
     }
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        var sb = new TmpfsSuperBlock(fsType);
+        var sb = new TmpfsSuperBlock(fsType, DevManager);
         var rootInode = sb.AllocInode();
         rootInode.Type = InodeType.Directory;
         rootInode.Mode = 0x1FF; // 777
@@ -29,7 +29,7 @@ public class TmpfsSuperBlock : SuperBlock
 {
     protected ulong _nextIno = 1;
 
-    public TmpfsSuperBlock(FileSystemType type)
+    public TmpfsSuperBlock(FileSystemType type, DeviceNumberManager devManager) : base(devManager)
     {
         Type = type;
     }

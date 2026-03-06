@@ -7,7 +7,7 @@ namespace Fiberish.VFS;
 
 public class ProcFileSystem : FileSystem
 {
-    public ProcFileSystem()
+    public ProcFileSystem(DeviceNumberManager? devManager = null) : base(devManager)
     {
         Name = "proc";
     }
@@ -15,7 +15,7 @@ public class ProcFileSystem : FileSystem
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         var fallbackSm = data as SyscallManager;
-        return new ProcSuperBlock(fsType, fallbackSm);
+        return new ProcSuperBlock(fsType, fallbackSm, DevManager);
     }
 }
 
@@ -24,7 +24,7 @@ public class ProcSuperBlock : SuperBlock
     private ulong _nextIno = 1;
     public SyscallManager? FallbackSyscallManager { get; }
 
-    public ProcSuperBlock(FileSystemType type, SyscallManager? fallbackSm)
+    public ProcSuperBlock(FileSystemType type, SyscallManager? fallbackSm, DeviceNumberManager? devManager = null) : base(devManager)
     {
         Type = type;
         FallbackSyscallManager = fallbackSm;

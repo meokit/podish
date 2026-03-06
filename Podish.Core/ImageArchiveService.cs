@@ -875,14 +875,14 @@ public sealed class ImageArchiveService
 
     private static void EnsureFileSystemsRegistered()
     {
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = static () => new Hostfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static () => new Tmpfs() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static () => new ProcFileSystem() });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = static devMgr => new Hostfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static devMgr => new ProcFileSystem(devMgr) });
         FileSystemRegistry.TryRegister(new FileSystemType
-            { Name = "overlay", Factory = static () => new OverlayFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static () => new LayerFileSystem() });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static () => new SilkFileSystem() });
+            { Name = "overlay", Factory = static devMgr => new OverlayFileSystem(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static devMgr => new LayerFileSystem(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static devMgr => new SilkFileSystem(devMgr) });
     }
 }
 

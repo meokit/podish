@@ -46,7 +46,7 @@ public class PageCacheConsistencyTests
     {
         using var engine = new Engine();
         var mm = new VMAManager();
-        var fsType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry("data.bin", null, root, sb);
@@ -82,7 +82,7 @@ public class PageCacheConsistencyTests
             var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
             lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
 
-            var tmpType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+            var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = tmpType.CreateFileSystem().ReadSuper(tmpType, 0, "ovl-upper", null);
 
             var overlayFs = new OverlayFileSystem();
@@ -154,7 +154,7 @@ public class PageCacheConsistencyTests
     {
         using var engine = new Engine();
         var mm = new VMAManager();
-        var fsType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry("data.bin", null, root, sb);
@@ -180,7 +180,7 @@ public class PageCacheConsistencyTests
     {
         using var engine = new Engine();
         var mm = new VMAManager();
-        var fsType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry("data.bin", null, root, sb);
@@ -217,7 +217,7 @@ public class PageCacheConsistencyTests
             var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
             lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
 
-            var tmpType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+            var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = tmpType.CreateFileSystem().ReadSuper(tmpType, 0, "ovl-upper-reverse", null);
 
             var overlayFs = new OverlayFileSystem();

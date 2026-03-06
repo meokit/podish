@@ -6,7 +6,7 @@ namespace Fiberish.VFS;
 
 public class OverlayFileSystem : FileSystem
 {
-    public OverlayFileSystem()
+    public OverlayFileSystem(DeviceNumberManager? devManager = null) : base(devManager)
     {
         Name = "overlay";
     }
@@ -64,7 +64,7 @@ public class OverlaySuperBlock : SuperBlock
     private readonly Dictionary<string, HashSet<string>> _whiteouts = new(StringComparer.Ordinal);
     private readonly HashSet<string> _opaqueDirs = new(StringComparer.Ordinal);
 
-    public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper)
+    public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper, DeviceNumberManager? devManager = null) : base(devManager)
     {
         if (lowers.Count == 0) throw new ArgumentException("OverlayFS requires at least one lower layer", nameof(lowers));
         Type = type;

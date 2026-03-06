@@ -175,7 +175,7 @@ public class MknodAndXattrSyscallTests
                 var lowerSb = new HostSuperBlock(hostType, _tempLowerDir, hostOpts);
                 lowerSb.Root = lowerSb.GetDentry(_tempLowerDir, "/", null)!;
 
-                var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static () => new Tmpfs() };
+                var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
                 var upperSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-overlay-upper", null);
 
                 var overlayFs = new OverlayFileSystem();

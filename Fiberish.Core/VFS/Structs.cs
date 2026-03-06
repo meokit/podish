@@ -48,25 +48,40 @@ public enum FileFlags
 
 public abstract class FileSystem
 {
+    protected FileSystem(DeviceNumberManager? devManager)
+    {
+        DevManager = devManager ?? new DeviceNumberManager();
+    }
+
     public string Name { get; set; } = "";
+    protected DeviceNumberManager DevManager { get; }
+
     public abstract SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data);
 }
 
 public class FileSystemType
 {
     public string Name { get; init; } = "";
-    public Func<FileSystem> Factory { get; init; } = static () =>
+    public Func<DeviceNumberManager, FileSystem> Factory { get; init; } = _ =>
         throw new InvalidOperationException("FileSystem factory is not configured.");
 
-    public FileSystem CreateFileSystem()
+    public FileSystem CreateFileSystem(DeviceNumberManager? devManager = null)
     {
-        return Factory();
+        return Factory(devManager ?? new DeviceNumberManager());
     }
 }
 
 public abstract class SuperBlock
 {
-    private static int _nextDevId = 0;
+    private readonly DeviceNumberManager? _devManager;
+    private readonly uint _dev;
+
+    protected SuperBlock(DeviceNumberManager? devManager = null)
+    {
+        _devManager = devManager;
+        // 0 means anonymous (no real device)
+        _dev = devManager?.Allocate() ?? 0;
+    }
 
     protected HashSet<Inode> AllInodes = [];
     public FileSystemType Type { get; set; } = null!;
@@ -76,11 +91,10 @@ public abstract class SuperBlock
     public object Lock { get; } = new();
 
     /// <summary>
-    ///     Unique device ID for this superblock, encoded as (major &lt;&lt; 8) | minor.
-    ///     Used by statx/stat to report st_dev. Each superblock gets a unique minor
-    ///     number so ld-musl correctly distinguishes inodes across different layers.
+    ///     Device ID for this superblock, encoded as (major &lt;&lt; 8) | minor.
+    ///     Allocated from DeviceNumberManager. 0 for anonymous superblocks.
     /// </summary>
-    public uint Dev { get; } = (8u << 8) | (uint)System.Threading.Interlocked.Increment(ref _nextDevId);
+    public uint Dev => _dev;
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
@@ -102,6 +116,8 @@ public abstract class SuperBlock
 
     protected virtual void Shutdown()
     {
+        // Release device number back to the pool
+        _devManager?.Free(_dev);
         // Subclasses can override to clean up resources
         AllInodes.Clear();
         Inodes.Clear();

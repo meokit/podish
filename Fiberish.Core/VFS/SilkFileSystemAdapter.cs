@@ -8,7 +8,7 @@ namespace Fiberish.VFS;
 /// </summary>
 public sealed class SilkFileSystem : FileSystem
 {
-    public SilkFileSystem()
+    public SilkFileSystem(DeviceNumberManager? devManager = null) : base(devManager)
     {
         Name = "silkfs";
     }
@@ -19,7 +19,7 @@ public sealed class SilkFileSystem : FileSystem
         var repository = new SilkRepository(options);
         repository.Initialize();
 
-        var sb = new SilkSuperBlock(fsType, repository);
+        var sb = new SilkSuperBlock(fsType, repository, DevManager);
         sb.LoadFromMetadata();
         return sb;
     }
@@ -27,7 +27,7 @@ public sealed class SilkFileSystem : FileSystem
 
 public sealed class SilkSuperBlock : TmpfsSuperBlock
 {
-    public SilkSuperBlock(FileSystemType type, SilkRepository repository) : base(type)
+    public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type, devManager)
     {
         Repository = repository;
     }

@@ -4,7 +4,7 @@ namespace Fiberish.VFS;
 
 public class LayerFileSystem : FileSystem
 {
-    public LayerFileSystem()
+    public LayerFileSystem(DeviceNumberManager? devManager = null) : base(devManager)
     {
         Name = "layerfs";
     }
@@ -23,7 +23,7 @@ public class LayerFileSystem : FileSystem
         }
 
         var contentProvider = options.ContentProvider ?? new InMemoryLayerContentProvider();
-        var sb = new LayerSuperBlock(fsType, index, contentProvider);
+        var sb = new LayerSuperBlock(fsType, index, contentProvider, DevManager);
         sb.Root = new Dentry("/", sb.GetOrCreateInode("/"), null, sb);
         sb.Root.Parent = sb.Root;
         return sb;
@@ -196,7 +196,7 @@ public class LayerSuperBlock : SuperBlock
     private ulong _nextIno = 1;
     private readonly Dictionary<string, LayerInode> _inodeByPath = new(StringComparer.Ordinal);
 
-    public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider)
+    public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider, DeviceNumberManager? devManager = null) : base(devManager)
     {
         Type = fsType;
         Index = index;

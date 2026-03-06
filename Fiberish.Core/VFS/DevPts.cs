@@ -248,7 +248,7 @@ public class DevPtsSuperBlock : SuperBlock
     private readonly PtyManager _ptyManager;
     private readonly Dictionary<int, Dentry> _slaveDentries = new();
 
-    public DevPtsSuperBlock(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger)
+    public DevPtsSuperBlock(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger, DeviceNumberManager? devManager = null) : base(devManager)
     {
         _ptyManager = ptyManager;
         _broadcaster = broadcaster;
@@ -340,7 +340,7 @@ public class DevPtsFileSystem : FileSystem
     private readonly ILogger _logger;
     private readonly PtyManager _ptyManager;
 
-    public DevPtsFileSystem(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger)
+    public DevPtsFileSystem(DeviceNumberManager? devManager = null, PtyManager? ptyManager = null, ISignalBroadcaster? broadcaster = null, ILogger? logger = null) : base(devManager)
     {
         Name = "devpts";
         _ptyManager = ptyManager;
@@ -350,6 +350,6 @@ public class DevPtsFileSystem : FileSystem
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        return new DevPtsSuperBlock(_ptyManager, _broadcaster, _logger);
+        return new DevPtsSuperBlock(_ptyManager, _broadcaster, _logger, DevManager);
     }
 }
