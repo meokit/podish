@@ -404,6 +404,12 @@ public class OverlayInode : Inode
 
     public override void Unlink(string name)
     {
+        var overlayEntry = Lookup(name);
+        if (overlayEntry == null)
+            throw new FileNotFoundException("Source does not exist", name);
+        if (overlayEntry.Inode?.Type == InodeType.Directory)
+            throw new InvalidOperationException("Is a directory");
+
         var inUpper = UpperInode?.Lookup(name) != null;
         var inLower = LookupInAnyLower(name) != null;
         var osb = (OverlaySuperBlock)SuperBlock;
@@ -420,6 +426,14 @@ public class OverlayInode : Inode
 
     public override void Rmdir(string name)
     {
+        var overlayEntry = Lookup(name);
+        if (overlayEntry == null)
+            throw new DirectoryNotFoundException(name);
+        if (overlayEntry.Inode?.Type != InodeType.Directory)
+            throw new InvalidOperationException("Not a directory");
+        if (overlayEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
+            throw new InvalidOperationException("Directory not empty");
+
         var inUpper = UpperInode?.Lookup(name) != null;
         var inLower = LookupInAnyLower(name) != null;
         var osb = (OverlaySuperBlock)SuperBlock;

@@ -47,7 +47,16 @@ public class HostSuperBlock : SuperBlock
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
-        if (_dentryCache.TryGetValue(hostPath, out var dentry)) return dentry;
+        lock (Lock)
+        {
+            if (_dentryCache.TryGetValue(hostPath, out var dentry))
+            {
+                if (PathExistsOnHost(hostPath))
+                    return dentry;
+
+                RemoveDentry(hostPath);
+            }
+        }
 
         // Check for symlink first (so we don't follow)
         // FileInfo.LinkTarget returns non-null for symlinks (including broken ones)
@@ -56,7 +65,10 @@ public class HostSuperBlock : SuperBlock
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Symlink);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
-            _dentryCache[hostPath] = newDentry;
+            lock (Lock)
+            {
+                _dentryCache[hostPath] = newDentry;
+            }
             return newDentry;
         }
 
@@ -65,7 +77,10 @@ public class HostSuperBlock : SuperBlock
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Directory);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
-            _dentryCache[hostPath] = newDentry;
+            lock (Lock)
+            {
+                _dentryCache[hostPath] = newDentry;
+            }
             return newDentry;
         }
 
@@ -74,7 +89,10 @@ public class HostSuperBlock : SuperBlock
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.File);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
-            _dentryCache[hostPath] = newDentry;
+            lock (Lock)
+            {
+                _dentryCache[hostPath] = newDentry;
+            }
             return newDentry;
         }
 
@@ -89,8 +107,32 @@ public class HostSuperBlock : SuperBlock
     {
         lock (Lock)
         {
-            if (!string.IsNullOrEmpty(oldPath)) _dentryCache.Remove(oldPath);
-            _dentryCache[newPath] = dentry;
+            var hits = _dentryCache
+                .Where(kv => string.Equals(kv.Key, oldPath, StringComparison.Ordinal) ||
+                             kv.Key.StartsWith(oldPath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                .ToList();
+
+            foreach (var hit in hits)
+            {
+                _dentryCache.Remove(hit.Key);
+                var movedPath = string.Equals(hit.Key, oldPath, StringComparison.Ordinal)
+                    ? newPath
+                    : newPath + hit.Key[oldPath.Length..];
+                _dentryCache[movedPath] = hit.Value;
+                if (hit.Value.Inode is HostInode hostInode)
+                    hostInode.HostPath = movedPath;
+            }
+
+            if (!_dentryCache.ContainsKey(newPath))
+                _dentryCache[newPath] = dentry;
+        }
+    }
+
+    public void AddDentry(string hostPath, Dentry dentry)
+    {
+        lock (Lock)
+        {
+            _dentryCache[hostPath] = dentry;
         }
     }
 
@@ -98,8 +140,19 @@ public class HostSuperBlock : SuperBlock
     {
         lock (Lock)
         {
-            _dentryCache.Remove(hostPath);
+            var stale = _dentryCache.Keys
+                .Where(path => string.Equals(path, hostPath, StringComparison.Ordinal) ||
+                               path.StartsWith(hostPath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                .ToList();
+            foreach (var path in stale)
+                _dentryCache.Remove(path);
         }
+    }
+
+    private static bool PathExistsOnHost(string hostPath)
+    {
+        var info = new FileInfo(hostPath);
+        return info.LinkTarget != null || Directory.Exists(hostPath) || File.Exists(hostPath);
     }
 
     public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
@@ -771,6 +824,8 @@ public partial class HostInode : Inode
             File.Delete(subPath);
             sb.MetadataStore.Remove(subPath);
             dentry?.Inode?.Put();
+            if (Dentries.Count > 0)
+                Dentries[0].Children.Remove(name);
             sb.RemoveDentry(subPath);
             return;
         }
@@ -791,6 +846,8 @@ public partial class HostInode : Inode
         Directory.Delete(subPath, false);
         sb.MetadataStore.Remove(subPath);
         dentry?.Inode?.Put();
+        if (Dentries.Count > 0)
+            Dentries[0].Children.Remove(name);
         sb.RemoveDentry(subPath);
     }
 
@@ -806,18 +863,40 @@ public partial class HostInode : Inode
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(oldFullPath, oldName, null) ??
                      throw new FileNotFoundException("Source not found", oldName);
+        var sourceIsDirectory = dentry.Inode!.Type == InodeType.Directory;
 
         // Handle overwrite
-        if (File.Exists(newFullPath) || Directory.Exists(newFullPath))
+        if (File.Exists(newFullPath) || Directory.Exists(newFullPath) || new FileInfo(newFullPath).LinkTarget != null)
         {
             var targetDentry = sb.GetDentry(newFullPath, newName, null);
-            if (Directory.Exists(newFullPath)) Directory.Delete(newFullPath, true);
-            else File.Delete(newFullPath);
+            var targetIsSymlink = new FileInfo(newFullPath).LinkTarget != null;
+            var targetIsDirectory = !targetIsSymlink && Directory.Exists(newFullPath);
+
+            if (targetIsDirectory)
+            {
+                if (!sourceIsDirectory)
+                    throw new InvalidOperationException("Is a directory");
+
+                if (targetDentry != null && targetDentry.Children.Count > 0)
+                    throw new InvalidOperationException("Directory not empty");
+
+                Directory.Delete(newFullPath, false);
+            }
+            else
+            {
+                if (sourceIsDirectory)
+                    throw new InvalidOperationException("Not a directory");
+
+                File.Delete(newFullPath);
+            }
+
             targetDentry?.Inode?.Put();
+            if (targetParent.Dentries.Count > 0)
+                targetParent.Dentries[0].Children.Remove(newName);
             sb.RemoveDentry(newFullPath);
         }
 
-        if (dentry.Inode!.Type == InodeType.Directory)
+        if (sourceIsDirectory)
             Directory.Move(oldFullPath, newFullPath);
         else
             File.Move(oldFullPath, newFullPath);
@@ -827,8 +906,14 @@ public partial class HostInode : Inode
         // Update cache and internal path
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
         ((HostInode)dentry.Inode).HostPath = newFullPath;
+        if (Dentries.Count > 0)
+            Dentries[0].Children.Remove(oldName);
         dentry.Name = newName;
-        if (targetParent.Dentries.Count > 0) dentry.Parent = targetParent.Dentries[0];
+        if (targetParent.Dentries.Count > 0)
+        {
+            dentry.Parent = targetParent.Dentries[0];
+            dentry.Parent.Children[newName] = dentry;
+        }
     }
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
@@ -864,11 +949,9 @@ public partial class HostInode : Inode
 
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
-        lock (sb.Lock)
-        {
-            sb.MoveDentry("", newPath,
-                dentry); // hack: we don't have an old host path for this new link yet in the cache
-        }
+        sb.AddDentry(newPath, dentry);
+        if (Dentries.Count > 0)
+            Dentries[0].Children[dentry.Name] = dentry;
 
         return dentry;
     }

@@ -194,27 +194,54 @@ public class TmpfsInode : Inode
             var primaryDentry = Dentries[0];
             var sb = (TmpfsSuperBlock)SuperBlock;
             var key = new DCacheKey(Ino, name);
-            if (sb.Dentries.TryGetValue(key, out var dentry))
+            if (!sb.Dentries.TryGetValue(key, out var dentry))
+                throw new FileNotFoundException("Source does not exist", name);
+
+            if (dentry.Inode?.Type == InodeType.Directory)
+                throw new InvalidOperationException("Is a directory");
+
+            lock (sb.Lock)
             {
-                lock (sb.Lock)
-                {
-                    sb.Dentries.Remove(key);
-                }
-
-                primaryDentry.Children.Remove(name);
-                var unlinkedInode = dentry.Inode;
-                unlinkedInode?.Dentries.Remove(dentry);
-                _childNames.Remove(name);
-
-                // Decrement refcount of the unlinked inode
-                unlinkedInode?.Put();
+                sb.Dentries.Remove(key);
             }
+
+            primaryDentry.Children.Remove(name);
+            var unlinkedInode = dentry.Inode;
+            unlinkedInode?.Dentries.Remove(dentry);
+            _childNames.Remove(name);
+
+            // Decrement refcount of the unlinked inode
+            unlinkedInode?.Put();
         }
     }
 
     public override void Rmdir(string name)
     {
-        Unlink(name);
+        lock (Lock)
+        {
+            if (Dentries.Count == 0) return;
+            var primaryDentry = Dentries[0];
+            var sb = (TmpfsSuperBlock)SuperBlock;
+            var key = new DCacheKey(Ino, name);
+            if (!sb.Dentries.TryGetValue(key, out var dentry))
+                throw new DirectoryNotFoundException(name);
+
+            if (dentry.Inode?.Type != InodeType.Directory)
+                throw new InvalidOperationException("Not a directory");
+
+            if (dentry.Children.Count > 0)
+                throw new InvalidOperationException("Directory not empty");
+
+            lock (sb.Lock)
+            {
+                sb.Dentries.Remove(key);
+            }
+
+            primaryDentry.Children.Remove(name);
+            dentry.Inode.Dentries.Remove(dentry);
+            _childNames.Remove(name);
+            dentry.Inode.Put();
+        }
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
