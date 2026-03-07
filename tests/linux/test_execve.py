@@ -19,6 +19,7 @@ def test_execve_vdso_persistence(fiberpod_dll, alpine_image):
     args = [
         fiberpod_dll,
         "run",
+        "--rm",
         "-v", f"{LINUX_ASSETS}:/tests",
         alpine_image,
         "--",

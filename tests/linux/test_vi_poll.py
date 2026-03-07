@@ -23,6 +23,7 @@ def test_vi_poll_spam(fiberpod_dll, alpine_image):
         "--log-level", "debug",
         "--log-file", EMULATOR_LOG,
         "run",
+        "--rm",
         "-i",
         "-t",
         alpine_image,

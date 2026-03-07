@@ -77,6 +77,7 @@ class TestFileBindMount:
             cmd = [
                 fiberpod_dll,
                 "run",
+                "--rm",
                 "-v", f"{temp_file}:/tmp/test_bind.txt",
                 alpine_image,
                 "/bin/cat",

@@ -11,6 +11,7 @@ def test_busybox_ping_localhost(project_root: Path) -> None:
         "--no-build",
         "--",
         "run",
+        "--rm",
         "docker.io/i386/alpine:latest",
         "--",
         "/bin/ping",

@@ -69,6 +69,9 @@ internal class Program
         var containerNameOption = new Option<string?>(
             new[] { "--name" },
             "Assign a name to the container");
+        var autoRemoveOption = new Option<bool>(
+            new[] { "--rm" },
+            "Automatically remove the container when it exits");
         var hostnameOption = new Option<string?>(
             new[] { "--hostname", "-h" },
             "Set the container hostname (defaults to --name, then short container id)");
@@ -89,6 +92,7 @@ internal class Program
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
         runCommand.AddOption(containerNameOption);
+        runCommand.AddOption(autoRemoveOption);
         runCommand.AddOption(hostnameOption);
         runCommand.AddArgument(runArgsArgument);
 
@@ -103,6 +107,7 @@ internal class Program
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
             var containerName = context.ParseResult.GetValueForOption(containerNameOption);
+            var autoRemove = context.ParseResult.GetValueForOption(autoRemoveOption);
             var explicitHostname = context.ParseResult.GetValueForOption(hostnameOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
@@ -249,6 +254,7 @@ internal class Program
             {
                 Name = containerName,
                 Hostname = hostname,
+                AutoRemove = autoRemove,
                 Image = image,
                 Rootfs = rootfs,
                 Exe = exe,
@@ -303,7 +309,15 @@ internal class Program
             metadata.Running = false;
             metadata.ExitCode = exitCode;
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
-            PodishContainerMetadataStore.Write(containersDir, metadata);
+            if (autoRemove)
+            {
+                eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-remove", containerId, imageRef));
+                PodishContainerMetadataStore.Delete(containersDir, containerId);
+            }
+            else
+            {
+                PodishContainerMetadataStore.Write(containersDir, metadata);
+            }
             context.ExitCode = exitCode;
         });
 

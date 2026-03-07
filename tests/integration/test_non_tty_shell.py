@@ -1,8 +1,8 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 
-def test_non_tty_shell_does_not_emit_terminal_queries(project_root: Path) -> None:
+def test_non_tty_shell_does_not_emit_terminal_queries(project_root: Path, alpine_image: str) -> None:
     cmd = [
         "dotnet",
         "run",
@@ -11,7 +11,8 @@ def test_non_tty_shell_does_not_emit_terminal_queries(project_root: Path) -> Non
         "--no-build",
         "--",
         "run",
-        str(project_root / ".fiberpod" / "oci" / "images" / "docker.io_i386_alpine_latest"),
+        "--rm",
+        alpine_image,
         "--",
         "/bin/sh",
     ]

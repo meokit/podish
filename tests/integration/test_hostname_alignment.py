@@ -1,9 +1,9 @@
-from pathlib import Path
-import subprocess
 import uuid
+import subprocess
+from pathlib import Path
 
 
-def _run_hostname_probe(project_root: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+def _run_hostname_probe(project_root: Path, alpine_image: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
     cmd = [
         "dotnet",
         "run",
@@ -12,8 +12,9 @@ def _run_hostname_probe(project_root: Path, *extra_args: str) -> subprocess.Comp
         "--no-build",
         "--",
         "run",
+        "--rm",
         *extra_args,
-        str(project_root / ".fiberpod" / "oci" / "images" / "docker.io_i386_alpine_latest"),
+        alpine_image,
         "--",
         "/bin/sh",
         "-lc",
@@ -30,9 +31,9 @@ def _run_hostname_probe(project_root: Path, *extra_args: str) -> subprocess.Comp
     )
 
 
-def test_container_name_sets_default_hostname(project_root: Path) -> None:
+def test_container_name_sets_default_hostname(project_root: Path, alpine_image: str) -> None:
     name = f"podish-hostname-default-{uuid.uuid4().hex[:8]}"
-    proc = _run_hostname_probe(project_root, "--name", name)
+    proc = _run_hostname_probe(project_root, alpine_image, "--name", name)
 
     output = proc.stdout + proc.stderr
     assert proc.returncode == 0, output
@@ -51,11 +52,12 @@ def test_container_name_sets_default_hostname(project_root: Path) -> None:
     ], output
 
 
-def test_explicit_hostname_overrides_container_name(project_root: Path) -> None:
+def test_explicit_hostname_overrides_container_name(project_root: Path, alpine_image: str) -> None:
     name = f"podish-hostname-name-{uuid.uuid4().hex[:8]}"
     hostname = f"podish-hostname-guest-{uuid.uuid4().hex[:8]}"
     proc = _run_hostname_probe(
         project_root,
+        alpine_image,
         "--name",
         name,
         "--hostname",

@@ -38,13 +38,13 @@ exit 0
     fiberpod_exe = "dotnet"
     
     # Run locker
-    fiberpod_args = [fiberpod_exe, "run", "--project", "Podish.Cli/Podish.Cli.csproj", "--", "run", "-v", f"{str(tmp_path)}:/scripts", "docker.io/i386/alpine:latest", "/bin/sh", "/scripts/locker.sh"]
+    fiberpod_args = [fiberpod_exe, "run", "--project", "Podish.Cli/Podish.Cli.csproj", "--", "run", "--rm", "-v", f"{str(tmp_path)}:/scripts", "docker.io/i386/alpine:latest", "/bin/sh", "/scripts/locker.sh"]
     proc1 = subprocess.run(fiberpod_args, capture_output=True, text=True)
     assert proc1.returncode == 0, f"Locker failed: {proc1.stderr}\nStdout: {proc1.stdout}"
     assert "locked1" in proc1.stdout, f"Locker didn't output locked1: {proc1.stdout}"
 
     # Run verifier
-    fiberpod_args_2 = [fiberpod_exe, "run", "--project", "Podish.Cli/Podish.Cli.csproj", "--", "run", "-v", f"{str(tmp_path)}:/scripts", "docker.io/i386/alpine:latest", "/bin/sh", "/scripts/verifier.sh"]
+    fiberpod_args_2 = [fiberpod_exe, "run", "--project", "Podish.Cli/Podish.Cli.csproj", "--", "run", "--rm", "-v", f"{str(tmp_path)}:/scripts", "docker.io/i386/alpine:latest", "/bin/sh", "/scripts/verifier.sh"]
     proc2 = subprocess.run(fiberpod_args_2, capture_output=True, text=True)
     
     # Assert verifier succeeded, meaning it acquired the lock

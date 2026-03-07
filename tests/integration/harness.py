@@ -47,6 +47,7 @@ def _fiberpod_cmd(
         "--no-build",
         "--",
         "run",
+        "--rm",
     ]
 
     # Add volumes if specified

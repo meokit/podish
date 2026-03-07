@@ -145,38 +145,43 @@ def test_export_contract(project_root: Path, fiberpod_dll: str, alpine_image: st
     created = sorted(after - before)
     assert created, "no container directory created by run"
     container_id = created[-1]
+    try:
+        archive = tmp_path / "container-export.tar"
+        export_res = _run_fiberpod_cli(
+            project_root,
+            "export",
+            "-o",
+            str(archive),
+            container_id,
+        )
+        assert export_res.returncode == 0, (
+            f"export failed\nstdout:\n{export_res.stdout}\nstderr:\n{export_res.stderr}"
+        )
+        assert archive.exists() and archive.stat().st_size > 0, "export did not produce archive"
 
-    archive = tmp_path / "container-export.tar"
-    export_res = _run_fiberpod_cli(
-        project_root,
-        "export",
-        "-o",
-        str(archive),
-        container_id,
-    )
-    assert export_res.returncode == 0, (
-        f"export failed\nstdout:\n{export_res.stdout}\nstderr:\n{export_res.stderr}"
-    )
-    assert archive.exists() and archive.stat().st_size > 0, "export did not produce archive"
+        with tarfile.open(archive, "r") as tf:
+            names = set(tf.getnames())
+            marker = tf.extractfile("tmp/fiberpod-export-marker.txt")
+            marker_text = marker.read().decode("utf-8").strip() if marker is not None else ""
+        assert "bin/sh" in names or "./bin/sh" in names, "export archive missing expected rootfs content"
+        assert marker_text == "upper-export-ok"
 
-    with tarfile.open(archive, "r") as tf:
-        names = set(tf.getnames())
-        marker = tf.extractfile("tmp/fiberpod-export-marker.txt")
-        marker_text = marker.read().decode("utf-8").strip() if marker is not None else ""
-    assert "bin/sh" in names or "./bin/sh" in names, "export archive missing expected rootfs content"
-    assert marker_text == "upper-export-ok"
-
-    export_stdout_res = _run_fiberpod_cli_bin(
-        project_root,
-        "export",
-        container_id,
-    )
-    assert export_stdout_res.returncode == 0, (
-        f"export stdout failed\nstdout bytes={len(export_stdout_res.stdout)}\nstderr:\n"
-        f"{export_stdout_res.stderr.decode('utf-8', errors='replace')}"
-    )
-    stdout_archive = tmp_path / "container-export-stdout.tar"
-    stdout_archive.write_bytes(export_stdout_res.stdout)
-    with tarfile.open(stdout_archive, "r") as tf:
-        names_stdout = set(tf.getnames())
-    assert "tmp/fiberpod-export-marker.txt" in names_stdout
+        export_stdout_res = _run_fiberpod_cli_bin(
+            project_root,
+            "export",
+            container_id,
+        )
+        assert export_stdout_res.returncode == 0, (
+            f"export stdout failed\nstdout bytes={len(export_stdout_res.stdout)}\nstderr:\n"
+            f"{export_stdout_res.stderr.decode('utf-8', errors='replace')}"
+        )
+        stdout_archive = tmp_path / "container-export-stdout.tar"
+        stdout_archive.write_bytes(export_stdout_res.stdout)
+        with tarfile.open(stdout_archive, "r") as tf:
+            names_stdout = set(tf.getnames())
+        assert "tmp/fiberpod-export-marker.txt" in names_stdout
+    finally:
+        rm_res = _run_fiberpod_cli(project_root, "rm", "-f", container_id)
+        assert rm_res.returncode == 0, (
+            f"cleanup rm failed\nstdout:\n{rm_res.stdout}\nstderr:\n{rm_res.stderr}"
+        )

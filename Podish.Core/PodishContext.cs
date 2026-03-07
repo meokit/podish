@@ -15,6 +15,7 @@ public sealed class PodishRunSpec
 {
     public string? Name { get; init; }
     public string? Hostname { get; init; }
+    public bool AutoRemove { get; init; }
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
     public string? Exe { get; init; }

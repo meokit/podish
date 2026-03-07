@@ -11,6 +11,7 @@ def test_busybox_ping6_localhost(project_root: Path) -> None:
         "--no-build",
         "--",
         "run",
+        "--rm",
         str(project_root / ".fiberpod" / "oci" / "images" / "docker.io_i386_alpine_latest"),
         "--",
         "/bin/ping",
