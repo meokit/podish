@@ -149,11 +149,6 @@ internal class Program
             Directory.CreateDirectory(logsDir);
             Directory.CreateDirectory(containersDir);
 
-            if (logFile == null)
-            {
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-            }
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -161,6 +156,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             if (!ContainerLogDriverParser.TryParse(containerLogDriverRaw, out var containerLogDriver))
             {
@@ -341,9 +338,6 @@ internal class Program
             Directory.CreateDirectory(logsDir);
             Directory.CreateDirectory(containersDir);
 
-            if (logFile == null)
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -351,6 +345,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -481,11 +477,6 @@ internal class Program
             Directory.CreateDirectory(logsDir);
             Directory.CreateDirectory(ociStoreImagesDir);
 
-            if (logFile == null)
-            {
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-            }
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -493,6 +484,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -545,9 +538,6 @@ internal class Program
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var logsDir = Path.Combine(fiberpodDir, "logs");
             Directory.CreateDirectory(logsDir);
-            if (logFile == null)
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -555,6 +545,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -587,9 +579,6 @@ internal class Program
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var logsDir = Path.Combine(fiberpodDir, "logs");
             Directory.CreateDirectory(logsDir);
-            if (logFile == null)
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -597,6 +586,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -632,9 +623,6 @@ internal class Program
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var logsDir = Path.Combine(fiberpodDir, "logs");
             Directory.CreateDirectory(logsDir);
-            if (logFile == null)
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -642,6 +630,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -676,9 +666,6 @@ internal class Program
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var logsDir = Path.Combine(fiberpodDir, "logs");
             Directory.CreateDirectory(logsDir);
-            if (logFile == null)
-                logFile = Path.Combine(logsDir, $"fiberpod_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-
             if (!TryParsePodmanLogLevel(logLevelRaw, out var logLevel))
             {
                 Console.Error.WriteLine(
@@ -686,6 +673,8 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
+            logFile = ResolveEngineLogFile(logLevel, logFile, logsDir);
 
             SetupLogging(logLevel, logFile);
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1054,7 +1043,8 @@ internal class Program
             "--dns",
             "--log-driver",
             "--rootfs",
-            "--name"
+            "--name",
+            "--hostname"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1063,7 +1053,8 @@ internal class Program
             "-t",
             "--tty",
             "-s",
-            "--strace"
+            "--strace",
+            "--rm"
         };
 
         bool hasRootfs = false;
@@ -1152,6 +1143,35 @@ internal class Program
     private static bool TryParsePodmanLogLevel(string raw, out LogLevel level)
     {
         return PodishContext.TryParsePodmanLogLevel(raw, out level);
+    }
+
+    private static string? ResolveEngineLogFile(LogLevel logLevel, string? explicitLogFile, string logsDir)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitLogFile))
+            return explicitLogFile;
+        if (logLevel > LogLevel.Debug)
+            return null;
+
+        Directory.CreateDirectory(logsDir);
+        CleanupOldAutoEngineLogs(logsDir, keep: 20);
+        return Path.Combine(logsDir, $"engine_{DateTime.Now:yyyyMMdd_HHmmss}_{Environment.ProcessId}.log");
+    }
+
+    private static void CleanupOldAutoEngineLogs(string logsDir, int keep)
+    {
+        try
+        {
+            var oldLogs = new DirectoryInfo(logsDir)
+                .GetFiles("engine_*.log", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(x => x.CreationTimeUtc)
+                .Skip(keep);
+
+            foreach (var file in oldLogs)
+                file.Delete();
+        }
+        catch
+        {
+        }
     }
 
     private static string ResolveContainerHostname(string? explicitHostname, string? containerName, string containerId)
