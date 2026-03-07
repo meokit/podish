@@ -6,10 +6,15 @@ use std::sync::{Mutex, OnceLock};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Loopback, Medium};
 use smoltcp::socket::tcp::{self, Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
+use smoltcp::socket::udp::{
+    PacketBuffer as UdpPacketBuffer, PacketMetadata as UdpPacketMetadata, Socket as UdpSocket,
+};
 use smoltcp::time::Instant;
-use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
+use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address};
 
 const TCP_BUFFER_SIZE: usize = 16 * 1024;
+const UDP_BUFFER_SIZE: usize = 16 * 1024;
+const UDP_METADATA_COUNT: usize = 16;
 const ERR_INVALID_ARG: i32 = -1;
 const ERR_NOT_FOUND: i32 = -2;
 const ERR_INVALID_STATE: i32 = -3;
@@ -20,6 +25,7 @@ const ERR_PROTOCOL: i32 = -5;
 enum SocketObject {
     TcpStream(TcpStreamObject),
     TcpListener(TcpListenerObject),
+    UdpSocket(UdpSocketObject),
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +39,11 @@ struct TcpListenerObject {
     local_port: Option<u16>,
     backlog: usize,
     pending_accepts: VecDeque<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct UdpSocketObject {
+    handle: SocketHandle,
 }
 
 struct NamespaceState {
@@ -89,6 +100,19 @@ fn add_tcp_socket(state: &mut NamespaceState) -> SocketHandle {
     state.sockets.add(socket)
 }
 
+fn add_udp_socket(state: &mut NamespaceState) -> SocketHandle {
+    let rx = UdpPacketBuffer::new(
+        vec![UdpPacketMetadata::EMPTY; UDP_METADATA_COUNT],
+        vec![0; UDP_BUFFER_SIZE],
+    );
+    let tx = UdpPacketBuffer::new(
+        vec![UdpPacketMetadata::EMPTY; UDP_METADATA_COUNT],
+        vec![0; UDP_BUFFER_SIZE],
+    );
+    let socket = UdpSocket::new(rx, tx);
+    state.sockets.add(socket)
+}
+
 fn tcp_stream_create_internal(state: &mut NamespaceState) -> u64 {
     let handle = add_tcp_socket(state);
     let object_handle = alloc_handle();
@@ -110,6 +134,15 @@ fn tcp_listener_create_internal(state: &mut NamespaceState) -> u64 {
             pending_accepts: VecDeque::new(),
         }),
     );
+    object_handle
+}
+
+fn udp_socket_create_internal(state: &mut NamespaceState) -> u64 {
+    let handle = add_udp_socket(state);
+    let object_handle = alloc_handle();
+    state
+        .objects
+        .insert(object_handle, SocketObject::UdpSocket(UdpSocketObject { handle }));
     object_handle
 }
 
@@ -268,6 +301,11 @@ pub extern "C" fn fiber_tcp_stream_create(ns_handle: u64) -> u64 {
 #[no_mangle]
 pub extern "C" fn fiber_tcp_listener_create(ns_handle: u64) -> u64 {
     with_namespace(ns_handle, tcp_listener_create_internal).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_create(ns_handle: u64) -> u64 {
+    with_namespace(ns_handle, udp_socket_create_internal).unwrap_or(0)
 }
 
 #[no_mangle]
@@ -468,6 +506,9 @@ pub extern "C" fn fiber_socket_close(ns_handle: u64, socket_handle: u64) -> i32 
                     }
                 }
             }
+            SocketObject::UdpSocket(udp) => {
+                state.sockets.remove(udp.handle);
+            }
         }
 
         0
@@ -537,6 +578,157 @@ pub extern "C" fn fiber_tcp_stream_get_remote_endpoint(
         match socket.remote_endpoint() {
             Some(endpoint) => write_endpoint(endpoint, out_ipv4_be, out_port),
             None => ERR_INVALID_STATE,
+        }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, local_port: u16) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get_mut::<UdpSocket>(udp.handle);
+        socket
+            .bind(local_port)
+            .map(|_| 0)
+            .unwrap_or(ERR_PROTOCOL)
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_send_to(
+    ns_handle: u64,
+    socket_handle: u64,
+    remote_ipv4_be: u32,
+    remote_port: u16,
+    data: *const u8,
+    len: usize,
+    out_written: *mut usize,
+) -> i32 {
+    if data.is_null() || out_written.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let [a, b, c, d] = remote_ipv4_be.to_be_bytes();
+        let remote_ip = Ipv4Address::new(a, b, c, d);
+        let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote_ip), remote_port);
+        let socket = state.sockets.get_mut::<UdpSocket>(udp.handle);
+        let slice = unsafe { std::slice::from_raw_parts(data, len) };
+
+        match socket.send_slice(slice, endpoint) {
+            Ok(()) => {
+                unsafe { ptr::write(out_written, len) };
+                0
+            }
+            Err(_) => ERR_WOULD_BLOCK,
+        }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_recv_from(
+    ns_handle: u64,
+    socket_handle: u64,
+    buffer: *mut u8,
+    len: usize,
+    out_read: *mut usize,
+    out_ipv4_be: *mut u32,
+    out_port: *mut u16,
+) -> i32 {
+    if buffer.is_null() || out_read.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get_mut::<UdpSocket>(udp.handle);
+        if !socket.can_recv() {
+            return ERR_WOULD_BLOCK;
+        }
+
+        let slice = unsafe { std::slice::from_raw_parts_mut(buffer, len) };
+        match socket.recv_slice(slice) {
+            Ok((read, metadata)) => {
+                unsafe { ptr::write(out_read, read) };
+                write_endpoint(metadata.endpoint, out_ipv4_be, out_port)
+            }
+            Err(_) => ERR_WOULD_BLOCK,
+        }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_can_read(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<UdpSocket>(udp.handle);
+        if socket.can_recv() { 1 } else { 0 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_can_write(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<UdpSocket>(udp.handle);
+        if socket.can_send() { 1 } else { 0 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_get_local_endpoint(
+    ns_handle: u64,
+    socket_handle: u64,
+    out_ipv4_be: *mut u32,
+    out_port: *mut u16,
+) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<UdpSocket>(udp.handle);
+        match socket.endpoint() {
+            IpListenEndpoint { addr: Some(IpAddress::Ipv4(ipv4)), port } => {
+                if !out_ipv4_be.is_null() {
+                    unsafe { ptr::write(out_ipv4_be, encode_ipv4_be(ipv4)) };
+                }
+                if !out_port.is_null() {
+                    unsafe { ptr::write(out_port, port) };
+                }
+                0
+            }
+            IpListenEndpoint { addr: None, port } => {
+                if !out_ipv4_be.is_null() {
+                    unsafe { ptr::write(out_ipv4_be, 0) };
+                }
+                if !out_port.is_null() {
+                    unsafe { ptr::write(out_port, port) };
+                }
+                0
+            }
         }
     })
     .unwrap_or_else(|rc| rc)

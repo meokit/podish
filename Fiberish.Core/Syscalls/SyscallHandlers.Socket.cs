@@ -41,9 +41,9 @@ public partial class SyscallManager
         if (sm.NetworkMode == Fiberish.Core.Net.NetworkMode.Private)
         {
             if (af != AddressFamily.InterNetwork) return -(int)Errno.EAFNOSUPPORT;
-            if (sockType != SocketType.Stream) return -(int)Errno.ESOCKTNOSUPPORT;
+            if (sockType != SocketType.Stream && sockType != SocketType.Dgram) return -(int)Errno.ESOCKTNOSUPPORT;
 
-            var inode = new NetstackSocketInode(0, sm.MemfdSuperBlock, sm.GetOrCreatePrivateNetNamespace());
+            var inode = new NetstackSocketInode(0, sm.MemfdSuperBlock, sm.GetOrCreatePrivateNetNamespace(), sockType);
             var fileFlags = FileFlags.O_RDWR;
             if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
@@ -461,7 +461,13 @@ public partial class SyscallManager
 
         if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            if (destAddrPtr != 0) return -(int)Errno.EISCONN;
+            if (destAddrPtr != 0)
+            {
+                var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen) as IPEndPoint;
+                if (endpoint == null) return -(int)Errno.EINVAL;
+                return await netInode.SendToAsync(file, buf, endpoint, flags);
+            }
+
             return await netInode.SendAsync(file, buf, flags);
         }
 
@@ -523,13 +529,25 @@ public partial class SyscallManager
 
         if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            var bytes = await netInode.RecvAsync(file, buf, flags);
+            int bytes;
+            EndPoint? remoteEp = null;
+            if (srcAddrPtr != 0 && addrLenPtr != 0)
+            {
+                var result = await netInode.RecvFromAsync(file, buf, flags);
+                bytes = result.Bytes;
+                remoteEp = result.RemoteEndPoint;
+            }
+            else
+            {
+                bytes = await netInode.RecvAsync(file, buf, flags);
+            }
+
             if (bytes > 0)
             {
                 if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
                     return -(int)Errno.EFAULT;
-                if (srcAddrPtr != 0 && addrLenPtr != 0 && netInode.RemoteEndPoint != null)
-                    WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, netInode.RemoteEndPoint);
+                if (srcAddrPtr != 0 && addrLenPtr != 0 && remoteEp != null)
+                    WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, remoteEp);
             }
             return bytes;
         }

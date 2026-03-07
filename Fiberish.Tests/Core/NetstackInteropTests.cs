@@ -70,6 +70,28 @@ public class NetstackInteropTests
         Assert.Equal("loopback", Encoding.ASCII.GetString(buffer[..read]));
     }
 
+    [Fact]
+    public void LoopbackNamespace_UdpLoopback_SendReceive_Works()
+    {
+        using var netns = LoopbackNetNamespace.Create(0x0A590002u, 24);
+        using var server = netns.CreateUdpSocket();
+        using var client = netns.CreateUdpSocket();
+
+        server.Bind(19210);
+        client.Bind(19211);
+
+        var payload = Encoding.ASCII.GetBytes("udp-loopback");
+        Assert.Equal(payload.Length, client.SendTo(0x7F000001u, 19210, payload));
+
+        LoopUntil(netns, () => server.CanRead, timeoutMs: 2_000);
+
+        Span<byte> buffer = stackalloc byte[32];
+        var read = server.ReceiveFrom(buffer, out var remoteEndPoint);
+        Assert.Equal("udp-loopback", Encoding.ASCII.GetString(buffer[..read]));
+        Assert.Equal("127.0.0.1", remoteEndPoint.Address.ToString());
+        Assert.Equal(19211, remoteEndPoint.Port);
+    }
+
     private static void LoopUntil(LoopbackNetNamespace netns, Func<bool> condition, int timeoutMs)
     {
         for (var elapsed = 0; elapsed < timeoutMs; elapsed += 10)

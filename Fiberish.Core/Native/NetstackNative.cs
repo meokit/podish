@@ -24,6 +24,9 @@ internal static partial class NetstackNative
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_create")]
     internal static partial ulong CreateTcpListener(ulong netnsHandle);
 
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_create")]
+    internal static partial ulong CreateUdpSocket(ulong netnsHandle);
+
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_listen")]
     internal static partial int TcpListenerListen(ulong netnsHandle, ulong socketHandle, ushort localPort, uint backlog);
 
@@ -59,4 +62,22 @@ internal static partial class NetstackNative
 
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_get_remote_endpoint")]
     internal static partial int TcpStreamGetRemoteEndpoint(ulong netnsHandle, ulong socketHandle, out uint ipv4Be, out ushort port);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_bind")]
+    internal static partial int UdpSocketBind(ulong netnsHandle, ulong socketHandle, ushort localPort);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_send_to")]
+    internal static unsafe partial int UdpSocketSendTo(ulong netnsHandle, ulong socketHandle, uint remoteIpv4Be, ushort remotePort, byte* data, nuint len, out nuint written);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_recv_from")]
+    internal static unsafe partial int UdpSocketRecvFrom(ulong netnsHandle, ulong socketHandle, byte* buffer, nuint len, out nuint read, out uint ipv4Be, out ushort port);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_can_read")]
+    internal static partial int UdpSocketCanRead(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_can_write")]
+    internal static partial int UdpSocketCanWrite(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_get_local_endpoint")]
+    internal static partial int UdpSocketGetLocalEndpoint(ulong netnsHandle, ulong socketHandle, out uint ipv4Be, out ushort port);
 }

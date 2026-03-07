@@ -333,6 +333,19 @@ public class SocketSyscallTests
 
         var rc = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
 
+        Assert.True(rc >= 0);
+        var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rc));
+        Assert.IsType<NetstackSocketInode>(file.Dentry.Inode);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_Raw_ReturnsEsocktnosupport()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+
+        var rc = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_RAW, 0);
+
         Assert.Equal(-(int)Errno.ESOCKTNOSUPPORT, rc);
     }
 

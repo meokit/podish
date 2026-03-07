@@ -1,5 +1,6 @@
 using System.Net;
 using System.Diagnostics;
+using System.Net.Sockets;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Native;
@@ -10,22 +11,26 @@ namespace Fiberish.VFS;
 public sealed class NetstackSocketInode : Inode
 {
     private readonly LoopbackNetNamespace _namespace;
+    private readonly SocketType _socketType;
     private LoopbackNetNamespace.TcpListenerSocket? _listener;
     private LoopbackNetNamespace.TcpStreamSocket? _stream;
+    private LoopbackNetNamespace.UdpDatagramSocket? _udp;
     private IPEndPoint? _boundEndPoint;
+    private IPEndPoint? _lastDatagramPeer;
     private int _backlog;
 
-    public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace)
+    public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
     {
         Ino = ino;
         SuperBlock = sb;
         _namespace = @namespace;
+        _socketType = socketType;
         Type = InodeType.Socket;
         Mode = 0x1ED;
     }
 
     private NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, LoopbackNetNamespace.TcpStreamSocket stream)
-        : this(ino, sb, @namespace)
+        : this(ino, sb, @namespace, SocketType.Stream)
     {
         _stream = stream;
     }
@@ -35,20 +40,28 @@ public sealed class NetstackSocketInode : Inode
 
     public IPEndPoint? LocalEndPoint =>
         _stream?.LocalEndPoint ??
+        _udp?.LocalEndPoint ??
         _boundEndPoint;
 
-    public IPEndPoint? RemoteEndPoint => _stream?.RemoteEndPoint;
+    public IPEndPoint? RemoteEndPoint => _stream?.RemoteEndPoint ?? _lastDatagramPeer;
 
     public int Bind(IPEndPoint endpoint)
     {
         if (!IsValidBindAddress(endpoint.Address))
             return -(int)Errno.EADDRNOTAVAIL;
         _boundEndPoint = endpoint;
+        if (_socketType == SocketType.Dgram)
+        {
+            _udp ??= _namespace.CreateUdpSocket();
+            _udp.Bind((ushort)endpoint.Port);
+        }
         return 0;
     }
 
     public int Listen(int backlog)
     {
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.EOPNOTSUPP;
         if (_boundEndPoint == null)
             return -(int)Errno.EINVAL;
 
@@ -63,6 +76,8 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> ConnectAsync(LinuxFile file, IPEndPoint endpoint)
     {
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.EOPNOTSUPP;
         if (!IsValidConnectAddress(endpoint.Address))
             return -(int)Errno.ENETUNREACH;
         _listener?.Dispose();
@@ -79,6 +94,8 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<(int Rc, NetstackSocketInode? Inode)> AcceptAsync(LinuxFile file, int flags)
     {
+        if (_socketType != SocketType.Stream)
+            return (-(int)Errno.EOPNOTSUPP, null);
         if (_listener == null)
             return (-(int)Errno.EINVAL, null);
 
@@ -98,6 +115,8 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
     {
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.EDESTADDRREQ;
         if (_stream == null)
             return -(int)Errno.ENOTCONN;
 
@@ -116,6 +135,8 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
     {
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.ENOTCONN;
         if (_stream == null)
             return -(int)Errno.ENOTCONN;
 
@@ -132,11 +153,67 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Receive(buffer);
     }
 
+    public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, IPEndPoint endpoint, int flags)
+    {
+        if (_socketType != SocketType.Dgram)
+            return -(int)Errno.EISCONN;
+        if (!IsValidConnectAddress(endpoint.Address))
+            return -(int)Errno.ENETUNREACH;
+        if (_boundEndPoint == null)
+            return -(int)Errno.EINVAL;
+
+        _udp ??= _namespace.CreateUdpSocket();
+
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_udp.CanWrite)
+            return -(int)Errno.EAGAIN;
+
+        if (!_udp.CanWrite)
+        {
+            var ok = await WaitForAsync(file, PollEvents.POLLOUT, () => _udp.CanWrite);
+            if (!ok)
+                return -(int)Errno.ERESTARTSYS;
+        }
+
+        _lastDatagramPeer = endpoint;
+        return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
+    }
+
+    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags)
+    {
+        if (_socketType != SocketType.Dgram)
+            return (-(int)Errno.ENOTCONN, null);
+        if (_udp == null)
+            return (-(int)Errno.EINVAL, null);
+
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_udp.CanRead)
+            return (-(int)Errno.EAGAIN, null);
+
+        if (!_udp.CanRead)
+        {
+            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _udp.CanRead);
+            if (!ok)
+                return (-(int)Errno.ERESTARTSYS, null);
+        }
+
+        var bytes = _udp.ReceiveFrom(buffer, out var remoteEndPoint);
+        _lastDatagramPeer = remoteEndPoint;
+        return (bytes, remoteEndPoint);
+    }
+
     public override short Poll(LinuxFile file, short events)
     {
         Drive();
 
         short revents = 0;
+        if (_udp != null)
+        {
+            if ((events & PollEvents.POLLIN) != 0 && _udp.CanRead)
+                revents |= PollEvents.POLLIN;
+            if ((events & PollEvents.POLLOUT) != 0 && _udp.CanWrite)
+                revents |= PollEvents.POLLOUT;
+            return revents;
+        }
+
         if (_listener != null)
         {
             if ((events & PollEvents.POLLIN) != 0 && _listener.AcceptPending)
@@ -170,8 +247,10 @@ public sealed class NetstackSocketInode : Inode
     {
         _listener?.Dispose();
         _stream?.Dispose();
+        _udp?.Dispose();
         _listener = null;
         _stream = null;
+        _udp = null;
         base.Release();
     }
 

@@ -73,6 +73,15 @@ public sealed class LoopbackNetNamespace : IDisposable
         return new TcpStreamSocket(this, socket);
     }
 
+    public UdpDatagramSocket CreateUdpSocket()
+    {
+        ThrowIfDisposed();
+        var socket = NetstackNative.CreateUdpSocket(_handle);
+        if (socket == 0)
+            throw new InvalidOperationException("Failed to create UDP socket.");
+        return new UdpDatagramSocket(this, socket);
+    }
+
     private void ThrowIfDisposed()
     {
         if (_handle == 0)
@@ -259,6 +268,111 @@ public sealed class LoopbackNetNamespace : IDisposable
         {
             if (_handle == 0)
                 throw new ObjectDisposedException(nameof(TcpStreamSocket));
+        }
+    }
+
+    public sealed class UdpDatagramSocket : IDisposable
+    {
+        private readonly LoopbackNetNamespace _namespace;
+        private ulong _handle;
+
+        internal UdpDatagramSocket(LoopbackNetNamespace @namespace, ulong handle)
+        {
+            _namespace = @namespace;
+            _handle = handle;
+        }
+
+        public void Bind(ushort localPort)
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.UdpSocketBind(_namespace.Handle, _handle, localPort);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to bind UDP socket (rc={rc}).");
+        }
+
+        public bool CanRead
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.UdpSocketCanRead(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query UDP read readiness (rc={rc}).");
+                return rc != 0;
+            }
+        }
+
+        public bool CanWrite
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.UdpSocketCanWrite(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query UDP write readiness (rc={rc}).");
+                return rc != 0;
+            }
+        }
+
+        public IPEndPoint LocalEndPoint
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.UdpSocketGetLocalEndpoint(_namespace.Handle, _handle, out var ipv4Be, out var port);
+                if (rc != 0)
+                    throw new InvalidOperationException($"Failed to query UDP local endpoint (rc={rc}).");
+                return new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+            }
+        }
+
+        public int SendTo(uint remoteIpv4Be, ushort remotePort, ReadOnlySpan<byte> data)
+        {
+            ThrowIfDisposed();
+            unsafe
+            {
+                fixed (byte* ptr = data)
+                {
+                    var rc = NetstackNative.UdpSocketSendTo(_namespace.Handle, _handle, remoteIpv4Be, remotePort, ptr, (nuint)data.Length,
+                        out var written);
+                    if (rc != 0)
+                        throw new InvalidOperationException($"Failed to send UDP data (rc={rc}).");
+                    return checked((int)written);
+                }
+            }
+        }
+
+        public int ReceiveFrom(Span<byte> buffer, out IPEndPoint remoteEndPoint)
+        {
+            ThrowIfDisposed();
+            unsafe
+            {
+                fixed (byte* ptr = buffer)
+                {
+                    var rc = NetstackNative.UdpSocketRecvFrom(_namespace.Handle, _handle, ptr, (nuint)buffer.Length, out var read,
+                        out var ipv4Be, out var port);
+                    if (rc != 0)
+                        throw new InvalidOperationException($"Failed to receive UDP data (rc={rc}).");
+                    remoteEndPoint = new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+                    return checked((int)read);
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_handle == 0)
+                return;
+
+            var handle = _handle;
+            _handle = 0;
+            NetstackNative.CloseSocket(_namespace.Handle, handle);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_handle == 0)
+                throw new ObjectDisposedException(nameof(UdpDatagramSocket));
         }
     }
 }
