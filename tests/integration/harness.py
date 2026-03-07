@@ -15,6 +15,7 @@ class EmulatorCase:
     binary_name: str
     args: list[str] = field(default_factory=list)
     rootfs: Path | None = None
+    network_mode: Literal["host", "private"] = "host"
     expect_tokens: list[str] = field(default_factory=list)
     reject_tokens: list[str] = field(default_factory=list)
     timeout: int = 30
@@ -28,6 +29,7 @@ def _fiberpod_cmd(
     image_or_rootfs: str,
     command: str,
     args: Iterable[str],
+    network_mode: str = "host",
     use_tty: bool = False,
     volumes: list[tuple[str, str]] | None = None,
     use_rootfs: bool = False,
@@ -48,6 +50,7 @@ def _fiberpod_cmd(
         "--",
         "run",
         "--rm",
+        "--network", network_mode,
     ]
 
     # Add volumes if specified
@@ -134,6 +137,7 @@ def _run_case_fiberpod(
         image_or_rootfs=image_or_rootfs,
         command=command,
         args=case.args,
+        network_mode=case.network_mode,
         use_tty=case.use_tty,
         volumes=volumes,
         use_rootfs=case.rootfs is not None,

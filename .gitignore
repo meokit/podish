@@ -34,6 +34,8 @@ artifacts/
 ia32_test
 tests/test_safe_access
 Fiberish.X86/build_native
+Fiberish.Netstack/target/
+Fiberish.Netstack/Cargo.lock
 *.DotSettings.user
 tests/alpine-rootfs/
 tests/openssl/rootfs/

@@ -3,6 +3,7 @@ using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -16,6 +17,7 @@ public sealed class ContainerRunRequest
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
     public string? ContainerName { get; init; }
+    public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
     public string Exe { get; init; } = string.Empty;
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
     public string[] Volumes { get; init; } = Array.Empty<string>();
@@ -142,6 +144,7 @@ public sealed class ContainerRuntimeService
             }
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
+            runtime.Syscalls.NetworkMode = request.NetworkMode;
             if (request.UseOverlay)
             {
                 if (!TryCreateLayerLower(request.RootfsPath, out var layerLowerSb, out var layerProvider,

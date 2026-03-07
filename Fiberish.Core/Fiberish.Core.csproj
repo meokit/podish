@@ -17,6 +17,28 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <NetstackCargoManifest>..\Fiberish.Netstack\Cargo.toml</NetstackCargoManifest>
+        <NetstackTargetDir>..\Fiberish.Netstack\target</NetstackTargetDir>
+        <NetstackProfile Condition="'$(Configuration)' == 'Release'">release</NetstackProfile>
+        <NetstackProfile Condition="'$(NetstackProfile)' == ''">debug</NetstackProfile>
+        <NetstackCargoArgs Condition="'$(Configuration)' == 'Release'">--release</NetstackCargoArgs>
+        <NetstackCargoArgs Condition="'$(NetstackCargoArgs)' == ''"></NetstackCargoArgs>
+        <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('OSX'))">libfiberish_netstack.dylib</NetstackLibName>
+        <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('Linux'))">libfiberish_netstack.so</NetstackLibName>
+        <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">fiberish_netstack.dll</NetstackLibName>
+        <NetstackLibPath>$(NetstackTargetDir)\$(NetstackProfile)\$(NetstackLibName)</NetstackLibPath>
     </PropertyGroup>
+
+    <Target Name="BuildNetstackNative" BeforeTargets="BeforeBuild">
+        <Message Text="Building Fiberish.Netstack with Cargo..." Importance="High"/>
+        <Exec Command="cargo build --manifest-path $(NetstackCargoManifest) $(NetstackCargoArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+    </Target>
+
+    <ItemGroup Condition="'$(NetstackLibName)' != ''">
+        <Content Include="$(NetstackLibPath)">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>$(NetstackLibName)</Link>
+        </Content>
+    </ItemGroup>
 
 </Project>

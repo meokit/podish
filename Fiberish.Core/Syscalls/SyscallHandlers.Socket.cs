@@ -38,6 +38,21 @@ public partial class SyscallManager
         else if (realType == LinuxConstants.SOCK_RAW) sockType = SocketType.Raw;
         else return -(int)Errno.EINVAL;
 
+        if (sm.NetworkMode == Fiberish.Core.Net.NetworkMode.Private)
+        {
+            if (af != AddressFamily.InterNetwork) return -(int)Errno.EAFNOSUPPORT;
+            if (sockType != SocketType.Stream) return -(int)Errno.ESOCKTNOSUPPORT;
+
+            var inode = new NetstackSocketInode(0, sm.MemfdSuperBlock, sm.GetOrCreatePrivateNetNamespace());
+            var fileFlags = FileFlags.O_RDWR;
+            if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+            if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+
+            var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, sm.MemfdSuperBlock);
+            var file = new LinuxFile(dentry, fileFlags, sm.AnonMount);
+            return sm.AllocFD(file);
+        }
+
         if (OperatingSystem.IsMacOS() && sockType == SocketType.Raw)
         {
             if (af == AddressFamily.InterNetwork) proto = ProtocolType.Icmp;
@@ -135,19 +150,29 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
-        var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen);
-        if (endpoint == null) return -(int)Errno.EINVAL;
-
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            return await sockInode.ConnectAsync(file, endpoint);
+            var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen);
+            if (endpoint == null) return -(int)Errno.EINVAL;
+
+            try
+            {
+                return await sockInode.ConnectAsync(file, endpoint);
+            }
+            catch (SocketException ex)
+            {
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
         }
-        catch (SocketException ex)
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen) as IPEndPoint;
+            if (endpoint == null) return -(int)Errno.EINVAL;
+            return await netInode.ConnectAsync(file, endpoint);
         }
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysBind(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -163,24 +188,34 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
-        var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen);
-        if (endpoint == null) return -(int)Errno.EINVAL;
-        Logger.LogTrace("[Socket] bind fd={Fd} endpoint={Endpoint} addrLen={AddrLen}", fd, endpoint, addrLen);
-
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            sockInode.NativeSocket!.Bind(endpoint);
-            return 0;
+            var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen);
+            if (endpoint == null) return -(int)Errno.EINVAL;
+            Logger.LogTrace("[Socket] bind fd={Fd} endpoint={Endpoint} addrLen={AddrLen}", fd, endpoint, addrLen);
+
+            try
+            {
+                sockInode.NativeSocket!.Bind(endpoint);
+                return 0;
+            }
+            catch (SocketException ex)
+            {
+                Logger.LogWarning(ex,
+                    "[Socket] bind failed fd={Fd} endpoint={Endpoint} addrLen={AddrLen} socketError={SocketError}",
+                    fd, endpoint, addrLen, ex.SocketErrorCode);
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
         }
-        catch (SocketException ex)
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            Logger.LogWarning(ex,
-                "[Socket] bind failed fd={Fd} endpoint={Endpoint} addrLen={AddrLen} socketError={SocketError}",
-                fd, endpoint, addrLen, ex.SocketErrorCode);
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen) as IPEndPoint;
+            if (endpoint == null) return -(int)Errno.EINVAL;
+            return netInode.Bind(endpoint);
         }
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysListen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -195,17 +230,23 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
+        if (file.Dentry.Inode is HostSocketInode sockInode)
+        {
+            try
+            {
+                sockInode.NativeSocket!.Listen(backlog);
+                return 0;
+            }
+            catch (SocketException ex)
+            {
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
+        }
 
-        try
-        {
-            sockInode.NativeSocket!.Listen(backlog);
-            return 0;
-        }
-        catch (SocketException ex)
-        {
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-        }
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
+            return netInode.Listen(backlog);
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysAccept(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -227,25 +268,34 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
-        EndPoint? ep;
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            ep = sockInode.NativeSocket!.LocalEndPoint;
+            EndPoint? ep;
+            try
+            {
+                ep = sockInode.NativeSocket!.LocalEndPoint;
+            }
+            catch
+            {
+                ep = null;
+            }
+
+            if (ep == null)
+                ep = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
+                    ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                    : new IPEndPoint(IPAddress.Any, 0);
+
+            WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
+            return 0;
         }
-        catch
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            ep = null;
+            WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, netInode.LocalEndPoint ?? new IPEndPoint(IPAddress.Any, 0));
+            return 0;
         }
 
-        if (ep == null)
-            ep = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
-                ? new IPEndPoint(IPAddress.IPv6Any, 0)
-                : new IPEndPoint(IPAddress.Any, 0);
-
-        WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
-        return 0;
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysGetPeerName(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -262,22 +312,32 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
-        EndPoint? ep;
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            ep = sockInode.NativeSocket!.RemoteEndPoint;
+            EndPoint? ep;
+            try
+            {
+                ep = sockInode.NativeSocket!.RemoteEndPoint;
+            }
+            catch
+            {
+                ep = null;
+            }
+
+            if (ep == null) return -(int)Errno.ENOTCONN;
+
+            WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
+            return 0;
         }
-        catch
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            ep = null;
+            if (netInode.RemoteEndPoint == null) return -(int)Errno.ENOTCONN;
+            WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, netInode.RemoteEndPoint);
+            return 0;
         }
 
-        if (ep == null) return -(int)Errno.ENOTCONN;
-
-        WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, ep);
-        return 0;
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysAccept4(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -294,32 +354,52 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            var newSock = await sockInode.AcceptAsync(file, flags);
+            try
+            {
+                var newSock = await sockInode.AcceptAsync(file, flags);
 
-            var newInode = new HostSocketInode(0, sm.MemfdSuperBlock, newSock);
+                var newInode = new HostSocketInode(0, sm.MemfdSuperBlock, newSock);
+                var fileFlags = FileFlags.O_RDWR;
+                if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+                if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+
+                var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
+                var newFile = new LinuxFile(dentry, fileFlags, sm.AnonMount);
+
+                if (addrPtr != 0 && addrLenPtr != 0) WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
+
+                return sm.AllocFD(newFile);
+            }
+            catch (SocketException ex)
+            {
+                if (ex.SocketErrorCode == SocketError.Interrupted)
+                    return -(int)Errno.ERESTARTSYS;
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
+        }
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
+        {
+            var accepted = await netInode.AcceptAsync(file, flags);
+            if (accepted.Rc != 0 || accepted.Inode == null)
+                return accepted.Rc;
+
             var fileFlags = FileFlags.O_RDWR;
             if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
-            var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
+            var dentry = new Dentry($"socket:[{accepted.Inode.Ino}]", accepted.Inode, null, sm.MemfdSuperBlock);
             var newFile = new LinuxFile(dentry, fileFlags, sm.AnonMount);
 
-            if (addrPtr != 0 && addrLenPtr != 0) WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
+            if (addrPtr != 0 && addrLenPtr != 0 && accepted.Inode.RemoteEndPoint != null)
+                WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, accepted.Inode.RemoteEndPoint);
 
             return sm.AllocFD(newFile);
         }
-        catch (SocketException ex)
-        {
-            // Signal-interrupted accept should return ERESTARTSYS so HandleAsyncSyscall
-            // can apply SA_RESTART logic, rather than unconditionally returning EINTR.
-            if (ex.SocketErrorCode == SocketError.Interrupted)
-                return -(int)Errno.ERESTARTSYS;
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-        }
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysSend(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -348,36 +428,44 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
         var buf = new byte[len];
         if (!task.CPU.CopyFromUser(bufPtr, buf)) return -(int)Errno.EFAULT;
 
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-
-            if (destAddrPtr != 0)
+            try
             {
-                var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen);
-                if (endpoint == null) return -(int)Errno.EINVAL;
+                var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
 
-                var ret = await sockInode.SendToAsync(file, buf, hostFlags, endpoint);
-                if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-                return ret;
+                if (destAddrPtr != 0)
+                {
+                    var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen);
+                    if (endpoint == null) return -(int)Errno.EINVAL;
+
+                    var ret = await sockInode.SendToAsync(file, buf, hostFlags, endpoint);
+                    if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+                    return ret;
+                }
+                else
+                {
+                    var ret = await sockInode.SendAsync(file, buf, hostFlags);
+                    if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+                    return ret;
+                }
             }
-            else
+            catch (SocketException ex)
             {
-                // SendAsync also needs to handle flags
-                var ret = await sockInode.SendAsync(file, buf, hostFlags);
-                if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-                return ret;
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
         }
-        catch (SocketException ex)
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
         {
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            if (destAddrPtr != 0) return -(int)Errno.EISCONN;
+            return await netInode.SendAsync(file, buf, flags);
         }
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysRecvFrom(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -396,41 +484,57 @@ public partial class SyscallManager
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.Dentry.Inode is not HostSocketInode sockInode) return -(int)Errno.ENOTSOCK;
-
         var buf = new byte[len];
 
-        try
+        if (file.Dentry.Inode is HostSocketInode sockInode)
         {
-            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-            int bytes;
-
-            if (srcAddrPtr != 0 && addrLenPtr != 0)
+            try
             {
-                EndPoint remoteEp = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
-                    ? new IPEndPoint(IPAddress.IPv6Any, 0)
-                    : new IPEndPoint(IPAddress.Any, 0);
+                var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
+                int bytes;
 
-                var result = await sockInode.RecvFromAsync(file, buf, hostFlags, remoteEp);
-                bytes = result.Bytes;
+                if (srcAddrPtr != 0 && addrLenPtr != 0)
+                {
+                    EndPoint remoteEp = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
+                        ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                        : new IPEndPoint(IPAddress.Any, 0);
 
-                if (bytes >= 0 && result.RemoteEp != null)
-                    WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, result.RemoteEp);
+                    var result = await sockInode.RecvFromAsync(file, buf, hostFlags, remoteEp);
+                    bytes = result.Bytes;
+
+                    if (bytes >= 0 && result.RemoteEp != null)
+                        WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, result.RemoteEp);
+                }
+                else
+                {
+                    bytes = await sockInode.RecvAsync(file, buf, hostFlags);
+                }
+
+                if (bytes > 0)
+                    if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
+                        return -(int)Errno.EFAULT;
+                return bytes;
             }
-            else
+            catch (SocketException ex)
             {
-                bytes = await sockInode.RecvAsync(file, buf, hostFlags);
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
+        }
 
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
+        {
+            var bytes = await netInode.RecvAsync(file, buf, flags);
             if (bytes > 0)
+            {
                 if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
                     return -(int)Errno.EFAULT;
+                if (srcAddrPtr != 0 && addrLenPtr != 0 && netInode.RemoteEndPoint != null)
+                    WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, netInode.RemoteEndPoint);
+            }
             return bytes;
         }
-        catch (SocketException ex)
-        {
-            return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-        }
+
+        return -(int)Errno.ENOTSOCK;
     }
 
     private static async ValueTask<int> SysSendMsg(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -520,6 +624,16 @@ public partial class SyscallManager
             return ret;
         }
 
+        if (file.Dentry.Inode is NetstackSocketInode netSock)
+        {
+            if (fds.Count > 0)
+                return -(int)Errno.EOPNOTSUPP;
+
+            var ret = await netSock.SendAsync(file, data, flags);
+            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+            return ret;
+        }
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -585,6 +699,14 @@ public partial class SyscallManager
 
             if (bytesRead >= 0 && namePtr != 0 && res.RemoteEp != null)
                 WriteSockaddr(sm.Engine, namePtr, nameLenPtr, res.RemoteEp);
+        }
+        else if (file.Dentry.Inode is NetstackSocketInode netSock)
+        {
+            bytesRead = await netSock.RecvAsync(file, buffer, flags);
+            if (bytesRead < 0) return bytesRead;
+
+            if (bytesRead >= 0 && namePtr != 0 && netSock.RemoteEndPoint != null)
+                WriteSockaddr(sm.Engine, namePtr, nameLenPtr, netSock.RemoteEndPoint);
         }
         else
         {

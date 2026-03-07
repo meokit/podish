@@ -1,5 +1,6 @@
 using Fiberish.Diagnostics;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Core.Net;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
@@ -16,6 +17,7 @@ public sealed class PodishRunSpec
     public string? Name { get; init; }
     public string? Hostname { get; init; }
     public bool AutoRemove { get; init; }
+    public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
     public string? Exe { get; init; }
@@ -435,6 +437,7 @@ public sealed class PodishContext : IDisposable
             UseTty = spec.Interactive && spec.Tty,
             Strace = spec.Strace,
             UseOverlay = !useRootfs,
+            NetworkMode = spec.NetworkMode,
             Hostname = spec.Hostname ?? spec.Name ?? containerId,
             ContainerName = spec.Name,
             ContainerId = containerId,

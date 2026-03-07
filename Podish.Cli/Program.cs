@@ -1,5 +1,6 @@
 ﻿using System.CommandLine;
 using System.Text.Json;
+using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -75,6 +76,10 @@ internal class Program
         var hostnameOption = new Option<string?>(
             new[] { "--hostname", "-h" },
             "Set the container hostname (defaults to --name, then short container id)");
+        var networkOption = new Option<string>(
+            new[] { "--network" },
+            () => "host",
+            "Network mode (host|private)");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -94,6 +99,7 @@ internal class Program
         runCommand.AddOption(containerNameOption);
         runCommand.AddOption(autoRemoveOption);
         runCommand.AddOption(hostnameOption);
+        runCommand.AddOption(networkOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async (context) =>
@@ -109,6 +115,7 @@ internal class Program
             var containerName = context.ParseResult.GetValueForOption(containerNameOption);
             var autoRemove = context.ParseResult.GetValueForOption(autoRemoveOption);
             var explicitHostname = context.ParseResult.GetValueForOption(hostnameOption);
+            var networkRaw = context.ParseResult.GetValueForOption(networkOption) ?? "host";
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -163,6 +170,13 @@ internal class Program
             {
                 Console.Error.WriteLine(
                     $"[Podish.Cli] invalid --log-driver value: {containerLogDriverRaw}. Use json-file|none");
+                context.ExitCode = 125;
+                return;
+            }
+
+            if (!TryParseNetworkMode(networkRaw, out var networkMode))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] invalid --network value: {networkRaw}. Use host|private");
                 context.ExitCode = 125;
                 return;
             }
@@ -252,6 +266,7 @@ internal class Program
                 Name = containerName,
                 Hostname = hostname,
                 AutoRemove = autoRemove,
+                NetworkMode = networkMode,
                 Image = image,
                 Rootfs = rootfs,
                 Exe = exe,
@@ -298,6 +313,7 @@ internal class Program
                 containerId,
                 containerName,
                 hostname,
+                networkMode,
                 imageRef,
                 containerDir,
                 containerLogDriver,
@@ -442,6 +458,7 @@ internal class Program
                 containerId,
                 metadata.Name,
                 spec.Hostname ?? ResolveContainerHostname(null, metadata.Name, containerId),
+                spec.NetworkMode,
                 imageRef,
                 containerDir,
                 containerLogDriver,
@@ -1044,7 +1061,8 @@ internal class Program
             "--log-driver",
             "--rootfs",
             "--name",
-            "--hostname"
+            "--hostname",
+            "--network"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1145,6 +1163,22 @@ internal class Program
         return PodishContext.TryParsePodmanLogLevel(raw, out level);
     }
 
+    private static bool TryParseNetworkMode(string raw, out NetworkMode mode)
+    {
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "host":
+                mode = NetworkMode.Host;
+                return true;
+            case "private":
+                mode = NetworkMode.Private;
+                return true;
+            default:
+                mode = default;
+                return false;
+        }
+    }
+
     private static string? ResolveEngineLogFile(LogLevel logLevel, string? explicitLogFile, string logsDir)
     {
         if (!string.IsNullOrWhiteSpace(explicitLogFile))
@@ -1185,7 +1219,7 @@ internal class Program
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
-        string containerId, string? containerName, string hostname, string image, string containerDir, ContainerLogDriver logDriver,
+        string containerId, string? containerName, string hostname, NetworkMode networkMode, string image, string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1204,6 +1238,7 @@ internal class Program
             UseOverlay = useOverlay,
             ContainerId = containerId,
             Hostname = hostname,
+            NetworkMode = networkMode,
             Image = image,
             ContainerDir = containerDir,
             LogDriver = logDriver,

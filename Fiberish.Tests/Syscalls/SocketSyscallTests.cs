@@ -30,6 +30,54 @@ public class SocketSyscallTests
         return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, level, optname, optval, optlenPtr, 0u])!;
     }
 
+    private static ValueTask<int> CallSysBind(TestEnv env, uint fd, uint addrPtr, uint addrLen)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysBind", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLen, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysListen(TestEnv env, uint fd, uint backlog)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysListen", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, backlog, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysConnect(TestEnv env, uint fd, uint addrPtr, uint addrLen)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysConnect", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLen, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysGetSockName(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysGetSockName", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysGetPeerName(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysGetPeerName", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysAccept(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysAccept", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysSendMsg(TestEnv env, uint fd, uint msgPtr, uint flags)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysSendMsg", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, msgPtr, flags, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysRecvMsg(TestEnv env, uint fd, uint msgPtr, uint flags)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysRecvMsg", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, msgPtr, flags, 0u, 0u, 0u])!;
+    }
+
     [Fact]
     public async Task Socket_RawWithProtocolZero_ReturnsEprotonosupport()
     {
@@ -264,6 +312,113 @@ public class SocketSyscallTests
         Assert.Equal(4, env.ReadInt32(0x16000));
     }
 
+    [Fact]
+    public async Task Socket_PrivateNetwork_Stream_UsesNetstackSocketInode()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+
+        Assert.True(fd >= 0);
+        var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(fd));
+        Assert.IsType<NetstackSocketInode>(file.Dentry.Inode);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_Dgram_ReturnsEsocktnosupport()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+
+        var rc = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+
+        Assert.Equal(-(int)Errno.ESOCKTNOSUPPORT, rc);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_GetSockNameAndPeerName_ReportLoopbackEndpoints()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+        env.MapUserPage(0x17000);
+        env.MapUserPage(0x18000);
+        env.MapUserPage(0x19000);
+        env.MapUserPage(0x1A000);
+        env.MapUserPage(0x1B000);
+        env.MapUserPage(0x1C000);
+
+        WriteSockaddrIn(env, 0x17000, 0x7F000001u, 19090);
+        WriteSockaddrIn(env, 0x18000, 0x7F000001u, 19090);
+        env.WriteInt32(0x1A000, 16);
+        env.WriteInt32(0x1C000, 16);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x17000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x18000, 16));
+
+        var clientNameRc = await CallSysGetSockName(env, (uint)clientFd, 0x19000, 0x1A000);
+        Assert.Equal(0, clientNameRc);
+        Assert.Equal(16, env.ReadInt32(0x1A000));
+        var (clientIp, clientPort) = ReadSockaddrIn(env, 0x19000);
+        Assert.Equal(0x7F000001u, clientIp);
+        Assert.True(clientPort >= 49152);
+
+        var peerRc = await CallSysGetPeerName(env, (uint)clientFd, 0x1B000, 0x1C000);
+        Assert.Equal(0, peerRc);
+        Assert.Equal(16, env.ReadInt32(0x1C000));
+        var (peerIp, peerPort) = ReadSockaddrIn(env, 0x1B000);
+        Assert.Equal(0x7F000001u, peerIp);
+        Assert.Equal(19090, peerPort);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_SendMsgRecvMsg_StreamPayload_Works()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+        env.MapUserPage(0x1D000);
+        env.MapUserPage(0x1E000);
+        env.MapUserPage(0x1F000);
+        env.MapUserPage(0x20000);
+        env.MapUserPage(0x21000);
+        env.MapUserPage(0x22000);
+        env.MapUserPage(0x23000);
+        env.MapUserPage(0x24000);
+        env.MapUserPage(0x25000);
+
+        WriteSockaddrIn(env, 0x1D000, 0x7F000001u, 19100);
+        WriteSockaddrIn(env, 0x1E000, 0x7F000001u, 19100);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x1D000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x1E000, 16));
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        var payload = "netmsg";
+        env.WriteBytes(0x22000, System.Text.Encoding.ASCII.GetBytes(payload));
+        WriteIovec(env, 0x20000, 0x22000, payload.Length);
+        WriteMsgHdr(env, 0x1F000, 0x20000, 1, 0, 0, 0, 0);
+
+        Assert.Equal(payload.Length, await CallSysSendMsg(env, (uint)clientFd, 0x1F000, 0));
+
+        WriteIovec(env, 0x24000, 0x25000, 16);
+        WriteMsgHdr(env, 0x23000, 0x24000, 1, 0, 0, 0, 0);
+        var recv = await CallSysRecvMsg(env, (uint)acceptedFd, 0x23000, 0);
+        Assert.Equal(payload.Length, recv);
+        Assert.Equal(payload, System.Text.Encoding.ASCII.GetString(env.ReadBytes(0x25000, recv)));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -314,5 +469,58 @@ public class SocketSyscallTests
             Assert.True(Engine.CopyFromUser(addr, buf));
             return BinaryPrimitives.ReadInt32LittleEndian(buf);
         }
+
+        public void WriteBytes(uint addr, byte[] data)
+        {
+            Assert.True(Engine.CopyToUser(addr, data));
+        }
+
+        public byte[] ReadBytes(uint addr, int len)
+        {
+            var data = new byte[len];
+            Assert.True(Engine.CopyFromUser(addr, data));
+            return data;
+        }
+    }
+
+    private static void WriteSockaddrIn(TestEnv env, uint addr, uint ipv4Be, ushort port)
+    {
+        Span<byte> buf = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(buf[0..2], (ushort)LinuxConstants.AF_INET);
+        BinaryPrimitives.WriteUInt16BigEndian(buf[2..4], port);
+        BinaryPrimitives.WriteUInt32BigEndian(buf[4..8], ipv4Be);
+        Assert.True(env.Engine.CopyToUser(addr, buf));
+    }
+
+    private static void WriteIovec(TestEnv env, uint addr, uint baseAddr, int len)
+    {
+        Span<byte> buf = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[0..4], baseAddr);
+        BinaryPrimitives.WriteInt32LittleEndian(buf[4..8], len);
+        Assert.True(env.Engine.CopyToUser(addr, buf));
+    }
+
+    private static void WriteMsgHdr(TestEnv env, uint addr, uint iovPtr, int iovLen, uint controlPtr, int controlLen, uint namePtr, int nameLen)
+    {
+        Span<byte> buf = stackalloc byte[28];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[0..4], namePtr);
+        BinaryPrimitives.WriteInt32LittleEndian(buf[4..8], nameLen);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[8..12], iovPtr);
+        BinaryPrimitives.WriteInt32LittleEndian(buf[12..16], iovLen);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[16..20], controlPtr);
+        BinaryPrimitives.WriteInt32LittleEndian(buf[20..24], controlLen);
+        BinaryPrimitives.WriteInt32LittleEndian(buf[24..28], 0);
+        Assert.True(env.Engine.CopyToUser(addr, buf));
+    }
+
+    private static (uint IpBe, ushort Port) ReadSockaddrIn(TestEnv env, uint addr)
+    {
+        Span<byte> buf = stackalloc byte[16];
+        Assert.True(env.Engine.CopyFromUser(addr, buf));
+        var family = BinaryPrimitives.ReadUInt16LittleEndian(buf[0..2]);
+        Assert.Equal((ushort)LinuxConstants.AF_INET, family);
+        var port = BinaryPrimitives.ReadUInt16BigEndian(buf[2..4]);
+        var ip = BinaryPrimitives.ReadUInt32BigEndian(buf[4..8]);
+        return (ip, port);
     }
 }

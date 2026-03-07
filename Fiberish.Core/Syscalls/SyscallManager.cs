@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
+using Fiberish.Core.Net;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -36,6 +37,7 @@ public partial class SyscallManager
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly FileSystemType _devptsFsType;
     private readonly DeviceNumberManager _devNumberManager = new();
+    private SharedLoopbackNetNamespace? _privateNetNamespace;
 
     internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
     internal DeviceNumberManager DeviceNumbers => _devNumberManager;
@@ -96,7 +98,8 @@ public partial class SyscallManager
         Mount anonMount,
         TtyDiscipline? tty,
         PtyManager ptyManager,
-        MountNamespace mountNamespace)
+        MountNamespace mountNamespace,
+        SharedLoopbackNetNamespace? privateNetNamespace)
     {
         Mem = mem;
         FDs = fds;
@@ -124,6 +127,8 @@ public partial class SyscallManager
         ProcessRoot.Dentry!.Inode!.Get();
 
         RegisterHandlers();
+
+        _privateNetNamespace = privateNetNamespace;
     }
 
     public TtyDiscipline? Tty { get; }
@@ -164,6 +169,12 @@ public partial class SyscallManager
     public uint BrkAddr { get; set; }
     public uint BrkBase { get; }
     public bool Strace { get; set; }
+    public NetworkMode NetworkMode { get; set; } = NetworkMode.Host;
+
+    public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()
+    {
+        return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24))).Namespace;
+    }
 
     /// <summary>
     ///     Mount namespace containing all mounts and lookup hash.
@@ -983,7 +994,7 @@ public partial class SyscallManager
         var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
-            sharedNamespace)
+            sharedNamespace, _privateNetNamespace?.AddRef())
         {
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,
@@ -1203,6 +1214,8 @@ public partial class SyscallManager
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
         ReleaseContainerPins();
+        _privateNetNamespace?.Release();
+        _privateNetNamespace = null;
 
         // Release this process' reference to the mount namespace.
         // Mount detach/unmount is controlled by umount(2), not by process exit.
