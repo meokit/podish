@@ -37,10 +37,10 @@ def integration_assets_dir(project_root) -> Path:
             DEFAULT_ASSETS_CANDIDATES[0],
         )
 
+    build_dir = project_root / "build" / "integration-assets"
+
     if not assets_dir.exists():
-        # Auto-build with CMake
-        print(f"\n[conftest] Integration assets not found, building with CMake...")
-        build_dir = project_root / "build" / "integration-assets"
+        print(f"\n[conftest] Integration assets not found, configuring CMake...")
         subprocess.run(
             [
                 "cmake", "-S", str(project_root / "tests/integration"),
@@ -50,10 +50,12 @@ def integration_assets_dir(project_root) -> Path:
             check=True,
             capture_output=True,
         )
-        subprocess.run(
-            ["cmake", "--build", str(build_dir), "--target", "integration-tests-build"],
-            check=True,
-        )
-        print(f"[conftest] Test binaries built in {assets_dir}")
+
+    # Always build once per test session so newly added assets are picked up.
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "integration-tests-build"],
+        check=True,
+    )
+    print(f"[conftest] Test binaries built in {assets_dir}")
 
     return assets_dir
