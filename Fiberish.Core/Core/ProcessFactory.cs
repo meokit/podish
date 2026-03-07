@@ -8,10 +8,10 @@ public static class ProcessFactory
 {
     public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, string guestPath, string[] args,
         string[] envs,
-        KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null)
+        KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null, UTSNamespace? uts = null)
     {
         var initPid = scheduler.AllocateTaskId();
-        var proc = new Process(initPid, runtime.Memory, runtime.Syscalls)
+        var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
         {
             PGID = 0,
             SID = 0

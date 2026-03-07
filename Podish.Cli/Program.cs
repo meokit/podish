@@ -69,6 +69,9 @@ internal class Program
         var containerNameOption = new Option<string?>(
             new[] { "--name" },
             "Assign a name to the container");
+        var hostnameOption = new Option<string?>(
+            new[] { "--hostname", "-h" },
+            "Set the container hostname (defaults to --name, then short container id)");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -86,6 +89,7 @@ internal class Program
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
         runCommand.AddOption(containerNameOption);
+        runCommand.AddOption(hostnameOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async (context) =>
@@ -99,6 +103,7 @@ internal class Program
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
             var containerName = context.ParseResult.GetValueForOption(containerNameOption);
+            var explicitHostname = context.ParseResult.GetValueForOption(hostnameOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -180,6 +185,7 @@ internal class Program
             }
 
             var containerId = Guid.NewGuid().ToString("N")[..12];
+            var hostname = ResolveContainerHostname(explicitHostname, containerName, containerId);
             var containerDir = Path.Combine(containersDir, containerId);
             Directory.CreateDirectory(containerDir);
             var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
@@ -242,6 +248,7 @@ internal class Program
             var spec = new PodishRunSpec
             {
                 Name = containerName,
+                Hostname = hostname,
                 Image = image,
                 Rootfs = rootfs,
                 Exe = exe,
@@ -286,6 +293,7 @@ internal class Program
                 !useRootfs,
                 containersDir,
                 containerId,
+                hostname,
                 imageRef,
                 containerDir,
                 containerLogDriver,
@@ -421,6 +429,7 @@ internal class Program
                 !useRootfs,
                 containersDir,
                 containerId,
+                spec.Hostname ?? ResolveContainerHostname(null, metadata.Name, containerId),
                 imageRef,
                 containerDir,
                 containerLogDriver,
@@ -1129,9 +1138,18 @@ internal class Program
         return PodishContext.TryParsePodmanLogLevel(raw, out level);
     }
 
+    private static string ResolveContainerHostname(string? explicitHostname, string? containerName, string containerId)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitHostname))
+            return explicitHostname.Trim();
+        if (!string.IsNullOrWhiteSpace(containerName))
+            return containerName.Trim();
+        return containerId;
+    }
+
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
-        string containerId, string image, string containerDir, ContainerLogDriver logDriver,
+        string containerId, string hostname, string image, string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1148,6 +1166,7 @@ internal class Program
             Strace = strace,
             UseOverlay = useOverlay,
             ContainerId = containerId,
+            Hostname = hostname,
             Image = image,
             ContainerDir = containerDir,
             LogDriver = logDriver,

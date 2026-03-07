@@ -14,6 +14,7 @@ public sealed class PodishContextOptions
 public sealed class PodishRunSpec
 {
     public string? Name { get; init; }
+    public string? Hostname { get; init; }
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
     public string? Exe { get; init; }
@@ -433,6 +434,7 @@ public sealed class PodishContext : IDisposable
             UseTty = spec.Interactive && spec.Tty,
             Strace = spec.Strace,
             UseOverlay = !useRootfs,
+            Hostname = spec.Hostname ?? spec.Name ?? containerId,
             ContainerId = containerId,
             Image = imageRef,
             ContainerDir = containerDir,

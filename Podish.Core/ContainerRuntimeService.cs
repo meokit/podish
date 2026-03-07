@@ -14,6 +14,7 @@ namespace Podish.Core;
 public sealed class ContainerRunRequest
 {
     public required string RootfsPath { get; init; }
+    public string Hostname { get; init; } = string.Empty;
     public string Exe { get; init; } = string.Empty;
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
     public string[] Volumes { get; init; } = Array.Empty<string>();
@@ -228,6 +229,16 @@ public sealed class ContainerRuntimeService
 
             try
             {
+                if (!string.IsNullOrWhiteSpace(request.Hostname))
+                {
+                    _logger.LogInformation("Mounting generated hostname at /etc/hostname via detached tmpfs");
+                    runtime.Syscalls.MountDetachedTmpfsFile(
+                        "/etc/hostname",
+                        "hostname",
+                        Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)),
+                        readOnly: true);
+                }
+
                 var resolvConf = BuildResolvConfContent(request.DnsServers);
                 _logger.LogInformation("Mounting generated DNS configuration at /etc/resolv.conf via detached tmpfs");
                 runtime.Syscalls.MountDetachedTmpfsFile(
@@ -258,9 +269,14 @@ public sealed class ContainerRuntimeService
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
             if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
 
+            var uts = new UTSNamespace
+            {
+                NodeName = string.IsNullOrWhiteSpace(request.Hostname) ? request.ContainerId : request.Hostname
+            };
+
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
-                scheduler, ttyDiag, loc.Mount!);
+                scheduler, ttyDiag, loc.Mount!, uts);
             request.ProcessController?.BindRuntimeControl(() =>
             {
                 try
@@ -678,6 +694,11 @@ public sealed class ContainerRuntimeService
         }
 
         return sb.ToString();
+    }
+
+    private static string BuildHostnameFileContent(string hostname)
+    {
+        return hostname.Trim() + "\n";
     }
 
     private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
