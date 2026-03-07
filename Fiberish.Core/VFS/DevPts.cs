@@ -343,13 +343,26 @@ public class DevPtsFileSystem : FileSystem
     public DevPtsFileSystem(DeviceNumberManager? devManager = null, PtyManager? ptyManager = null, ISignalBroadcaster? broadcaster = null, ILogger? logger = null) : base(devManager)
     {
         Name = "devpts";
-        _ptyManager = ptyManager;
-        _broadcaster = broadcaster;
-        _logger = logger;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        _ptyManager = ptyManager ?? new PtyManager(_logger);
+        _broadcaster = broadcaster ?? NoopSignalBroadcaster.Instance;
     }
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         return new DevPtsSuperBlock(_ptyManager, _broadcaster, _logger, DevManager);
+    }
+}
+
+file sealed class NoopSignalBroadcaster : ISignalBroadcaster
+{
+    public static readonly NoopSignalBroadcaster Instance = new();
+
+    public void SignalProcessGroup(int pgid, int signal)
+    {
+    }
+
+    public void SignalForegroundTask(int signal)
+    {
     }
 }

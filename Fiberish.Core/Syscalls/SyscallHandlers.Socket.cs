@@ -28,30 +28,54 @@ public partial class SyscallManager
         SocketType sockType;
         ProtocolType proto;
 
-        // Linux AF_INET = 2, AF_INET6 = 10, AF_UNIX = 1
-        if (domain == 2) af = AddressFamily.InterNetwork;
-        else if (domain == 10) af = AddressFamily.InterNetworkV6;
-        else if (domain == 1) return -(int)Errno.EAFNOSUPPORT; // TODO: UNIX Domain Sockets
+        if (domain == LinuxConstants.AF_INET) af = AddressFamily.InterNetwork;
+        else if (domain == LinuxConstants.AF_INET6) af = AddressFamily.InterNetworkV6;
+        else if (domain == LinuxConstants.AF_UNIX) return -(int)Errno.EAFNOSUPPORT; // TODO: UNIX Domain Sockets
         else return -(int)Errno.EAFNOSUPPORT;
 
-        if (realType == 1) sockType = SocketType.Stream; // SOCK_STREAM
-        else if (realType == 2) sockType = SocketType.Dgram; // SOCK_DGRAM
+        if (realType == LinuxConstants.SOCK_STREAM) sockType = SocketType.Stream;
+        else if (realType == LinuxConstants.SOCK_DGRAM) sockType = SocketType.Dgram;
+        else if (realType == LinuxConstants.SOCK_RAW) sockType = SocketType.Raw;
         else return -(int)Errno.EINVAL;
 
-        if (protocol == 0)
-            proto = sockType == SocketType.Stream ? ProtocolType.Tcp : ProtocolType.Udp;
-        else if (protocol == 6 /* IPPROTO_TCP */) proto = ProtocolType.Tcp;
-        else if (protocol == 17 /* IPPROTO_UDP */) proto = ProtocolType.Udp;
+        if (OperatingSystem.IsMacOS() && sockType == SocketType.Raw)
+        {
+            if (af == AddressFamily.InterNetwork) proto = ProtocolType.Icmp;
+            else if (af == AddressFamily.InterNetworkV6) proto = ProtocolType.IcmpV6;
+            else return -(int)Errno.EPROTONOSUPPORT;
+        }
+        else if (protocol == 0)
+        {
+            if (sockType == SocketType.Stream) proto = ProtocolType.Tcp;
+            else if (sockType == SocketType.Dgram) proto = ProtocolType.Udp;
+            else return -(int)Errno.EPROTONOSUPPORT;
+        }
+        else if (protocol == LinuxConstants.IPPROTO_TCP && sockType == SocketType.Stream) proto = ProtocolType.Tcp;
+        else if (protocol == LinuxConstants.IPPROTO_UDP && sockType == SocketType.Dgram) proto = ProtocolType.Udp;
+        else if (protocol == LinuxConstants.IPPROTO_ICMP &&
+                 (sockType == SocketType.Raw || sockType == SocketType.Dgram) &&
+                 af == AddressFamily.InterNetwork) proto = ProtocolType.Icmp;
+        else if (protocol == LinuxConstants.IPPROTO_ICMPV6 &&
+                 (sockType == SocketType.Raw || sockType == SocketType.Dgram) &&
+                 af == AddressFamily.InterNetworkV6) proto = ProtocolType.IcmpV6;
         else return -(int)Errno.EPROTONOSUPPORT;
 
         try
         {
-            var inode = new HostSocketInode(0, sm.MemfdSuperBlock, af, sockType, proto);
+            HostSocketInode inode;
+            if ((sockType == SocketType.Dgram || sockType == SocketType.Raw) &&
+                (protocol == LinuxConstants.IPPROTO_ICMP || protocol == LinuxConstants.IPPROTO_ICMPV6))
+            {
+                inode = CreateHostSocketForLinuxPingSemantics(sm, af, proto, sockType);
+            }
+            else
+            {
+                inode = new HostSocketInode(0, sm.MemfdSuperBlock, af, sockType, proto);
+            }
             var fileFlags = FileFlags.O_RDWR;
 
-            // Linux socket type flags: SOCK_NONBLOCK=04000 (0x800), SOCK_CLOEXEC=02000000 (0x80000)
-            if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-            if ((type & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+            if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+            if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
             var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, sm.MemfdSuperBlock);
             var file = new LinuxFile(dentry, fileFlags, sm.AnonMount);
@@ -64,6 +88,40 @@ public partial class SyscallManager
         }
     }
 
+    /// <summary>
+    ///     Maps Linux ping/raw socket semantics onto a host socket shape we can actually support.
+    ///     Darwin is intentionally special-cased here: guest raw ICMP/ICMPv6 sockets are downgraded
+    ///     to host datagram sockets, while HostSocketInode keeps Linux-visible SO_TYPE semantics via
+    ///     LinuxSocketType. Keep this policy here, not in HostSocketInode, so the data path stays uniform.
+    /// </summary>
+    private static HostSocketInode CreateHostSocketForLinuxPingSemantics(SyscallManager sm, AddressFamily af, ProtocolType proto,
+        SocketType linuxSocketType)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
+                linuxSocketType: linuxSocketType);
+        }
+
+        if (linuxSocketType == SocketType.Dgram)
+        {
+            try
+            {
+                return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
+                    linuxSocketType: SocketType.Dgram);
+            }
+            catch (SocketException ex) when (
+                ex.SocketErrorCode is SocketError.ProtocolNotSupported or SocketError.OperationNotSupported)
+            {
+                // Some hosts do not expose Linux-style ping sockets but still allow raw ICMP.
+                // Keep guest-visible SO_TYPE as SOCK_DGRAM to preserve Linux ABI.
+                return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto,
+                    linuxSocketType: SocketType.Dgram);
+            }
+        }
+
+        return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto, linuxSocketType: linuxSocketType);
+    }
     private static async ValueTask<int> SysConnect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -113,7 +171,7 @@ public partial class SyscallManager
 
         try
         {
-            sockInode.NativeSocket.Bind(endpoint);
+            sockInode.NativeSocket!.Bind(endpoint);
             return 0;
         }
         catch (SocketException ex)
@@ -141,7 +199,7 @@ public partial class SyscallManager
 
         try
         {
-            sockInode.NativeSocket.Listen(backlog);
+            sockInode.NativeSocket!.Listen(backlog);
             return 0;
         }
         catch (SocketException ex)
@@ -174,7 +232,7 @@ public partial class SyscallManager
         EndPoint? ep;
         try
         {
-            ep = sockInode.NativeSocket.LocalEndPoint;
+            ep = sockInode.NativeSocket!.LocalEndPoint;
         }
         catch
         {
@@ -182,7 +240,7 @@ public partial class SyscallManager
         }
 
         if (ep == null)
-            ep = sockInode.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+            ep = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
                 ? new IPEndPoint(IPAddress.IPv6Any, 0)
                 : new IPEndPoint(IPAddress.Any, 0);
 
@@ -209,7 +267,7 @@ public partial class SyscallManager
         EndPoint? ep;
         try
         {
-            ep = sockInode.NativeSocket.RemoteEndPoint;
+            ep = sockInode.NativeSocket!.RemoteEndPoint;
         }
         catch
         {
@@ -349,7 +407,7 @@ public partial class SyscallManager
 
             if (srcAddrPtr != 0 && addrLenPtr != 0)
             {
-                EndPoint remoteEp = sockInode.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+                EndPoint remoteEp = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
                     ? new IPEndPoint(IPAddress.IPv6Any, 0)
                     : new IPEndPoint(IPAddress.Any, 0);
 
@@ -515,7 +573,7 @@ public partial class SyscallManager
         }
         else if (file.Dentry.Inode is HostSocketInode hostSock)
         {
-            EndPoint remoteEp = hostSock.NativeSocket.AddressFamily == AddressFamily.InterNetworkV6
+            EndPoint remoteEp = hostSock.HostAddressFamily == AddressFamily.InterNetworkV6
                 ? new IPEndPoint(IPAddress.IPv6Any, 0)
                 : new IPEndPoint(IPAddress.Any, 0);
 
@@ -580,20 +638,20 @@ public partial class SyscallManager
         var protocol = (int)a3;
         var svPtr = a4;
 
-        if (domain != 1) return -(int)Errno.EAFNOSUPPORT; // AF_UNIX only
+        if (domain != LinuxConstants.AF_UNIX) return -(int)Errno.EAFNOSUPPORT; // AF_UNIX only
 
-        if (protocol != 0 && protocol != 1 /* PF_UNIX */) return -(int)Errno.EPROTONOSUPPORT;
+        if (protocol != 0 && protocol != LinuxConstants.AF_UNIX) return -(int)Errno.EPROTONOSUPPORT;
 
         var realType = type & 0xf;
         SocketType sockType;
-        if (realType == 1) sockType = SocketType.Stream; // SOCK_STREAM
-        else if (realType == 2) sockType = SocketType.Dgram; // SOCK_DGRAM
-        else if (realType == 5) sockType = SocketType.Seqpacket; // SOCK_SEQPACKET
+        if (realType == LinuxConstants.SOCK_STREAM) sockType = SocketType.Stream;
+        else if (realType == LinuxConstants.SOCK_DGRAM) sockType = SocketType.Dgram;
+        else if (realType == LinuxConstants.SOCK_SEQPACKET) sockType = SocketType.Seqpacket;
         else return -(int)Errno.EINVAL;
 
         var fileFlags = FileFlags.O_RDWR;
-        if ((type & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-        if ((type & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+        if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+        if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
         var inode1 = new UnixSocketInode(0, sm.MemfdSuperBlock, sockType);
         var inode2 = new UnixSocketInode(0, sm.MemfdSuperBlock, sockType);

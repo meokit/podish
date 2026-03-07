@@ -423,6 +423,46 @@ public static class LinuxConstants
     public const int MSG_RST = 0x1000;
     public const int MSG_ERRQUEUE = 0x2000;
     public const int MSG_NOSIGNAL = 0x4000;
+
+    // Socket domains/types/protocols
+    public const int AF_UNIX = 1;
+    public const int AF_INET = 2;
+    public const int AF_INET6 = 10;
+
+    public const int SOCK_STREAM = 1;
+    public const int SOCK_DGRAM = 2;
+    public const int SOCK_RAW = 3;
+    public const int SOCK_SEQPACKET = 5;
+    public const int SOCK_NONBLOCK = 0x800;
+    public const int SOCK_CLOEXEC = 0x80000;
+
+    public const int IPPROTO_ICMP = 1;
+    public const int IPPROTO_IP = 0;
+    public const int IPPROTO_TCP = 6;
+    public const int IPPROTO_UDP = 17;
+    public const int IPPROTO_IPV6 = 41;
+    public const int IPPROTO_ICMPV6 = 58;
+    public const int ICMPV6_FILTER = 1;
+    public const int IP_STRIPHDR = 23;
+
+    public const int SOL_SOCKET = 1;
+    public const int SO_TYPE = 3;
+    public const int SO_ERROR = 4;
+    public const int SO_REUSEADDR = 2;
+    public const int SO_KEEPALIVE = 6;
+    public const int SO_OOBINLINE = 7;
+    public const int SO_SNDBUF = 8;
+    public const int SO_RCVBUF = 9;
+    public const int SO_REUSEPORT = 15;
+    public const int SO_RCVTIMEO = 20;
+    public const int SO_SNDTIMEO = 21;
+
+    public const int TCP_NODELAY = 1;
+    public const int TCP_KEEPIDLE = 8;
+    public const int TCP_KEEPINTVL = 9;
+    public const int TCP_KEEPCNT = 10;
+
+    public const int IPV6_V6ONLY = 26;
     public const int MSG_MORE = 0x8000;
     public const int MSG_WAITFORONE = 0x10000;
     public const int MSG_BATCH = 0x40000;

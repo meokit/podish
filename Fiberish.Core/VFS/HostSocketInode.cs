@@ -18,11 +18,13 @@ public sealed class HostSocketInode : Inode
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
     // SOCK_STREAM = 1, SOCK_DGRAM = 2
-    public HostSocketInode(ulong ino, SuperBlock sb, AddressFamily af, SocketType type, ProtocolType proto)
+    public HostSocketInode(ulong ino, SuperBlock sb, AddressFamily af, SocketType type, ProtocolType proto,
+        SocketType? linuxSocketType = null)
     {
         Ino = ino;
         SuperBlock = sb;
         NativeSocket = new Socket(af, type, proto);
+        LinuxSocketType = linuxSocketType ?? type;
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
@@ -37,6 +39,7 @@ public sealed class HostSocketInode : Inode
         Ino = ino;
         SuperBlock = sb;
         NativeSocket = connectedSocket;
+        LinuxSocketType = connectedSocket.SocketType;
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
@@ -46,6 +49,10 @@ public sealed class HostSocketInode : Inode
     }
 
     public Socket NativeSocket { get; }
+    public SocketType LinuxSocketType { get; }
+    public AddressFamily HostAddressFamily => NativeSocket.AddressFamily;
+    public ProtocolType HostProtocolType => NativeSocket.ProtocolType;
+    public SocketType HostSocketType => NativeSocket.SocketType;
 
     public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
@@ -322,7 +329,7 @@ public sealed class HostSocketInode : Inode
     {
         Logger.LogTrace(
             "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, buffer.Length, flags, (int)file.Flags, NativeSocket.Connected);
+            Ino, buffer.Length, flags, (int)file.Flags, NativeSocket!.Connected);
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             try
             {
@@ -422,7 +429,7 @@ public sealed class HostSocketInode : Inode
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
         Logger.LogTrace(
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
+            Ino, segment.Count, flags, (int)file.Flags, NativeSocket!.Connected);
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             try

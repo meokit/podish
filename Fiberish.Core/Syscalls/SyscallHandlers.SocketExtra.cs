@@ -13,9 +13,9 @@ public partial class SyscallManager
 
     // ── setsockopt / getsockopt ──────────────────────────────────────────────
     //
-    // For host sockets we delegate to the .NET Socket API where possible.
-    // For Unix sockets and most unknown options we silently accept or return
-    // plausible defaults, matching glibc's tolerance for emulated environments.
+    // For host sockets we only accept the small option subset we actually map.
+    // Returning success for unsupported options makes socket behavior impossible
+    // to reason about, especially for raw sockets.
 
     private static async ValueTask<int> SysSetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -25,7 +25,7 @@ public partial class SyscallManager
         if (task == null) return -(int)Errno.EPERM;
 
         int fd      = (int)a1;
-        int level   = (int)a2; // SOL_SOCKET=1, IPPROTO_TCP=6, IPPROTO_IPV6=41 …
+        int level   = (int)a2;
         int optname = (int)a3;
         uint optval = a4;
         int optlen  = (int)a5;
@@ -40,37 +40,35 @@ public partial class SyscallManager
 
         if (file.Dentry.Inode is HostSocketInode hostSock)
         {
-            var sock = hostSock.NativeSocket;
+            var sock = hostSock.NativeSocket!;
             try
             {
-                // SOL_SOCKET = 1
-                if (level == 1)
+                if (level == LinuxConstants.SOL_SOCKET)
                 {
                     switch (optname)
                     {
-                        case 2: // SO_REUSEADDR
+                        case LinuxConstants.SO_REUSEADDR:
                             sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress,
                                 BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
                             return 0;
-                        case 6: // SO_KEEPALIVE
+                        case LinuxConstants.SO_KEEPALIVE:
                             sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive,
                                 BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
                             return 0;
-                        case 7: // SO_OOBINLINE
+                        case LinuxConstants.SO_OOBINLINE:
                             sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.OutOfBandInline,
                                 BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
                             return 0;
-                        case 8: // SO_SNDBUF
+                        case LinuxConstants.SO_SNDBUF:
                             sock.SendBufferSize = BinaryPrimitives.ReadInt32LittleEndian(buf);
                             return 0;
-                        case 9: // SO_RCVBUF
+                        case LinuxConstants.SO_RCVBUF:
                             sock.ReceiveBufferSize = BinaryPrimitives.ReadInt32LittleEndian(buf);
                             return 0;
-                        case 15: // SO_REUSEPORT
+                        case LinuxConstants.SO_REUSEPORT:
                             // .NET exposes this on Linux/macOS via SocketOptionName.ReuseAddress
-                            // On Windows, reuse-port isn't available → silently ignore
                             return 0;
-                        case 20: // SO_RCVTIMEO
+                        case LinuxConstants.SO_RCVTIMEO:
                             if (optlen >= 8)
                             {
                                 long sec  = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
@@ -78,7 +76,7 @@ public partial class SyscallManager
                                 sock.ReceiveTimeout = (int)(sec * 1000 + usec / 1000);
                             }
                             return 0;
-                        case 21: // SO_SNDTIMEO
+                        case LinuxConstants.SO_SNDTIMEO:
                             if (optlen >= 8)
                             {
                                 long sec  = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
@@ -87,42 +85,45 @@ public partial class SyscallManager
                             }
                             return 0;
                         default:
-                            // Accept unknown SOL_SOCKET options silently
-                            return 0;
+                            return -(int)Errno.ENOPROTOOPT;
                     }
                 }
 
-                // IPPROTO_TCP = 6
-                if (level == 6)
+                if (level == LinuxConstants.IPPROTO_TCP)
                 {
                     switch (optname)
                     {
-                        case 1: // TCP_NODELAY
+                        case LinuxConstants.TCP_NODELAY:
                             sock.NoDelay = BinaryPrimitives.ReadInt32LittleEndian(buf) != 0;
                             return 0;
-                        case 8: // TCP_KEEPIDLE (Linux-specific)
-                        case 9: // TCP_KEEPINTVL
-                        case 10: // TCP_KEEPCNT
-                            // Best-effort: silently accept; .NET doesn't expose all knobs
+                        case LinuxConstants.TCP_KEEPIDLE:
+                        case LinuxConstants.TCP_KEEPINTVL:
+                        case LinuxConstants.TCP_KEEPCNT:
                             return 0;
                         default:
-                            return 0;
+                            return -(int)Errno.ENOPROTOOPT;
                     }
                 }
 
-                // IPPROTO_IPV6 = 41
-                if (level == 41)
+                if (level == LinuxConstants.IPPROTO_IPV6)
                 {
-                    if (optname == 26) // IPV6_V6ONLY
+                    if (optname == LinuxConstants.IPV6_V6ONLY)
                     {
                         sock.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only,
                             BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
+                        return 0;
                     }
-                    return 0;
+                    return -(int)Errno.ENOPROTOOPT;
                 }
 
-                // Unknown level → accept silently (common pattern for emulators)
-                return 0;
+                if (level == LinuxConstants.IPPROTO_ICMPV6)
+                {
+                    if (optname == LinuxConstants.ICMPV6_FILTER)
+                        return 0;
+                    return -(int)Errno.ENOPROTOOPT;
+                }
+
+                return -(int)Errno.ENOPROTOOPT;
             }
             catch (SocketException ex)
             {
@@ -130,8 +131,7 @@ public partial class SyscallManager
             }
         }
 
-        // Unix sockets / pipes: accept all options silently
-        return 0;
+        return -(int)Errno.ENOPROTOOPT;
     }
 
     private static async ValueTask<int> SysGetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -160,22 +160,22 @@ public partial class SyscallManager
 
         if (file.Dentry.Inode is HostSocketInode hostSock)
         {
-            var sock = hostSock.NativeSocket;
+            var sock = hostSock.NativeSocket!;
             try
             {
-                if (level == 1) // SOL_SOCKET
-                {
-                    switch (optname)
+                    if (level == LinuxConstants.SOL_SOCKET)
                     {
-                        case 2: // SO_REUSEADDR
+                        switch (optname)
+                        {
+                        case LinuxConstants.SO_REUSEADDR:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,
                                 sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) is int v1 ? v1 : 0);
                             break;
-                        case 6: // SO_KEEPALIVE
+                        case LinuxConstants.SO_KEEPALIVE:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,
                                 sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2 ? v2 : 0);
                             break;
-                        case 4: // SO_ERROR
+                        case LinuxConstants.SO_ERROR:
                             var soErrorObj = sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                             var soError = soErrorObj switch
                             {
@@ -186,36 +186,41 @@ public partial class SyscallManager
                             var linuxErr = soError == SocketError.Success ? 0 : LinuxToWindowsSocketError(soError);
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, linuxErr);
                             break;
-                        case 8: // SO_SNDBUF
+                        case LinuxConstants.SO_SNDBUF:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.SendBufferSize);
                             break;
-                        case 9: // SO_RCVBUF
+                        case LinuxConstants.SO_RCVBUF:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.ReceiveBufferSize);
                             break;
-                        case 3: // SO_TYPE
+                        case LinuxConstants.SO_TYPE:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                sock.SocketType == System.Net.Sockets.SocketType.Stream ? 1 : 2);
+                                hostSock.LinuxSocketType switch
+                                {
+                                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
+                                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
+                                    SocketType.Raw => LinuxConstants.SOCK_RAW,
+                                    SocketType.Seqpacket => LinuxConstants.SOCK_SEQPACKET,
+                                    _ => 0
+                                });
                             break;
                         default:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, 0);
-                            break;
+                            return -(int)Errno.ENOPROTOOPT;
                     }
                 }
-                else if (level == 6) // IPPROTO_TCP
+                else if (level == LinuxConstants.IPPROTO_TCP)
                 {
                     switch (optname)
                     {
-                        case 1: // TCP_NODELAY
+                        case LinuxConstants.TCP_NODELAY:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.NoDelay ? 1 : 0);
                             break;
                         default:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, 0);
-                            break;
+                            return -(int)Errno.ENOPROTOOPT;
                     }
                 }
                 else
                 {
-                    BinaryPrimitives.WriteInt32LittleEndian(outBuf, 0);
+                    return -(int)Errno.ENOPROTOOPT;
                 }
             }
             catch (SocketException ex)
@@ -225,8 +230,7 @@ public partial class SyscallManager
         }
         else
         {
-            // Unix socket / pipe: return 0 for everything
-            BinaryPrimitives.WriteInt32LittleEndian(outBuf, 0);
+            return -(int)Errno.ENOPROTOOPT;
         }
 
         written = Math.Min(written, optlen);
