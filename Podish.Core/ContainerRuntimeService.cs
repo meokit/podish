@@ -15,6 +15,7 @@ public sealed class ContainerRunRequest
 {
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
+    public string? ContainerName { get; init; }
     public string Exe { get; init; } = string.Empty;
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
     public string[] Volumes { get; init; } = Array.Empty<string>();
@@ -236,6 +237,16 @@ public sealed class ContainerRuntimeService
                         "/etc/hostname",
                         "hostname",
                         Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)),
+                        readOnly: true);
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.Hostname))
+                {
+                    _logger.LogInformation("Mounting generated hosts file at /etc/hosts via detached tmpfs");
+                    runtime.Syscalls.MountDetachedTmpfsFile(
+                        "/etc/hosts",
+                        "hosts",
+                        Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)),
                         readOnly: true);
                 }
 
@@ -699,6 +710,25 @@ public sealed class ContainerRuntimeService
     private static string BuildHostnameFileContent(string hostname)
     {
         return hostname.Trim() + "\n";
+    }
+
+    private static string BuildHostsFileContent(string hostname, string? containerName)
+    {
+        var primary = hostname.Trim();
+        var aliases = new List<string> { primary };
+        if (!string.IsNullOrWhiteSpace(containerName))
+        {
+            var alias = containerName.Trim();
+            if (!string.Equals(alias, primary, StringComparison.Ordinal))
+                aliases.Add(alias);
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("127.0.0.1 localhost");
+        sb.Append("127.0.1.1 ");
+        sb.AppendLine(string.Join(" ", aliases));
+        sb.AppendLine("::1 localhost ip6-localhost ip6-loopback");
+        return sb.ToString();
     }
 
     private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable

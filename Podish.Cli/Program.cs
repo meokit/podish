@@ -293,6 +293,7 @@ internal class Program
                 !useRootfs,
                 containersDir,
                 containerId,
+                containerName,
                 hostname,
                 imageRef,
                 containerDir,
@@ -429,6 +430,7 @@ internal class Program
                 !useRootfs,
                 containersDir,
                 containerId,
+                metadata.Name,
                 spec.Hostname ?? ResolveContainerHostname(null, metadata.Name, containerId),
                 imageRef,
                 containerDir,
@@ -1149,7 +1151,7 @@ internal class Program
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
-        string containerId, string hostname, string image, string containerDir, ContainerLogDriver logDriver,
+        string containerId, string? containerName, string hostname, string image, string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1157,6 +1159,7 @@ internal class Program
         return await service.RunAsync(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
+            ContainerName = containerName,
             Exe = exe,
             ExeArgs = exeArgs,
             Volumes = volumes,

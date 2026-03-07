@@ -435,6 +435,7 @@ public sealed class PodishContext : IDisposable
             Strace = spec.Strace,
             UseOverlay = !useRootfs,
             Hostname = spec.Hostname ?? spec.Name ?? containerId,
+            ContainerName = spec.Name,
             ContainerId = containerId,
             Image = imageRef,
             ContainerDir = containerDir,
