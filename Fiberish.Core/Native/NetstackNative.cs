@@ -6,6 +6,15 @@ internal static partial class NetstackNative
 {
     private const string LibName = "fiberish_netstack";
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void NetnsNotifyCallback(nint userdata);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_set_notify_callback")]
+    internal static partial int SetNotifyCallback(ulong handle, nint cb, nint userdata);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_clear_notify")]
+    internal static partial int ClearNotify(ulong handle);
+
     [LibraryImport(LibName, EntryPoint = "fiber_netns_create_loopback")]
     internal static partial ulong CreateLoopback(uint ipv4Be, byte prefixLen);
 

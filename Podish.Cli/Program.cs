@@ -80,6 +80,12 @@ internal class Program
             new[] { "--network" },
             () => "host",
             "Network mode (host|private)");
+        var publishOption = new Option<string[]>(
+            new[] { "--publish", "-p" },
+            "Publish a container's port(s) to the host (e.g. hostPort:containerPort)")
+        {
+            AllowMultipleArgumentsPerToken = false
+        };
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -100,6 +106,7 @@ internal class Program
         runCommand.AddOption(autoRemoveOption);
         runCommand.AddOption(hostnameOption);
         runCommand.AddOption(networkOption);
+        runCommand.AddOption(publishOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async (context) =>
@@ -116,6 +123,7 @@ internal class Program
             var autoRemove = context.ParseResult.GetValueForOption(autoRemoveOption);
             var explicitHostname = context.ParseResult.GetValueForOption(hostnameOption);
             var networkRaw = context.ParseResult.GetValueForOption(networkOption) ?? "host";
+            var publishRaw = context.ParseResult.GetValueForOption(publishOption) ?? Array.Empty<string>();
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -179,6 +187,25 @@ internal class Program
                 Console.Error.WriteLine($"[Podish.Cli] invalid --network value: {networkRaw}. Use host|private");
                 context.ExitCode = 125;
                 return;
+            }
+
+            if (networkMode == NetworkMode.Host && publishRaw.Length > 0)
+            {
+                Console.Error.WriteLine("[Podish.Cli] Error: --publish/-p is not supported in host network mode.");
+                context.ExitCode = 125;
+                return;
+            }
+
+            var publishedPorts = new List<PublishedPortSpec>();
+            foreach (var p in publishRaw)
+            {
+                if (!TryParsePublishedPort(p, out var pSpec))
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] invalid published port format: {p}. Expected hostPort:containerPort");
+                    context.ExitCode = 125;
+                    return;
+                }
+                publishedPorts.Add(pSpec);
             }
 
             SetupLogging(logLevel, logFile);
@@ -277,7 +304,8 @@ internal class Program
                 Interactive = interactive,
                 Tty = tty,
                 Strace = strace,
-                LogDriver = containerLogDriver.ToCliValue()
+                LogDriver = containerLogDriver.ToCliValue(),
+                PublishedPorts = publishedPorts
             };
             var metadata = new PodishContainerMetadata
             {
@@ -317,7 +345,8 @@ internal class Program
                 imageRef,
                 containerDir,
                 containerLogDriver,
-                eventStore);
+                eventStore,
+                publishedPorts);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -462,7 +491,8 @@ internal class Program
                 imageRef,
                 containerDir,
                 containerLogDriver,
-                eventStore);
+                eventStore,
+                spec.PublishedPorts);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1191,6 +1221,24 @@ internal class Program
         return Path.Combine(logsDir, $"engine_{DateTime.Now:yyyyMMdd_HHmmss}_{Environment.ProcessId}.log");
     }
 
+    private static bool TryParsePublishedPort(string raw, out PublishedPortSpec spec)
+    {
+        spec = null!;
+        var parts = raw.Split(':');
+        if (parts.Length != 2) return false;
+
+        if (!int.TryParse(parts[0], out var hostPort) || hostPort < 1 || hostPort > 65535) return false;
+        if (!int.TryParse(parts[1], out var containerPort) || containerPort < 1 || containerPort > 65535) return false;
+
+        spec = new PublishedPortSpec
+        {
+            HostPort = hostPort,
+            ContainerPort = containerPort,
+            Protocol = TransportProtocol.Tcp
+        };
+        return true;
+    }
+
     private static void CleanupOldAutoEngineLogs(string logsDir, int keep)
     {
         try
@@ -1220,7 +1268,7 @@ internal class Program
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image, string containerDir, ContainerLogDriver logDriver,
-        ContainerEventStore eventStore)
+        ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
@@ -1242,7 +1290,8 @@ internal class Program
             Image = image,
             ContainerDir = containerDir,
             LogDriver = logDriver,
-            EventStore = eventStore
+            EventStore = eventStore,
+            PublishedPorts = publishedPorts
         });
     }
 }

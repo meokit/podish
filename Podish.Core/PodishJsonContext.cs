@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Fiberish.VFS;
+using Fiberish.Core.Net;
 
 namespace Podish.Core;
 
@@ -16,6 +17,9 @@ namespace Podish.Core;
 [JsonSerializable(typeof(List<OciDescriptor>))]
 [JsonSerializable(typeof(OciManifest))]
 [JsonSerializable(typeof(OciImageConfig))]
+[JsonSerializable(typeof(PublishedPortSpec))]
+[JsonSerializable(typeof(List<PublishedPortSpec>))]
+[JsonSerializable(typeof(TransportProtocol))]
 [JsonSerializable(typeof(PodishRunSpec))]
 [JsonSerializable(typeof(PodishContainerMetadata))]
 [JsonSerializable(typeof(List<PodishContainerMetadata>))]

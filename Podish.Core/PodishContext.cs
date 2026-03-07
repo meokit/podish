@@ -29,6 +29,7 @@ public sealed class PodishRunSpec
     public bool Tty { get; init; }
     public bool Strace { get; init; }
     public string LogDriver { get; init; } = "json-file";
+    public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
 }
 
 public sealed class PodishRunResult
@@ -447,7 +448,8 @@ public sealed class PodishContext : IDisposable
             EventStore = eventStore,
             TerminalBridge = bridge,
             ProcessController = processController,
-            EnableHostConsoleInput = !attachTerminalBridge
+            EnableHostConsoleInput = !attachTerminalBridge,
+            PublishedPorts = spec.PublishedPorts
         }));
 
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);

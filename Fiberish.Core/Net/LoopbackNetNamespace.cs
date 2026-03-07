@@ -45,11 +45,41 @@ public sealed class LoopbackNetNamespace : IDisposable
         return nextPollMillis;
     }
 
+    private static readonly NetstackNative.NetnsNotifyCallback NotifyThunk = OnNetnsNotify;
+    private static readonly nint NotifyThunkPtr = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(NotifyThunk);
+
+    private static void OnNetnsNotify(nint token)
+    {
+        NetstackWakeRegistry.Signal(token);
+    }
+
+    public void BindWakeCallback(nint token)
+    {
+        ThrowIfDisposed();
+        var rc = NetstackNative.SetNotifyCallback(_handle, NotifyThunkPtr, token);
+        if (rc != 0) throw new InvalidOperationException($"Failed to bind wake callback (rc={rc})");
+    }
+
+    public void UnbindWakeCallback()
+    {
+        if (_handle != 0)
+        {
+            NetstackNative.SetNotifyCallback(_handle, 0, 0);
+        }
+    }
+
+    public void ClearNotify()
+    {
+        ThrowIfDisposed();
+        NetstackNative.ClearNotify(_handle);
+    }
+
     public void Dispose()
     {
         if (_handle == 0)
             return;
 
+        UnbindWakeCallback();
         var handle = _handle;
         _handle = 0;
         NetstackNative.Destroy(handle);

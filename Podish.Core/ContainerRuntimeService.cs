@@ -34,17 +34,20 @@ public sealed class ContainerRunRequest
     public PodishTerminalBridge? TerminalBridge { get; init; }
     public ContainerProcessController? ProcessController { get; init; }
     public bool EnableHostConsoleInput { get; init; } = true;
+    public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
 }
 
 public sealed class ContainerRuntimeService
 {
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly Networking.PortForwardManager _portForwardManager;
 
     public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
     {
         _logger = logger;
         _loggerFactory = loggerFactory;
+        _portForwardManager = new Networking.PortForwardManager(loggerFactory);
     }
 
     public async Task<int> RunAsync(ContainerRunRequest request)
@@ -130,7 +133,9 @@ public sealed class ContainerRuntimeService
                 }
             }
         }
-
+        
+        INetworkBackend? networkBackend = null;
+        ContainerNetworkContext? networkContext = null;
         try
         {
             if (!Directory.Exists(request.RootfsPath))
@@ -144,6 +149,22 @@ public sealed class ContainerRuntimeService
             }
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
+            
+            if (request.NetworkMode == NetworkMode.Private)
+            {
+                networkBackend = new PrivateNetworkBackend(new DummySwitch());
+            }
+            else
+            {
+                networkBackend = new HostNetworkBackend();
+            }
+ 
+            if (request.NetworkMode == NetworkMode.Private)
+            {
+                networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec { ContainerId = request.ContainerId });
+                _portForwardManager.Start(networkContext, request.PublishedPorts);
+            }
+
             runtime.Syscalls.NetworkMode = request.NetworkMode;
             if (request.UseOverlay)
             {
@@ -311,9 +332,9 @@ public sealed class ContainerRuntimeService
                 request.Image));
 
             _logger.LogDebug(
-                "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver}",
+                "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver} publishedPortCount={PublishedPortCount}",
                 request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty, request.Volumes.Length,
-                request.LogDriver);
+                request.LogDriver, request.PublishedPorts.Count);
             scheduler.Run();
             _logger.LogDebug(
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
@@ -411,6 +432,21 @@ public sealed class ContainerRuntimeService
 
             _logger.LogTrace("Container teardown unbinding controller containerId={ContainerId}", request.ContainerId);
             request.ProcessController?.Unbind();
+
+            if (networkContext != null)
+            {
+                if (_portForwardManager.Stop(networkContext))
+                {
+                    networkBackend?.DestroyContainerNetwork(networkContext);
+                    networkContext.Dispose();
+                }
+                else
+                {
+                    _logger.LogCritical("Port forwarding loop failed to stop gracefully for container {ContainerId}. Leaking network resources to prevent memory corruption.", request.ContainerId);
+                }
+            }
+            networkBackend?.Dispose();
+
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }
     }

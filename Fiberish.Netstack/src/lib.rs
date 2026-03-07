@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
@@ -11,6 +11,8 @@ use smoltcp::socket::udp::{
 };
 use smoltcp::time::Instant;
 use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address};
+
+type NotifyCallback = extern "C" fn(usize);
 
 const TCP_BUFFER_SIZE: usize = 16 * 1024;
 const UDP_BUFFER_SIZE: usize = 16 * 1024;
@@ -54,9 +56,24 @@ struct NamespaceState {
     prefix_len: u8,
     next_ephemeral_port: u16,
     objects: HashMap<u64, SocketObject>,
+    notify_cb: Option<NotifyCallback>,
+    notify_userdata: usize,
+    notify_pending: AtomicBool,
+}
+
+
+impl NamespaceState {
+    fn notify(&self) {
+        if let Some(cb) = self.notify_cb {
+            if !self.notify_pending.swap(true, Ordering::AcqRel) {
+                cb(self.notify_userdata);
+            }
+        }
+    }
 }
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+
 static NAMESPACES: OnceLock<Mutex<HashMap<u64, NamespaceState>>> = OnceLock::new();
 
 fn namespaces() -> &'static Mutex<HashMap<u64, NamespaceState>> {
@@ -90,6 +107,9 @@ fn build_namespace(ipv4_be: u32, prefix_len: u8) -> NamespaceState {
         prefix_len,
         next_ephemeral_port: 49152,
         objects: HashMap::new(),
+        notify_cb: None,
+        notify_userdata: 0,
+        notify_pending: AtomicBool::new(false),
     }
 }
 
@@ -156,7 +176,8 @@ fn with_namespace<R>(ns_handle: u64, f: impl FnOnce(&mut NamespaceState) -> R) -
 }
 
 fn poll_namespace(state: &mut NamespaceState, now: Instant) {
-    let _ = state.iface.poll(now, &mut state.device, &mut state.sockets);
+    let poll_res = state.iface.poll(now, &mut state.device, &mut state.sockets);
+    let mut changed = !matches!(poll_res, smoltcp::iface::PollResult::None);
 
     let listener_handles: Vec<u64> = state
         .objects
@@ -168,22 +189,25 @@ fn poll_namespace(state: &mut NamespaceState, now: Instant) {
         .collect();
 
     for listener_handle in listener_handles {
-        promote_pending_accept(state, listener_handle);
+        changed |= promote_pending_accept(state, listener_handle);
+    }
+    if changed {
+        state.notify();
     }
 }
 
-fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) {
+fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> bool {
     let Some(SocketObject::TcpListener(listener)) = state.objects.get(&listener_handle).cloned() else {
-        return;
+        return false;
     };
 
     let socket = state.sockets.get::<TcpSocket>(listener.handle);
     if socket.is_listening() || !socket.is_active() {
-        return;
+        return false;
     }
 
     let Some(local_port) = listener.local_port else {
-        return;
+        return false;
     };
 
     let accepted_handle = alloc_handle();
@@ -200,13 +224,16 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) {
         if replacement.listen(local_port).is_err() {
             let _ = state.objects.remove(&accepted_handle);
             state.sockets.remove(replacement_socket_handle);
-            return;
+            return false;
         }
     }
 
     if let Some(SocketObject::TcpListener(listener_mut)) = state.objects.get_mut(&listener_handle) {
         listener_mut.handle = replacement_socket_handle;
         listener_mut.pending_accepts.push_back(accepted_handle);
+        true
+    } else {
+        false
     }
 }
 
@@ -242,6 +269,30 @@ fn write_endpoint(endpoint: IpEndpoint, out_ipv4_be: *mut u32, out_port: *mut u1
         unsafe { ptr::write(out_port, endpoint.port) };
     }
     0
+}
+
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_set_notify_callback(
+    handle: u64,
+    cb: Option<NotifyCallback>,
+    userdata: usize,
+) -> i32 {
+    with_namespace(handle, |state| {
+        state.notify_cb = cb;
+        state.notify_userdata = userdata;
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_clear_notify(handle: u64) -> i32 {
+    with_namespace(handle, |state| {
+        state.notify_pending.store(false, Ordering::Release);
+        0
+    })
+    .unwrap_or_else(|rc| rc)
 }
 
 #[no_mangle]
@@ -325,6 +376,7 @@ pub extern "C" fn fiber_tcp_listener_listen(ns_handle: u64, socket_handle: u64, 
             listener_mut.backlog = backlog as usize;
         }
 
+        state.notify();
         0
     })
     .unwrap_or_else(|rc| rc)
@@ -351,7 +403,7 @@ pub extern "C" fn fiber_tcp_stream_connect(
         socket
             .connect(cx, (IpAddress::Ipv4(remote_ip), remote_port), local_port)
             .map(|_| 0)
-            .unwrap_or(ERR_PROTOCOL)
+            .map(|_| { state.notify(); 0 }).unwrap_or(ERR_PROTOCOL)
     })
     .unwrap_or_else(|rc| rc)
 }
@@ -372,6 +424,7 @@ pub extern "C" fn fiber_tcp_listener_accept(ns_handle: u64, socket_handle: u64, 
         };
 
         unsafe { ptr::write(out_socket_handle, accepted) };
+        state.notify();
         0
     })
     .unwrap_or_else(|rc| rc)
@@ -403,6 +456,7 @@ pub extern "C" fn fiber_tcp_stream_send(
         match socket.send_slice(slice) {
             Ok(written) => {
                 unsafe { ptr::write(out_written, written) };
+                state.notify();
                 0
             }
             Err(tcp::SendError::InvalidState) => ERR_INVALID_STATE,
@@ -442,6 +496,7 @@ pub extern "C" fn fiber_tcp_stream_recv(
         match socket.recv_slice(slice) {
             Ok(read) => {
                 unsafe { ptr::write(out_read, read) };
+                state.notify();
                 0
             }
             Err(tcp::RecvError::InvalidState) => ERR_INVALID_STATE,
@@ -515,6 +570,7 @@ pub extern "C" fn fiber_tcp_stream_close(ns_handle: u64, socket_handle: u64) -> 
 
         let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
         socket.close();
+        state.notify();
         0
     })
     .unwrap_or_else(|rc| rc)
@@ -556,6 +612,7 @@ pub extern "C" fn fiber_socket_close(ns_handle: u64, socket_handle: u64) -> i32 
             }
         }
 
+        state.notify();
         0
     })
     .unwrap_or_else(|rc| rc)
@@ -645,7 +702,7 @@ pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, loca
         socket
             .bind(bind_port)
             .map(|_| 0)
-            .unwrap_or(ERR_PROTOCOL)
+            .map(|_| { state.notify(); 0 }).unwrap_or(ERR_PROTOCOL)
     })
     .unwrap_or_else(|rc| rc)
 }
