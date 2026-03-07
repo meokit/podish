@@ -147,7 +147,7 @@ file sealed class ProcRootInode : Inode
             "mounts" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
             "mountinfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
             "cpuinfo" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateCpuInfo()),
-            "meminfo" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateMemInfo()),
+            "meminfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager)),
             "version" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateVersion()),
             "stat" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler)),
             "uptime" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler)),

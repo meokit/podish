@@ -1,6 +1,7 @@
 using System.Text;
 using System.Reflection;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
@@ -229,6 +230,52 @@ public class ProcFsTests
         }
     }
 
+    [Fact]
+    public void ProcMemInfo_ShouldUseLiveMemoryStats()
+    {
+        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
+        IntPtr allocated = IntPtr.Zero;
+        ExternalPageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
+        try
+        {
+            Assert.True(ExternalPageManager.TryAllocateExternalPageStrict(out allocated, AllocationClass.Anonymous));
+            var text = ProcFsManager.GenerateMemInfo(null);
+
+            var total = ParseMemInfoKiB(text, "MemTotal");
+            var free = ParseMemInfoKiB(text, "MemFree");
+            var available = ParseMemInfoKiB(text, "MemAvailable");
+            var mapped = ParseMemInfoKiB(text, "Mapped");
+            var shmem = ParseMemInfoKiB(text, "Shmem");
+            var writeback = ParseMemInfoKiB(text, "Writeback");
+            var committed = ParseMemInfoKiB(text, "Committed_AS");
+            var active = ParseMemInfoKiB(text, "Active");
+            var inactive = ParseMemInfoKiB(text, "Inactive");
+            var activeAnon = ParseMemInfoKiB(text, "Active(anon)");
+            var inactiveAnon = ParseMemInfoKiB(text, "Inactive(anon)");
+            var activeFile = ParseMemInfoKiB(text, "Active(file)");
+            var inactiveFile = ParseMemInfoKiB(text, "Inactive(file)");
+
+            Assert.True(total > 0);
+            Assert.InRange(free, 0, total);
+            Assert.InRange(available, 0, total);
+            Assert.True(mapped > 0);
+            Assert.True(shmem >= 0);
+            Assert.True(writeback >= 0);
+            Assert.True(committed >= 0);
+            Assert.True(active >= 0);
+            Assert.True(inactive >= 0);
+            Assert.True(activeAnon >= 0);
+            Assert.True(inactiveAnon >= 0);
+            Assert.True(activeFile >= 0);
+            Assert.True(inactiveFile >= 0);
+        }
+        finally
+        {
+            if (allocated != IntPtr.Zero) ExternalPageManager.ReleasePtr(allocated);
+            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+        }
+    }
+
     private static string ReadAll(PathLocation loc)
     {
         Assert.True(loc.IsValid);
@@ -259,5 +306,16 @@ public class ProcFsTests
         {
             file.Close();
         }
+    }
+
+    private static long ParseMemInfoKiB(string text, string field)
+    {
+        var line = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(l => l.StartsWith(field + ":", StringComparison.Ordinal));
+        Assert.False(string.IsNullOrEmpty(line));
+        var right = line!.Split(':', 2)[1].Trim();
+        var number = right.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+        Assert.True(long.TryParse(number, out var value));
+        return value;
     }
 }

@@ -32,7 +32,9 @@ public sealed class MemoryObjectManager
             }
 
             var obj = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(obj);
+            GlobalPageCacheManager.TrackPageCache(obj, IsShmemInode(inode)
+                ? GlobalPageCacheManager.PageCacheClass.Shmem
+                : GlobalPageCacheManager.PageCacheClass.File);
             _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
             obj.AddRef(); // caller mapping reference
             inode.PageCache = obj;
@@ -86,5 +88,11 @@ public sealed class MemoryObjectManager
             _namedObjects.Remove(name);
             obj.Release();
         }
+    }
+
+    private static bool IsShmemInode(Inode inode)
+    {
+        var fsName = inode.SuperBlock?.Type?.Name;
+        return string.Equals(fsName, "tmpfs", StringComparison.Ordinal);
     }
 }

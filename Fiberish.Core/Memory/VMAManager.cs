@@ -483,8 +483,8 @@ public class VMAManager
                     else
                     {
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
-                        var newPage = ExternalPageManager.AllocateExternalPage();
-                        if (newPage == IntPtr.Zero) return false;
+                        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow))
+                            return false;
 
                         unsafe
                         {
@@ -551,8 +551,8 @@ public class VMAManager
                     if (srcPage == IntPtr.Zero) return false;
 
                     // Allocate private copy from inode cache
-                    existingCow = ExternalPageManager.AllocateExternalPage();
-                    if (existingCow == IntPtr.Zero) return false;
+                    if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow))
+                        return false;
 
                     unsafe
                     {
@@ -645,7 +645,7 @@ public class VMAManager
             }
 
             return true;
-        }, out _);
+        }, out _, vma.File == null, vma.File == null ? AllocationClass.Anonymous : AllocationClass.PageCache);
         if (hostPtr == IntPtr.Zero)
         {
             Logger.LogError("HandleFault: object page allocation failed for 0x{PageStart:x}", pageStart);
@@ -674,7 +674,7 @@ public class VMAManager
     public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
     {
         var pageStart = addr & LinuxConstants.PageMask;
-        var hostPtr = ExternalPages.GetOrAllocate(pageStart, out var isNew);
+        var hostPtr = ExternalPages.GetOrAllocate(pageStart, out var isNew, strictQuota: true, AllocationClass.Anonymous);
         if (hostPtr == IntPtr.Zero) return false;
         if (!engine.MapExternalPage(pageStart, hostPtr, (byte)perms))
         {
@@ -774,9 +774,17 @@ public class VMAManager
             unsafe
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
-                var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen), pageData, true);
-                if (rc == 0)
-                    vma.MemoryObject.ClearDirty(pageIndex);
+                GlobalPageCacheManager.BeginWritebackPages();
+                try
+                {
+                    var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen), pageData, true);
+                    if (rc == 0)
+                        vma.MemoryObject.ClearDirty(pageIndex);
+                }
+                finally
+                {
+                    GlobalPageCacheManager.EndWritebackPages();
+                }
             }
         }
 

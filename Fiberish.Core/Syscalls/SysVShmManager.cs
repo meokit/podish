@@ -386,6 +386,20 @@ public class SysVShmManager
         }
     }
 
+    public long GetResidentBytesSnapshot()
+    {
+        lock (_lock)
+        {
+            long bytes = 0;
+            foreach (var segment in _segmentsByShmid.Values)
+            {
+                bytes += (long)segment.BackingObject.PageCount * LinuxConstants.PageSize;
+            }
+
+            return bytes;
+        }
+    }
+
     private void DestroySegment(SysVShmSegment segment)
     {
         _segmentsByShmid.Remove(segment.Shmid);

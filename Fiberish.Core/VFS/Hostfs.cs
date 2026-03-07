@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Win32.SafeHandles;
 
@@ -1140,9 +1141,9 @@ public partial class HostInode : Inode
                 }
 
                 return n >= 0;
-            }, out _);
+            }, out _, strictQuota: true, Fiberish.Memory.AllocationClass.Readahead);
 
-            if (ptr == IntPtr.Zero) return -(int)Errno.EIO;
+            if (ptr == IntPtr.Zero) return 0;
         }
 
         return 0;
@@ -1155,7 +1156,16 @@ public partial class HostInode : Inode
         if (request.Length == 0) return 0;
         if (!sync) return 0;
 
-        var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        int rc;
+        GlobalPageCacheManager.BeginWritebackPages();
+        try
+        {
+            rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        }
+        finally
+        {
+            GlobalPageCacheManager.EndWritebackPages();
+        }
         if (rc < 0) return rc;
         lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
         if (linuxFile != null) Sync(linuxFile);
@@ -1192,7 +1202,16 @@ public partial class HostInode : Inode
             unsafe
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
-                var rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
+                int rc;
+                GlobalPageCacheManager.BeginWritebackPages();
+                try
+                {
+                    rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
+                }
+                finally
+                {
+                    GlobalPageCacheManager.EndWritebackPages();
+                }
                 if (rc < 0) return rc;
             }
 

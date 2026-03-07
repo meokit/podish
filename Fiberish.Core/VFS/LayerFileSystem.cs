@@ -354,9 +354,9 @@ public class LayerInode : Inode
                 }
 
                 return true;
-            }, out _);
+            }, out _, strictQuota: true, Fiberish.Memory.AllocationClass.Readahead);
 
-            if (ptr == IntPtr.Zero) return -(int)Errno.EIO;
+            if (ptr == IntPtr.Zero) return 0;
         }
 
         return 0;

@@ -88,6 +88,12 @@ public sealed class MemoryObject
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
     {
+        return GetOrCreatePage(pageIndex, onFirstCreate, out isNew, strictQuota: false, AllocationClass.PageCache);
+    }
+
+    public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew,
+        bool strictQuota, AllocationClass allocationClass)
+    {
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
@@ -97,7 +103,20 @@ public sealed class MemoryObject
             }
         }
 
-        var ptr = ExternalPageManager.AllocateExternalPage();
+        IntPtr ptr;
+        if (strictQuota)
+        {
+            if (!ExternalPageManager.TryAllocateExternalPageStrict(out ptr, allocationClass))
+            {
+                isNew = false;
+                return IntPtr.Zero;
+            }
+        }
+        else
+        {
+            ptr = ExternalPageManager.AllocateExternalPage();
+        }
+
         if (ptr == IntPtr.Zero)
         {
             isNew = false;
@@ -203,8 +222,7 @@ public sealed class MemoryObject
                 {
                     // Anonymous mappings lack CowObject, so they cannot rely on HandleFault COW.
                     // Do a deep copy here to maintain strict isolation for MAP_PRIVATE anon.
-                    var newPage = ExternalPageManager.AllocateExternalPage();
-                    if (newPage != IntPtr.Zero)
+                    if (ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Anonymous))
                     {
                         unsafe
                         {

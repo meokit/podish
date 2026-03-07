@@ -1,14 +1,30 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
+
+public enum AllocationClass
+{
+    Anonymous,
+    Cow,
+    PageCache,
+    Readahead,
+    KernelInternal
+}
 
 public sealed class ExternalPageManager
 {
     private static readonly Dictionary<nint, int> GlobalRefs = new();
     private static readonly object GlobalLock = new();
+    private static long _strictAllocSuccess;
+    private static long _strictAllocReclaimSuccess;
+    private static long _strictAllocFail;
+    private static long _legacyAllocOverQuota;
 
     private readonly Dictionary<uint, IntPtr> _pages = new();
+
+    public static long MemoryQuotaBytes { get; set; } = 256L * 1024 * 1024;
 
     public bool TryGet(uint pageAddr, out IntPtr ptr)
     {
@@ -22,7 +38,8 @@ public sealed class ExternalPageManager
         return false;
     }
 
-    public IntPtr GetOrAllocate(uint pageAddr, out bool isNew)
+    public IntPtr GetOrAllocate(uint pageAddr, out bool isNew, bool strictQuota = false,
+        AllocationClass allocationClass = AllocationClass.KernelInternal)
     {
         if (_pages.TryGetValue(pageAddr, out var page))
         {
@@ -30,7 +47,20 @@ public sealed class ExternalPageManager
             return page;
         }
 
-        var ptr = AllocateExternalPage();
+        IntPtr ptr;
+        if (strictQuota)
+        {
+            if (!TryAllocateExternalPageStrict(out ptr, allocationClass))
+            {
+                isNew = false;
+                return IntPtr.Zero;
+            }
+        }
+        else
+        {
+            ptr = AllocateExternalPage();
+        }
+
         if (ptr == IntPtr.Zero)
         {
             isNew = false;
@@ -90,6 +120,29 @@ public sealed class ExternalPageManager
         }
     }
 
+    public static long GetAllocatedPageCount()
+    {
+        lock (GlobalLock)
+        {
+            return GlobalRefs.Count;
+        }
+    }
+
+    public static long GetAllocatedBytes()
+    {
+        return GetAllocatedPageCount() * LinuxConstants.PageSize;
+    }
+
+    public static (long StrictSuccess, long StrictReclaimSuccess, long StrictFail, long LegacyOverQuota)
+        GetAllocationStats()
+    {
+        return (
+            Interlocked.Read(ref _strictAllocSuccess),
+            Interlocked.Read(ref _strictAllocReclaimSuccess),
+            Interlocked.Read(ref _strictAllocFail),
+            Interlocked.Read(ref _legacyAllocOverQuota));
+    }
+
     private static void AddGlobalRef(IntPtr ptr)
     {
         lock (GlobalLock)
@@ -122,6 +175,7 @@ public sealed class ExternalPageManager
 
     public static IntPtr AllocateExternalPage()
     {
+        var overQuota = MemoryQuotaBytes > 0 && GetAllocatedBytes() + LinuxConstants.PageSize > MemoryQuotaBytes;
         IntPtr ptr;
         unsafe
         {
@@ -136,7 +190,46 @@ public sealed class ExternalPageManager
         }
 
         AddGlobalRef(ptr);
+        if (overQuota) Interlocked.Increment(ref _legacyAllocOverQuota);
         return ptr;
+    }
+
+    public static bool TryAllocateExternalPageStrict(out IntPtr ptr, AllocationClass allocationClass)
+    {
+        ptr = IntPtr.Zero;
+        var reclaimed = false;
+        if (!HasQuotaCapacity())
+        {
+            // Best-effort one-shot reclaim before failing strict allocation.
+            if (allocationClass != AllocationClass.Readahead)
+                reclaimed = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize) > 0;
+
+            if (!HasQuotaCapacity())
+            {
+                Interlocked.Increment(ref _strictAllocFail);
+                return false;
+            }
+        }
+
+        ptr = AllocateExternalPage();
+        if (ptr == IntPtr.Zero)
+        {
+            Interlocked.Increment(ref _strictAllocFail);
+            return false;
+        }
+
+        if (reclaimed)
+            Interlocked.Increment(ref _strictAllocReclaimSuccess);
+        else
+            Interlocked.Increment(ref _strictAllocSuccess);
+        return true;
+    }
+
+    private static bool HasQuotaCapacity()
+    {
+        if (MemoryQuotaBytes <= 0) return true;
+        var next = GetAllocatedBytes() + LinuxConstants.PageSize;
+        return next <= MemoryQuotaBytes;
     }
 
     public static void AddRefPtr(IntPtr ptr)

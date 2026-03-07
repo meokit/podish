@@ -761,7 +761,7 @@ public class TmpfsInode : Inode
     {
         if (PageCache != null) return PageCache;
         PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-        GlobalPageCacheManager.TrackPageCache(PageCache);
+        GlobalPageCacheManager.TrackPageCache(PageCache, GlobalPageCacheManager.PageCacheClass.Shmem);
         _ownsPageCache = true;
         return PageCache;
     }
@@ -822,7 +822,7 @@ public class TmpfsInode : Inode
                 }
 
                 return true;
-            }, out _);
+            }, out _, strictQuota: true, AllocationClass.PageCache);
 
             if (pagePtr == IntPtr.Zero)
                 throw new OutOfMemoryException("Failed to allocate tmpfs page cache page");

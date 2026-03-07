@@ -334,9 +334,16 @@ public abstract class Inode : IPageCacheOps
                 }
 
                 return true;
-            }, out _);
+            }, out _, strictQuota: true, AllocationClass.PageCache);
 
-            if (pagePtr == IntPtr.Zero) return total > 0 ? total : -(int)Errno.EIO;
+            if (pagePtr == IntPtr.Zero)
+            {
+                // OOM on cache population: serve data without caching.
+                tempPage.AsSpan(pageOffset, toCopy).CopyTo(buffer[total..]);
+                total += toCopy;
+                cursor += toCopy;
+                continue;
+            }
 
             unsafe
             {
@@ -398,8 +405,8 @@ public abstract class Inode : IPageCacheOps
                     }
 
                     return true;
-                }, out _);
-                if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.EIO;
+                }, out _, strictQuota: true, AllocationClass.PageCache);
+                if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
             }
 
             unsafe
