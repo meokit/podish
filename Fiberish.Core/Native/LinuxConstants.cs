@@ -427,6 +427,7 @@ public static class LinuxConstants
     // Socket domains/types/protocols
     public const int AF_UNIX = 1;
     public const int AF_INET = 2;
+    public const int AF_NETLINK = 16;
     public const int AF_INET6 = 10;
 
     public const int SOCK_STREAM = 1;
@@ -469,4 +470,39 @@ public static class LinuxConstants
     public const int MSG_ZEROCOPY = 0x4000000;
     public const int MSG_FASTOPEN = 0x20000000;
     public const int MSG_CMSG_CLOEXEC = 0x40000000;
+
+    // netlink / rtnetlink
+    public const int NETLINK_ROUTE = 0;
+    public const ushort RTM_NEWLINK = 16;
+    public const ushort RTM_GETLINK = 18;
+    public const ushort RTM_NEWADDR = 20;
+    public const ushort RTM_GETADDR = 22;
+    public const ushort NLMSG_DONE = 3;
+    public const ushort NLM_F_REQUEST = 0x0001;
+    public const ushort NLM_F_MULTI = 0x0002;
+    public const ushort NLM_F_ROOT = 0x0100;
+    public const ushort NLM_F_MATCH = 0x0200;
+    public const ushort NLM_F_DUMP = NLM_F_ROOT | NLM_F_MATCH;
+    public const uint IFF_UP = 0x1;
+    public const uint IFF_RUNNING = 0x40;
+    public const uint IFF_LOOPBACK = 0x8;
+    public const ushort ARPHRD_ETHER = 1;
+    public const ushort ARPHRD_LOOPBACK = 772;
+    public const ushort IFLA_ADDRESS = 1;
+    public const ushort IFLA_IFNAME = 3;
+    public const ushort IFLA_MTU = 4;
+    public const ushort IFA_ADDRESS = 1;
+    public const ushort IFA_LOCAL = 2;
+    public const ushort IFA_LABEL = 3;
+    public const byte RT_SCOPE_UNIVERSE = 0;
+    public const byte RT_SCOPE_HOST = 254;
+
+    // network ioctl (i386)
+    public const uint SIOCGIFCONF = 0x8912;
+    public const uint SIOCGIFFLAGS = 0x8913;
+    public const uint SIOCGIFADDR = 0x8915;
+    public const uint SIOCGIFNETMASK = 0x891B;
+    public const uint SIOCGIFMTU = 0x8921;
+    public const uint SIOCGIFTXQLEN = 0x8942;
+    public const int IFNAMSIZ = 16;
 }

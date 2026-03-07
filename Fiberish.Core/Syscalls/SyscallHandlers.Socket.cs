@@ -28,6 +28,24 @@ public partial class SyscallManager
         SocketType sockType;
         ProtocolType proto;
 
+        if (domain == LinuxConstants.AF_NETLINK)
+        {
+            if (realType != LinuxConstants.SOCK_RAW && realType != LinuxConstants.SOCK_DGRAM)
+                return -(int)Errno.ESOCKTNOSUPPORT;
+            if (protocol != LinuxConstants.NETLINK_ROUTE)
+                return -(int)Errno.EPROTONOSUPPORT;
+
+            var inode = new NetlinkRouteSocketInode(0, sm.MemfdSuperBlock,
+                () => Fiberish.Core.Net.NetDeviceSnapshotProvider.Capture(sm.NetworkMode, sm.TryGetPrivateNetNamespace()));
+            var fileFlags = FileFlags.O_RDWR;
+            if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+            if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+
+            var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, sm.MemfdSuperBlock);
+            var file = new LinuxFile(dentry, fileFlags, sm.AnonMount);
+            return sm.AllocFD(file);
+        }
+
         if (domain == LinuxConstants.AF_INET) af = AddressFamily.InterNetwork;
         else if (domain == LinuxConstants.AF_INET6) af = AddressFamily.InterNetworkV6;
         else if (domain == LinuxConstants.AF_UNIX) return -(int)Errno.EAFNOSUPPORT; // TODO: UNIX Domain Sockets
@@ -215,6 +233,13 @@ public partial class SyscallManager
             return netInode.Bind(endpoint);
         }
 
+        if (file.Dentry.Inode is NetlinkRouteSocketInode)
+        {
+            // Userspace (iproute2/busybox ip) binds AF_NETLINK sockets before dump requests.
+            // For our in-process route socket, bind has no side effects.
+            return 0;
+        }
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -295,6 +320,12 @@ public partial class SyscallManager
             return 0;
         }
 
+        if (file.Dentry.Inode is NetlinkRouteSocketInode)
+        {
+            WriteSockaddrNetlink(sm.Engine, addrPtr, addrLenPtr);
+            return 0;
+        }
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -336,6 +367,9 @@ public partial class SyscallManager
             WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, netInode.RemoteEndPoint);
             return 0;
         }
+
+        if (file.Dentry.Inode is NetlinkRouteSocketInode)
+            return -(int)Errno.ENOTCONN;
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -511,6 +545,9 @@ public partial class SyscallManager
             return await netInode.SendAsync(file, buf, flags);
         }
 
+        if (file.Dentry.Inode is NetlinkRouteSocketInode netlinkInode)
+            return await netlinkInode.SendAsync(file, buf, flags);
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -589,6 +626,16 @@ public partial class SyscallManager
                 if (srcAddrPtr != 0 && addrLenPtr != 0 && remoteEp != null)
                     WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, remoteEp);
             }
+            return bytes;
+        }
+
+        if (file.Dentry.Inode is NetlinkRouteSocketInode netlinkInode)
+        {
+            var bytes = await netlinkInode.RecvAsync(file, buf, flags);
+            if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
+                return -(int)Errno.EFAULT;
+            if (bytes > 0 && srcAddrPtr != 0 && addrLenPtr != 0)
+                WriteSockaddrNetlink(sm.Engine, srcAddrPtr, addrLenPtr);
             return bytes;
         }
 
@@ -692,6 +739,13 @@ public partial class SyscallManager
             return ret;
         }
 
+        if (file.Dentry.Inode is NetlinkRouteSocketInode netlinkSock)
+        {
+            if (fds.Count > 0)
+                return -(int)Errno.EOPNOTSUPP;
+            return await netlinkSock.SendAsync(file, data, flags);
+        }
+
         return -(int)Errno.ENOTSOCK;
     }
 
@@ -765,6 +819,13 @@ public partial class SyscallManager
 
             if (bytesRead >= 0 && namePtr != 0 && netSock.RemoteEndPoint != null)
                 WriteSockaddr(sm.Engine, namePtr, nameLenPtr, netSock.RemoteEndPoint);
+        }
+        else if (file.Dentry.Inode is NetlinkRouteSocketInode netlinkSock)
+        {
+            bytesRead = await netlinkSock.RecvAsync(file, buffer, flags);
+            if (bytesRead < 0) return bytesRead;
+            if (bytesRead >= 0 && namePtr != 0)
+                WriteSockaddrNetlink(sm.Engine, namePtr, nameLenPtr);
         }
         else
         {
@@ -966,6 +1027,22 @@ public partial class SyscallManager
                 engine.CopyToUser(addrLenPtr, lenBuf);
             }
         }
+    }
+
+    private static void WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr)
+    {
+        Span<byte> lenBuf = stackalloc byte[4];
+        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;
+        var maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+
+        Span<byte> addr = stackalloc byte[12];
+        addr.Clear();
+        BinaryPrimitives.WriteUInt16LittleEndian(addr.Slice(0, 2), LinuxConstants.AF_NETLINK);
+        var toCopy = Math.Min(maxLen, 12);
+        engine.CopyToUser(addrPtr, addr.Slice(0, toCopy));
+
+        BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 12);
+        engine.CopyToUser(addrLenPtr, lenBuf);
     }
 
     private static int LinuxToWindowsSocketError(SocketError err)

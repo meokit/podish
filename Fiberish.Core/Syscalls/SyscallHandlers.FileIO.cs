@@ -565,6 +565,11 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        {
+            if (offset != -1) return -(int)Errno.ESPIPE;
+            return await DoReadVSocket(sm, f, iovs, iovCnt, flags);
+        }
 
         var updatePosition = offset == -1;
         var currentOffset = updatePosition ? f.Position : offset;
@@ -634,6 +639,11 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        if (f.Dentry.Inode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        {
+            if (offset != -1) return -(int)Errno.ESPIPE;
+            return await DoWriteVSocket(sm, f, iovs, iovCnt, flags);
+        }
 
         // Check mount read-only status (like Linux mnt_want_write)
         var wantWrite = f.WantWrite();
@@ -704,6 +714,88 @@ public partial class SyscallManager
         if (updatePosition) f.Position = currentOffset;
 
         return totalWritten;
+    }
+
+    private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt, int flags)
+    {
+        var totalWritten = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                if (!sm.Engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len)))
+                    return -(int)Errno.EFAULT;
+
+                var payload = data.AsMemory(0, (int)iov.Len);
+                int n = file.Dentry.Inode switch
+                {
+                    HostSocketInode host => await host.SendAsync(file, payload, flags),
+                    NetstackSocketInode netstack => await netstack.SendAsync(file, payload, flags),
+                    NetlinkRouteSocketInode netlink => await netlink.SendAsync(file, payload, flags),
+                    UnixSocketInode unix => await unix.SendMessageAsync(file, payload.ToArray(), null, flags),
+                    _ => -(int)Errno.ENOTSOCK
+                };
+
+                if (n == -(int)Errno.EPIPE && sm.Engine.Owner is FiberTask task)
+                    task.PostSignal((int)Signal.SIGPIPE);
+                if (n < 0)
+                    return totalWritten > 0 ? totalWritten : n;
+
+                totalWritten += n;
+                if (n < iov.Len)
+                    return totalWritten;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(data);
+            }
+        }
+
+        return totalWritten;
+    }
+
+    private static async ValueTask<int> DoReadVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt, int flags)
+    {
+        var totalRead = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var buffer = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                int n = file.Dentry.Inode switch
+                {
+                    HostSocketInode host => await host.RecvAsync(file, buffer, flags),
+                    NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags),
+                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, buffer, flags),
+                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, buffer, flags)).BytesRead,
+                    _ => -(int)Errno.ENOTSOCK
+                };
+
+                if (n < 0)
+                    return totalRead > 0 ? totalRead : n;
+                if (n == 0)
+                    return totalRead;
+                if (!sm.Engine.CopyToUser(iov.BaseAddr, buffer.AsSpan(0, n)))
+                    return -(int)Errno.EFAULT;
+
+                totalRead += n;
+                if (n < iov.Len)
+                    return totalRead;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        return totalRead;
     }
 
     private static Iovec[]? ReadIovecs(SyscallManager sm, uint iovAddr, int iovCnt)

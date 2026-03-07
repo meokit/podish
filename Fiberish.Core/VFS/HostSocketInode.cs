@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
+using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.Syscalls;
@@ -76,7 +77,7 @@ public sealed class HostSocketInode : Inode
                 return 0;
             }
             default:
-                return -(int)Errno.ENOTTY;
+                return NetDeviceIoctlHelper.Handle(engine, request, arg);
         }
     }
 

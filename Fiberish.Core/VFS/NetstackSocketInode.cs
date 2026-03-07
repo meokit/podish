@@ -340,6 +340,11 @@ public sealed class NetstackSocketInode : Inode
         return revents;
     }
 
+    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    {
+        return NetDeviceIoctlHelper.Handle(engine, request, arg);
+    }
+
     public int Shutdown(int how)
     {
         if (_socketType != SocketType.Stream)

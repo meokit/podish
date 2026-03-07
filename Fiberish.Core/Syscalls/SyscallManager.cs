@@ -176,6 +176,11 @@ public partial class SyscallManager
         return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24))).Namespace;
     }
 
+    public LoopbackNetNamespace? TryGetPrivateNetNamespace()
+    {
+        return _privateNetNamespace?.Namespace;
+    }
+
     public void SetPrivateNetNamespace(SharedLoopbackNetNamespace sharedNamespace)
     {
         _privateNetNamespace?.Release();
