@@ -56,22 +56,27 @@ public sealed class ContainerRuntimeService
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
         PosixSignalRegistration? sigwinch = null;
+        ITtyDriver? driver = null;
         var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
-        ITtyDriver driver = request.TerminalBridge != null
-            ? new BridgeTtyDriver(request.TerminalBridge, logSink)
-            : new ConsoleTtyDriver(logSink);
-        var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-        ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>());
-        if (driver is ConsoleTtyDriver consoleDriver)
-            consoleDriver.BindTty(ttyDiag);
-        if (request.TerminalBridge != null)
-            request.TerminalBridge.BindTty(ttyDiag);
-        scheduler.Tty = ttyDiag;
+        if (request.UseTty)
+        {
+            driver = request.TerminalBridge != null
+                ? new BridgeTtyDriver(request.TerminalBridge, logSink)
+                : new ConsoleTtyDriver(logSink);
+            var broadcaster = new SchedulerSignalBroadcaster(scheduler);
+            ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>());
+            if (driver is ConsoleTtyDriver consoleDriver)
+                consoleDriver.BindTty(ttyDiag);
+            if (request.TerminalBridge != null)
+                request.TerminalBridge.BindTty(ttyDiag);
+            scheduler.Tty = ttyDiag;
+        }
 
         if (isInteractive)
         {
+            var tty = ttyDiag!;
             stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -94,14 +99,14 @@ public sealed class ContainerRuntimeService
             }
 
             inputCts = new CancellationTokenSource();
-            inputTask = Task.Run(() => InputLoop(ttyDiag, stdinStream, inputCts.Token));
+            inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 try
                 {
                     if (!Console.IsOutputRedirected)
-                        ttyDiag.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                        tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
 
                     sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, context =>
                     {
@@ -109,7 +114,7 @@ public sealed class ContainerRuntimeService
                         try
                         {
                             if (!Console.IsOutputRedirected)
-                                ttyDiag.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                                tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
                         }
                         catch
                         {
@@ -243,9 +248,10 @@ public sealed class ContainerRuntimeService
             {
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "HOME=/root",
-                "TERM=xterm",
                 "USER=root"
             };
+            if (request.UseTty)
+                finalEnvs.Add("TERM=xterm");
             foreach (var env in request.GuestEnvs)
                 finalEnvs.Add(env);
 
