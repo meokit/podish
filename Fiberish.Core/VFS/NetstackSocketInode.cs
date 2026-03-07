@@ -17,6 +17,11 @@ public sealed class NetstackSocketInode : Inode
     private LoopbackNetNamespace.UdpDatagramSocket? _udp;
     private IPEndPoint? _boundEndPoint;
     private IPEndPoint? _lastDatagramPeer;
+    private IPEndPoint? _connectedDatagramPeer;
+    private int _socketError;
+    private bool _reuseAddress;
+    private int? _receiveTimeoutMs;
+    private int? _sendTimeoutMs;
     private int _backlog;
 
     public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
@@ -58,6 +63,55 @@ public sealed class NetstackSocketInode : Inode
         return 0;
     }
 
+    public int SetSocketOption(int level, int optname, ReadOnlySpan<byte> value)
+    {
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_REUSEADDR:
+                _reuseAddress = value.Length >= 4 && BitConverter.ToInt32(value[..4]) != 0;
+                return 0;
+            case LinuxConstants.SO_RCVTIMEO:
+                _receiveTimeoutMs = ParseTimevalMs(value);
+                return 0;
+            case LinuxConstants.SO_SNDTIMEO:
+                _sendTimeoutMs = ParseTimevalMs(value);
+                return 0;
+            default:
+                return -(int)Errno.ENOPROTOOPT;
+        }
+    }
+
+    public int GetSocketOption(int level, int optname, Span<byte> destination, out int written)
+    {
+        written = 4;
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_TYPE:
+                BitConverter.TryWriteBytes(destination, _socketType switch
+                {
+                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
+                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
+                    _ => 0
+                });
+                return 0;
+            case LinuxConstants.SO_ERROR:
+                BitConverter.TryWriteBytes(destination, _socketError);
+                _socketError = 0;
+                return 0;
+            case LinuxConstants.SO_REUSEADDR:
+                BitConverter.TryWriteBytes(destination, _reuseAddress ? 1 : 0);
+                return 0;
+            default:
+                return -(int)Errno.ENOPROTOOPT;
+        }
+    }
+
     public int Listen(int backlog)
     {
         if (_socketType != SocketType.Stream)
@@ -76,6 +130,20 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> ConnectAsync(LinuxFile file, IPEndPoint endpoint)
     {
+        if (_socketType == SocketType.Dgram)
+        {
+            if (!IsValidConnectAddress(endpoint.Address))
+                return -(int)Errno.ENETUNREACH;
+            if (_boundEndPoint == null)
+            {
+                _udp ??= _namespace.CreateUdpSocket();
+                _udp.Bind(0);
+                _boundEndPoint = _udp.LocalEndPoint;
+            }
+            _connectedDatagramPeer = endpoint;
+            _lastDatagramPeer = endpoint;
+            return 0;
+        }
         if (_socketType != SocketType.Stream)
             return -(int)Errno.EOPNOTSUPP;
         if (!IsValidConnectAddress(endpoint.Address))
@@ -115,6 +183,12 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
     {
+        if (_socketType == SocketType.Dgram)
+        {
+            if (_connectedDatagramPeer == null)
+                return -(int)Errno.EDESTADDRREQ;
+            return await SendToAsync(file, buffer, _connectedDatagramPeer, flags);
+        }
         if (_socketType != SocketType.Stream)
             return -(int)Errno.EDESTADDRREQ;
         if (_stream == null)
@@ -135,6 +209,20 @@ public sealed class NetstackSocketInode : Inode
 
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
     {
+        if (_socketType == SocketType.Dgram)
+        {
+            if (_connectedDatagramPeer == null)
+                return -(int)Errno.ENOTCONN;
+
+            while (true)
+            {
+                var result = await RecvFromAsync(file, buffer, flags);
+                if (result.Bytes < 0)
+                    return result.Bytes;
+                if (result.RemoteEndPoint == null || result.RemoteEndPoint.Equals(_connectedDatagramPeer))
+                    return result.Bytes;
+            }
+        }
         if (_socketType != SocketType.Stream)
             return -(int)Errno.ENOTCONN;
         if (_stream == null)
@@ -159,10 +247,12 @@ public sealed class NetstackSocketInode : Inode
             return -(int)Errno.EISCONN;
         if (!IsValidConnectAddress(endpoint.Address))
             return -(int)Errno.ENETUNREACH;
-        if (_boundEndPoint == null)
-            return -(int)Errno.EINVAL;
-
         _udp ??= _namespace.CreateUdpSocket();
+        if (_boundEndPoint == null)
+        {
+            _udp.Bind(0);
+            _boundEndPoint = _udp.LocalEndPoint;
+        }
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_udp.CanWrite)
             return -(int)Errno.EAGAIN;
@@ -296,6 +386,15 @@ public sealed class NetstackSocketInode : Inode
         }
 
         return false;
+    }
+
+    private int? ParseTimevalMs(ReadOnlySpan<byte> value)
+    {
+        if (value.Length < 8)
+            return 0;
+        var sec = BitConverter.ToInt32(value[..4]);
+        var usec = BitConverter.ToInt32(value.Slice(4, 4));
+        return sec * 1000 + usec / 1000;
     }
 
     private uint ToIpv4Be(IPAddress address)

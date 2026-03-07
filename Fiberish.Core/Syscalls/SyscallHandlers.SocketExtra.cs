@@ -131,6 +131,11 @@ public partial class SyscallManager
             }
         }
 
+        if (file.Dentry.Inode is NetstackSocketInode netSock)
+        {
+            return netSock.SetSocketOption(level, optname, buf.AsSpan(0, optlen));
+        }
+
         return -(int)Errno.ENOPROTOOPT;
     }
 
@@ -230,7 +235,15 @@ public partial class SyscallManager
         }
         else
         {
-            return -(int)Errno.ENOPROTOOPT;
+            if (file.Dentry.Inode is NetstackSocketInode netSock)
+            {
+                var rc = netSock.GetSocketOption(level, optname, outBuf, out written);
+                if (rc != 0) return rc;
+            }
+            else
+            {
+                return -(int)Errno.ENOPROTOOPT;
+            }
         }
 
         written = Math.Min(written, optlen);

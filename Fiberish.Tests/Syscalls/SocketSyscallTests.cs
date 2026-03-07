@@ -350,6 +350,56 @@ public class SocketSyscallTests
     }
 
     [Fact]
+    public async Task Socket_PrivateNetwork_Dgram_GetSockOpt_TypeAndError_Work()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+        env.MapUserPage(0x26000);
+        env.MapUserPage(0x27000);
+        env.WriteInt32(0x27000, 4);
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(0, await CallSysGetSockOpt(env, (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_TYPE, 0x26000, 0x27000));
+        Assert.Equal(LinuxConstants.SOCK_DGRAM, env.ReadInt32(0x26000));
+
+        env.WriteInt32(0x27000, 4);
+        Assert.Equal(0, await CallSysGetSockOpt(env, (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_ERROR, 0x26000, 0x27000));
+        Assert.Equal(0, env.ReadInt32(0x26000));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_Dgram_Connect_ReportsPeerAndEphemeralLocalPort()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+        env.MapUserPage(0x28000);
+        env.MapUserPage(0x29000);
+        env.MapUserPage(0x2A000);
+        env.MapUserPage(0x2B000);
+        env.WriteInt32(0x29000, 16);
+        env.WriteInt32(0x2B000, 16);
+
+        WriteSockaddrIn(env, 0x28000, 0x7F000001u, 19220);
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(0, await CallSysConnect(env, (uint)fd, 0x28000, 16));
+
+        Assert.Equal(0, await CallSysGetPeerName(env, (uint)fd, 0x2A000, 0x2B000));
+        var (peerIp, peerPort) = ReadSockaddrIn(env, 0x2A000);
+        Assert.Equal(0x7F000001u, peerIp);
+        Assert.Equal(19220, peerPort);
+
+        env.WriteInt32(0x29000, 16);
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)fd, 0x28000, 0x29000));
+        var (localIp, localPort) = ReadSockaddrIn(env, 0x28000);
+        Assert.Equal(0x00000000u, localIp);
+        Assert.True(localPort >= 49152);
+    }
+
+    [Fact]
     public async Task Socket_PrivateNetwork_GetSockNameAndPeerName_ReportLoopbackEndpoints()
     {
         using var env = new TestEnv();

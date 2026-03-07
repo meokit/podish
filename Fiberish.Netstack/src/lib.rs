@@ -590,9 +590,15 @@ pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, loca
             return ERR_NOT_FOUND;
         };
 
+        let bind_port = if local_port == 0 {
+            allocate_local_port(state)
+        } else {
+            local_port
+        };
+
         let socket = state.sockets.get_mut::<UdpSocket>(udp.handle);
         socket
-            .bind(local_port)
+            .bind(bind_port)
             .map(|_| 0)
             .unwrap_or(ERR_PROTOCOL)
     })
