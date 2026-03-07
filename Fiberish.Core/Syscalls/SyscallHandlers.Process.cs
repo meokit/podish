@@ -42,14 +42,7 @@ public partial class SyscallManager
 
                 ProcFsManager.OnProcessExit(sm, task.Process.TGID);
                 sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
-                task.Process.State = ProcessState.Zombie;
-                task.Process.ExitStatus = exitCode;
-                task.Process.ExitedBySignal = false;
-                task.Process.TermSignal = 0;
-                task.Process.CoreDumped = false;
-                task.Process.HasWaitableStop = false;
-                task.Process.HasWaitableContinue = false;
-                task.Process.StateChangeEvent.Set();
+                MarkProcessExitAndReparent(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
             }
         }
 
@@ -86,14 +79,7 @@ public partial class SyscallManager
 
             ProcFsManager.OnProcessExit(sm, task.Process.TGID);
             sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
-            task.Process.State = ProcessState.Zombie;
-            task.Process.ExitStatus = exitCode;
-            task.Process.ExitedBySignal = false;
-            task.Process.TermSignal = 0;
-            task.Process.CoreDumped = false;
-            task.Process.HasWaitableStop = false;
-            task.Process.HasWaitableContinue = false;
-            task.Process.StateChangeEvent.Set();
+            MarkProcessExitAndReparent(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, true);
@@ -448,6 +434,32 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16, 4), info.Uid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.Status);
         return sm.Engine.CopyToUser(addr, buf);
+    }
+
+    internal static void MarkProcessExitAndReparent(FiberTask task, int exitStatus, bool exitedBySignal, int termSignal,
+        bool coreDumped)
+    {
+        task.Process.State = ProcessState.Zombie;
+        task.Process.ExitStatus = exitStatus;
+        task.Process.ExitedBySignal = exitedBySignal;
+        task.Process.TermSignal = termSignal;
+        task.Process.CoreDumped = coreDumped;
+        task.Process.HasWaitableStop = false;
+        task.Process.HasWaitableContinue = false;
+
+        var reparented = task.CommonKernel.ReparentChildrenToInit(task.Process.TGID);
+        if (reparented > 0)
+        {
+            Logger.LogDebug("[Exit] Reparented {Count} orphaned children from PID {Pid} to init PID {InitPid}",
+                reparented, task.Process.TGID, task.CommonKernel.InitPid);
+        }
+
+        task.Process.StateChangeEvent.Set();
+
+        if (task.CommonKernel.TryAutoReapZombie(task.Process))
+        {
+            Logger.LogDebug("[Exit] Auto-reaped zombie PID {Pid} by engine init reaper", task.Process.TGID);
+        }
     }
 
     private static async ValueTask<int> SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

@@ -36,6 +36,7 @@ public sealed class ContainerRunRequest
     public ContainerProcessController? ProcessController { get; init; }
     public bool EnableHostConsoleInput { get; init; } = true;
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
+    public bool UseEngineInit { get; init; }
 }
 
 public sealed class ContainerRuntimeService
@@ -312,9 +313,17 @@ public sealed class ContainerRuntimeService
                 NodeName = string.IsNullOrWhiteSpace(request.Hostname) ? request.ContainerId : request.Hostname
             };
 
+            Process? engineInitProc = null;
+            if (request.UseEngineInit)
+            {
+                engineInitProc = ProcessFactory.CreateEngineInitProcess(runtime, scheduler, uts);
+                scheduler.SetEngineInitReaperEnabled(true);
+                _logger.LogInformation("Engine init reaper enabled. PID 1 is reserved by runtime.");
+            }
+
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
-                scheduler, ttyDiag, loc.Mount!, uts);
+                scheduler, ttyDiag, loc.Mount!, uts, parentPid: engineInitProc?.TGID ?? 0);
             request.ProcessController?.BindRuntimeControl(() =>
             {
                 try
@@ -330,7 +339,18 @@ public sealed class ContainerRuntimeService
                 scheduler.Running = false;
                 scheduler.WakeUp();
             });
-            request.ProcessController?.BindInitProcess(mainTask.Process.TGID, sig => mainTask.PostSignal(sig));
+            var exposedInitPid = engineInitProc?.TGID ?? mainTask.Process.TGID;
+            request.ProcessController?.BindInitProcess(exposedInitPid, sig =>
+            {
+                if (request.UseEngineInit)
+                {
+                    _ = scheduler.SignalProcess(exposedInitPid, sig);
+                }
+                else
+                {
+                    mainTask.PostSignal(sig);
+                }
+            });
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
 

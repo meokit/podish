@@ -804,14 +804,8 @@ public class FiberTask
         if (TID == Process.TGID)
         {
             ProcFsManager.OnProcessExit(Process.Syscalls, Process.TGID);
-            Process.State = ProcessState.Zombie;
-            Process.ExitStatus = ExitStatus;
-            Process.ExitedBySignal = true;
-            Process.TermSignal = sig;
-            Process.CoreDumped = coreDumped;
-            Process.HasWaitableStop = false;
-            Process.HasWaitableContinue = false;
-            Process.StateChangeEvent.Set();
+            SyscallManager.MarkProcessExitAndReparent(this, ExitStatus, exitedBySignal: true, termSignal: sig,
+                coreDumped);
         }
     }
 

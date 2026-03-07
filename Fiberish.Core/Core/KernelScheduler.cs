@@ -35,6 +35,8 @@ public class KernelScheduler
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
     private int _nextTaskId;
+    private int _initPid;
+    private int _engineInitReaperEnabled;
 
     private TtyDiscipline? _tty;
     private int _wakePending;
@@ -57,6 +59,8 @@ public class KernelScheduler
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();
 
     public FiberTask? CurrentTask { get; internal set; }
+    public int InitPid => Volatile.Read(ref _initPid);
+    public bool EngineInitReaperEnabled => Volatile.Read(ref _engineInitReaperEnabled) != 0;
 
     public static KernelScheduler? Current
     {
@@ -122,6 +126,97 @@ public class KernelScheduler
     public int AllocateTaskId()
     {
         return Interlocked.Increment(ref _nextTaskId);
+    }
+
+    public void SetInitPid(int pid)
+    {
+        if (pid <= 0) return;
+        Interlocked.CompareExchange(ref _initPid, pid, 0);
+    }
+
+    public void SetEngineInitReaperEnabled(bool enabled)
+    {
+        Volatile.Write(ref _engineInitReaperEnabled, enabled ? 1 : 0);
+    }
+
+    public int ReparentChildrenToInit(int exitingPid)
+    {
+        var initPid = InitPid;
+        if (initPid <= 0 || exitingPid <= 0 || exitingPid == initPid) return 0;
+        return ReparentChildren(exitingPid, initPid);
+    }
+
+    public int ReparentChildren(int fromPid, int toPid)
+    {
+        if (fromPid <= 0 || toPid <= 0 || fromPid == toPid) return 0;
+
+        Process? fromProc;
+        Process? toProc;
+        List<int> adoptedPids = [];
+
+        lock (_processes)
+        {
+            _processes.TryGetValue(fromPid, out fromProc);
+            if (!_processes.TryGetValue(toPid, out toProc)) return 0;
+
+            foreach (var proc in _processes.Values)
+            {
+                if (proc.PPID != fromPid) continue;
+                proc.PPID = toPid;
+                adoptedPids.Add(proc.TGID);
+            }
+        }
+
+        if (adoptedPids.Count == 0) return 0;
+
+        if (fromProc != null)
+        {
+            lock (fromProc.Children)
+            {
+                foreach (var pid in adoptedPids) fromProc.Children.Remove(pid);
+            }
+        }
+
+        lock (toProc!.Children)
+        {
+            foreach (var pid in adoptedPids)
+            {
+                if (!toProc.Children.Contains(pid)) toProc.Children.Add(pid);
+            }
+        }
+
+        var initTask = GetTask(toPid);
+        if (initTask != null)
+        {
+            initTask.PostSignal((int)Signal.SIGCHLD);
+            initTask.TrySetActiveWaitReason(WakeReason.Event);
+            Schedule(initTask);
+        }
+
+        return adoptedPids.Count;
+    }
+
+    public bool TryAutoReapZombie(Process process)
+    {
+        if (!EngineInitReaperEnabled) return false;
+        if (process.State != ProcessState.Zombie) return false;
+        if (process.TGID == InitPid || process.PPID != InitPid) return false;
+
+        Process? initProc;
+        lock (_processes)
+        {
+            if (!_processes.TryGetValue(process.TGID, out var live) || !ReferenceEquals(live, process)) return false;
+            if (!_processes.TryGetValue(InitPid, out initProc)) return false;
+            _processes.Remove(process.TGID);
+        }
+
+        lock (initProc!.Children)
+        {
+            initProc.Children.Remove(process.TGID);
+        }
+
+        process.State = ProcessState.Dead;
+        return true;
     }
 
     public void Schedule(FiberTask task)
@@ -471,9 +566,20 @@ public class KernelScheduler
         }
 
         var mainTask = GetTask(proc.TGID);
-        if (mainTask == null) return false;
-        mainTask.PostSignal(signal);
-        return true;
+        if (mainTask != null)
+        {
+            mainTask.PostSignal(signal);
+            return true;
+        }
+
+        // Engine-managed init has no FiberTask. In --init mode, forward init's signals
+        // to its direct children so kill(1, sig) semantics remain usable.
+        if (EngineInitReaperEnabled && pid == InitPid)
+        {
+            return ForwardSignalFromEngineInit(signal) > 0;
+        }
+
+        return false;
     }
 
     public bool SignalProcessInfo(int pid, int signal, SigInfo info)
@@ -485,9 +591,18 @@ public class KernelScheduler
         }
 
         var mainTask = GetTask(proc.TGID);
-        if (mainTask == null) return false;
-        mainTask.PostSignalInfo(info);
-        return true;
+        if (mainTask != null)
+        {
+            mainTask.PostSignalInfo(info);
+            return true;
+        }
+
+        if (EngineInitReaperEnabled && pid == InitPid)
+        {
+            return ForwardSignalFromEngineInit(signal) > 0;
+        }
+
+        return false;
     }
 
     public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)
@@ -507,6 +622,32 @@ public class KernelScheduler
         foreach (var pid in pids)
             if (SignalProcess(pid, signal))
                 count++;
+
+        return count;
+    }
+
+    private int ForwardSignalFromEngineInit(int signal)
+    {
+        Process? initProc;
+        lock (_processes)
+        {
+            if (!_processes.TryGetValue(InitPid, out initProc)) return 0;
+        }
+
+        List<int> childPids;
+        lock (initProc!.Children)
+        {
+            childPids = [.. initProc.Children];
+        }
+
+        var count = 0;
+        foreach (var childPid in childPids)
+        {
+            var child = GetProcess(childPid);
+            if (child == null) continue;
+            if (child.State is ProcessState.Zombie or ProcessState.Dead) continue;
+            if (SignalProcess(childPid, signal)) count++;
+        }
 
         return count;
     }

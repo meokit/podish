@@ -48,6 +48,9 @@ internal class Program
         var straceOption = new Option<bool>(
             new[] { "--strace", "-s" },
             "Enable syscall tracing (strace-like logs)");
+        var initOption = new Option<bool>(
+            new[] { "--init" },
+            "Run with an engine-managed PID 1 reaper (podman --init compatible)");
         var rootfsOption = new Option<string?>(
             new[] { "--rootfs" },
             "Use a local root filesystem path (Podman-compatible rootfs mode)");
@@ -98,6 +101,7 @@ internal class Program
         runCommand.AddOption(interactiveOption);
         runCommand.AddOption(ttyOption);
         runCommand.AddOption(straceOption);
+        runCommand.AddOption(initOption);
         runCommand.AddOption(rootfsOption);
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
@@ -115,6 +119,7 @@ internal class Program
             var interactive = context.ParseResult.GetValueForOption(interactiveOption);
             var tty = context.ParseResult.GetValueForOption(ttyOption);
             var strace = context.ParseResult.GetValueForOption(straceOption);
+            var useInit = context.ParseResult.GetValueForOption(initOption);
             var rootfs = context.ParseResult.GetValueForOption(rootfsOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
@@ -304,6 +309,7 @@ internal class Program
                 Interactive = interactive,
                 Tty = tty,
                 Strace = strace,
+                Init = useInit,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
             };
@@ -336,6 +342,7 @@ internal class Program
                 dnsServers,
                 interactive && tty,
                 strace,
+                useInit,
                 !useRootfs,
                 containersDir,
                 containerId,
@@ -482,6 +489,7 @@ internal class Program
                 spec.Dns,
                 spec.Interactive && spec.Tty,
                 spec.Strace,
+                spec.Init,
                 !useRootfs,
                 containersDir,
                 containerId,
@@ -1266,7 +1274,7 @@ internal class Program
     }
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useOverlay, string containersDir,
+        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit, bool useOverlay, string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image, string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts)
     {
@@ -1283,6 +1291,7 @@ internal class Program
             DnsServers = dnsServers,
             UseTty = useTty,
             Strace = strace,
+            UseEngineInit = useEngineInit,
             UseOverlay = useOverlay,
             ContainerId = containerId,
             Hostname = hostname,
