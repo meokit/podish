@@ -163,6 +163,7 @@ public sealed class ContainerRuntimeService
             {
                 networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec { ContainerId = request.ContainerId });
                 _portForwardManager.Start(networkContext, request.PublishedPorts);
+                runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
             }
 
             runtime.Syscalls.NetworkMode = request.NetworkMode;

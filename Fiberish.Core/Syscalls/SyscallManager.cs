@@ -176,6 +176,12 @@ public partial class SyscallManager
         return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24))).Namespace;
     }
 
+    public void SetPrivateNetNamespace(SharedLoopbackNetNamespace sharedNamespace)
+    {
+        _privateNetNamespace?.Release();
+        _privateNetNamespace = sharedNamespace.AddRef();
+    }
+
     /// <summary>
     ///     Mount namespace containing all mounts and lookup hash.
     /// </summary>

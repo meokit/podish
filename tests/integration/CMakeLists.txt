@@ -73,6 +73,7 @@ add_integration_binary("test_private_tcp_poll" "tests/src/test_private_tcp_poll.
 add_integration_binary("test_private_tcp_shutdown" "tests/src/test_private_tcp_shutdown.c")
 add_integration_binary("test_private_udp_loopback" "tests/src/test_private_udp_loopback.c")
 add_integration_binary("test_private_udp_connected" "tests/src/test_private_udp_connected.c")
+add_integration_binary("test_cli_port_forward_server" "tests/src/test_cli_port_forward_server.c")
 add_integration_binary("test_low_hanging" "tests/src/test_low_hanging.c")
 add_integration_binary("test_fchdir_truncate" "tests/src/test_fchdir_truncate.c")
 add_integration_binary("test_job_control" "tests/src/test_job_control.c")

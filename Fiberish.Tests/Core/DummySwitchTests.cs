@@ -15,7 +15,7 @@ public class DummySwitchTests
             "test-container",
             NetworkMode.Private,
             new IPAddress([10, 88, 0, 1]), // 10.88.0.1
-            null!,
+            (LoopbackNetNamespace)null!,
             sw);
         
         var spec = new PublishedPortSpec

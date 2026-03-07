@@ -19,6 +19,8 @@ public sealed class PortForwardLoop : IDisposable
     private readonly Lock _contextsLock = new();
     private readonly Thread _loopThread;
     private volatile bool _running = true;
+    private volatile bool _disposed;
+    private volatile bool _wakeSignalDisposed;
     private long _nextSessionId = 1;
 
     public PortForwardLoop(ILogger logger)
@@ -39,7 +41,7 @@ public sealed class PortForwardLoop : IDisposable
                 PortSpec = port
             });
         }
-        _wakeSignal.Set();
+        WakeLoop();
     }
 
     public void StopPublishedPorts(ContainerNetworkContext context, TaskCompletionSource? completion = null)
@@ -50,7 +52,7 @@ public sealed class PortForwardLoop : IDisposable
             Context = context,
             Completion = completion
         });
-        _wakeSignal.Set();
+        WakeLoop();
     }
 
     public IEnumerable<int> GetActivePorts(string containerId)
@@ -241,7 +243,7 @@ public sealed class PortForwardLoop : IDisposable
                 Context = context,
                 PortSpec = spec
             });
-            _wakeSignal.Set();
+            WakeLoop();
         };
 
         try
@@ -324,7 +326,7 @@ public sealed class PortForwardLoop : IDisposable
             session.HostReadClosed = true;
             session.HostReceivePending = false;
             try { session.GuestStream.CloseWrite(); } catch { }
-            _wakeSignal.Set();
+            WakeLoop();
         }
     }
 
@@ -332,7 +334,7 @@ public sealed class PortForwardLoop : IDisposable
     {
         var session = (RelaySession)e.UserToken!;
         _eventQueue.Enqueue(new LoopEvent { Type = LoopEventType.HostReceive, Session = session });
-        _wakeSignal.Set();
+        WakeLoop();
     }
 
     private void HandleHostReceive(RelaySession session)
@@ -355,7 +357,7 @@ public sealed class PortForwardLoop : IDisposable
         }
         session.HostToGuestCount = args.BytesTransferred;
         session.HostToGuestOffset = 0;
-        _wakeSignal.Set();
+        WakeLoop();
     }
 
     private void BeginHostSend(RelaySession session)
@@ -383,7 +385,7 @@ public sealed class PortForwardLoop : IDisposable
             _logger.LogDebug("Host send failed: {Message}", ex.Message);
             session.HostWriteClosed = true;
             session.HostSendPending = false;
-            _wakeSignal.Set();
+            WakeLoop();
         }
     }
 
@@ -391,7 +393,7 @@ public sealed class PortForwardLoop : IDisposable
     {
         var session = (RelaySession)e.UserToken!;
         _eventQueue.Enqueue(new LoopEvent { Type = LoopEventType.HostSend, Session = session });
-        _wakeSignal.Set();
+        WakeLoop();
     }
 
     private void HandleHostSend(RelaySession session)
@@ -407,7 +409,7 @@ public sealed class PortForwardLoop : IDisposable
 
         session.GuestToHostCount -= args.BytesTransferred;
         session.GuestToHostOffset += args.BytesTransferred;
-        _wakeSignal.Set();
+            WakeLoop();
     }
 
     private void ProcessSessions()
@@ -532,9 +534,28 @@ public sealed class PortForwardLoop : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
         _running = false;
-        _wakeSignal.Set();
+        // Unblock wait-loop before joining.
+        try { _wakeSignal.Set(); } catch { }
         _loopThread.Join();
+        _wakeSignalDisposed = true;
         _wakeSignal.Dispose();
+        _disposed = true;
+    }
+
+    private void WakeLoop()
+    {
+        if (_wakeSignalDisposed)
+            return;
+
+        try
+        {
+            _wakeSignal.Set();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Teardown can race with async socket completions; wake is best-effort.
+        }
     }
 }
