@@ -8,6 +8,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
 
 namespace Podish.Core;
@@ -45,9 +46,9 @@ public sealed class ContainerRuntimeService
 
     public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
     {
-        _logger = logger;
-        _loggerFactory = loggerFactory;
-        _portForwardManager = new Networking.PortForwardManager(loggerFactory);
+        _logger = logger ?? NullLogger.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _portForwardManager = new Networking.PortForwardManager(_loggerFactory);
     }
 
     public async Task<int> RunAsync(ContainerRunRequest request)
@@ -67,6 +68,7 @@ public sealed class ContainerRuntimeService
         var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
+        var publishedPorts = request.PublishedPorts ?? Array.Empty<PublishedPortSpec>();
         if (request.UseTty)
         {
             driver = request.TerminalBridge != null
@@ -162,7 +164,7 @@ public sealed class ContainerRuntimeService
             if (request.NetworkMode == NetworkMode.Private)
             {
                 networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec { ContainerId = request.ContainerId });
-                _portForwardManager.Start(networkContext, request.PublishedPorts);
+                _portForwardManager.Start(networkContext, publishedPorts);
                 runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
             }
 
@@ -335,7 +337,7 @@ public sealed class ContainerRuntimeService
             _logger.LogDebug(
                 "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver} publishedPortCount={PublishedPortCount}",
                 request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty, request.Volumes.Length,
-                request.LogDriver, request.PublishedPorts.Count);
+                request.LogDriver, publishedPorts.Count);
             scheduler.Run();
             _logger.LogDebug(
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 
 namespace Fiberish.X86.Native;
 
@@ -35,6 +36,14 @@ public enum Seg
 public unsafe partial class X86Native
 {
     private const string LibName = "fibercpu";
+
+#pragma warning disable CA2255
+    [ModuleInitializer]
+    internal static void Initialize()
+    {
+        NativeLibraryResolver.Register(typeof(X86Native), LibName);
+    }
+#pragma warning restore CA2255
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]
     public static partial IntPtr Create();

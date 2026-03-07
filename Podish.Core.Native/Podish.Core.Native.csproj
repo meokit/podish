@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <DirectPInvoke Include="fibercpu" />
+    <DirectPInvoke Include="fiberish_netstack" />
   </ItemGroup>
 
 </Project>
