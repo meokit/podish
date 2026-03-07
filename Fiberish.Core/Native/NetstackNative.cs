@@ -1,10 +1,44 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
+using System.Runtime.Loader;
 
 namespace Fiberish.Core.Native;
 
 internal static partial class NetstackNative
 {
     private const string LibName = "fiberish_netstack";
+
+    static NetstackNative()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(NetstackNative).Assembly, Resolve);
+    }
+
+    private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        if (!string.Equals(libraryName, LibName, StringComparison.Ordinal))
+            return IntPtr.Zero;
+
+#if PODISH_STATIC_NATIVE
+        if (NativeLibrary.TryLoad("__Internal", assembly, searchPath, out var internalHandle))
+            return internalHandle;
+#endif
+
+        if (NativeLibrary.TryLoad(libraryName, assembly, searchPath, out var handle))
+            return handle;
+
+        var ext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? ".dll"
+            : RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? ".dylib"
+                : ".so";
+        var prefix = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? string.Empty : "lib";
+        var fileName = prefix + libraryName + ext;
+        var localPath = Path.Combine(AppContext.BaseDirectory, fileName);
+        if (NativeLibrary.TryLoad(localPath, out handle))
+            return handle;
+
+        return IntPtr.Zero;
+    }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void NetnsNotifyCallback(nint userdata);

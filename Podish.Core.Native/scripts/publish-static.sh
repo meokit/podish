@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJ="$ROOT_DIR/Podish.Core.Native/Podish.Core.Native.csproj"
+NETSTACK_MANIFEST="$ROOT_DIR/Fiberish.Netstack/Cargo.toml"
 TFM="net10.0"
 NUGET_ROOT="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
 OUT_ROOT="$ROOT_DIR/Podish/artifacts/podish-native"
@@ -78,6 +79,19 @@ find_native_static_dir() {
   return 1
 }
 
+cargo_target_for_rid() {
+  local rid="$1"
+  case "$rid" in
+    osx-arm64) echo "aarch64-apple-darwin" ;;
+    ios-arm64) echo "aarch64-apple-ios" ;;
+    iossimulator-arm64) echo "aarch64-apple-ios-sim" ;;
+    *)
+      echo "error: unsupported RID for netstack static build: $rid" >&2
+      return 1
+      ;;
+  esac
+}
+
 build_library_for_rid() {
   local rid="$1"
   local rid_out="$WORK_ROOT/$rid"
@@ -85,6 +99,7 @@ build_library_for_rid() {
   local static_out="$rid_out/libPodishCore.a"
   local fibercpu_static="$ROOT_DIR/Fiberish.X86/build_native/$rid/libfibercpu.a"
   local native_dir sdk_dir tmp_inputs dedup_inputs bootstrapper_dll_obj
+  local netstack_target netstack_static
 
   echo "=== RID: $rid ==="
   rm -rf "$rid_out"
@@ -93,6 +108,9 @@ build_library_for_rid() {
   # Restore for the concrete RID first so build/publish always resolves RID-specific assets.
   dotnet restore "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -r "$rid" --nologo
   dotnet build "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -c Release --nologo /p:PodishStaticNative=true /p:RuntimeIdentifier="$rid"
+  netstack_target="$(cargo_target_for_rid "$rid")"
+  cargo build --manifest-path "$NETSTACK_MANIFEST" --release --target "$netstack_target"
+  netstack_static="$ROOT_DIR/Fiberish.Netstack/target/$netstack_target/release/libfiberish_netstack.a"
   dotnet restore "$PROJ" -r "$rid" --nologo /p:TargetFramework="$TFM" /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
   dotnet publish "$PROJ" -f "$TFM" -c Release -r "$rid" -o "$rid_out" --nologo /p:PodishStaticNative=true /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
 
@@ -111,6 +129,10 @@ build_library_for_rid() {
     echo "error: missing libfibercpu.a for RID '$rid': $fibercpu_static" >&2
     exit 1
   fi
+  if [ ! -f "$netstack_static" ]; then
+    echo "error: missing libfiberish_netstack.a for RID '$rid': $netstack_static" >&2
+    exit 1
+  fi
 
   native_dir="$(find_native_static_dir "$rid")" || {
     echo "error: NativeAOT static dir not found for RID '$rid'." >&2
@@ -122,6 +144,7 @@ build_library_for_rid() {
   {
     echo "$rid_out/podishcore.a"
     echo "$fibercpu_static"
+    echo "$netstack_static"
     for a in "$native_dir"/*.a; do
       [ -f "$a" ] && echo "$a"
     done

@@ -17,24 +17,52 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <DefineConstants Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">$(DefineConstants);PODISH_STATIC_NATIVE</DefineConstants>
         <NetstackCargoManifest>..\Fiberish.Netstack\Cargo.toml</NetstackCargoManifest>
         <NetstackTargetDir>..\Fiberish.Netstack\target</NetstackTargetDir>
         <NetstackProfile Condition="'$(Configuration)' == 'Release'">release</NetstackProfile>
         <NetstackProfile Condition="'$(NetstackProfile)' == ''">debug</NetstackProfile>
         <NetstackCargoArgs Condition="'$(Configuration)' == 'Release'">--release</NetstackCargoArgs>
         <NetstackCargoArgs Condition="'$(NetstackCargoArgs)' == ''"></NetstackCargoArgs>
+        <BuildNetstackStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">true</BuildNetstackStatic>
+        <BuildNetstackStatic Condition="'$(BuildNetstackStatic)' == ''">false</BuildNetstackStatic>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</NetstackCargoTarget>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</NetstackCargoTarget>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</NetstackCargoTarget>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</NetstackCargoTarget>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</NetstackCargoTarget>
+        <NetstackCargoTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</NetstackCargoTarget>
+        <NetstackCargoTargetArg Condition="'$(NetstackCargoTarget)' != ''">--target $(NetstackCargoTarget)</NetstackCargoTargetArg>
+        <NetstackCargoTargetArg Condition="'$(NetstackCargoTargetArg)' == ''"></NetstackCargoTargetArg>
         <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('OSX'))">libfiberish_netstack.dylib</NetstackLibName>
         <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('Linux'))">libfiberish_netstack.so</NetstackLibName>
         <NetstackLibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">fiberish_netstack.dll</NetstackLibName>
         <NetstackLibPath>$(NetstackTargetDir)\$(NetstackProfile)\$(NetstackLibName)</NetstackLibPath>
+        <NetstackStaticLibName Condition="$([MSBuild]::IsOsPlatform('OSX'))">libfiberish_netstack.a</NetstackStaticLibName>
+        <NetstackStaticLibName Condition="$([MSBuild]::IsOsPlatform('Linux'))">libfiberish_netstack.a</NetstackStaticLibName>
+        <NetstackStaticLibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">fiberish_netstack.lib</NetstackStaticLibName>
+        <NetstackStaticLibPath Condition="'$(NetstackCargoTarget)' != ''">$(NetstackTargetDir)\$(NetstackCargoTarget)\$(NetstackProfile)\$(NetstackStaticLibName)</NetstackStaticLibPath>
+        <NetstackStaticLibPath Condition="'$(NetstackCargoTarget)' == ''">$(NetstackTargetDir)\$(NetstackProfile)\$(NetstackStaticLibName)</NetstackStaticLibPath>
     </PropertyGroup>
 
     <Target Name="BuildNetstackNative" BeforeTargets="BeforeBuild">
         <Message Text="Building Fiberish.Netstack with Cargo..." Importance="High"/>
-        <Exec Command="cargo build --manifest-path $(NetstackCargoManifest) $(NetstackCargoArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Exec Command="cargo build --manifest-path $(NetstackCargoManifest) $(NetstackCargoArgs) $(NetstackCargoTargetArg)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
     </Target>
 
-    <ItemGroup Condition="'$(NetstackLibName)' != ''">
+    <ItemGroup Condition="'$(BuildNetstackStatic)' == 'true' And $([MSBuild]::IsOsPlatform('OSX'))">
+        <NativeLibrary Include="$(NetstackStaticLibPath)"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(BuildNetstackStatic)' == 'true' And $([MSBuild]::IsOsPlatform('Linux'))">
+        <NativeLibrary Include="$(NetstackStaticLibPath)"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(BuildNetstackStatic)' == 'true' And $([MSBuild]::IsOsPlatform('Windows'))">
+        <NativeLibrary Include="$(NetstackStaticLibPath)"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(BuildNetstackStatic)' != 'true' And '$(NetstackLibName)' != ''">
         <Content Include="$(NetstackLibPath)">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>$(NetstackLibName)</Link>
