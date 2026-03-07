@@ -48,6 +48,15 @@ internal static partial class NetstackNative
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_can_write")]
     internal static partial int TcpStreamCanWrite(ulong netnsHandle, ulong socketHandle);
 
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_may_read")]
+    internal static partial int TcpStreamMayRead(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_may_write")]
+    internal static partial int TcpStreamMayWrite(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_close")]
+    internal static partial int TcpStreamClose(ulong netnsHandle, ulong socketHandle);
+
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_accept_pending")]
     internal static partial int TcpListenerAcceptPending(ulong netnsHandle, ulong socketHandle);
 

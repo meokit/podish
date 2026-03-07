@@ -23,6 +23,8 @@ public sealed class NetstackSocketInode : Inode
     private int? _receiveTimeoutMs;
     private int? _sendTimeoutMs;
     private int _backlog;
+    private bool _shutdownRead;
+    private bool _shutdownWrite;
 
     public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
     {
@@ -193,15 +195,21 @@ public sealed class NetstackSocketInode : Inode
             return -(int)Errno.EDESTADDRREQ;
         if (_stream == null)
             return -(int)Errno.ENOTCONN;
+        if (_shutdownWrite)
+            return -(int)Errno.EPIPE;
+        if (IsTerminalWriteClosed())
+            return -(int)Errno.EPIPE;
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_stream.CanWrite)
             return -(int)Errno.EAGAIN;
 
         if (!_stream.CanWrite)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLOUT, () => _stream.CanWrite);
+            var ok = await WaitForAsync(file, PollEvents.POLLOUT, () => _stream.CanWrite || IsTerminalWriteClosed());
             if (!ok)
                 return -(int)Errno.ERESTARTSYS;
+            if (_shutdownWrite || IsTerminalWriteClosed())
+                return -(int)Errno.EPIPE;
         }
 
         return _stream.Send(buffer.Span);
@@ -227,15 +235,21 @@ public sealed class NetstackSocketInode : Inode
             return -(int)Errno.ENOTCONN;
         if (_stream == null)
             return -(int)Errno.ENOTCONN;
+        if (_shutdownRead)
+            return 0;
+        if (HasReadEof())
+            return 0;
 
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_stream.CanRead)
-            return -(int)Errno.EAGAIN;
+            return HasReadEof() ? 0 : -(int)Errno.EAGAIN;
 
         if (!_stream.CanRead)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _stream.CanRead);
+            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _stream.CanRead || HasReadEof());
             if (!ok)
                 return -(int)Errno.ERESTARTSYS;
+            if (HasReadEof())
+                return 0;
         }
 
         return _stream.Receive(buffer);
@@ -313,13 +327,49 @@ public sealed class NetstackSocketInode : Inode
 
         if (_stream != null)
         {
-            if ((events & PollEvents.POLLIN) != 0 && _stream.CanRead)
+            if ((events & PollEvents.POLLIN) != 0 && (_stream.CanRead || HasReadEof()))
                 revents |= PollEvents.POLLIN;
-            if ((events & PollEvents.POLLOUT) != 0 && (_stream.CanWrite || _stream.State == 4))
+            if ((events & PollEvents.POLLOUT) != 0 && !_shutdownWrite && (_stream.CanWrite || _stream.State == 4))
                 revents |= PollEvents.POLLOUT;
+            if (HasReadEof())
+                revents |= PollEvents.POLLHUP;
+            if (_shutdownWrite && !_stream.CanWrite)
+                revents |= PollEvents.POLLERR;
         }
 
         return revents;
+    }
+
+    public int Shutdown(int how)
+    {
+        if (_socketType != SocketType.Stream)
+            return 0;
+        if (_stream == null)
+            return -(int)Errno.ENOTCONN;
+
+        switch (how)
+        {
+            case 0:
+                _shutdownRead = true;
+                return 0;
+            case 1:
+                if (!_shutdownWrite)
+                {
+                    _stream.CloseWrite();
+                    _shutdownWrite = true;
+                }
+                return 0;
+            case 2:
+                _shutdownRead = true;
+                if (!_shutdownWrite)
+                {
+                    _stream.CloseWrite();
+                    _shutdownWrite = true;
+                }
+                return 0;
+            default:
+                return -(int)Errno.EINVAL;
+        }
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
@@ -415,6 +465,26 @@ public sealed class NetstackSocketInode : Inode
         if (address.Equals(IPAddress.Loopback) || address.Equals(_namespace.PrivateIpv4Address))
             return true;
         return false;
+    }
+
+    private bool HasReadEof()
+    {
+        if (_shutdownRead)
+            return true;
+        if (_stream == null || _stream.CanRead)
+            return false;
+        if (_stream.MayRead)
+            return false;
+
+        return _stream.State is not 2 and not 3;
+    }
+
+    private bool IsTerminalWriteClosed()
+    {
+        if (_shutdownWrite || _stream == null)
+            return true;
+
+        return !_stream.MayWrite && _stream.State is 0 or 9 or 10 or 11;
     }
 
     private sealed class PollingWaitRegistration : IDisposable

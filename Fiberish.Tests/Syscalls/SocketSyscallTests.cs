@@ -78,6 +78,18 @@ public class SocketSyscallTests
         return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, msgPtr, flags, 0u, 0u, 0u])!;
     }
 
+    private static ValueTask<int> CallSysShutdown(TestEnv env, uint fd, uint how)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysShutdown", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, how, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysSend(TestEnv env, uint fd, uint bufPtr, uint len, uint flags = 0)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysSend", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, flags, 0u, 0u])!;
+    }
+
     [Fact]
     public async Task Socket_RawWithProtocolZero_ReturnsEprotonosupport()
     {
@@ -480,6 +492,34 @@ public class SocketSyscallTests
         var recv = await CallSysRecvMsg(env, (uint)acceptedFd, 0x23000, 0);
         Assert.Equal(payload.Length, recv);
         Assert.Equal(payload, System.Text.Encoding.ASCII.GetString(env.ReadBytes(0x25000, recv)));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_ShutdownWrite_MakesFurtherSendFailWithEpipe()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = Fiberish.Core.Net.NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.MapUserPage(0x32000);
+
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 19140);
+        WriteSockaddrIn(env, 0x31000, 0x7F000001u, 19140);
+        env.WriteBytes(0x32000, [1, 2, 3, 4]);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x30000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x31000, 16));
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        Assert.Equal(0, await CallSysShutdown(env, (uint)clientFd, 1));
+        Assert.Equal(-(int)Errno.EPIPE, await CallSysSend(env, (uint)clientFd, 0x32000u, 4u));
     }
 
     private sealed class TestEnv : IDisposable

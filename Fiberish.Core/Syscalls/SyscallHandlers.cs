@@ -201,6 +201,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.getpeername, SysGetPeerName);
         Register(X86SyscallNumbers.sendto, SysSendTo);
         Register(X86SyscallNumbers.recvfrom, SysRecvFrom);
+        Register(X86SyscallNumbers.shutdown, SysShutdown);
         Register(X86SyscallNumbers.socketpair, SysSocketPair);
         Register(X86SyscallNumbers.sendmsg, SysSendMsg);
         Register(X86SyscallNumbers.recvmsg, SysRecvMsg);

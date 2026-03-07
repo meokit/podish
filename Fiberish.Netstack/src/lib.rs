@@ -430,7 +430,12 @@ pub extern "C" fn fiber_tcp_stream_recv(
 
         let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
         if !socket.can_recv() {
-            return if socket.may_recv() { ERR_WOULD_BLOCK } else { ERR_INVALID_STATE };
+            if socket.may_recv() {
+                return ERR_WOULD_BLOCK;
+            }
+
+            unsafe { ptr::write(out_read, 0) };
+            return 0;
         }
 
         let slice = unsafe { std::slice::from_raw_parts_mut(buffer, len) };
@@ -471,6 +476,46 @@ pub extern "C" fn fiber_tcp_stream_can_write(ns_handle: u64, socket_handle: u64)
 
         let socket = state.sockets.get::<TcpSocket>(stream.handle);
         if socket.can_send() { 1 } else { 0 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_may_read(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        if socket.may_recv() { 1 } else { 0 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_may_write(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        if socket.may_send() { 1 } else { 0 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_close(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        socket.close();
+        0
     })
     .unwrap_or_else(|rc| rc)
 }

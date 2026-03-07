@@ -188,6 +188,30 @@ public sealed class LoopbackNetNamespace : IDisposable
             }
         }
 
+        public bool MayRead
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpStreamMayRead(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query TCP read viability (rc={rc}).");
+                return rc != 0;
+            }
+        }
+
+        public bool MayWrite
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpStreamMayWrite(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query TCP write viability (rc={rc}).");
+                return rc != 0;
+            }
+        }
+
         public int State
         {
             get
@@ -252,6 +276,14 @@ public sealed class LoopbackNetNamespace : IDisposable
                     return checked((int)read);
                 }
             }
+        }
+
+        public void CloseWrite()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.TcpStreamClose(_namespace.Handle, _handle);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to close TCP send side (rc={rc}).");
         }
 
         public void Dispose()

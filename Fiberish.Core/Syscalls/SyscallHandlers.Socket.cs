@@ -412,6 +412,46 @@ public partial class SyscallManager
         return await SysRecvFrom(state, a1, a2, a3, a4, 0, 0);
     }
 
+    private static async ValueTask<int> SysShutdown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var fd = (int)a1;
+        var how = (int)a2;
+        var file = sm.GetFD(fd);
+        if (file == null) return -(int)Errno.EBADF;
+
+        if (file.Dentry.Inode is HostSocketInode sockInode)
+        {
+            try
+            {
+                var mode = how switch
+                {
+                    0 => SocketShutdown.Receive,
+                    1 => SocketShutdown.Send,
+                    2 => SocketShutdown.Both,
+                    _ => throw new ArgumentOutOfRangeException(nameof(how))
+                };
+                sockInode.NativeSocket!.Shutdown(mode);
+                return 0;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return -(int)Errno.EINVAL;
+            }
+            catch (SocketException ex)
+            {
+                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
+        }
+
+        if (file.Dentry.Inode is NetstackSocketInode netInode)
+            return netInode.Shutdown(how);
+
+        return -(int)Errno.ENOTSOCK;
+    }
+
     private static async ValueTask<int> SysSendTo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -844,6 +884,7 @@ public partial class SyscallManager
             10 /* SYS_RECV */ => await SysRecv(state, args[0], args[1], args[2], args[3], 0, 0),
             11 /* SYS_SENDTO */ => await SysSendTo(state, args[0], args[1], args[2], args[3], args[4], args[5]),
             12 /* SYS_RECVFROM */ => await SysRecvFrom(state, args[0], args[1], args[2], args[3], args[4], args[5]),
+            13 /* SYS_SHUTDOWN */ => await SysShutdown(state, args[0], args[1], 0, 0, 0, 0),
             14 /* SYS_SETSOCKOPT */ => await SysSetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
             15 /* SYS_GETSOCKOPT */ => await SysGetSockOpt(state, args[0], args[1], args[2], args[3], args[4], 0),
             16 /* SYS_SENDMSG */ => await SysSendMsg(state, args[0], args[1], args[2], 0, 0, 0),

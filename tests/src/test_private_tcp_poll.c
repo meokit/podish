@@ -78,16 +78,24 @@ int main(void) {
     fds[1].fd = client_fd;
     fds[1].events = POLLOUT;
 
-    rc = poll(fds, 2, 2000);
-    if (rc <= 0) {
-        perror("poll(connect)");
-        close(client_fd);
-        close(server_fd);
-        return 1;
+    int server_ready = 0;
+    int client_ready = 0;
+    for (int i = 0; i < 4 && (!server_ready || !client_ready); ++i) {
+        rc = poll(fds, 2, 2000);
+        if (rc <= 0) {
+            perror("poll(connect)");
+            close(client_fd);
+            close(server_fd);
+            return 1;
+        }
+        if ((fds[0].revents & POLLIN) != 0)
+            server_ready = 1;
+        if ((fds[1].revents & POLLOUT) != 0)
+            client_ready = 1;
     }
 
-    assert((fds[0].revents & POLLIN) != 0);
-    assert((fds[1].revents & POLLOUT) != 0);
+    assert(server_ready);
+    assert(client_ready);
     printf("Connect readiness observed: server=0x%x client=0x%x\n", fds[0].revents, fds[1].revents);
 
     int accepted_fd = accept(server_fd, NULL, NULL);

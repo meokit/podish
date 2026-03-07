@@ -92,6 +92,36 @@ public class NetstackInteropTests
         Assert.Equal(19211, remoteEndPoint.Port);
     }
 
+    [Fact]
+    public void LoopbackNamespace_TcpCloseWrite_PropagatesRemoteEof()
+    {
+        using var netns = LoopbackNetNamespace.Create(0x0A590002u, 24);
+        using var listener = netns.CreateTcpListener();
+        using var client = netns.CreateTcpStream();
+
+        listener.Listen(20300);
+        client.Connect(0x7F000001u, 20300);
+
+        LoopUntil(netns, () => listener.AcceptPending && client.CanWrite, timeoutMs: 2_000);
+
+        using var accepted = listener.Accept();
+        LoopUntil(netns, () => client.State == 4 && accepted.State == 4, timeoutMs: 2_000);
+
+        var payload = Encoding.ASCII.GetBytes("bye");
+        Assert.Equal(payload.Length, client.Send(payload));
+        LoopUntil(netns, () => accepted.CanRead, timeoutMs: 2_000);
+
+        Span<byte> buffer = stackalloc byte[16];
+        var read = accepted.Receive(buffer);
+        Assert.Equal("bye", Encoding.ASCII.GetString(buffer[..read]));
+
+        client.CloseWrite();
+        LoopUntil(netns, () => !accepted.MayRead, timeoutMs: 2_000);
+
+        Assert.False(accepted.MayRead);
+        Assert.Equal(0, accepted.Receive(buffer));
+    }
+
     private static void LoopUntil(LoopbackNetNamespace netns, Func<bool> condition, int timeoutMs)
     {
         for (var elapsed = 0; elapsed < timeoutMs; elapsed += 10)
