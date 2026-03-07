@@ -59,3 +59,33 @@ enum SidebarSelection: Hashable {
     case events
     case container(UUID)
 }
+
+enum PodishNetworkMode: String, CaseIterable, Identifiable {
+    case host
+    case privateNet = "private"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .host:
+            return "Host"
+        case .privateNet:
+            return "Private"
+        }
+    }
+
+    var nativeValue: Int {
+        switch self {
+        case .host:
+            return 0
+        case .privateNet:
+            return 1
+        }
+    }
+}
+
+struct PodishPortMapping: Hashable {
+    let hostPort: Int
+    let containerPort: Int
+}

@@ -7,12 +7,16 @@ struct NewContainerSheetView: View {
     @State private var pullImageRef = "docker.io/i386/alpine:latest"
     @State private var selectedImageId: String?
     @State private var containerName = ""
+    @State private var networkMode: PodishNetworkMode = .host
+    @State private var portMappingsText = ""
+    @State private var createError: String?
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
                 pullSection
                 nameSection
+                networkSection
                 imageListSection
             }
             .padding()
@@ -30,7 +34,21 @@ struct NewContainerSheetView: View {
                     Button("Create") {
                         if let imageRef = selectedImageRef {
                             let trimmed = containerName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            store.createContainer(fromImage: imageRef, name: trimmed.isEmpty ? nil : trimmed)
+                            let mappings: [PodishPortMapping]
+                            do {
+                                mappings = try parsePortMappings()
+                            } catch {
+                                createError = error.localizedDescription
+                                return
+                            }
+
+                            createError = nil
+                            store.createContainer(
+                                fromImage: imageRef,
+                                name: trimmed.isEmpty ? nil : trimmed,
+                                networkMode: networkMode,
+                                portMappings: mappings
+                            )
                             dismiss()
                         }
                     }
@@ -137,8 +155,79 @@ struct NewContainerSheetView: View {
         }
     }
 
+    private var networkSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Network")
+                .font(.headline)
+            Picker("Network", selection: $networkMode) {
+                ForEach(PodishNetworkMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if networkMode == .privateNet {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Port Forwarding (hostPort:containerPort, one per line)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $portMappingsText)
+                        .frame(minHeight: 90)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(.secondary.opacity(0.25), lineWidth: 1)
+                        )
+                    if let createError {
+                        Text(createError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+    }
+
     private var selectedImageRef: String? {
         guard let selectedImageId else { return nil }
         return store.images.first(where: { $0.id == selectedImageId })?.repoTag
+    }
+
+    private func parsePortMappings() throws -> [PodishPortMapping] {
+        if networkMode != .privateNet {
+            return []
+        }
+
+        let lines = portMappingsText
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if lines.isEmpty {
+            return []
+        }
+
+        var result: [PodishPortMapping] = []
+        var hostPorts = Set<Int>()
+        for line in lines {
+            let parts = line.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  let host = Int(parts[0]),
+                  let container = Int(parts[1]),
+                  (1...65535).contains(host),
+                  (1...65535).contains(container) else {
+                throw ParseError("Invalid mapping '\(line)'. Expected hostPort:containerPort with ports 1-65535.")
+            }
+            if hostPorts.contains(host) {
+                throw ParseError("Duplicate host port \(host).")
+            }
+            hostPorts.insert(host)
+            result.append(PodishPortMapping(hostPort: host, containerPort: container))
+        }
+        return result
+    }
+
+    private struct ParseError: LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
     }
 }

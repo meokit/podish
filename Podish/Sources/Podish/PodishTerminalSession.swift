@@ -34,7 +34,22 @@ private let podishContainerStateCallbackImpl: PodContainerStateCallback = { user
 }
 
 private struct PodishRunSpec: Codable {
+    struct PublishedPortSpec: Codable {
+        var hostPort: Int
+        var containerPort: Int
+        var protocolValue: Int
+        var bindAddress: String
+
+        enum CodingKeys: String, CodingKey {
+            case hostPort
+            case containerPort
+            case protocolValue = "protocol"
+            case bindAddress
+        }
+    }
+
     var name: String?
+    var networkMode: Int = 0
     var image: String?
     var rootfs: String?
     var exe: String?
@@ -46,6 +61,7 @@ private struct PodishRunSpec: Codable {
     var tty: Bool = true
     var strace: Bool = false
     var logDriver: String = "json-file"
+    var publishedPorts: [PublishedPortSpec] = []
 }
 
 enum PodishRuntimeError: LocalizedError {
@@ -162,9 +178,19 @@ actor PodishRuntimeActor {
         return try listImages()
     }
 
-    func createContainer(imageRef: String, name: String?) throws -> String {
+    func createContainer(
+        imageRef: String,
+        name: String?,
+        networkMode: PodishNetworkMode,
+        portMappings: [PodishPortMapping]
+    ) throws -> String {
         try ensureContext()
-        return try createAndStartContainer(imageRef: imageRef, name: name)
+        return try createAndStartContainer(
+            imageRef: imageRef,
+            name: name,
+            networkMode: networkMode,
+            portMappings: portMappings
+        )
     }
 
     func startContainer(containerId: String) throws -> [NativeContainerListItem] {
@@ -440,11 +466,25 @@ actor PodishRuntimeActor {
         }
     }
 
-    private func createAndStartContainer(imageRef: String, name: String?) throws -> String {
+    private func createAndStartContainer(
+        imageRef: String,
+        name: String?,
+        networkMode: PodishNetworkMode = .host,
+        portMappings: [PodishPortMapping] = []
+    ) throws -> String {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
         let beforeIds = Set(try listContainers().map(\.containerId))
+        let publishedPorts = portMappings.map { mapping in
+            PodishRunSpec.PublishedPortSpec(
+                hostPort: mapping.hostPort,
+                containerPort: mapping.containerPort,
+                protocolValue: 0, // TCP
+                bindAddress: "0.0.0.0"
+            )
+        }
         let spec = PodishRunSpec(
             name: name,
+            networkMode: networkMode.nativeValue,
             image: imageRef,
             rootfs: nil,
             exe: "/bin/ash",
@@ -455,7 +495,8 @@ actor PodishRuntimeActor {
             interactive: true,
             tty: true,
             strace: false,
-            logDriver: "json-file"
+            logDriver: "json-file",
+            publishedPorts: publishedPorts
         )
         let data = try JSONEncoder().encode(spec)
         guard let json = String(data: data, encoding: .utf8) else {
@@ -747,11 +788,21 @@ final class PodishTerminalSession: ObservableObject {
         }
     }
 
-    func createContainer(from imageRef: String, name: String?) {
+    func createContainer(
+        from imageRef: String,
+        name: String?,
+        networkMode: PodishNetworkMode,
+        portMappings: [PodishPortMapping]
+    ) {
         Task {
             do {
                 let previousActiveId = await MainActor.run { self.activeContainerId }
-                let containerId = try await runtime.createContainer(imageRef: imageRef, name: name)
+                let containerId = try await runtime.createContainer(
+                    imageRef: imageRef,
+                    name: name,
+                    networkMode: networkMode,
+                    portMappings: portMappings
+                )
                 let containers = try await runtime.refreshContainers()
                 let keepCurrentActive = previousActiveId != nil
                     && containers.contains(where: { $0.containerId == previousActiveId && $0.running })
