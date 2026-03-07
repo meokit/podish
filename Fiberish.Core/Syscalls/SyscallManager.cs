@@ -996,6 +996,7 @@ public partial class SyscallManager
             ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
             sharedNamespace, _privateNetNamespace?.AddRef())
         {
+            NetworkMode = NetworkMode,
             CloneHandler = CloneHandler,
             ExitHandler = ExitHandler,
             GetTID = GetTID,
