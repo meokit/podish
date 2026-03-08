@@ -14,6 +14,13 @@ namespace Fiberish.VFS;
 public sealed class HostSocketInode : Inode
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
+    private const long ReadyCacheTtlMs = 2;
+
+    [ThreadStatic] private static Stack<SocketAsyncEventArgs>? ThreadProbeArgsPool;
+
+    private readonly Queue<Socket> _acceptedProbeQueue = new();
+    private short _readyCacheBits;
+    private long _readyCacheExpireAtMs;
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
     // SOCK_STREAM = 1, SOCK_DGRAM = 2
@@ -27,7 +34,6 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-
     }
 
     // Wrap an accepted socket
@@ -40,7 +46,6 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-
     }
 
     public Socket NativeSocket { get; }
@@ -77,42 +82,9 @@ public sealed class HostSocketInode : Inode
 
     public override short Poll(LinuxFile file, short events)
     {
-        short revents = 0;
-        try
-        {
-            var canRead = NativeSocket.Poll(0, SelectMode.SelectRead);
-            var canWrite = NativeSocket.Poll(0, SelectMode.SelectWrite);
-            var hasError = NativeSocket.Poll(0, SelectMode.SelectError);
-
-            if ((events & PollEvents.POLLIN) != 0 && canRead)
-                revents |= PollEvents.POLLIN;
-            if ((events & PollEvents.POLLOUT) != 0 && canWrite)
-                revents |= PollEvents.POLLOUT;
-
-            // Linux poll semantics: POLLERR/POLLHUP are reported regardless of requested events.
-            if (hasError)
-                revents |= PollEvents.POLLERR;
-
-            if (NativeSocket.Connected && canRead && !canWrite)
-                try
-                {
-                    if (NativeSocket.Available == 0) revents |= PollEvents.POLLHUP;
-                }
-                catch (SocketException)
-                {
-                    revents |= PollEvents.POLLHUP;
-                }
-        }
-        catch (ObjectDisposedException)
-        {
-            revents |= PollEvents.POLLNVAL;
-        }
-        catch
-        {
-            revents |= PollEvents.POLLERR;
-        }
-
-        return revents;
+        if (TryProbeReady(events, out var revents))
+            return revents;
+        return PollEvents.POLLERR;
     }
 
     protected override void Release()
@@ -126,6 +98,24 @@ public sealed class HostSocketInode : Inode
             // ignored
         }
 
+        lock (_acceptedProbeQueue)
+        {
+            while (_acceptedProbeQueue.Count > 0)
+            {
+                try
+                {
+                    _acceptedProbeQueue.Dequeue().Dispose();
+                }
+                catch
+                {
+                    // ignored
+                }
+            }
+        }
+
+        _readyCacheBits = 0;
+        _readyCacheExpireAtMs = 0;
+
         base.Release();
     }
 
@@ -136,175 +126,36 @@ public sealed class HostSocketInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
-        var registered = false;
         var scheduler = KernelScheduler.Current;
         if (scheduler == null) return null;
         Logger.LogTrace("Host socket RegisterWait ino={Ino} events=0x{Events:X}", Ino, events);
+
         List<IDisposable>? registrations = null;
 
         if ((events & PollEvents.POLLIN) != 0)
         {
-            var reg = ArmReadWait(callback, scheduler);
+            var reg = IsListeningSocket() ? ArmAcceptProbe(callback, scheduler) : ArmReadProbe(callback, scheduler);
             if (reg != null)
             {
                 registrations ??= [];
                 registrations.Add(reg);
-                registered = true;
             }
         }
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            var reg = ArmWriteWait(callback, scheduler);
+            var reg = ArmWriteProbe(callback, scheduler);
             if (reg != null)
             {
                 registrations ??= [];
                 registrations.Add(reg);
-                registered = true;
             }
         }
 
-        if (!registered) return null;
         if (registrations == null || registrations.Count == 0) return null;
         if (registrations.Count == 1) return registrations[0];
         return new CompositeRegistration(registrations);
     }
-
-    private void OnRegisterWaitCompleted(object? sender, SocketAsyncEventArgs e)
-    {
-        Logger.LogTrace(
-            "Host socket RegisterWait completed ino={Ino} bytes={Bytes} error={Error} flags=0x{Flags:X}",
-            Ino, e.BytesTransferred, e.SocketError, (int)e.SocketFlags);
-        if (e.UserToken is RegisterWaitToken token && token.TryComplete())
-            token.Scheduler.Schedule(token.Callback);
-        if (e.UserToken is RegisterWaitToken token2) token2.DetachSaea();
-        e.UserToken = null;
-        e.Completed -= OnRegisterWaitCompleted;
-        e.Dispose();
-    }
-
-    private IDisposable? ArmReadWait(Action callback, KernelScheduler scheduler)
-    {
-        var saea = new SocketAsyncEventArgs();
-        saea.SetBuffer(Array.Empty<byte>());
-        saea.SocketFlags = SocketFlags.None;
-        var token = new RegisterWaitToken(callback, scheduler, saea);
-        saea.UserToken = token;
-        saea.Completed += OnRegisterWaitCompleted;
-
-        try
-        {
-            if (!NativeSocket.ReceiveAsync(saea))
-            {
-                Logger.LogTrace("Host socket RegisterWait POLLIN completed synchronously ino={Ino}", Ino);
-                token.TryComplete();
-                scheduler.Schedule(callback);
-                saea.Completed -= OnRegisterWaitCompleted;
-                saea.Dispose();
-                return null;
-            }
-
-            Logger.LogTrace("Host socket RegisterWait POLLIN armed async ino={Ino}", Ino);
-            return token;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogTrace(ex, "Host socket RegisterWait POLLIN failed ino={Ino}, scheduling callback", Ino);
-            token.TryComplete();
-            scheduler.Schedule(callback);
-            saea.Completed -= OnRegisterWaitCompleted;
-            saea.Dispose();
-            return null;
-        }
-    }
-
-    private IDisposable? ArmWriteWait(Action callback, KernelScheduler scheduler)
-    {
-        var saea = new SocketAsyncEventArgs();
-        saea.SetBuffer(Array.Empty<byte>());
-        var token = new RegisterWaitToken(callback, scheduler, saea);
-        saea.UserToken = token;
-        saea.Completed += OnRegisterWaitCompleted;
-
-        try
-        {
-            if (!NativeSocket.SendAsync(saea))
-            {
-                Logger.LogTrace("Host socket RegisterWait POLLOUT completed synchronously ino={Ino}", Ino);
-                token.TryComplete();
-                scheduler.Schedule(callback);
-                saea.Completed -= OnRegisterWaitCompleted;
-                saea.Dispose();
-                return null;
-            }
-
-            Logger.LogTrace("Host socket RegisterWait POLLOUT armed async ino={Ino}", Ino);
-            return token;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogTrace(ex, "Host socket RegisterWait POLLOUT failed ino={Ino}, scheduling callback", Ino);
-            token.TryComplete();
-            scheduler.Schedule(callback);
-            saea.Completed -= OnRegisterWaitCompleted;
-            saea.Dispose();
-            return null;
-        }
-    }
-
-    private sealed class CompositeRegistration : IDisposable
-    {
-        private List<IDisposable>? _items;
-
-        public CompositeRegistration(List<IDisposable> items)
-        {
-            _items = items;
-        }
-
-        public void Dispose()
-        {
-            var items = Interlocked.Exchange(ref _items, null);
-            if (items == null) return;
-            foreach (var item in items) item.Dispose();
-        }
-    }
-
-    private sealed class RegisterWaitToken : IDisposable
-    {
-        private int _state; // 0=pending, 1=completed, 2=canceled
-        private SocketAsyncEventArgs? _saea;
-
-        public RegisterWaitToken(Action callback, KernelScheduler scheduler, SocketAsyncEventArgs saea)
-        {
-            Callback = callback;
-            Scheduler = scheduler;
-            _saea = saea;
-        }
-
-        public Action Callback { get; }
-        public KernelScheduler Scheduler { get; }
-
-        public bool TryComplete()
-        {
-            return Interlocked.CompareExchange(ref _state, 1, 0) == 0;
-        }
-
-        public void DetachSaea()
-        {
-            Interlocked.Exchange(ref _saea, null);
-        }
-
-        public void Dispose()
-        {
-            // Cancellation is logical: suppress callback delivery.
-            // We let in-flight SAEA finish and be disposed by completion path.
-            if (Interlocked.CompareExchange(ref _state, 2, 0) != 0) return;
-            var saea = Interlocked.Exchange(ref _saea, null);
-            if (saea != null) saea.UserToken = null;
-        }
-    }
-
-    // --- Async Operations ---
 
     private async ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
     {
@@ -320,11 +171,10 @@ public sealed class HostSocketInode : Inode
             var waitQueue = new AsyncWaitQueue();
             using var registration = RegisterWaitHandle(file, waitQueue.Signal, events);
 
-            if ((Poll(file, events) & events) != 0)
-                return true;
-
             if (registration == null)
             {
+                if ((Poll(file, events) & events) != 0)
+                    return true;
                 var spin = await new SleepAwaitable(1);
                 if (spin == AwaitResult.Interrupted)
                     return false;
@@ -337,24 +187,405 @@ public sealed class HostSocketInode : Inode
         }
     }
 
+    private bool TryProbeReady(short events, out short revents)
+    {
+        revents = 0;
+        try
+        {
+            const short terminal = PollEvents.POLLERR | PollEvents.POLLHUP | PollEvents.POLLNVAL;
+            var now = Environment.TickCount64;
+            var cached = GetCachedReadyBits(now);
+            revents |= (short)(cached & (events | terminal));
+
+            if ((events & PollEvents.POLLIN) != 0 && HasBufferedAcceptedSocket())
+            {
+                revents |= PollEvents.POLLIN;
+                PromoteReadyCache(PollEvents.POLLIN);
+            }
+
+            if ((revents & (events | terminal)) != 0)
+                return true;
+
+            var needWrite = (events & PollEvents.POLLOUT) != 0;
+            var canWrite = needWrite && NativeSocket.Poll(0, SelectMode.SelectWrite);
+
+            var needRead = (events & PollEvents.POLLIN) != 0 || (NativeSocket.Connected && !canWrite);
+            var canRead = needRead && NativeSocket.Poll(0, SelectMode.SelectRead);
+
+            // Keep POLLERR visibility independent of requested mask.
+            var hasError = NativeSocket.Poll(0, SelectMode.SelectError);
+
+            if ((events & PollEvents.POLLIN) != 0 && canRead)
+                revents |= PollEvents.POLLIN;
+            if ((events & PollEvents.POLLOUT) != 0 && canWrite)
+                revents |= PollEvents.POLLOUT;
+            if (hasError)
+                revents |= PollEvents.POLLERR;
+
+            if (NativeSocket.Connected && canRead && !canWrite)
+            {
+                try
+                {
+                    if (NativeSocket.Available == 0)
+                        revents |= PollEvents.POLLHUP;
+                }
+                catch (SocketException)
+                {
+                    revents |= PollEvents.POLLHUP;
+                }
+            }
+
+            if (revents != 0)
+                PromoteReadyCache(revents);
+            else
+                ClearExpiredReadyCache(now);
+
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            revents |= PollEvents.POLLNVAL;
+            PromoteReadyCache(PollEvents.POLLNVAL);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private sealed class CompositeRegistration : IDisposable
+    {
+        private List<IDisposable>? _items;
+
+        public CompositeRegistration(List<IDisposable> items)
+        {
+            _items = items;
+        }
+
+        public void Dispose()
+        {
+            var items = _items;
+            _items = null;
+            if (items == null) return;
+            foreach (var item in items) item.Dispose();
+        }
+    }
+
+    private sealed class AsyncProbeRegistration : IDisposable
+    {
+        private readonly HostSocketInode _inode;
+        private readonly KernelScheduler _scheduler;
+        private readonly Action _callback;
+        private readonly SocketAsyncEventArgs _saea;
+        private readonly bool _isAcceptProbe;
+        private readonly Action _scheduledCompletion;
+        private bool _disposed;
+        private bool _completed;
+
+        public AsyncProbeRegistration(HostSocketInode inode, KernelScheduler scheduler, Action callback,
+            SocketAsyncEventArgs saea, bool isAcceptProbe)
+        {
+            _inode = inode;
+            _scheduler = scheduler;
+            _callback = callback;
+            _saea = saea;
+            _isAcceptProbe = isAcceptProbe;
+            _scheduledCompletion = CompleteScheduled;
+            _saea.UserToken = this;
+            _saea.Completed += OnCompleted;
+        }
+
+        public void HandleCompletedSync()
+        {
+            CompleteOnSchedulerThread(_saea);
+        }
+
+        private void OnCompleted(object? sender, SocketAsyncEventArgs e)
+        {
+            if (e.UserToken is not AsyncProbeRegistration reg)
+            {
+                RecycleProbeArgs(e);
+                return;
+            }
+
+            reg._scheduler.Schedule(reg._scheduledCompletion);
+        }
+
+        private void CompleteScheduled()
+        {
+            CompleteOnSchedulerThread(_saea);
+        }
+
+        private void CompleteOnSchedulerThread(SocketAsyncEventArgs e)
+        {
+            if (_completed) return;
+            _completed = true;
+
+            short readyHint = 0;
+            if (_isAcceptProbe && e.AcceptSocket != null)
+            {
+                _inode.EnqueueAcceptedSocket(e.AcceptSocket);
+                e.AcceptSocket = null;
+                readyHint |= PollEvents.POLLIN;
+            }
+            else if (e.LastOperation == SocketAsyncOperation.Receive && e.SocketError == SocketError.Success)
+            {
+                readyHint |= PollEvents.POLLIN;
+            }
+
+            if (e.LastOperation == SocketAsyncOperation.Send && e.SocketError == SocketError.Success)
+                readyHint |= PollEvents.POLLOUT;
+
+            if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending and not SocketError.OperationAborted and not SocketError.Interrupted)
+                readyHint |= PollEvents.POLLERR;
+
+            if (readyHint != 0)
+                _inode.PromoteReadyCache(readyHint);
+
+            if (!_disposed && ShouldSignalRePoll(e))
+                _callback();
+
+            _saea.Completed -= OnCompleted;
+            _saea.UserToken = null;
+            if (_saea.AcceptSocket != null)
+            {
+                _saea.AcceptSocket.Dispose();
+                _saea.AcceptSocket = null;
+            }
+            RecycleProbeArgs(_saea);
+        }
+
+        private static bool ShouldSignalRePoll(SocketAsyncEventArgs e)
+        {
+            return e.SocketError switch
+            {
+                SocketError.Success => true,
+                SocketError.OperationAborted => false,
+                SocketError.Interrupted => false,
+                SocketError.WouldBlock => false,
+                SocketError.IOPending => false,
+                _ => true
+            };
+        }
+
+        public void CancelAndRecycleImmediately()
+        {
+            if (_completed) return;
+            _completed = true;
+            _disposed = true;
+            _saea.Completed -= OnCompleted;
+            _saea.UserToken = null;
+            if (_saea.AcceptSocket != null)
+            {
+                _saea.AcceptSocket.Dispose();
+                _saea.AcceptSocket = null;
+            }
+            RecycleProbeArgs(_saea);
+        }
+
+        public void Dispose()
+        {
+            _disposed = true;
+        }
+    }
+
+    private bool IsListeningSocket()
+    {
+        return NativeSocket.SocketType == SocketType.Stream && NativeSocket.IsBound && !NativeSocket.Connected;
+    }
+
+    private IDisposable? ArmReadProbe(Action callback, KernelScheduler scheduler)
+    {
+        var saea = RentProbeArgs();
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        saea.AcceptSocket = null;
+        var reg = new AsyncProbeRegistration(this, scheduler, callback, saea, isAcceptProbe: false);
+        try
+        {
+            if (!NativeSocket.ReceiveAsync(saea))
+            {
+                reg.HandleCompletedSync();
+                return null;
+            }
+
+            return reg;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
+        {
+            reg.CancelAndRecycleImmediately();
+            return null;
+        }
+        catch
+        {
+            reg.CancelAndRecycleImmediately();
+            scheduler.Schedule(callback);
+            return null;
+        }
+    }
+
+    private IDisposable? ArmAcceptProbe(Action callback, KernelScheduler scheduler)
+    {
+        var saea = RentProbeArgs();
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        saea.AcceptSocket = null;
+        var reg = new AsyncProbeRegistration(this, scheduler, callback, saea, isAcceptProbe: true);
+        try
+        {
+            if (!NativeSocket.AcceptAsync(saea))
+            {
+                reg.HandleCompletedSync();
+                return null;
+            }
+
+            return reg;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
+        {
+            reg.CancelAndRecycleImmediately();
+            return null;
+        }
+        catch
+        {
+            reg.CancelAndRecycleImmediately();
+            scheduler.Schedule(callback);
+            return null;
+        }
+    }
+
+    private IDisposable? ArmWriteProbe(Action callback, KernelScheduler scheduler)
+    {
+        var saea = RentProbeArgs();
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        saea.AcceptSocket = null;
+        var reg = new AsyncProbeRegistration(this, scheduler, callback, saea, isAcceptProbe: false);
+        try
+        {
+            if (!NativeSocket.SendAsync(saea))
+            {
+                reg.HandleCompletedSync();
+                return null;
+            }
+
+            return reg;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
+        {
+            reg.CancelAndRecycleImmediately();
+            return null;
+        }
+        catch
+        {
+            reg.CancelAndRecycleImmediately();
+            scheduler.Schedule(callback);
+            return null;
+        }
+    }
+
+    private void EnqueueAcceptedSocket(Socket socket)
+    {
+        lock (_acceptedProbeQueue)
+        {
+            _acceptedProbeQueue.Enqueue(socket);
+        }
+    }
+
+    private bool TryDequeueAcceptedSocket(out Socket socket)
+    {
+        lock (_acceptedProbeQueue)
+        {
+            if (_acceptedProbeQueue.Count > 0)
+            {
+                socket = _acceptedProbeQueue.Dequeue();
+                return true;
+            }
+        }
+
+        socket = null!;
+        return false;
+    }
+
+    private bool HasBufferedAcceptedSocket()
+    {
+        lock (_acceptedProbeQueue)
+            return _acceptedProbeQueue.Count > 0;
+    }
+
+    private short GetCachedReadyBits(long nowMs)
+    {
+        if (_readyCacheBits == 0) return 0;
+        if (nowMs <= _readyCacheExpireAtMs) return _readyCacheBits;
+        _readyCacheBits = 0;
+        _readyCacheExpireAtMs = 0;
+        return 0;
+    }
+
+    private void PromoteReadyCache(short bits)
+    {
+        _readyCacheBits |= bits;
+        _readyCacheExpireAtMs = Environment.TickCount64 + ReadyCacheTtlMs;
+    }
+
+    private void ClearReadyBits(short bits)
+    {
+        _readyCacheBits = (short)(_readyCacheBits & ~bits);
+        if (_readyCacheBits == 0)
+            _readyCacheExpireAtMs = 0;
+    }
+
+    private void ClearExpiredReadyCache(long nowMs)
+    {
+        if (_readyCacheBits != 0 && nowMs > _readyCacheExpireAtMs)
+        {
+            _readyCacheBits = 0;
+            _readyCacheExpireAtMs = 0;
+        }
+    }
+
+    private static SocketAsyncEventArgs RentProbeArgs()
+    {
+        var pool = ThreadProbeArgsPool;
+        if (pool != null && pool.Count > 0)
+            return pool.Pop();
+        return new SocketAsyncEventArgs();
+    }
+
+    private static void RecycleProbeArgs(SocketAsyncEventArgs saea)
+    {
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        saea.AcceptSocket = null;
+        var pool = ThreadProbeArgsPool ??= new Stack<SocketAsyncEventArgs>(16);
+        if (pool.Count < 256)
+            pool.Push(saea);
+        else
+            saea.Dispose();
+    }
+
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return 0;
         Logger.LogTrace(
             "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, recvLen, flags, (int)file.Flags, NativeSocket!.Connected);
+            Ino, recvLen, flags, (int)file.Flags, NativeSocket.Connected);
 
         while (true)
             try
             {
                 var n = NativeSocket.Receive(buffer, 0, recvLen, (SocketFlags)flags);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLIN);
                 Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
+                ClearReadyBits(PollEvents.POLLIN);
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
                     Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
@@ -379,14 +610,18 @@ public sealed class HostSocketInode : Inode
             {
                 var remoteEp = remoteEpTemplate;
                 var n = NativeSocket.ReceiveFrom(buffer, 0, buffer.Length, (SocketFlags)flags, ref remoteEp);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLIN);
                 return (n, remoteEp);
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
+                ClearReadyBits(PollEvents.POLLIN);
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
-                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
                     return (-(int)Errno.EAGAIN, null);
                 }
 
@@ -405,18 +640,21 @@ public sealed class HostSocketInode : Inode
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
         Logger.LogTrace(
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, segment.Count, flags, (int)file.Flags, NativeSocket!.Connected);
+            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
 
         while (true)
             try
             {
                 var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLOUT);
                 Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
+                ClearReadyBits(PollEvents.POLLOUT);
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
                     Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
@@ -440,14 +678,19 @@ public sealed class HostSocketInode : Inode
         while (true)
             try
             {
-                return NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
+                var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLOUT);
+                return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
+                ClearReadyBits(PollEvents.POLLOUT);
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
-                    Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
                     return -(int)Errno.EAGAIN;
                 }
 
@@ -476,7 +719,8 @@ public sealed class HostSocketInode : Inode
             {
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
-                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
                     return -(int)Errno.EINPROGRESS;
                 }
 
@@ -502,10 +746,20 @@ public sealed class HostSocketInode : Inode
 
     public async ValueTask<Socket> AcceptAsync(LinuxFile file, int flags)
     {
+        if (TryDequeueAcceptedSocket(out var queued))
+        {
+            if (!HasBufferedAcceptedSocket())
+                ClearReadyBits(PollEvents.POLLIN);
+            return queued;
+        }
+
         while (true)
             try
             {
-                return NativeSocket.Accept();
+                var accepted = NativeSocket.Accept();
+                if (!HasBufferedAcceptedSocket())
+                    ClearReadyBits(PollEvents.POLLIN);
+                return accepted;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
@@ -611,5 +865,4 @@ public sealed class HostSocketInode : Inode
 
         return sb.ToString();
     }
-
 }

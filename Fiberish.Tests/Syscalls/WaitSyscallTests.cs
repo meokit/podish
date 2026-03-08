@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
@@ -180,6 +182,98 @@ public class WaitSyscallTests
         Assert.Equal(1, rc);
         Assert.Equal(LinuxConstants.EPOLLIN, BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
         Assert.Equal(0x1122334455667788UL, BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
+    }
+
+    [Fact]
+    public async Task Ppoll_HostListeningSocket_WakesOnIncomingConnection()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x1C000;
+        const uint tsPtr = 0x1D000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        var inode = new HostSocketInode(200, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        inode.NativeSocket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        inode.NativeSocket.Listen(16);
+        var listenEp = (IPEndPoint)inode.NativeSocket.LocalEndPoint!;
+
+        var file = new LinuxFile(new Dentry("host-listen", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
+        WriteTimespecSec(env, tsPtr, 1);
+
+        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(listenEp);
+
+        await DrainUntilCompleted(env, pending);
+        var rc = await pending;
+        Assert.Equal(1, rc);
+        var pfd = env.ReadStruct<PollFd>(pollfdPtr);
+        Assert.True((pfd.Revents & LinuxConstants.POLLIN) != 0);
+    }
+
+    [Fact]
+    public async Task Ppoll_HostConnectedSocket_WakesOnReadableData()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x1E000;
+        const uint tsPtr = 0x1F000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(ep);
+        using var server = listener.Accept();
+        server.Blocking = false;
+
+        var inode = new HostSocketInode(201, env.SyscallManager.MemfdSuperBlock, server);
+        var file = new LinuxFile(new Dentry("host-connected", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
+        WriteTimespecSec(env, tsPtr, 1);
+
+        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var payload = new byte[] { 0x41 };
+        _ = client.Send(payload);
+
+        await DrainUntilCompleted(env, pending);
+        var rc = await pending;
+        Assert.Equal(1, rc);
+        var pfd = env.ReadStruct<PollFd>(pollfdPtr);
+        Assert.True((pfd.Revents & LinuxConstants.POLLIN) != 0);
+    }
+
+    private static void WriteTimespecSec(TestEnv env, uint tsPtr, int seconds)
+    {
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), seconds);
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
+        env.Write(tsPtr, ts);
+    }
+
+    private static async Task DrainUntilCompleted(TestEnv env, Task task, int maxIterations = 200)
+    {
+        for (var i = 0; i < maxIterations && !task.IsCompleted; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(5);
+        }
     }
 
     private sealed class TestEnv : IDisposable
