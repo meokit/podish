@@ -41,6 +41,68 @@ inline float80& FpuTop(EmuState* state, int index) { return state->ctx.fpu_regs[
 
 inline void UpdateFpuRoundingMode(EmuState* state) { f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw); }
 
+inline void SetFpuCompareFlags(EmuState* state, float80 a, float80 b) {
+    state->ctx.fpu_sw &= ~0x4500;  // Clear C3/C2/C0
+    if (f80_uncomparable(a, b)) {
+        state->ctx.fpu_sw |= 0x4500;  // C3=1, C2=1, C0=1
+    } else if (f80_eq(a, b)) {
+        state->ctx.fpu_sw |= 0x4000;  // C3=1
+    } else if (f80_lt(a, b)) {
+        state->ctx.fpu_sw |= 0x0100;  // C0=1
+    }
+}
+
+inline mem::MemResult<float80> ReadPackedBcd80(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, ShimOp* op) {
+    double value = 0.0;
+    double place = 1.0;
+    for (int i = 0; i < 9; ++i) {
+        auto b_res = ReadMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + (uint32_t)i, utlb, op);
+        if (!b_res) return std::unexpected(b_res.error());
+        uint8_t b = *b_res;
+        uint8_t lo = b & 0x0F;
+        uint8_t hi = (b >> 4) & 0x0F;
+        if (lo <= 9) {
+            value += (double)lo * place;
+        }
+        place *= 10.0;
+        if (hi <= 9) {
+            value += (double)hi * place;
+        }
+        place *= 10.0;
+    }
+
+    auto sign_res = ReadMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + 9, utlb, op);
+    if (!sign_res) return std::unexpected(sign_res.error());
+    if ((*sign_res & 0x80) != 0) {
+        value = -value;
+    }
+
+    return f80_from_double(value);
+}
+
+inline bool WritePackedBcd80(EmuState* state, uint32_t addr, float80 value, mem::MicroTLB* utlb, ShimOp* op) {
+    double d = std::trunc(f80_to_double(value));
+    bool negative = std::signbit(d);
+    double abs_val = std::fabs(d);
+
+    for (int i = 0; i < 9; ++i) {
+        uint8_t lo = (uint8_t)std::fmod(abs_val, 10.0);
+        abs_val = std::floor(abs_val / 10.0);
+        uint8_t hi = (uint8_t)std::fmod(abs_val, 10.0);
+        abs_val = std::floor(abs_val / 10.0);
+        uint8_t packed = (uint8_t)((hi << 4) | lo);
+        if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + (uint32_t)i, packed, utlb, op)) {
+            return false;
+        }
+    }
+
+    uint8_t sign = negative ? 0x80 : 0x00;
+    if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + 9, sign, utlb, op)) {
+        return false;
+    }
+    return true;
+}
+
 // Helper to read float32 from memory and convert to float80
 // Uses Blocking Read (fail_on_tlb_miss = false)
 inline mem::MemResult<float80> ReadF32(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
@@ -343,9 +405,16 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             {
                 auto cw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
                 if (!cw_res) return LogicFlow::ExitOnCurrentEIP;
+                auto sw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 2, utlb, op);
+                if (!sw_res) return LogicFlow::ExitOnCurrentEIP;
+                auto tw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 4, utlb, op);
+                if (!tw_res) return LogicFlow::ExitOnCurrentEIP;
                 state->ctx.fpu_cw = *cw_res;
-                // TODO: full env load (SW, TW, IP, CS, OP, DS)
+                state->ctx.fpu_sw = *sw_res;
+                state->ctx.fpu_tw = *tw_res;
+                state->ctx.fpu_top = (state->ctx.fpu_sw >> 11) & 7;
                 UpdateFpuRoundingMode(state);
+                UpdateFSW(state);
                 break;
             }
             case 5:  // FLDCW m16
@@ -360,7 +429,8 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             {
                 if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, state->ctx.fpu_cw, utlb, op))
                     return LogicFlow::ExitOnCurrentEIP;
-                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 2, state->ctx.fpu_sw, utlb, op))
+                uint16_t saved_sw = (uint16_t)((state->ctx.fpu_sw & ~0x3800) | ((state->ctx.fpu_top & 7) << 11));
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 2, saved_sw, utlb, op))
                     return LogicFlow::ExitOnCurrentEIP;
                 if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 4, state->ctx.fpu_tw, utlb, op))
                     return LogicFlow::ExitOnCurrentEIP;
@@ -563,6 +633,14 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                 int32_t val = (int32_t)*val_res;
                 float80 t = f80_from_int(val);
                 FpuPush(state, &t);
+                break;
+            }
+            case 1:  // FISTTP m32int
+            {
+                int32_t val = (int32_t)std::trunc(f80_to_double(FpuTop(state, 0)));
+                if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, addr, (uint32_t)val, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                FpuPop(state);
                 break;
             }
             case 2:  // FIST m32int
@@ -772,6 +850,65 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
                 FpuPop(state);
                 break;
             }
+            case 4:  // FRSTOR m94/108byte (partial env restore)
+            {
+                uint32_t addr = ComputeLinearAddress(state, op);
+                auto cw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 0, utlb, op);
+                if (!cw_res) return LogicFlow::ExitOnCurrentEIP;
+                auto sw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 2, utlb, op);
+                if (!sw_res) return LogicFlow::ExitOnCurrentEIP;
+                auto tw_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 4, utlb, op);
+                if (!tw_res) return LogicFlow::ExitOnCurrentEIP;
+                state->ctx.fpu_cw = *cw_res;
+                state->ctx.fpu_sw = *sw_res;
+                state->ctx.fpu_tw = *tw_res;
+                state->ctx.fpu_top = (state->ctx.fpu_sw >> 11) & 7;
+                for (int i = 0; i < 8; ++i) {
+                    uint32_t reg_addr = addr + 28u + (uint32_t)(i * 10);
+                    auto low_res = ReadMem<uint64_t, OpOnTLBMiss::Blocking>(state, reg_addr, utlb, op);
+                    if (!low_res) return LogicFlow::ExitOnCurrentEIP;
+                    auto high_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, reg_addr + 8, utlb, op);
+                    if (!high_res) return LogicFlow::ExitOnCurrentEIP;
+                    state->ctx.fpu_regs[i].signif = *low_res;
+                    state->ctx.fpu_regs[i].signExp = *high_res;
+                }
+                UpdateFpuRoundingMode(state);
+                UpdateFSW(state);
+                break;
+            }
+            case 6:  // FNSAVE m94/108byte (partial env store)
+            {
+                uint32_t addr = ComputeLinearAddress(state, op);
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 0, state->ctx.fpu_cw, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 2, state->ctx.fpu_sw, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + 4, state->ctx.fpu_tw, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                for (int i = 0; i < 8; ++i) {
+                    uint32_t reg_addr = addr + 28u + (uint32_t)(i * 10);
+                    float80 f = state->ctx.fpu_regs[i];
+                    if (!WriteMem<uint64_t, OpOnTLBMiss::Blocking>(state, reg_addr, f.signif, utlb, op))
+                        return LogicFlow::ExitOnCurrentEIP;
+                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, reg_addr + 8, f.signExp, utlb, op))
+                        return LogicFlow::ExitOnCurrentEIP;
+                }
+                // x87 save also resets FPU state
+                state->ctx.fpu_cw = 0x037F;
+                state->ctx.fpu_sw = 0;
+                state->ctx.fpu_tw = 0xFFFF;
+                state->ctx.fpu_top = 0;
+                UpdateFpuRoundingMode(state);
+                UpdateFSW(state);
+                break;
+            }
+            case 7:  // FNSTSW m2byte
+            {
+                uint32_t addr = ComputeLinearAddress(state, op);
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, state->ctx.fpu_sw, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                break;
+            }
             default:
                 state->fault_vector = 6;
                 if (!state->hooks.on_invalid_opcode(state)) {
@@ -788,6 +925,15 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
+        if (op->modrm == 0xD9) {  // FCOMPP
+            float80 st0 = FpuTop(state, 0);
+            float80 st1 = FpuTop(state, 1);
+            SetFpuCompareFlags(state, st0, st1);
+            FpuPop(state);
+            FpuPop(state);
+            return LogicFlow::Continue;
+        }
+
         // DE C0-F7
         // DE C1: FADDP ST(1), ST0 (Add ST0 to ST1 and Pop)
         int idx = op->modrm & 7;
@@ -840,6 +986,23 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
                 FpuTop(state, 0) = f80_mul(FpuTop(state, 0), f80_from_int(val));
                 break;
             }
+            case 2:  // FICOM m16int
+            {
+                auto val_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
+                if (!val_res) return LogicFlow::ExitOnCurrentEIP;
+                int16_t val = (int16_t)*val_res;
+                SetFpuCompareFlags(state, FpuTop(state, 0), f80_from_int(val));
+                break;
+            }
+            case 3:  // FICOMP m16int
+            {
+                auto val_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
+                if (!val_res) return LogicFlow::ExitOnCurrentEIP;
+                int16_t val = (int16_t)*val_res;
+                SetFpuCompareFlags(state, FpuTop(state, 0), f80_from_int(val));
+                FpuPop(state);
+                break;
+            }
             case 4:  // FISUB m16int
             {
                 auto val_res = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
@@ -888,7 +1051,12 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
     uint8_t subop = (op->modrm >> 3) & 7;
 
     if ((op->modrm >> 6) == 3) {
-        if (op->modrm == 0xE0) {  // FNSTSW AX
+        if ((op->modrm & 0xF8) == 0xC0) {  // FFREEP ST(i)
+            int idx = op->modrm & 7;
+            int phys = (state->ctx.fpu_top + idx) & 7;
+            state->ctx.fpu_tw |= (3 << (phys * 2));  // mark ST(i) empty
+            FpuPop(state);                           // pop ST(0)
+        } else if (op->modrm == 0xE0) {              // FNSTSW AX
             state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFF0000) | state->ctx.fpu_sw;
         } else if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMIP
             // ... (already implemented)
@@ -940,6 +1108,14 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
                 FpuPush(state, &f);
                 break;
             }
+            case 1:  // FISTTP m16int
+            {
+                int16_t val = (int16_t)std::trunc(f80_to_double(FpuTop(state, 0)));
+                if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, (uint16_t)val, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
+                FpuPop(state);
+                break;
+            }
             case 2:  // FIST m16int
             {
                 float80 st0 = FpuTop(state, 0);
@@ -964,6 +1140,19 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
                 int64_t val = (int64_t)*val_res;
                 float80 f = f80_from_int(val);
                 FpuPush(state, &f);
+                break;
+            }
+            case 4:  // FBLD m80bcd
+            {
+                auto bcd_res = ReadPackedBcd80(state, addr, utlb, op);
+                if (!bcd_res) return LogicFlow::ExitOnCurrentEIP;
+                FpuPush(state, &(*bcd_res));
+                break;
+            }
+            case 6:  // FBSTP m80bcd
+            {
+                if (!WritePackedBcd80(state, addr, FpuTop(state, 0), utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+                FpuPop(state);
                 break;
             }
             case 7:  // FISTP m64int

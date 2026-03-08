@@ -556,3 +556,118 @@ def test_run_sse_flags():
     run_fpu_test(case_sse_ucomisd_jb)
     run_fpu_test(case_sse_ucomisd_jp_nan)
     run_fpu_test(case_sse_ucomiss_ja)
+
+@pytest.mark.fpu
+def case_fpu_fldenv_fnstenv_roundtrip():
+    """
+    finit
+    fld1
+    fldz
+    fcom st1                ; 0.0 < 1.0 => C0=1
+    fnstenv [0x2400]
+
+    finit
+    fldenv [0x2400]
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x3100,      # TOP=6 + C0=1
+            'FSW': 0x3100,
+            'FCW': 0x037F
+        },
+        'expected_write': {
+            0x2400: 0x037F,     # CW
+            0x2402: 0x3100,     # SW
+            0x2404: 0x0FFF      # TW (only two regs valid)
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fnsave_frstor_roundtrip():
+    """
+    finit
+    fld1
+    fld dword [0x2200]       ; 2.0
+    faddp st1, st0           ; 3.0
+
+    fnsave [0x2500]
+    fldz                     ; disturb state
+    frstor [0x2500]
+    fstp qword [0x2510]
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_read': {
+            0x2200: 0x40000000  # 2.0f
+        },
+        'expected_write': {
+            0x2500: 0x037F      # saved CW
+        },
+        'fuzzy_write': {
+            0x2510: struct.unpack('<Q', struct.pack('<d', 3.0))[0]
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fisttp_mem():
+    """
+    fld dword [0x2300]       ; 3.9
+    fisttp dword [0x2304]    ; 3
+    fld dword [0x2308]       ; -2.9
+    fisttp word [0x230c]     ; -2
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_read': {
+            0x2300: 0x4079999A,  # 3.9f
+            0x2308: 0xC039999A   # -2.9f
+        },
+        'expected_write': {
+            0x2304: 0x00000003,
+            0x230c: 0x0000FFFE
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fnstsw_mem():
+    """
+    fld1
+    fldz
+    fcom st1
+    fnstsw word [0x2410]
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_write': {
+            0x2410: 0x00003100
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fbld_fbstp_roundtrip():
+    """
+    fld1
+    fbstp tword [0x2600]
+    fbld tword [0x2600]
+    fstp qword [0x2610]
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'fuzzy_write': {
+            0x2610: struct.unpack('<Q', struct.pack('<d', 1.0))[0]
+        }
+    }
+
+def test_run_fpu_new_paths():
+    run_fpu_test(case_fpu_fldenv_fnstenv_roundtrip)
+    run_fpu_test(case_fpu_fnsave_frstor_roundtrip)
+    run_fpu_test(case_fpu_fisttp_mem)
+    run_fpu_test(case_fpu_fnstsw_mem)
+    run_fpu_test(case_fpu_fbld_fbstp_roundtrip)
