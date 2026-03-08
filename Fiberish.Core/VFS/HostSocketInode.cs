@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -14,6 +15,7 @@ namespace Fiberish.VFS;
 public sealed class HostSocketInode : Inode
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
+    [ThreadStatic] private static StringBuilder? CachedHexBuilder;
     private readonly HostSocketReadiness _readiness;
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
@@ -28,7 +30,7 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger);
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger, new SchedulerReadyDispatcher(KernelScheduler.Current));
     }
 
     // Wrap an accepted socket
@@ -41,7 +43,7 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger);
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger, new SchedulerReadyDispatcher(KernelScheduler.Current));
     }
 
     public Socket NativeSocket { get; }
@@ -179,79 +181,109 @@ public sealed class HostSocketInode : Inode
 
     public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
     {
-        if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
+        byte[]? rented = null;
+        ArraySegment<byte> segment;
+        if (!MemoryMarshal.TryGetArray(buffer, out segment))
+        {
+            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+            buffer.Span.CopyTo(rented);
+            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
+        }
         Logger.LogTrace(
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
             Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
 
-        while (true)
-            try
-            {
-                var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
-                if (n > 0)
-                    ClearReadyBits(PollEvents.POLLOUT);
-                Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
-                return n;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                ClearReadyBits(PollEvents.POLLOUT);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        try
+        {
+            while (true)
+                try
                 {
-                    Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                    return -(int)Errno.EAGAIN;
+                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                    if (n > 0)
+                        ClearReadyBits(PollEvents.POLLOUT);
+                    Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
+                    return n;
                 }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                                 ex.SocketErrorCode == SocketError.IOPending)
+                {
+                    ClearReadyBits(PollEvents.POLLOUT);
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    {
+                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                        return -(int)Errno.EAGAIN;
+                    }
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
-                if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
-            }
-            catch (SocketException ex)
-            {
-                return MapSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
+                    var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                    if (!ready)
+                        return -(int)Errno.ERESTARTSYS;
+                }
+                catch (SocketException ex)
+                {
+                    return MapSocketError(ex.SocketErrorCode);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return -(int)Errno.ENOTCONN;
+                }
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
     {
-        if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
+        byte[]? rented = null;
+        ArraySegment<byte> segment;
+        if (!MemoryMarshal.TryGetArray(buffer, out segment))
+        {
+            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+            buffer.Span.CopyTo(rented);
+            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
+        }
 
-        while (true)
-            try
-            {
-                var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
-                if (n > 0)
-                    ClearReadyBits(PollEvents.POLLOUT);
-                return n;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                ClearReadyBits(PollEvents.POLLOUT);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        try
+        {
+            while (true)
+                try
                 {
-                    Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
-                        (int)file.Flags);
-                    return -(int)Errno.EAGAIN;
+                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
+                    if (n > 0)
+                        ClearReadyBits(PollEvents.POLLOUT);
+                    return n;
                 }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                                 ex.SocketErrorCode == SocketError.IOPending)
+                {
+                    ClearReadyBits(PollEvents.POLLOUT);
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    {
+                        Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
+                            (int)file.Flags);
+                        return -(int)Errno.EAGAIN;
+                    }
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
-                if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
-            }
-            catch (SocketException ex)
-            {
-                return MapSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
+                    var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                    if (!ready)
+                        return -(int)Errno.ERESTARTSYS;
+                }
+                catch (SocketException ex)
+                {
+                    return MapSocketError(ex.SocketErrorCode);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return -(int)Errno.ENOTCONN;
+                }
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public async ValueTask<int> ConnectAsync(LinuxFile file, EndPoint endpoint)
@@ -333,12 +365,12 @@ public sealed class HostSocketInode : Inode
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)
     {
+        var rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
         try
         {
-            var arr = buffer.ToArray();
-            var bytes = NativeSocket.Receive(arr);
-            TraceIo("read", arr.AsSpan(0, bytes), bytes);
-            arr.AsSpan(0, bytes).CopyTo(buffer);
+            var bytes = NativeSocket.Receive(rented, 0, buffer.Length, SocketFlags.None);
+            TraceIo("read", rented.AsSpan(0, bytes), bytes);
+            rented.AsSpan(0, bytes).CopyTo(buffer);
             return bytes;
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
@@ -353,16 +385,21 @@ public sealed class HostSocketInode : Inode
         catch (ObjectDisposedException)
         {
             return -(int)Errno.ENOTCONN;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 
     public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
+        var rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
         try
         {
-            var data = buffer.ToArray();
-            var bytes = NativeSocket.Send(data);
-            TraceIo("write", data.AsSpan(0, Math.Min(bytes, data.Length)), bytes);
+            buffer.CopyTo(rented);
+            var bytes = NativeSocket.Send(rented, 0, buffer.Length, SocketFlags.None);
+            TraceIo("write", rented.AsSpan(0, Math.Min(bytes, buffer.Length)), bytes);
             return bytes;
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
@@ -377,6 +414,10 @@ public sealed class HostSocketInode : Inode
         catch (ObjectDisposedException)
         {
             return -(int)Errno.ENOTCONN;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
         }
     }
 
@@ -422,13 +463,44 @@ public sealed class HostSocketInode : Inode
     private static string HexPreview(ReadOnlySpan<byte> data)
     {
         if (data.IsEmpty) return "";
-        var sb = new StringBuilder(data.Length * 3);
-        for (var i = 0; i < data.Length; i++)
+        var sb = AcquireHexBuilder(data.Length * 3);
+        try
         {
-            if (i > 0) sb.Append(' ');
-            sb.Append(data[i].ToString("X2"));
+            for (var i = 0; i < data.Length; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(data[i].ToString("X2"));
+            }
+
+            return sb.ToString();
+        }
+        finally
+        {
+            ReleaseHexBuilder(sb);
+        }
+    }
+
+    private static StringBuilder AcquireHexBuilder(int capacity)
+    {
+        var cached = CachedHexBuilder;
+        if (cached != null)
+        {
+            CachedHexBuilder = null;
+            cached.Clear();
+            if (cached.Capacity < capacity)
+                cached.EnsureCapacity(capacity);
+            return cached;
         }
 
-        return sb.ToString();
+        return new StringBuilder(capacity);
+    }
+
+    private static void ReleaseHexBuilder(StringBuilder sb)
+    {
+        const int maxCachedCapacity = 1024;
+        if (sb.Capacity > maxCachedCapacity)
+            return;
+        sb.Clear();
+        CachedHexBuilder = sb;
     }
 }
