@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Fiberish.Auth.Cred;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
@@ -116,20 +117,52 @@ public partial class SyscallManager
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
 
+        var snapshot = MemoryStatsSnapshot.Capture(sm);
+        var totalBytes = Math.Max(0, snapshot.MemTotalBytes);
+        var freeBytes = Math.Max(0, snapshot.FreeBytes);
+        var sharedBytes = Math.Max(0, snapshot.ShmemBytes);
+        var bufferBytes = 0L; // /proc/meminfo currently reports Buffers: 0
+        var totalSwapBytes = 0L;
+        var freeSwapBytes = 0L;
+        var totalHighBytes = 0L;
+        var freeHighBytes = 0L;
+
+        var maxBytes = Math.Max(
+            totalBytes,
+            Math.Max(
+                freeBytes,
+                Math.Max(
+                    sharedBytes,
+                    Math.Max(bufferBytes, Math.Max(totalSwapBytes, Math.Max(freeSwapBytes, Math.Max(totalHighBytes, freeHighBytes)))))));
+
+        var memUnit = maxBytes <= int.MaxValue ? 1 : LinuxConstants.PageSize;
+        int ToSysValue(long bytes)
+        {
+            if (bytes <= 0) return 0;
+            var scaled = bytes / memUnit;
+            if (scaled > int.MaxValue) return int.MaxValue;
+            return (int)scaled;
+        }
+
+        var scheduler = t.CommonKernel;
+        var processCount = scheduler?.GetProcessesSnapshot().Count ?? 1;
+        if (processCount <= 0) processCount = 1;
+        if (processCount > short.MaxValue) processCount = short.MaxValue;
+
         var info = new SysInfo
         {
             Uptime = GetSysinfoUptimeSeconds(),
             Loads = [65536, 65536, 65536],
-            TotalRam = 256 * 1024 * 1024,
-            FreeRam = 128 * 1024 * 1024,
-            SharedRam = 0,
-            BufferRam = 0,
-            TotalSwap = 0,
-            FreeSwap = 0,
-            Procs = 1, // Simplified for now: current processes count is not easily accessible via public API without listing.
-            TotalHigh = 0,
-            FreeHigh = 0,
-            MemUnit = 1,
+            TotalRam = ToSysValue(totalBytes),
+            FreeRam = ToSysValue(freeBytes),
+            SharedRam = ToSysValue(sharedBytes),
+            BufferRam = ToSysValue(bufferBytes),
+            TotalSwap = ToSysValue(totalSwapBytes),
+            FreeSwap = ToSysValue(freeSwapBytes),
+            Procs = (short)processCount,
+            TotalHigh = ToSysValue(totalHighBytes),
+            FreeHigh = ToSysValue(freeHighBytes),
+            MemUnit = memUnit,
             Padding = new byte[8]
         };
 

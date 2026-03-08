@@ -154,8 +154,8 @@ public static class ProcFsManager
             $"AnonPages:{Fmt(anonKb)} kB\n" +
             $"Mapped:{Fmt(mappedKb)} kB\n" +
             $"Shmem:{Fmt(shmemKb)} kB\n" +
-            $"Slab:{Fmt(reclaimableKb)} kB\n" +
-            $"SReclaimable:{Fmt(reclaimableKb)} kB\n" +
+            "Slab:                0 kB\n" +
+            "SReclaimable:         0 kB\n" +
             "SUnreclaim:           0 kB\n" +
             "KernelStack:          0 kB\n" +
             "PageTables:           0 kB\n" +
