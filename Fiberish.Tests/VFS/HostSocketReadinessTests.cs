@@ -190,6 +190,67 @@ public class HostSocketReadinessTests
     }
 
     [Fact(Timeout = TestTimeoutMs)]
+    public async Task RegisterWaitHandle_ConnectedRead_NoData_DoesNotSpuriouslyFire()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(ep);
+        using var server = listener.Accept();
+        server.Blocking = false;
+
+        var inode = new HostSocketInode(3007, env.SyscallManager.MemfdSuperBlock, server);
+        var file = new LinuxFile(new Dentry("readiness-no-spurious", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>());
+
+        var fired = 0;
+        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
+        Assert.NotNull(reg);
+
+        for (var i = 0; i < 20; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(5);
+        }
+
+        Assert.Equal(0, Volatile.Read(ref fired));
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
+    public async Task RegisterWaitHandle_ConnectedRead_DataArrival_FiresPromptly()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(ep);
+        using var server = listener.Accept();
+        server.Blocking = false;
+
+        var inode = new HostSocketInode(3011, env.SyscallManager.MemfdSuperBlock, server);
+        var file = new LinuxFile(new Dentry("readiness-data-arrival", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>());
+
+        var fired = 0;
+        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
+        Assert.NotNull(reg);
+
+        _ = client.Send([0x33]);
+        await DrainUntil(() => Volatile.Read(ref fired) > 0, env, 300);
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
     public async Task ConnectAsync_NonBlockingToClosedPort_ReturnsInProgressOrConnectionRefused()
     {
         using var env = new ReadinessEnv();

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
@@ -7,15 +8,30 @@ namespace Fiberish.VFS;
 internal sealed class HostSocketProbeEngine : IDisposable
 {
     private const long ReadyCacheTtlMs = 2;
-
-    [ThreadStatic] private static Stack<SocketAsyncEventArgs>? ThreadProbeArgsPool;
-    [ThreadStatic] private static Stack<AsyncProbeRegistration>? ThreadProbeRegistrationPool;
+    private static readonly ConcurrentBag<SocketAsyncEventArgs> ReadProbeArgsPool = new();
+    private static readonly ConcurrentBag<SocketAsyncEventArgs> WriteProbeArgsPool = new();
+    private static readonly ConcurrentBag<SocketAsyncEventArgs> AcceptProbeArgsPool = new();
+    private static readonly EventHandler<SocketAsyncEventArgs> StaticProbeCompleted = OnProbeCompletedStatic;
 
     private readonly HostSocketInode _owner;
     private readonly Socket _socket;
     private readonly ILogger _logger;
     private readonly IReadyDispatcher _dispatcher;
     private readonly Queue<Socket> _acceptedProbeQueue = new();
+
+    private readonly object _waitersLock = new();
+    private readonly List<WaiterRegistration> _readWaiters = [];
+    private readonly List<WaiterRegistration> _writeWaiters = [];
+
+    private SocketAsyncEventArgs? _readProbeArgs;
+    private SocketAsyncEventArgs? _writeProbeArgs;
+    private SocketAsyncEventArgs? _acceptProbeArgs;
+
+    private int _readProbeInFlight;
+    private int _writeProbeInFlight;
+    private int _acceptProbeInFlight;
+    private int _disposed;
+
     private short _readyCacheBits;
     private long _readyCacheExpireAtMs;
 
@@ -25,6 +41,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         _socket = socket;
         _logger = logger;
         _dispatcher = dispatcher;
+
     }
 
     public short Poll(short events)
@@ -44,14 +61,20 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
         if ((events & PollEvents.POLLIN) != 0)
         {
-            regIn = IsListeningSocket() ? ArmAcceptProbe(callback) : ArmReadProbe(callback);
+            regIn = RegisterWaiter(callback, PollEvents.POLLIN);
+            if (IsListeningSocket())
+                ArmAcceptProbe();
+            else
+                ArmReadProbe();
         }
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            regOut = IsNonBlockingConnectPending(file)
-                ? ArmConnectProbe(callback)
-                : ArmWriteProbe(callback);
+            regOut = RegisterWaiter(callback, PollEvents.POLLOUT);
+            if (IsNonBlockingConnectPending(file))
+                ArmConnectProbe();
+            else
+                ArmWriteProbe();
         }
 
         if (regIn == null) return regOut;
@@ -89,6 +112,13 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        ReturnOrDisposeProbeArgs(ref _readProbeArgs, ReadProbeArgsPool, Volatile.Read(ref _readProbeInFlight) != 0);
+        ReturnOrDisposeProbeArgs(ref _writeProbeArgs, WriteProbeArgsPool, Volatile.Read(ref _writeProbeInFlight) != 0);
+        ReturnOrDisposeProbeArgs(ref _acceptProbeArgs, AcceptProbeArgsPool, Volatile.Read(ref _acceptProbeInFlight) != 0);
+
         try
         {
             _socket.Dispose();
@@ -111,6 +141,12 @@ internal sealed class HostSocketProbeEngine : IDisposable
                     // ignored
                 }
             }
+        }
+
+        lock (_waitersLock)
+        {
+            _readWaiters.Clear();
+            _writeWaiters.Clear();
         }
 
         _readyCacheBits = 0;
@@ -150,7 +186,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
                     }
                     catch (SocketException)
                     {
-                        // leave canRead false; error/hup path below will report state.
+                        // keep false
                     }
                 }
             }
@@ -188,7 +224,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 }
                 catch
                 {
-                    // Fall back to poll bits if SO_ERROR isn't available.
+                    // fall back to poll bits
                 }
             }
 
@@ -243,135 +279,223 @@ internal sealed class HostSocketProbeEngine : IDisposable
                (file.Flags & FileFlags.O_NONBLOCK) != 0;
     }
 
-    private IDisposable? ArmReadProbe(Action callback)
+    private SocketAsyncEventArgs EnsureProbeArgs(ProbeKind kind)
     {
-        var saea = RentProbeArgs();
-        saea.SetBuffer(null, 0, 0);
-        saea.SocketFlags = SocketFlags.None;
-        saea.AcceptSocket = null;
-        var reg = RentProbeRegistration(this, _dispatcher, callback, saea, isAcceptProbe: false);
+        return kind switch
+        {
+            ProbeKind.Read => _readProbeArgs ??= RentProbeArgs(ReadProbeArgsPool, kind),
+            ProbeKind.Write => _writeProbeArgs ??= RentProbeArgs(WriteProbeArgsPool, kind),
+            _ => _acceptProbeArgs ??= RentProbeArgs(AcceptProbeArgsPool, kind)
+        };
+    }
+
+    private void ArmReadProbe()
+    {
+        if (Interlocked.Exchange(ref _readProbeInFlight, 1) != 0)
+            return;
+
+        var args = EnsureProbeArgs(ProbeKind.Read);
+        if (args.UserToken is ProbeTag readTag) readTag.Owner = this;
         try
         {
-            if (!_socket.ReceiveAsync(saea))
-            {
-                reg.HandleCompletedSync();
-                _dispatcher.Post(callback);
-                return null;
-            }
-
-            return reg;
+            if (!_socket.ReceiveAsync(args))
+                HandleProbeCompleted(args, ProbeKind.Read);
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
         {
-            reg.CancelAndRecycleImmediately();
-            return null;
+            Interlocked.Exchange(ref _readProbeInFlight, 0);
         }
         catch
         {
-            reg.CancelAndRecycleImmediately();
-            _dispatcher.Post(callback);
-            return null;
+            Interlocked.Exchange(ref _readProbeInFlight, 0);
+            NotifyWaiters(PollEvents.POLLERR, notifyRead: true, notifyWrite: false);
         }
     }
 
-    private IDisposable? ArmAcceptProbe(Action callback)
+    private void ArmWriteProbe()
     {
-        var saea = RentProbeArgs();
-        saea.SetBuffer(null, 0, 0);
-        saea.SocketFlags = SocketFlags.None;
-        saea.AcceptSocket = null;
-        var reg = RentProbeRegistration(this, _dispatcher, callback, saea, isAcceptProbe: true);
+        if (Interlocked.Exchange(ref _writeProbeInFlight, 1) != 0)
+            return;
+
+        var args = EnsureProbeArgs(ProbeKind.Write);
+        if (args.UserToken is ProbeTag writeTag) writeTag.Owner = this;
         try
         {
-            if (!_socket.AcceptAsync(saea))
-            {
-                reg.HandleCompletedSync();
-                _dispatcher.Post(callback);
-                return null;
-            }
-
-            return reg;
+            if (!_socket.SendAsync(args))
+                HandleProbeCompleted(args, ProbeKind.Write);
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
         {
-            reg.CancelAndRecycleImmediately();
-            return null;
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
         }
         catch
         {
-            reg.CancelAndRecycleImmediately();
-            _dispatcher.Post(callback);
-            return null;
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
+            NotifyWaiters(PollEvents.POLLERR, notifyRead: false, notifyWrite: true);
         }
     }
 
-    private IDisposable? ArmWriteProbe(Action callback)
+    private void ArmConnectProbe()
     {
-        var saea = RentProbeArgs();
-        saea.SetBuffer(null, 0, 0);
-        saea.SocketFlags = SocketFlags.None;
-        saea.AcceptSocket = null;
-        var reg = RentProbeRegistration(this, _dispatcher, callback, saea, isAcceptProbe: false);
+        if (Interlocked.Exchange(ref _writeProbeInFlight, 1) != 0)
+            return;
+
+        var args = EnsureProbeArgs(ProbeKind.Write);
+        if (args.UserToken is ProbeTag connectTag) connectTag.Owner = this;
         try
         {
-            if (!_socket.SendAsync(saea))
-            {
-                reg.HandleCompletedSync();
-                _dispatcher.Post(callback);
-                return null;
-            }
-
-            return reg;
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
-        {
-            reg.CancelAndRecycleImmediately();
-            return null;
-        }
-        catch
-        {
-            reg.CancelAndRecycleImmediately();
-            _dispatcher.Post(callback);
-            return null;
-        }
-    }
-
-    private IDisposable? ArmConnectProbe(Action callback)
-    {
-        var saea = RentProbeArgs();
-        saea.SetBuffer(null, 0, 0);
-        saea.SocketFlags = SocketFlags.None;
-        saea.AcceptSocket = null;
-        var reg = RentProbeRegistration(this, _dispatcher, callback, saea, isAcceptProbe: false);
-        try
-        {
-            if (!_socket.ConnectAsync(saea))
-            {
-                reg.HandleCompletedSync();
-                _dispatcher.Post(callback);
-                return null;
-            }
-
-            return reg;
+            if (!_socket.ConnectAsync(args))
+                HandleProbeCompleted(args, ProbeKind.Write);
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
         {
-            reg.CancelAndRecycleImmediately();
-            return null;
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
         }
         catch
         {
-            reg.CancelAndRecycleImmediately();
-            _dispatcher.Post(callback);
-            return null;
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
+            NotifyWaiters(PollEvents.POLLERR, notifyRead: false, notifyWrite: true);
         }
     }
 
-    private void EnqueueAcceptedSocket(Socket socket)
+    private void ArmAcceptProbe()
     {
-        lock (_acceptedProbeQueue)
+        if (Interlocked.Exchange(ref _acceptProbeInFlight, 1) != 0)
+            return;
+
+        var args = EnsureProbeArgs(ProbeKind.Accept);
+        if (args.UserToken is ProbeTag acceptTag) acceptTag.Owner = this;
+        try
         {
-            _acceptedProbeQueue.Enqueue(socket);
+            if (!_socket.AcceptAsync(args))
+                HandleProbeCompleted(args, ProbeKind.Accept);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
+        {
+            Interlocked.Exchange(ref _acceptProbeInFlight, 0);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _acceptProbeInFlight, 0);
+            NotifyWaiters(PollEvents.POLLERR, notifyRead: true, notifyWrite: false);
+        }
+    }
+
+    private static void OnProbeCompletedStatic(object? sender, SocketAsyncEventArgs e)
+    {
+        if (e.UserToken is not ProbeTag tag || tag.Owner == null)
+            return;
+        var owner = tag.Owner;
+        owner._dispatcher.Post(() => owner.HandleProbeCompleted(e, tag.Kind));
+    }
+
+    private void HandleProbeCompleted(SocketAsyncEventArgs e, ProbeKind kind)
+    {
+        switch (kind)
+        {
+            case ProbeKind.Read:
+                Interlocked.Exchange(ref _readProbeInFlight, 0);
+                break;
+            case ProbeKind.Write:
+                Interlocked.Exchange(ref _writeProbeInFlight, 0);
+                break;
+            case ProbeKind.Accept:
+                Interlocked.Exchange(ref _acceptProbeInFlight, 0);
+                break;
+        }
+
+        short readyHint = 0;
+        if (kind == ProbeKind.Accept && e.AcceptSocket != null)
+        {
+            lock (_acceptedProbeQueue)
+                _acceptedProbeQueue.Enqueue(e.AcceptSocket);
+            e.AcceptSocket = null;
+            readyHint |= PollEvents.POLLIN;
+        }
+        else if (kind == ProbeKind.Read && e.SocketError == SocketError.Success)
+        {
+            readyHint |= PollEvents.POLLIN;
+        }
+
+        if (kind == ProbeKind.Write)
+        {
+            if (e.LastOperation == SocketAsyncOperation.Send && e.SocketError == SocketError.Success)
+                readyHint |= PollEvents.POLLOUT;
+            if (e.LastOperation == SocketAsyncOperation.Connect)
+                readyHint |= PollEvents.POLLOUT | PollEvents.POLLERR;
+        }
+
+        if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending and not SocketError.OperationAborted and not SocketError.Interrupted)
+            readyHint |= PollEvents.POLLERR;
+
+        if (readyHint != 0)
+            PromoteReadyCache(readyHint);
+
+        if (!ShouldSignalRePoll(e))
+            return;
+
+        NotifyWaiters(readyHint,
+            notifyRead: kind is ProbeKind.Read or ProbeKind.Accept,
+            notifyWrite: kind == ProbeKind.Write);
+    }
+
+    private void NotifyWaiters(short readyHint, bool notifyRead, bool notifyWrite)
+    {
+        if (readyHint == 0)
+            return;
+
+        WaiterRegistration[] readSnapshot = [];
+        WaiterRegistration[] writeSnapshot = [];
+
+        lock (_waitersLock)
+        {
+            if (notifyRead && _readWaiters.Count > 0)
+                readSnapshot = _readWaiters.ToArray();
+            if (notifyWrite && _writeWaiters.Count > 0)
+                writeSnapshot = _writeWaiters.ToArray();
+        }
+
+        foreach (var w in readSnapshot)
+            w.TryInvoke();
+        foreach (var w in writeSnapshot)
+            w.TryInvoke();
+    }
+
+    private static bool ShouldSignalRePoll(SocketAsyncEventArgs e)
+    {
+        return e.SocketError switch
+        {
+            SocketError.Success => true,
+            SocketError.OperationAborted => false,
+            SocketError.Interrupted => false,
+            SocketError.WouldBlock => false,
+            SocketError.IOPending => false,
+            _ => true
+        };
+    }
+
+    private IDisposable RegisterWaiter(Action callback, short eventMask)
+    {
+        var reg = new WaiterRegistration(this, callback, eventMask);
+        lock (_waitersLock)
+        {
+            if ((eventMask & PollEvents.POLLIN) != 0)
+                _readWaiters.Add(reg);
+            if ((eventMask & PollEvents.POLLOUT) != 0)
+                _writeWaiters.Add(reg);
+        }
+
+        return reg;
+    }
+
+    private void UnregisterWaiter(WaiterRegistration reg)
+    {
+        lock (_waitersLock)
+        {
+            if ((reg.EventMask & PollEvents.POLLIN) != 0)
+                _readWaiters.Remove(reg);
+            if ((reg.EventMask & PollEvents.POLLOUT) != 0)
+                _writeWaiters.Remove(reg);
         }
     }
 
@@ -399,46 +523,87 @@ internal sealed class HostSocketProbeEngine : IDisposable
         }
     }
 
-    private static SocketAsyncEventArgs RentProbeArgs()
+    private static SocketAsyncEventArgs RentProbeArgs(ConcurrentBag<SocketAsyncEventArgs> pool, ProbeKind kind)
     {
-        var pool = ThreadProbeArgsPool;
-        if (pool != null && pool.Count > 0)
-            return pool.Pop();
-        return new SocketAsyncEventArgs();
-    }
+        SocketAsyncEventArgs saea;
+        if (!pool.TryTake(out saea!))
+        {
+            saea = new SocketAsyncEventArgs();
+            saea.Completed += StaticProbeCompleted;
+        }
 
-    private static void RecycleProbeArgs(SocketAsyncEventArgs saea)
-    {
         saea.SetBuffer(null, 0, 0);
         saea.SocketFlags = SocketFlags.None;
-        saea.AcceptSocket = null;
-        var pool = ThreadProbeArgsPool ??= new Stack<SocketAsyncEventArgs>(16);
-        if (pool.Count < 256)
-            pool.Push(saea);
-        else
+        if (saea.AcceptSocket != null)
+        {
+            saea.AcceptSocket.Dispose();
+            saea.AcceptSocket = null;
+        }
+
+        var tag = saea.UserToken as ProbeTag ?? new ProbeTag();
+        tag.Kind = kind;
+        tag.Owner = null;
+        saea.UserToken = tag;
+        return saea;
+    }
+
+    private static void ReturnOrDisposeProbeArgs(ref SocketAsyncEventArgs? args, ConcurrentBag<SocketAsyncEventArgs> pool,
+        bool mayStillBeInFlight)
+    {
+        var saea = args;
+        args = null;
+        if (saea == null)
+            return;
+
+        if (mayStillBeInFlight)
+        {
             saea.Dispose();
+            return;
+        }
+
+        if (saea.UserToken is ProbeTag tag)
+            tag.Owner = null;
+
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        if (saea.AcceptSocket != null)
+        {
+            saea.AcceptSocket.Dispose();
+            saea.AcceptSocket = null;
+        }
+
+        pool.Add(saea);
     }
 
-    private static AsyncProbeRegistration RentProbeRegistration(HostSocketProbeEngine probe, IReadyDispatcher dispatcher,
-        Action callback, SocketAsyncEventArgs saea, bool isAcceptProbe)
+    private sealed class WaiterRegistration : IDisposable
     {
-        var pool = ThreadProbeRegistrationPool;
-        AsyncProbeRegistration reg;
-        if (pool != null && pool.Count > 0)
-            reg = pool.Pop();
-        else
-            reg = new AsyncProbeRegistration();
+        private HostSocketProbeEngine? _owner;
+        private readonly Action _callback;
+        private int _disposed;
 
-        reg.Initialize(probe, dispatcher, callback, saea, isAcceptProbe);
-        return reg;
-    }
+        public WaiterRegistration(HostSocketProbeEngine owner, Action callback, short eventMask)
+        {
+            _owner = owner;
+            _callback = callback;
+            EventMask = eventMask;
+        }
 
-    private static void RecycleProbeRegistration(AsyncProbeRegistration reg)
-    {
-        reg.ResetForPool();
-        var pool = ThreadProbeRegistrationPool ??= new Stack<AsyncProbeRegistration>(64);
-        if (pool.Count < 1024)
-            pool.Push(reg);
+        public short EventMask { get; }
+
+        public void TryInvoke()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
+            _callback();
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            var owner = Interlocked.Exchange(ref _owner, null);
+            owner?.UnregisterWaiter(this);
+        }
     }
 
     private sealed class DualRegistration : IDisposable
@@ -463,142 +628,16 @@ internal sealed class HostSocketProbeEngine : IDisposable
         }
     }
 
-    private sealed class AsyncProbeRegistration : IDisposable
+    private sealed class ProbeTag
     {
-        private HostSocketProbeEngine _probe = null!;
-        private IReadyDispatcher _dispatcher = null!;
-        private Action _callback = null!;
-        private SocketAsyncEventArgs _saea = null!;
-        private bool _isAcceptProbe;
-        private readonly Action _scheduledCompletion;
-        private bool _disposed;
-        private bool _completed;
+        public HostSocketProbeEngine? Owner { get; set; }
+        public ProbeKind Kind { get; set; }
+    }
 
-        public AsyncProbeRegistration()
-        {
-            _scheduledCompletion = CompleteScheduled;
-        }
-
-        public void Initialize(HostSocketProbeEngine probe, IReadyDispatcher dispatcher, Action callback,
-            SocketAsyncEventArgs saea, bool isAcceptProbe)
-        {
-            _probe = probe;
-            _dispatcher = dispatcher;
-            _callback = callback;
-            _saea = saea;
-            _isAcceptProbe = isAcceptProbe;
-            _disposed = false;
-            _completed = false;
-            _saea.UserToken = this;
-            _saea.Completed += OnCompleted;
-        }
-
-        public void HandleCompletedSync()
-        {
-            CompleteOnSchedulerThread(_saea);
-        }
-
-        private void OnCompleted(object? sender, SocketAsyncEventArgs e)
-        {
-            if (e.UserToken is not AsyncProbeRegistration reg)
-            {
-                RecycleProbeArgs(e);
-                return;
-            }
-
-            reg._dispatcher.Post(reg._scheduledCompletion);
-        }
-
-        private void CompleteScheduled()
-        {
-            CompleteOnSchedulerThread(_saea);
-        }
-
-        private void CompleteOnSchedulerThread(SocketAsyncEventArgs e)
-        {
-            if (_completed) return;
-            _completed = true;
-
-            short readyHint = 0;
-            if (_isAcceptProbe && e.AcceptSocket != null)
-            {
-                _probe.EnqueueAcceptedSocket(e.AcceptSocket);
-                e.AcceptSocket = null;
-                readyHint |= PollEvents.POLLIN;
-            }
-            else if (e.LastOperation == SocketAsyncOperation.Receive && e.SocketError == SocketError.Success)
-            {
-                readyHint |= PollEvents.POLLIN;
-            }
-
-            if (e.LastOperation == SocketAsyncOperation.Send && e.SocketError == SocketError.Success)
-                readyHint |= PollEvents.POLLOUT;
-            if (e.LastOperation == SocketAsyncOperation.Connect)
-                readyHint |= PollEvents.POLLOUT | PollEvents.POLLERR;
-
-            if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending and not SocketError.OperationAborted and not SocketError.Interrupted)
-                readyHint |= PollEvents.POLLERR;
-
-            if (readyHint != 0)
-                _probe.PromoteReadyCache(readyHint);
-
-            if (!_disposed && ShouldSignalRePoll(e))
-                _callback();
-
-            _saea.Completed -= OnCompleted;
-            _saea.UserToken = null;
-            if (_saea.AcceptSocket != null)
-            {
-                _saea.AcceptSocket.Dispose();
-                _saea.AcceptSocket = null;
-            }
-            RecycleProbeArgs(_saea);
-            RecycleProbeRegistration(this);
-        }
-
-        private static bool ShouldSignalRePoll(SocketAsyncEventArgs e)
-        {
-            return e.SocketError switch
-            {
-                SocketError.Success => true,
-                SocketError.OperationAborted => false,
-                SocketError.Interrupted => false,
-                SocketError.WouldBlock => false,
-                SocketError.IOPending => false,
-                _ => true
-            };
-        }
-
-        public void CancelAndRecycleImmediately()
-        {
-            if (_completed) return;
-            _completed = true;
-            _disposed = true;
-            _saea.Completed -= OnCompleted;
-            _saea.UserToken = null;
-            if (_saea.AcceptSocket != null)
-            {
-                _saea.AcceptSocket.Dispose();
-                _saea.AcceptSocket = null;
-            }
-            RecycleProbeArgs(_saea);
-            RecycleProbeRegistration(this);
-        }
-
-        public void Dispose()
-        {
-            _disposed = true;
-        }
-
-        public void ResetForPool()
-        {
-            _probe = null!;
-            _dispatcher = null!;
-            _callback = null!;
-            _saea = null!;
-            _isAcceptProbe = false;
-            _disposed = false;
-            _completed = false;
-        }
+    private enum ProbeKind
+    {
+        Read,
+        Write,
+        Accept
     }
 }
