@@ -2,13 +2,26 @@ import SwiftUI
 
 struct PodishRootView: View {
     @StateObject private var store = PodishUiStore()
+    @StateObject private var session = PodishTerminalSession()
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var detailsContainer: PodishContainer?
     @State private var showNewContainer = false
     @State private var showSidebar = false
     @State private var sidebarSelection: PodishSidebarDestination = .home
+    @State private var didBindSession = false
 
     var body: some View {
+        platformContent
+            .onChange(of: store.selectedContainerID) { newId in
+                guard let newId,
+                      let container = store.containers.first(where: { $0.id == newId }),
+                      container.state == .running else { return }
+                session.attachContainer(container.containerId)
+            }
+    }
+
+    @ViewBuilder
+    private var platformContent: some View {
         #if os(macOS)
         NavigationSplitView(columnVisibility: $splitVisibility) {
             SidebarView(store: store, selection: $sidebarSelection) { container in
@@ -20,6 +33,8 @@ struct PodishRootView: View {
         }
         .navigationSplitViewStyle(.automatic)
         .onAppear {
+            bindSessionIfNeeded()
+            session.startIfNeeded()
             store.onShowNewContainer = {
                 DispatchQueue.main.async {
                     showNewContainer = true
@@ -48,6 +63,8 @@ struct PodishRootView: View {
                 }
         }
         .onAppear {
+            bindSessionIfNeeded()
+            session.startIfNeeded()
             store.onShowNewContainer = {
                 DispatchQueue.main.async {
                     if showSidebar {
@@ -105,10 +122,67 @@ struct PodishRootView: View {
                     store.showNewContainer()
                 }
             } else {
-                TerminalWorkspaceView(store: store)
+                TerminalWorkspaceView(session: session)
             }
         }
         .navigationTitle("Podish")
+    }
+
+    private func bindSessionIfNeeded() {
+        guard !didBindSession else { return }
+        didBindSession = true
+
+        session.onContainerList = { items in
+            DispatchQueue.main.async {
+                store.applyContainerList(items)
+            }
+        }
+        session.onImageList = { items in
+            DispatchQueue.main.async {
+                store.applyImageList(items)
+            }
+        }
+        session.onContainerStateChanged = { items in
+            DispatchQueue.main.async {
+                store.applyContainerList(items)
+                if let selectedId = store.selectedContainerID,
+                   let selected = store.containers.first(where: { $0.id == selectedId }),
+                   selected.state == .running {
+                    session.attachContainer(selected.containerId)
+                }
+            }
+        }
+
+        store.onStartContainer = { containerId in
+            session.startContainer(containerId) { _ in
+                store.clearPendingAction(for: containerId)
+            }
+        }
+        store.onStopContainer = { containerId in
+            session.stopContainer(containerId) { _ in
+                store.clearPendingAction(for: containerId)
+            }
+        }
+        store.onRemoveContainer = { containerId in
+            session.removeContainer(containerId)
+        }
+        store.onCreateContainer = { imageRef, name, networkMode, portMappings in
+            session.createContainer(
+                from: imageRef,
+                name: name,
+                networkMode: networkMode,
+                portMappings: portMappings
+            )
+        }
+        store.onPullImage = { imageRef in
+            session.pullImage(imageRef)
+        }
+        store.onRemoveImage = { imageRef in
+            session.removeImage(imageRef)
+        }
+        store.onAttachContainer = { containerId in
+            session.attachContainer(containerId)
+        }
     }
 }
 
