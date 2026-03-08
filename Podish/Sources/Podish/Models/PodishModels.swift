@@ -53,6 +53,60 @@ struct NativeContainerListItem: Decodable, Hashable {
     let exitCode: Int?
 }
 
+struct NativePublishedPortSpec: Decodable, Hashable {
+    let hostPort: Int
+    let containerPort: Int
+    let protocolValue: Int
+    let bindAddress: String
+
+    enum CodingKeys: String, CodingKey {
+        case hostPort
+        case containerPort
+        case protocolValue = "protocol"
+        case bindAddress
+    }
+}
+
+struct NativeRunSpec: Decodable, Hashable {
+    let name: String?
+    let networkMode: Int
+    let image: String?
+    let rootfs: String?
+    let exe: String?
+    let exeArgs: [String]
+    let volumes: [String]
+    let env: [String]
+    let dns: [String]
+    let interactive: Bool
+    let tty: Bool
+    let strace: Bool
+    let logDriver: String
+    let publishedPorts: [NativePublishedPortSpec]
+}
+
+struct NativeContainerInspect: Decodable, Hashable {
+    let handle: String
+    let containerId: String
+    let name: String
+    let image: String
+    let state: String
+    let hasTerminal: Bool
+    let running: Bool
+    let exitCode: Int?
+    let spec: NativeRunSpec
+}
+
+struct NativeContainerLogEntry: Decodable, Hashable {
+    let time: String
+    let stream: String
+    let log: String
+}
+
+struct NativeLogsChunk: Decodable, Hashable {
+    let cursor: String
+    let entries: [NativeContainerLogEntry]
+}
+
 enum PodishSidebarDestination: Hashable {
     case home
     case container(String)

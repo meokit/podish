@@ -51,7 +51,7 @@ struct PodishRootView: View {
             }
         }
         .sheet(item: $detailsContainer) { container in
-            ContainerDetailsSheetView(container: container)
+            ContainerDetailsSheetView(container: container, session: session)
         }
         .sheet(isPresented: $showNewContainer) {
             NewContainerSheetView(store: store)
@@ -116,7 +116,7 @@ struct PodishRootView: View {
             }
         }
         .sheet(item: $detailsContainer) { container in
-            ContainerDetailsSheetView(container: container)
+            ContainerDetailsSheetView(container: container, session: session)
         }
         .sheet(isPresented: $showNewContainer) {
             NewContainerSheetView(store: store)

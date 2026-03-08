@@ -97,6 +97,14 @@ func pod_container_list_json(
     _ out_len: UnsafeMutablePointer<Int32>?
 ) -> Int32
 
+@_silgen_name("pod_container_inspect_json")
+func pod_container_inspect_json(
+    _ container: UnsafeMutableRawPointer?,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32,
+    _ out_len: UnsafeMutablePointer<Int32>?
+) -> Int32
+
 @_silgen_name("pod_container_destroy")
 func pod_container_destroy(_ container: UnsafeMutableRawPointer?)
 
@@ -131,3 +139,14 @@ func pod_terminal_resize(_ terminal: UnsafeMutableRawPointer?, _ rows: UInt16, _
 
 @_silgen_name("pod_terminal_close")
 func pod_terminal_close(_ terminal: UnsafeMutableRawPointer?)
+
+@_silgen_name("pod_logs_read_json")
+func pod_logs_read_json(
+    _ container: UnsafeMutableRawPointer?,
+    _ cursor_utf8: UnsafePointer<CChar>?,
+    _ follow: Int32,
+    _ timeout_ms: Int32,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32,
+    _ out_len: UnsafeMutablePointer<Int32>?
+) -> Int32

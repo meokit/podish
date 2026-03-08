@@ -163,6 +163,78 @@ actor PodishRuntimeActor {
         return try listImages()
     }
 
+    func inspectContainer(containerId: String) throws -> NativeContainerInspect {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        defer { pod_container_close(handle) }
+
+        var capacity = 16 * 1024
+        while true {
+            var buffer = [UInt8](repeating: 0, count: capacity)
+            var outLen: Int32 = 0
+            let rc = buffer.withUnsafeMutableBufferPointer { ptr in
+                pod_container_inspect_json(handle, ptr.baseAddress, Int32(ptr.count), &outLen)
+            }
+
+            if rc == 0 {
+                let n = max(0, Int(outLen))
+                let data = Data(buffer.prefix(n))
+                return try JSONDecoder().decode(NativeContainerInspect.self, from: data)
+            }
+
+            if rc == 34 {
+                capacity *= 2
+                if capacity > 1_048_576 {
+                    throw PodishRuntimeError.native(code: rc, message: "container inspect payload too large")
+                }
+                continue
+            }
+
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+    }
+
+    func readLogs(containerId: String, cursor: String?, follow: Bool, timeoutMs: Int32) throws -> NativeLogsChunk {
+        try ensureContext()
+        let handle = try openContainer(containerId: containerId)
+        defer { pod_container_close(handle) }
+
+        var capacity = 16 * 1024
+        while true {
+            var buffer = [UInt8](repeating: 0, count: capacity)
+            var outLen: Int32 = 0
+            let rc = (cursor ?? "").withCString { cstr in
+                buffer.withUnsafeMutableBufferPointer { ptr in
+                    pod_logs_read_json(
+                        handle,
+                        cstr,
+                        follow ? 1 : 0,
+                        timeoutMs,
+                        ptr.baseAddress,
+                        Int32(ptr.count),
+                        &outLen
+                    )
+                }
+            }
+
+            if rc == 0 {
+                let n = max(0, Int(outLen))
+                let data = Data(buffer.prefix(n))
+                return try JSONDecoder().decode(NativeLogsChunk.self, from: data)
+            }
+
+            if rc == 34 {
+                capacity *= 2
+                if capacity > 1_048_576 {
+                    throw PodishRuntimeError.native(code: rc, message: "container logs payload too large")
+                }
+                continue
+            }
+
+            throw PodishRuntimeError.native(code: rc, message: lastError())
+        }
+    }
+
     func pullImage(imageRef: String) throws -> [NativeImageListItem] {
         try ensureContext()
         try pullImageInternal(imageRef)
@@ -696,6 +768,39 @@ final class PodishTerminalSession: ObservableObject {
                 }
             } catch {
                 DispatchQueue.main.async { self.startupError = error.localizedDescription }
+            }
+        }
+    }
+
+    func fetchContainerInspect(_ containerId: String, completion: @escaping (Result<NativeContainerInspect, Error>) -> Void) {
+        Task {
+            do {
+                let inspect = try await runtime.inspectContainer(containerId: containerId)
+                DispatchQueue.main.async { completion(.success(inspect)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    func fetchContainerLogs(
+        _ containerId: String,
+        cursor: String? = nil,
+        follow: Bool = false,
+        timeoutMs: Int32 = 0,
+        completion: @escaping (Result<NativeLogsChunk, Error>) -> Void
+    ) {
+        Task {
+            do {
+                let chunk = try await runtime.readLogs(
+                    containerId: containerId,
+                    cursor: cursor,
+                    follow: follow,
+                    timeoutMs: timeoutMs
+                )
+                DispatchQueue.main.async { completion(.success(chunk)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
             }
         }
     }
