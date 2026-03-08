@@ -13,10 +13,19 @@ struct PodishRootView: View {
     var body: some View {
         platformContent
             .onChange(of: store.selectedContainerID) { newId in
-                guard let newId,
-                      let container = store.containers.first(where: { $0.id == newId }),
-                      container.state == .running else { return }
-                session.attachContainer(container.containerId)
+                guard let newId else { return }
+                session.attachContainer(newId)
+            }
+            .onChange(of: session.activeContainerId) { activeId in
+                guard let activeId, store.selectedContainerID != activeId else { return }
+                DispatchQueue.main.async {
+                    if store.selectedContainerID != activeId {
+                        store.selectedContainerID = activeId
+                    }
+                    if sidebarSelection != .home {
+                        sidebarSelection = .container(activeId)
+                    }
+                }
             }
     }
 
@@ -145,10 +154,8 @@ struct PodishRootView: View {
         session.onContainerStateChanged = { items in
             DispatchQueue.main.async {
                 store.applyContainerList(items)
-                if let selectedId = store.selectedContainerID,
-                   let selected = store.containers.first(where: { $0.id == selectedId }),
-                   selected.state == .running {
-                    session.attachContainer(selected.containerId)
+                if let selectedId = store.selectedContainerID {
+                    session.attachContainer(selectedId)
                 }
             }
         }

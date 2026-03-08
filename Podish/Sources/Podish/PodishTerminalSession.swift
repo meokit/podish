@@ -828,23 +828,34 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func attachContainer(_ containerId: String) {
-        #if os(macOS)
-        if activeContainerId == containerId, isContainerDisplayed(containerId) { return }
-        #else
-        if activeContainerId == containerId { return }
-        #endif
         ensureTerminalView(containerId: containerId)
+        activateContainer(containerId)
+
+        guard isContainerRunning(containerId) else {
+            // Keep showing the last buffered terminal content for non-running containers.
+            return
+        }
+
         Task {
             do {
                 try await runtime.ensureTerminalSession(containerId: containerId)
                 DispatchQueue.main.async {
-                    self.activateContainer(containerId)
-                    self.startupError = nil
+                    if self.activeContainerId == containerId {
+                        self.startupError = nil
+                    }
                 }
             } catch {
-                DispatchQueue.main.async { self.startupError = error.localizedDescription }
+                DispatchQueue.main.async {
+                    if self.activeContainerId == containerId {
+                        self.startupError = error.localizedDescription
+                    }
+                }
             }
         }
+    }
+
+    private func isContainerRunning(_ containerId: String) -> Bool {
+        lastContainerSnapshot.contains { $0.containerId == containerId && $0.running }
     }
 
     private func ensureTerminalView(containerId: String) {
