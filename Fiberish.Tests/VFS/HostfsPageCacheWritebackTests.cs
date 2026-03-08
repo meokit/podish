@@ -197,6 +197,45 @@ public class HostfsPageCacheWritebackTests
         }
     }
 
+    [Fact]
+    public async Task Fsync_MustFlushBufferedWritePageCacheForSameFd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-fsync-write-buffered-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        var manager = new MemoryObjectManager();
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+
+            _ = manager.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            var writeRc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
+            Assert.Equal(2, writeRc);
+            Assert.Equal("abcde", File.ReadAllText(hostFile));
+
+            var fsyncRc = await CallSys("SysFsync", engine.State, (uint)fd);
+            Assert.Equal(0, fsyncRc);
+            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+
+            sm.FreeFD(fd);
+            manager.ReleaseInodePageCache(file.Dentry.Inode);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static LinuxFile OpenHostFile(string rootDir, string relativePath)
     {
         var fsType = new FileSystemType { Name = "hostfs" };

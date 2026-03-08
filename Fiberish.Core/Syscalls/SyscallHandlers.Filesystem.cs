@@ -1344,8 +1344,14 @@ public partial class SyscallManager
         if (sm == null) return -1;
         var file = sm.GetFD((int)a1);
         if (file == null) return -(int)Errno.EBADF;
+        var inode = file.Dentry.Inode;
+        if (inode == null) return -(int)Errno.EBADF;
+
         sm.Mem.SyncMappedFile(file, sm.Engine);
-        file.Dentry.Inode!.Sync(file);
+        var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue, true));
+        if (writebackRc < 0 && writebackRc != -(int)Errno.EOPNOTSUPP && writebackRc != -(int)Errno.EROFS)
+            return writebackRc;
+        inode.Sync(file);
         return 0;
     }
 

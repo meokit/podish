@@ -551,6 +551,7 @@ public class TmpfsInode : Inode
 
             var pageCache = EnsurePageCacheLocked();
             WriteToPageCacheLocked(pageCache, offset, buffer);
+            MarkDirtyRangeLocked(pageCache, offset, buffer.Length);
             var end = offset + buffer.Length;
             if (end > (long)Size) Size = (ulong)end;
             MTime = DateTime.Now;
@@ -837,6 +838,18 @@ public class TmpfsInode : Inode
             }
 
             consumed += chunk;
+        }
+    }
+
+    private void MarkDirtyRangeLocked(MemoryObject pageCache, long offset, int length)
+    {
+        if (length <= 0) return;
+        var startPage = (uint)(offset / LinuxConstants.PageSize);
+        var endPage = (uint)((offset + length - 1) / LinuxConstants.PageSize);
+        for (var page = startPage; page <= endPage; page++)
+        {
+            pageCache.MarkDirty(page);
+            _dirtyPageIndexes.Add(page);
         }
     }
 }

@@ -420,6 +420,7 @@ public abstract class Inode : IPageCacheOps
 
             var dirtyRc = SetPageDirty(pageIndex);
             if (dirtyRc < 0) return consumed > 0 ? consumed : dirtyRc;
+            pageCache.MarkDirty(pageIndex);
 
             // Route through page-level op for filesystem-specific bookkeeping.
             var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk), buffer.Slice(consumed, chunk), false);

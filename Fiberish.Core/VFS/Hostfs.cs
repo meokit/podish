@@ -1168,6 +1168,8 @@ public partial class HostInode : Inode
         }
         if (rc < 0) return rc;
         lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
+        if (request.PageIndex >= 0 && request.PageIndex <= uint.MaxValue)
+            PageCache?.ClearDirty((uint)request.PageIndex);
         if (linuxFile != null) Sync(linuxFile);
         return 0;
     }
@@ -1188,13 +1190,21 @@ public partial class HostInode : Inode
         foreach (var pageIndex in toFlush)
         {
             var pagePtr = PageCache.GetPage((uint)pageIndex);
-            if (pagePtr == IntPtr.Zero) continue;
+            if (pagePtr == IntPtr.Zero)
+            {
+                lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+                if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                    PageCache.ClearDirty((uint)pageIndex);
+                continue;
+            }
 
             var fileOffset = pageIndex * LinuxConstants.PageSize;
             var remaining = (long)Size - fileOffset;
             if (remaining <= 0)
             {
                 lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+                if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                    PageCache.ClearDirty((uint)pageIndex);
                 continue;
             }
 
@@ -1216,6 +1226,8 @@ public partial class HostInode : Inode
             }
 
             lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+            if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                PageCache.ClearDirty((uint)pageIndex);
         }
 
         if (linuxFile != null) Sync(linuxFile);
@@ -1234,9 +1246,21 @@ public partial class HostInode : Inode
 
     public override int Truncate(long size)
     {
+        if (size < 0) return -(int)Errno.EINVAL;
         using var handle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         RandomAccess.SetLength(handle, size);
+        if (PageCache != null)
+        {
+            PageCache.TruncateToSize(size);
+            var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+            lock (_dirtyPageLock)
+            {
+                _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+            }
+        }
+
         Size = (ulong)size;
+        MTime = DateTime.Now;
         return 0;
     }
 

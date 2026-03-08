@@ -252,6 +252,111 @@ public class PageCacheConsistencyTests
         }
     }
 
+    [Fact]
+    public void Hostfs_WritePath_MustMarkMemoryObjectDirty_BeforeWriteback()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-pagecache-dirty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "hello");
+
+        var manager = new MemoryObjectManager();
+        LinuxFile? file = null;
+        MemoryObject? cache = null;
+        try
+        {
+            file = OpenHostFile(root, "data.bin");
+            var inode = file.Dentry.Inode!;
+            cache = manager.GetOrCreateInodePageCache(inode);
+
+            var rc = inode.Write(file, "XY"u8.ToArray(), 1);
+            Assert.Equal(2, rc);
+            Assert.Equal("hello", File.ReadAllText(hostFile));
+
+            // Unflushed cached page must not be reclaimable as "clean".
+            Assert.True(cache.IsDirty(0));
+            Assert.False(cache.TryEvictCleanPage(0));
+
+            var buf = new byte[5];
+            var n = inode.Read(file, buf, 0);
+            Assert.Equal(5, n);
+            Assert.Equal("hXYlo", Encoding.ASCII.GetString(buf));
+        }
+        finally
+        {
+            if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
+            if (file?.Dentry.Inode != null) manager.ReleaseInodePageCache(file.Dentry.Inode);
+            cache?.Release();
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Tmpfs_WritePath_MustMarkMemoryObjectDirty_BeforeWriteback()
+    {
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmp", null);
+        var root = sb.Root;
+        var dentry = new Dentry("data.bin", null, root, sb);
+        root.Inode!.Create(dentry, 0x1B6, 0, 0);
+        var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
+
+        var inode = dentry.Inode!;
+        var rc = inode.Write(file, "hello"u8.ToArray(), 0);
+        Assert.Equal(5, rc);
+        var cache = Assert.IsType<MemoryObject>(inode.PageCache);
+
+        // tmpfs data is shmem resident; unflushed page must not be reclaimable as "clean".
+        Assert.True(cache.IsDirty(0));
+        Assert.False(cache.TryEvictCleanPage(0));
+
+        var buf = new byte[5];
+        var n = inode.Read(file, buf, 0);
+        Assert.Equal(5, n);
+        Assert.Equal("hello", Encoding.ASCII.GetString(buf));
+    }
+
+    [Fact]
+    public void Hostfs_TruncateShrinkThenGrow_MustNotExposeStalePageCacheData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-truncate-stale-cache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "hello");
+
+        var manager = new MemoryObjectManager();
+        LinuxFile? file = null;
+        MemoryObject? cache = null;
+        try
+        {
+            file = OpenHostFile(root, "data.bin");
+            var inode = file.Dentry.Inode!;
+            cache = manager.GetOrCreateInodePageCache(inode);
+
+            var warm = new byte[5];
+            var warmN = inode.Read(file, warm, 0);
+            Assert.Equal(5, warmN);
+            Assert.Equal("hello", Encoding.ASCII.GetString(warm));
+            Assert.NotEqual(IntPtr.Zero, cache.GetPage(0));
+
+            Assert.Equal(0, inode.Truncate(0));
+            Assert.Equal(0, inode.Truncate(5));
+            Assert.Equal(5, File.ReadAllBytes(hostFile).Length);
+
+            var readBack = new byte[5];
+            var n = inode.Read(file, readBack, 0);
+            Assert.Equal(5, n);
+            Assert.Equal(new byte[5], readBack);
+        }
+        finally
+        {
+            if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
+            if (file?.Dentry.Inode != null) manager.ReleaseInodePageCache(file.Dentry.Inode);
+            cache?.Release();
+            Directory.Delete(root, true);
+        }
+    }
+
     private static LinuxFile OpenHostFile(string rootDir, string relativePath)
     {
         var fsType = new FileSystemType { Name = "hostfs" };

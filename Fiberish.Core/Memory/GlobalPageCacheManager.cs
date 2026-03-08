@@ -169,8 +169,9 @@ public static class GlobalPageCacheManager
     {
         if (targetFreeBytes <= 0) return 0;
         var candidates = new List<(MemoryObject Cache, uint PageIndex, long LastAccessTicks)>();
-        foreach (var (cache, _) in caches)
+        foreach (var (cache, cacheClass) in caches)
         {
+            if (cacheClass == PageCacheClass.Shmem) continue;
             var states = cache.SnapshotPageStates();
             foreach (var state in states)
             {
