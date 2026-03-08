@@ -11,6 +11,32 @@ namespace Fiberish.Memory;
 /// </summary>
 public static class GlobalPageCacheManager
 {
+    private sealed class State
+    {
+        public readonly object Gate = new();
+        public readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
+        public long NextMaintenanceTicks;
+        public long WritebackPagesInFlight;
+        public TimeSpan WritebackInterval = TimeSpan.FromSeconds(5);
+        public long HighWatermarkBytes = 256L * 1024 * 1024;
+        public long LowWatermarkBytes = 192L * 1024 * 1024;
+    }
+
+    private sealed class ScopeRestore : IDisposable
+    {
+        private readonly State? _previous;
+
+        public ScopeRestore(State? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            ScopedState.Value = _previous;
+        }
+    }
+
     public enum PageCacheClass
     {
         File,
@@ -19,20 +45,41 @@ public static class GlobalPageCacheManager
 
     private readonly record struct TrackedEntry(WeakReference<MemoryObject> Cache, PageCacheClass Class);
 
-    private static readonly object Gate = new();
-    private static readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
-    private static long _nextMaintenanceTicks;
-    private static long _writebackPagesInFlight;
+    private static readonly AsyncLocal<State?> ScopedState = new();
+    private static readonly State DefaultState = new();
+    private static State CurrentState => ScopedState.Value ?? DefaultState;
 
-    public static TimeSpan WritebackInterval { get; set; } = TimeSpan.FromSeconds(5);
-    public static long HighWatermarkBytes { get; set; } = 256L * 1024 * 1024;
-    public static long LowWatermarkBytes { get; set; } = 192L * 1024 * 1024;
+    public static TimeSpan WritebackInterval
+    {
+        get => CurrentState.WritebackInterval;
+        set => CurrentState.WritebackInterval = value;
+    }
+
+    public static long HighWatermarkBytes
+    {
+        get => CurrentState.HighWatermarkBytes;
+        set => CurrentState.HighWatermarkBytes = value;
+    }
+
+    public static long LowWatermarkBytes
+    {
+        get => CurrentState.LowWatermarkBytes;
+        set => CurrentState.LowWatermarkBytes = value;
+    }
+
+    public static IDisposable BeginIsolatedScope()
+    {
+        var previous = ScopedState.Value;
+        ScopedState.Value = new State();
+        return new ScopeRestore(previous);
+    }
 
     public static void TrackPageCache(MemoryObject pageCache, PageCacheClass cacheClass = PageCacheClass.File)
     {
-        lock (Gate)
+        var state = CurrentState;
+        lock (state.Gate)
         {
-            TrackedCaches[RuntimeHelpers.GetHashCode(pageCache)] =
+            state.TrackedCaches[RuntimeHelpers.GetHashCode(pageCache)] =
                 new TrackedEntry(new WeakReference<MemoryObject>(pageCache), cacheClass);
         }
     }
@@ -40,11 +87,12 @@ public static class GlobalPageCacheManager
     public static void MaybeRunMaintenance(VMAManager mm, Engine engine)
     {
         if (engine == null || engine.State == IntPtr.Zero) return;
+        var state = CurrentState;
         var now = DateTime.UtcNow.Ticks;
-        lock (Gate)
+        lock (state.Gate)
         {
-            if (now < _nextMaintenanceTicks) return;
-            _nextMaintenanceTicks = now + WritebackInterval.Ticks;
+            if (now < state.NextMaintenanceTicks) return;
+            state.NextMaintenanceTicks = now + state.WritebackInterval.Ticks;
         }
 
         // 1) Periodic writeback of mmap-shared dirty pages.
@@ -74,7 +122,8 @@ public static class GlobalPageCacheManager
 
     public static CacheStats GetCacheStats()
     {
-        var caches = GetLiveCaches();
+        var state = CurrentState;
+        var caches = GetLiveCaches(state);
         long total = 0;
         long dirty = 0;
         long shmem = 0;
@@ -83,18 +132,18 @@ public static class GlobalPageCacheManager
             var states = cache.SnapshotPageStates();
             total += states.Count;
             if (cacheClass == PageCacheClass.Shmem) shmem += states.Count;
-            foreach (var state in states)
+            foreach (var pageState in states)
             {
-                if (state.Dirty) dirty++;
+                if (pageState.Dirty) dirty++;
             }
         }
 
-        return new CacheStats(total, total - dirty, dirty, shmem, Interlocked.Read(ref _writebackPagesInFlight));
+        return new CacheStats(total, total - dirty, dirty, shmem, Interlocked.Read(ref state.WritebackPagesInFlight));
     }
 
     public static IReadOnlyList<CachePageState> GetPageStatesSnapshot()
     {
-        var caches = GetLiveCaches();
+        var caches = GetLiveCaches(CurrentState);
         if (caches.Count == 0) return Array.Empty<CachePageState>();
 
         var states = new List<CachePageState>();
@@ -113,46 +162,49 @@ public static class GlobalPageCacheManager
     public static void BeginWritebackPages(int pages = 1)
     {
         if (pages <= 0) return;
-        Interlocked.Add(ref _writebackPagesInFlight, pages);
+        var state = CurrentState;
+        Interlocked.Add(ref state.WritebackPagesInFlight, pages);
     }
 
     public static void EndWritebackPages(int pages = 1)
     {
         if (pages <= 0) return;
-        var current = Interlocked.Add(ref _writebackPagesInFlight, -pages);
+        var state = CurrentState;
+        var current = Interlocked.Add(ref state.WritebackPagesInFlight, -pages);
         if (current >= 0) return;
-        Interlocked.Exchange(ref _writebackPagesInFlight, 0);
+        Interlocked.Exchange(ref state.WritebackPagesInFlight, 0);
     }
 
     public static long TryReclaimBytes(long targetBytes)
     {
         if (targetBytes <= 0) return 0;
-        var caches = GetLiveCaches();
+        var caches = GetLiveCaches(CurrentState);
         return ReclaimFromCaches(caches, targetBytes);
     }
 
     private static void ReclaimIfNeeded()
     {
-        var caches = GetLiveCaches();
+        var state = CurrentState;
+        var caches = GetLiveCaches(state);
 
         if (caches.Count == 0) return;
 
         long totalBytes = 0;
         foreach (var (cache, _) in caches) totalBytes += (long)cache.PageCount * LinuxConstants.PageSize;
-        if (totalBytes <= HighWatermarkBytes) return;
+        if (totalBytes <= state.HighWatermarkBytes) return;
 
-        var targetFree = totalBytes - LowWatermarkBytes;
+        var targetFree = totalBytes - state.LowWatermarkBytes;
         if (targetFree <= 0) return;
         ReclaimFromCaches(caches, targetFree);
     }
 
-    private static List<(MemoryObject Cache, PageCacheClass Class)> GetLiveCaches()
+    private static List<(MemoryObject Cache, PageCacheClass Class)> GetLiveCaches(State state)
     {
-        lock (Gate)
+        lock (state.Gate)
         {
-            var caches = new List<(MemoryObject Cache, PageCacheClass Class)>(TrackedCaches.Count);
+            var caches = new List<(MemoryObject Cache, PageCacheClass Class)>(state.TrackedCaches.Count);
             var deadKeys = new List<int>();
-            foreach (var (key, entry) in TrackedCaches)
+            foreach (var (key, entry) in state.TrackedCaches)
             {
                 if (entry.Cache.TryGetTarget(out var cache))
                     caches.Add((cache, entry.Class));
@@ -160,7 +212,7 @@ public static class GlobalPageCacheManager
                     deadKeys.Add(key);
             }
 
-            foreach (var dead in deadKeys) TrackedCaches.Remove(dead);
+            foreach (var dead in deadKeys) state.TrackedCaches.Remove(dead);
             return caches;
         }
     }

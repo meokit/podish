@@ -4,6 +4,7 @@ using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Core.Net;
+using Fiberish.Memory;
 using Fiberish.Diagnostics;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -55,6 +56,8 @@ public sealed class ContainerRuntimeService
     public async Task<int> RunAsync(ContainerRunRequest request)
     {
         await Task.CompletedTask;
+        using var _externalPageScope = ExternalPageManager.BeginIsolatedScope();
+        using var _globalPageCacheScope = GlobalPageCacheManager.BeginIsolatedScope();
 
         var scheduler = new KernelScheduler();
         scheduler.LoggerFactory = _loggerFactory;

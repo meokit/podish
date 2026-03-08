@@ -5,8 +5,8 @@ namespace Fiberish.Core.Net;
 public sealed class PrivateNetworkBackend : INetworkBackend
 {
     private readonly INetworkSwitch _switch;
-    private static readonly object _ipLock = new();
-    private static readonly bool[] _allocatedIps = new bool[256];
+    private readonly object _ipLock = new();
+    private readonly bool[] _allocatedIps = new bool[256];
 
     public PrivateNetworkBackend(INetworkSwitch @switch)
     {
