@@ -22,9 +22,9 @@ struct ContainerRowView: View {
 
 struct SidebarView: View {
     @ObservedObject var store: PodishUiStore
+    @Binding var selection: PodishSidebarDestination
     let onShowDetails: (PodishContainer) -> Void
     var onSelected: (() -> Void)? = nil
-    @State private var localSelection: String?
 
     var body: some View {
         #if os(macOS)
@@ -40,15 +40,22 @@ struct SidebarView: View {
 
             containerList
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 8)
         .padding(.top, 8)
+        .background(.regularMaterial)
         #else
         containerList
         #endif
     }
 
     private var containerList: some View {
-        List(selection: $localSelection) {
+        List(selection: listSelectionBinding) {
+            Section("General") {
+                Label("Home", systemImage: "house")
+                    .tag(PodishSidebarDestination.home)
+            }
+
             #if !os(macOS)
             Section("Actions") {
                 Button {
@@ -101,7 +108,7 @@ struct SidebarView: View {
                         }
                     }
                     #endif
-                    .tag(container.id)
+                    .tag(PodishSidebarDestination.container(container.id))
                 }
             }
 
@@ -146,7 +153,7 @@ struct SidebarView: View {
                         }
                     }
                     #endif
-                    .tag(container.id)
+                    .tag(PodishSidebarDestination.container(container.id))
                 }
             }
 
@@ -158,26 +165,39 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Containers")
-        .onAppear {
-            localSelection = store.selectedContainerID
-        }
-        .onChange(of: localSelection) { newValue in
-            guard store.selectedContainerID != newValue else { return }
-            DispatchQueue.main.async {
-                if store.selectedContainerID != newValue {
-                    store.selectedContainerID = newValue
-                    onSelected?()
-                }
-            }
-        }
+        .background(Color.clear)
         .onChange(of: store.selectedContainerID) { newValue in
-            guard localSelection != newValue else { return }
+            guard case .container = selection else { return }
             DispatchQueue.main.async {
-                if localSelection != newValue {
-                    localSelection = newValue
+                if let newValue {
+                    selection = .container(newValue)
+                } else {
+                    selection = .home
                 }
             }
         }
+    }
+
+    private var listSelectionBinding: Binding<PodishSidebarDestination?> {
+        Binding<PodishSidebarDestination?>(
+            get: { selection },
+            set: { newValue in
+                guard let newValue else { return }
+                DispatchQueue.main.async {
+                    selection = newValue
+                    switch newValue {
+                    case .home:
+                        onSelected?()
+                    case .container(let containerID):
+                        if store.selectedContainerID != containerID {
+                            store.selectedContainerID = containerID
+                        }
+                        onSelected?()
+                    }
+                }
+            }
+        )
     }
 }

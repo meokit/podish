@@ -9,6 +9,7 @@ struct TerminalWorkspaceView: View {
             TerminalViewHost(terminalView: session.currentTerminalView)
                 .id(session.activeTerminalIdentity)
                 .background(Color.black)
+                .clipped()
                 .onAppear {
                     session.startIfNeeded()
                 }

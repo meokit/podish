@@ -53,11 +53,9 @@ struct NativeContainerListItem: Decodable, Hashable {
     let exitCode: Int?
 }
 
-enum SidebarSelection: Hashable {
-    case images
-    case containers
-    case events
-    case container(UUID)
+enum PodishSidebarDestination: Hashable {
+    case home
+    case container(String)
 }
 
 enum PodishNetworkMode: String, CaseIterable, Identifiable {

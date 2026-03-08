@@ -6,17 +6,17 @@ struct PodishRootView: View {
     @State private var detailsContainer: PodishContainer?
     @State private var showNewContainer = false
     @State private var showSidebar = false
+    @State private var sidebarSelection: PodishSidebarDestination = .home
 
     var body: some View {
         #if os(macOS)
         NavigationSplitView(columnVisibility: $splitVisibility) {
-            SidebarView(store: store) { container in
+            SidebarView(store: store, selection: $sidebarSelection) { container in
                 detailsContainer = container
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 420)
         } detail: {
-            TerminalWorkspaceView(store: store)
-                .navigationTitle("Podish")
+            detailContent
         }
         .navigationSplitViewStyle(.automatic)
         .onAppear {
@@ -34,7 +34,7 @@ struct PodishRootView: View {
         }
         #else
         NavigationStack {
-            TerminalWorkspaceView(store: store)
+            detailContent
                 .navigationTitle("Podish")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -63,11 +63,16 @@ struct PodishRootView: View {
         }
         .sheet(isPresented: $showSidebar) {
             NavigationStack {
-                SidebarView(store: store, onShowDetails: { container in
-                    detailsContainer = container
-                }, onSelected: {
-                    showSidebar = false
-                })
+                SidebarView(
+                    store: store,
+                    selection: $sidebarSelection,
+                    onShowDetails: { container in
+                        detailsContainer = container
+                    },
+                    onSelected: {
+                        showSidebar = false
+                    }
+                )
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Done") {
@@ -84,5 +89,54 @@ struct PodishRootView: View {
             NewContainerSheetView(store: store)
         }
         #endif
+    }
+
+    private var detailContent: some View {
+        ZStack {
+            TerminalWorkspaceView(store: store)
+                .navigationTitle("Podish")
+
+            if sidebarSelection == .home {
+                HomeDashboardView {
+                    store.showNewContainer()
+                }
+                #if os(macOS)
+                .background(Color(nsColor: .windowBackgroundColor))
+                #else
+                .background(Color(uiColor: .systemBackground))
+                #endif
+            }
+        }
+    }
+}
+
+private struct HomeDashboardView: View {
+    let onAddContainer: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 46))
+                .foregroundStyle(.secondary)
+
+            Text("Podish")
+                .font(.largeTitle.weight(.semibold))
+
+            Text("Create and manage containers")
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            Button {
+                onAddContainer()
+            } label: {
+                Label("Add Container", systemImage: "plus.rectangle.on.rectangle")
+                    .frame(minWidth: 200)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut("n", modifiers: [.command])
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
