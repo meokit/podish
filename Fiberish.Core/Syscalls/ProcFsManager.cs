@@ -283,6 +283,12 @@ public static class ProcFsManager
         return "60\n";
     }
 
+    public static string GenerateSysVmDropCaches()
+    {
+        // Linux exposes this control as a write-triggered knob and reads as 0.
+        return "0\n";
+    }
+
     private static string EscapeMountField(string value)
     {
         return value

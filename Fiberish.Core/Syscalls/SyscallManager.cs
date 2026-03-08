@@ -35,6 +35,7 @@ public partial class SyscallManager
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
+    private readonly HashSet<int> _fdCloseOnExec = [];
     private readonly FileSystemType _devptsFsType;
     private readonly DeviceNumberManager _devNumberManager = new();
     private SharedLoopbackNetNamespace? _privateNetNamespace;
@@ -90,7 +91,8 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, LinuxFile> fds, FutexManager futex,
+    private SyscallManager(VMAManager mem, Dictionary<int, LinuxFile> fds, HashSet<int> fdCloseOnExec,
+        FutexManager futex,
         SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
         bool strace,
@@ -103,6 +105,7 @@ public partial class SyscallManager
     {
         Mem = mem;
         FDs = fds;
+        _fdCloseOnExec = fdCloseOnExec;
         Futex = futex;
         SysVShm = sysvShm;
         SysVSem = sysvSem;
@@ -983,13 +986,16 @@ public partial class SyscallManager
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
     {
         Dictionary<int, LinuxFile> newFds;
+        HashSet<int> newFdCloseOnExec;
         if (shareFiles)
         {
             newFds = FDs;
+            newFdCloseOnExec = _fdCloseOnExec;
         }
         else
         {
             newFds = [];
+            newFdCloseOnExec = [];
             foreach (var kv in FDs)
             {
                 // fork/clone (without CLONE_FILES) should duplicate fd table entries,
@@ -997,12 +1003,16 @@ public partial class SyscallManager
                 kv.Value.Get();
                 newFds[kv.Key] = kv.Value;
             }
+
+            foreach (var fd in _fdCloseOnExec)
+                newFdCloseOnExec.Add(fd);
         }
 
         // Share the mount namespace (mounts are shared across fork/clone by default)
         var sharedNamespace = _mountNamespace.Share();
 
-        var newSys = new SyscallManager(newMem, newFds, Futex, SysVShm, SysVSem, BrkAddr, BrkBase, Strace, Root,
+        var newSys = new SyscallManager(newMem, newFds, newFdCloseOnExec, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
+            Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
             sharedNamespace, _privateNetNamespace?.AddRef())
@@ -1243,6 +1253,7 @@ public partial class SyscallManager
             // But usually SyscallManager.Close is called when the task/process actually dies.
             fd.Close();
         FDs.Clear();
+        _fdCloseOnExec.Clear();
     }
 
     private class PlaceholderInode : Inode

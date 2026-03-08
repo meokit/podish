@@ -2,6 +2,7 @@ using System.Text;
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
@@ -277,6 +278,89 @@ public class ProcFsTests
         }
     }
 
+    [Fact]
+    public void ProcSysVmDropCaches_WriteShouldReclaimPageCache()
+    {
+        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        MemoryObject? cache = null;
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+            var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(loc.IsValid);
+            Assert.Equal("0\n", ReadAll(loc));
+
+            cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            Assert.NotEqual(IntPtr.Zero, page);
+            Assert.True(cache.PageCount > 0);
+
+            Assert.Equal(-(int)Errno.EINVAL, WriteAll(loc, "9\n"));
+            Assert.Equal(2, WriteAll(loc, "1\n"));
+            Assert.Equal(0, cache.PageCount);
+        }
+        finally
+        {
+            cache?.Release();
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode2_ShouldDropDentryCacheAndSweepUnusedInodes()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(dropLoc.IsValid);
+
+            // Warm proc dentry caches.
+            var procRoot = sm.PathWalk("/proc");
+            Assert.True(procRoot.IsValid);
+            Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
+            Assert.True(procRoot.Dentry.Children.ContainsKey("sys"));
+
+            var shmLoc = sm.PathWalk("/dev/shm");
+            if (!shmLoc.IsValid)
+            {
+                sm.MountStandardShm();
+                shmLoc = sm.PathWalk("/dev/shm");
+            }
+
+            Assert.True(shmLoc.IsValid);
+            var shmDir = shmLoc.Dentry!;
+            var tmp = new Dentry("drop_inode.tmp", null, shmDir, shmDir.SuperBlock);
+            shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
+            var sb = shmLoc.Mount!.SB;
+            var trackedBefore = sb.Inodes.Count;
+            shmDir.Inode.Unlink("drop_inode.tmp");
+            Assert.True(trackedBefore >= 2);
+
+            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+
+            Assert.False(procRoot.Dentry.Children.ContainsKey("sys"));
+            Assert.True(sb.Inodes.Count < trackedBefore);
+
+            var rematerialized = sm.PathWalk("/proc/sys/vm");
+            Assert.True(rematerialized.IsValid);
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
     private static string ReadAll(PathLocation loc)
     {
         Assert.True(loc.IsValid);
@@ -318,5 +402,19 @@ public class ProcFsTests
         var number = right.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
         Assert.True(long.TryParse(number, out var value));
         return value;
+    }
+
+    private static int WriteAll(PathLocation loc, string text, long offset = 0)
+    {
+        Assert.True(loc.IsValid);
+        var file = new LinuxFile(loc.Dentry!, FileFlags.O_WRONLY, loc.Mount!);
+        try
+        {
+            return loc.Dentry!.Inode!.Write(file, Encoding.UTF8.GetBytes(text), offset);
+        }
+        finally
+        {
+            file.Close();
+        }
     }
 }

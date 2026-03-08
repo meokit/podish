@@ -1,5 +1,6 @@
 using System.Text;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 
@@ -19,7 +20,7 @@ public class ProcFileSystem : FileSystem
     }
 }
 
-public class ProcSuperBlock : SuperBlock
+public class ProcSuperBlock : SuperBlock, IDentryInodeCacheDropper
 {
     private ulong _nextIno = 1;
     public SyscallManager? FallbackSyscallManager { get; }
@@ -45,6 +46,21 @@ public class ProcSuperBlock : SuperBlock
         {
             return _nextIno++;
         }
+    }
+
+    public long DropDentryAndInodeCaches()
+    {
+        if (Root == null) return 0;
+
+        long dropped = 0;
+        var children = Root.Children.Values.ToList();
+        foreach (var child in children)
+        {
+            if (child.IsMounted) continue;
+            dropped += VfsCacheReclaimer.DetachCachedSubtree(child);
+        }
+
+        return dropped;
     }
 }
 
@@ -660,6 +676,8 @@ file sealed class ProcSysRootInode : Inode
             (ProcSysKind.Vm, "overcommit_memory") => CreateFile(dir, name,
                 _ => ProcFsManager.GenerateSysVmOvercommitMemory()),
             (ProcSysKind.Vm, "swappiness") => CreateFile(dir, name, _ => ProcFsManager.GenerateSysVmSwappiness()),
+            (ProcSysKind.Vm, "drop_caches") => CreateFile(dir, name,
+                _ => ProcFsManager.GenerateSysVmDropCaches(), 0x1A4, HandleDropCachesWrite),
             _ => null
         };
 
@@ -692,6 +710,7 @@ file sealed class ProcSysRootInode : Inode
             case ProcSysKind.Vm:
                 entries.Add(new DirectoryEntry { Name = "overcommit_memory", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "swappiness", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "drop_caches", Ino = 0, Type = InodeType.File });
                 break;
         }
 
@@ -704,12 +723,36 @@ file sealed class ProcSysRootInode : Inode
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory)
+    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory, int mode = 0x124,
+        ProcWriteHandler? writeHandler = null)
     {
-        var inode = new ProcDynamicFileInode(_sb, 0x124, contentFactory);
+        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory, writeHandler);
         return new Dentry(name, inode, parent, _sb);
     }
+
+    private static int HandleDropCachesWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset)
+    {
+        if (offset != 0) return -(int)Errno.EINVAL;
+        if (buffer.Length == 0) return -(int)Errno.EINVAL;
+
+        var text = Encoding.UTF8.GetString(buffer).Trim();
+        if (text.Length == 0) return -(int)Errno.EINVAL;
+        if (!int.TryParse(text, out var mode) || mode < 0 || mode > 3) return -(int)Errno.EINVAL;
+
+        // Linux requires privilege (CAP_SYS_ADMIN). Approximate with euid==0.
+        if ((context.Process?.EUID ?? 0) != 0) return -(int)Errno.EPERM;
+
+        if ((mode & 0x1) != 0)
+            _ = GlobalPageCacheManager.TryReclaimBytes(long.MaxValue);
+
+        if ((mode & 0x2) != 0)
+            _ = VfsCacheReclaimer.DropDentryAndInodeCaches(context.SyscallManager);
+
+        return buffer.Length;
+    }
 }
+
+file delegate int ProcWriteHandler(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset);
 
 file sealed class ProcSelfSymlinkInode : Inode
 {
@@ -741,10 +784,13 @@ file sealed class ProcSelfSymlinkInode : Inode
 file sealed class ProcDynamicFileInode : Inode
 {
     private readonly Func<ProcOpenContext, string> _contentFactory;
+    private readonly ProcWriteHandler? _writeHandler;
 
-    public ProcDynamicFileInode(ProcSuperBlock sb, int mode, Func<ProcOpenContext, string> contentFactory)
+    public ProcDynamicFileInode(ProcSuperBlock sb, int mode, Func<ProcOpenContext, string> contentFactory,
+        ProcWriteHandler? writeHandler = null)
     {
         _contentFactory = contentFactory;
+        _writeHandler = writeHandler;
         SuperBlock = sb;
         Ino = sb.AllocateIno();
         Type = InodeType.File;
@@ -785,7 +831,18 @@ file sealed class ProcDynamicFileInode : Inode
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        return -(int)Errno.EPERM;
+        if (_writeHandler == null) return -(int)Errno.EPERM;
+
+        var openData = linuxFile.PrivateData as ProcOpenData;
+        var context = openData?.Context ?? ProcContext.Capture((ProcSuperBlock)SuperBlock);
+        var rc = _writeHandler(context, buffer, offset);
+        if (rc < 0) return rc;
+
+        var refreshed = Encoding.UTF8.GetBytes(_contentFactory(context));
+        linuxFile.PrivateData = new ProcOpenData(context, refreshed);
+        Size = (ulong)refreshed.Length;
+        MTime = CTime = DateTime.UtcNow;
+        return rc;
     }
 
     public override int Truncate(long length)

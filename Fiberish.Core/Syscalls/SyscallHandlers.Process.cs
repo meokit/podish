@@ -584,9 +584,8 @@ public partial class SyscallManager
             if (origArgs.Count > 1)
                 newArgs.AddRange(origArgs.Skip(1));
 
-            // Close O_CLOEXEC files
-            var toCloseShebang = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key)
-                .ToList();
+            // Close close-on-exec descriptors (FD_CLOEXEC is per-fd).
+            var toCloseShebang = sm.GetCloseOnExecFds();
             foreach (var fd in toCloseShebang) sm.FreeFD(fd);
 
             // Reset signals
@@ -675,8 +674,8 @@ public partial class SyscallManager
             }
         }
 
-        // Close O_CLOEXEC files
-        var toClose = sm.FDs.Where(f => (f.Value.Flags & FileFlags.O_CLOEXEC) != 0).Select(f => f.Key).ToList();
+        // Close close-on-exec descriptors (FD_CLOEXEC is per-fd).
+        var toClose = sm.GetCloseOnExecFds();
         foreach (var fd in toClose) sm.FreeFD(fd);
 
         // Reset Signals (execve semantics: caught -> default, ignored -> kept)

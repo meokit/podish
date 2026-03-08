@@ -544,13 +544,27 @@ public partial class SyscallManager
         sm.FreeFD(newfd);
         sm.FDs[newfd] = f;
         f.Get();
+        sm.SetFdCloseOnExec(newfd, false);
         return newfd;
     }
 
     private static async ValueTask<int> SysDup3(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        // For now ignore flags like O_CLOEXEC
-        return await SysDup2(state, a1, a2, a3, a4, a5, a6);
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+
+        var oldfd = (int)a1;
+        var newfd = (int)a2;
+        var flags = (int)a3;
+        const int O_CLOEXEC = (int)FileFlags.O_CLOEXEC;
+
+        if ((flags & ~O_CLOEXEC) != 0) return -(int)Errno.EINVAL;
+        if (oldfd == newfd) return -(int)Errno.EINVAL;
+
+        var rc = await SysDup2(state, a1, a2, 0, 0, 0, 0);
+        if (rc < 0) return rc;
+        sm.SetFdCloseOnExec(newfd, (flags & O_CLOEXEC) != 0);
+        return rc;
     }
 
 

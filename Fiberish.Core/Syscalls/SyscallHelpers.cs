@@ -1,6 +1,7 @@
 using System.Text;
 using System.Linq;
 using Fiberish.Core;
+using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
@@ -122,18 +123,30 @@ public partial class SyscallManager
         return PathWalker.PathWalkForCreate(path, startAt);
     }
 
-    public int AllocFD(LinuxFile linuxFile, int minFd = 0)
+    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
     {
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
         FDs[fd] = linuxFile;
+        var cloexec = closeOnExec ?? ((linuxFile.Flags & FileFlags.O_CLOEXEC) != 0);
+        if (cloexec)
+            _fdCloseOnExec.Add(fd);
+        else
+            _fdCloseOnExec.Remove(fd);
         return fd;
     }
 
-    public int DupFD(LinuxFile linuxFile, int minFd = 0)
+    public int DupFD(LinuxFile linuxFile, int minFd = 0, bool closeOnExec = false)
     {
         linuxFile.Get();
-        return AllocFD(linuxFile, minFd);
+        return AllocFD(linuxFile, minFd, closeOnExec);
+    }
+
+    public int DupFD(int oldFd, int minFd = 0, bool closeOnExec = false)
+    {
+        var file = GetFD(oldFd);
+        if (file == null) return -(int)Errno.EBADF;
+        return DupFD(file, minFd, closeOnExec);
     }
 
     public LinuxFile? GetFD(int fd)
@@ -141,8 +154,28 @@ public partial class SyscallManager
         return FDs.TryGetValue(fd, out var f) ? f : null;
     }
 
+    public bool IsFdCloseOnExec(int fd)
+    {
+        return _fdCloseOnExec.Contains(fd);
+    }
+
+    public void SetFdCloseOnExec(int fd, bool closeOnExec)
+    {
+        if (!FDs.ContainsKey(fd)) return;
+        if (closeOnExec)
+            _fdCloseOnExec.Add(fd);
+        else
+            _fdCloseOnExec.Remove(fd);
+    }
+
+    public IReadOnlyList<int> GetCloseOnExecFds()
+    {
+        return _fdCloseOnExec.ToList();
+    }
+
     public void FreeFD(int fd)
     {
+        _fdCloseOnExec.Remove(fd);
         if (FDs.Remove(fd, out var f)) f.Close();
     }
 
@@ -151,6 +184,7 @@ public partial class SyscallManager
         var fds = FDs.Keys.ToList();
         foreach (var fd in fds)
             FreeFD(fd);
+        _fdCloseOnExec.Clear();
     }
 
     /// <summary>

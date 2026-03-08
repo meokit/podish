@@ -131,6 +131,12 @@ public abstract class SuperBlock
     public virtual void WriteInode(Inode inode)
     {
     }
+
+    internal void RemoveInodeFromTracking(Inode inode)
+    {
+        Inodes.Remove(inode);
+        AllInodes.Remove(inode);
+    }
 }
 
 public abstract class Inode : IPageCacheOps

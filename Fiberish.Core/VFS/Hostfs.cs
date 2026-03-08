@@ -29,7 +29,7 @@ public class Hostfs : FileSystem
     }
 }
 
-public class HostSuperBlock : SuperBlock
+public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
 {
     private readonly Dictionary<string, Dentry> _dentryCache = [];
     private ulong _nextIno = 1;
@@ -172,6 +172,42 @@ public class HostSuperBlock : SuperBlock
         }
 
         if (dentry.Parent != null) dentry.Parent.Children[dentry.Name] = dentry;
+    }
+
+    public long DropDentryAndInodeCaches()
+    {
+        List<Dentry> candidates;
+        lock (Lock)
+        {
+            candidates = _dentryCache.Values
+                .Distinct()
+                .Where(dentry => !ReferenceEquals(dentry, Root) && !dentry.IsMounted)
+                .ToList();
+        }
+
+        var candidateSet = new HashSet<Dentry>(candidates);
+        var roots = candidates
+            .Where(dentry =>
+                dentry.Parent == null ||
+                ReferenceEquals(dentry.Parent, dentry) ||
+                !candidateSet.Contains(dentry.Parent))
+            .ToList();
+
+        long dropped = 0;
+        foreach (var root in roots)
+            dropped += VfsCacheReclaimer.DetachCachedSubtree(root);
+
+        lock (Lock)
+        {
+            var staleKeys = _dentryCache
+                .Where(kv => !ReferenceEquals(kv.Value, Root) && !kv.Value.IsMounted)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var key in staleKeys)
+                _dentryCache.Remove(key);
+        }
+
+        return dropped;
     }
 }
 

@@ -38,7 +38,8 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        var targetFd = (int)fd;
+        if (!sm.FDs.TryGetValue(targetFd, out var file)) return -(int)Errno.EBADF;
 
         const uint F_DUPFD = 0;
         const uint F_GETFD = 1;
@@ -52,19 +53,18 @@ public partial class SyscallManager
 
         return cmd switch
         {
-            F_DUPFD => sm.DupFD(file, (int)arg),
-            F_GETFD => (file.Flags & FileFlags.O_CLOEXEC) != 0 ? (int)FD_CLOEXEC : 0,
-            F_SETFD => SetFdFlags(file, arg),
-            F_GETFL => (int)file.Flags,
+            F_DUPFD => sm.DupFD(targetFd, (int)arg, closeOnExec: false),
+            F_GETFD => sm.IsFdCloseOnExec(targetFd) ? (int)FD_CLOEXEC : 0,
+            F_SETFD => SetFdFlags(sm, targetFd, arg),
+            F_GETFL => (int)(file.Flags & ~FileFlags.O_CLOEXEC),
             F_SETFL => SetStatusFlags(file, arg),
-            F_DUPFD_CLOEXEC => DupFdCloexec(sm, file, (int)arg),
+            F_DUPFD_CLOEXEC => sm.DupFD(targetFd, (int)arg, closeOnExec: true),
             _ => -(int)Errno.EINVAL
         };
 
-        static int SetFdFlags(LinuxFile file, uint arg)
+        static int SetFdFlags(SyscallManager sm, int fd, uint arg)
         {
-            if ((arg & FD_CLOEXEC) != 0) file.Flags |= FileFlags.O_CLOEXEC;
-            else file.Flags &= ~FileFlags.O_CLOEXEC;
+            sm.SetFdCloseOnExec(fd, (arg & FD_CLOEXEC) != 0);
             return 0;
         }
 
@@ -77,15 +77,5 @@ public partial class SyscallManager
             return 0;
         }
 
-        static int DupFdCloexec(SyscallManager sm, LinuxFile file, int minFd)
-        {
-            var newFd = sm.DupFD(file, minFd);
-            if (newFd < 0) return newFd;
-
-            if (sm.FDs.TryGetValue(newFd, out var newFile))
-                newFile.Flags |= FileFlags.O_CLOEXEC;
-
-            return newFd;
-        }
     }
 }
