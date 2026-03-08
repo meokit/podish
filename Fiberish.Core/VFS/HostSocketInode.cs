@@ -600,6 +600,10 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
+            }
     }
 
     public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags,
@@ -632,6 +636,10 @@ public sealed class HostSocketInode : Inode
             catch (SocketException ex)
             {
                 return (MapSocketError(ex.SocketErrorCode), null);
+            }
+            catch (ObjectDisposedException)
+            {
+                return (-(int)Errno.ENOTCONN, null);
             }
     }
 
@@ -669,6 +677,10 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
+            }
     }
 
     public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
@@ -701,6 +713,10 @@ public sealed class HostSocketInode : Inode
             catch (SocketException ex)
             {
                 return MapSocketError(ex.SocketErrorCode);
+            }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
             }
     }
 
@@ -742,6 +758,10 @@ public sealed class HostSocketInode : Inode
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
+            }
     }
 
     public async ValueTask<Socket> AcceptAsync(LinuxFile file, int flags)
@@ -771,6 +791,10 @@ public sealed class HostSocketInode : Inode
                 if (!ready)
                     throw new SocketException((int)SocketError.Interrupted);
             }
+            catch (ObjectDisposedException)
+            {
+                throw new SocketException((int)SocketError.NotConnected);
+            }
     }
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)
@@ -792,6 +816,10 @@ public sealed class HostSocketInode : Inode
         {
             return MapSocketError(ex.SocketErrorCode);
         }
+        catch (ObjectDisposedException)
+        {
+            return -(int)Errno.ENOTCONN;
+        }
     }
 
     public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
@@ -811,6 +839,10 @@ public sealed class HostSocketInode : Inode
         catch (SocketException ex)
         {
             return MapSocketError(ex.SocketErrorCode);
+        }
+        catch (ObjectDisposedException)
+        {
+            return -(int)Errno.ENOTCONN;
         }
     }
 

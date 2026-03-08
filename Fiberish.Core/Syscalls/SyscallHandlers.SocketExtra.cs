@@ -65,6 +65,15 @@ public partial class SyscallManager
                         case LinuxConstants.SO_RCVBUF:
                             sock.ReceiveBufferSize = BinaryPrimitives.ReadInt32LittleEndian(buf);
                             return 0;
+                        case LinuxConstants.SO_LINGER:
+                            if (optlen < 8)
+                                return -(int)Errno.EINVAL;
+                            var lingerOn = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4)) != 0;
+                            var lingerSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+                            if (lingerSec < 0)
+                                lingerSec = 0;
+                            sock.LingerState = new LingerOption(lingerOn, lingerSec);
+                            return 0;
                         case LinuxConstants.SO_REUSEPORT:
                             // .NET exposes this on Linux/macOS via SocketOptionName.ReuseAddress
                             return 0;
@@ -160,7 +169,7 @@ public partial class SyscallManager
         if (!task.CPU.CopyFromUser(optlenPtr, lenBuf)) return -(int)Errno.EFAULT;
         int optlen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
 
-        var outBuf = new byte[Math.Max(optlen, 4)];
+        var outBuf = new byte[Math.Max(optlen, 8)];
         int written = 4; // default: return a single int
 
         if (file.Dentry.Inode is HostSocketInode hostSock)
@@ -196,6 +205,12 @@ public partial class SyscallManager
                             break;
                         case LinuxConstants.SO_RCVBUF:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.ReceiveBufferSize);
+                            break;
+                        case LinuxConstants.SO_LINGER:
+                            var linger = sock.LingerState ?? new LingerOption(false, 0);
+                            BinaryPrimitives.WriteInt32LittleEndian(outBuf.AsSpan(0, 4), linger.Enabled ? 1 : 0);
+                            BinaryPrimitives.WriteInt32LittleEndian(outBuf.AsSpan(4, 4), linger.LingerTime);
+                            written = 8;
                             break;
                         case LinuxConstants.SO_TYPE:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,

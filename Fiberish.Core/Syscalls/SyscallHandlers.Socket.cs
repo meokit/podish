@@ -460,6 +460,17 @@ public partial class SyscallManager
         {
             try
             {
+                if (how == 2)
+                {
+                    var linger = sockInode.NativeSocket!.LingerState ?? new LingerOption(false, 0);
+                    if (linger.Enabled && linger.LingerTime == 0)
+                    {
+                        // Abortive close path: aligned with close()+SO_LINGER(0) RST behavior.
+                        sockInode.NativeSocket.Dispose();
+                        return 0;
+                    }
+                }
+
                 var mode = how switch
                 {
                     0 => SocketShutdown.Receive,
@@ -477,6 +488,10 @@ public partial class SyscallManager
             catch (SocketException ex)
             {
                 return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+            }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
             }
         }
 

@@ -454,6 +454,7 @@ public static class LinuxConstants
     public const int SO_OOBINLINE = 7;
     public const int SO_SNDBUF = 8;
     public const int SO_RCVBUF = 9;
+    public const int SO_LINGER = 13;
     public const int SO_REUSEPORT = 15;
     public const int SO_RCVTIMEO = 20;
     public const int SO_SNDTIMEO = 21;
