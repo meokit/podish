@@ -173,7 +173,18 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 return true;
 
             var needWrite = (events & PollEvents.POLLOUT) != 0;
-            var canWrite = needWrite && _socket.Poll(0, SelectMode.SelectWrite);
+            var canWrite = false;
+            if (needWrite)
+            {
+                try
+                {
+                    canWrite = _socket.Poll(0, SelectMode.SelectWrite);
+                }
+                catch (SocketException)
+                {
+                    // keep false; error path below handles fault state.
+                }
+            }
 
             var canRead = false;
             if ((events & PollEvents.POLLIN) != 0)
@@ -191,7 +202,15 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 }
             }
 
-            var hasError = _socket.Poll(0, SelectMode.SelectError);
+            var hasError = false;
+            try
+            {
+                hasError = _socket.Poll(0, SelectMode.SelectError);
+            }
+            catch (SocketException)
+            {
+                hasError = true;
+            }
             if ((events & PollEvents.POLLOUT) != 0 &&
                 _socket.SocketType == SocketType.Stream &&
                 !_socket.Connected &&
@@ -216,6 +235,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
                     {
                         hasError = true;
                         canWrite = false;
+                        _owner.CachePendingSocketError(soError);
                     }
                     else
                     {
@@ -404,6 +424,25 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 break;
         }
 
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            if (kind == ProbeKind.Accept && e.AcceptSocket != null)
+            {
+                try
+                {
+                    e.AcceptSocket.Dispose();
+                }
+                catch
+                {
+                    // ignored
+                }
+
+                e.AcceptSocket = null;
+            }
+
+            return;
+        }
+
         short readyHint = 0;
         if (kind == ProbeKind.Accept && e.AcceptSocket != null)
         {
@@ -555,14 +594,15 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (saea == null)
             return;
 
-        if (mayStillBeInFlight)
-        {
-            saea.Dispose();
-            return;
-        }
-
         if (saea.UserToken is ProbeTag tag)
             tag.Owner = null;
+
+        if (mayStillBeInFlight)
+        {
+            // Do not dispose while I/O may still be in flight.
+            // The owning socket teardown will abort operation and runtime will release references on completion.
+            return;
+        }
 
         saea.SetBuffer(null, 0, 0);
         saea.SocketFlags = SocketFlags.None;
@@ -594,7 +634,14 @@ internal sealed class HostSocketProbeEngine : IDisposable
         {
             if (Volatile.Read(ref _disposed) != 0)
                 return;
-            _callback();
+            try
+            {
+                _callback();
+            }
+            catch
+            {
+                // Keep notification fan-out robust even when one callback misbehaves.
+            }
         }
 
         public void Dispose()

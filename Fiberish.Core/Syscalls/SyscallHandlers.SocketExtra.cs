@@ -190,6 +190,12 @@ public partial class SyscallManager
                                 sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2 ? v2 : 0);
                             break;
                         case LinuxConstants.SO_ERROR:
+                            var cachedSoError = hostSock.ConsumeCachedSocketError();
+                            if (cachedSoError != 0)
+                            {
+                                BinaryPrimitives.WriteInt32LittleEndian(outBuf, cachedSoError);
+                                break;
+                            }
                             var soErrorObj = sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                             var soError = soErrorObj switch
                             {

@@ -271,6 +271,38 @@ public class HostSocketReadinessTests
     }
 
     [Fact(Timeout = TestTimeoutMs)]
+    public async Task Poll_NonBlockingConnectFailure_DoesNotConsumeSoErrorForGuest()
+    {
+        using var env = new ReadinessEnv();
+        int closedPort;
+        using (var probe = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        {
+            probe.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            closedPort = ((IPEndPoint)probe.LocalEndPoint!).Port;
+        }
+
+        var inode = new HostSocketInode(3012, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        var file = new LinuxFile(new Dentry("readiness-connect-soerror", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>());
+
+        var rc = await inode.ConnectAsync(file, new IPEndPoint(IPAddress.Loopback, closedPort));
+        if (rc != -(int)Errno.EINPROGRESS)
+            return; // Host stack may return ECONNREFUSED synchronously; skip inconclusive path.
+
+        await DrainUntil(() =>
+        {
+            var revents = readiness.Poll(file, PollEvents.POLLOUT);
+            return (revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0;
+        }, env, 500);
+
+        var cached = inode.ConsumeCachedSocketError();
+        Assert.True(cached > 0);
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
     public async Task RegisterWaitHandle_NonBlockingConnectPending_PollOut_IsArmedOrImmediatelyReady()
     {
         using var env = new ReadinessEnv();

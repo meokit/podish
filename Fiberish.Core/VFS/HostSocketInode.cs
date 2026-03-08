@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
@@ -17,6 +18,7 @@ public sealed class HostSocketInode : Inode
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
     private readonly HostSocketReadiness _readiness;
+    private int _cachedSocketError;
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
     // SOCK_STREAM = 1, SOCK_DGRAM = 2
@@ -450,6 +452,21 @@ public sealed class HostSocketInode : Inode
             SocketError.SocketNotSupported => -(int)Errno.ESOCKTNOSUPPORT,
             _ => -(int)Errno.EIO
         };
+    }
+
+    internal void CachePendingSocketError(SocketError err)
+    {
+        if (err is SocketError.Success or SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
+            return;
+
+        var mapped = MapSocketError(err);
+        var linuxErr = mapped < 0 ? -mapped : (int)Errno.EIO;
+        Interlocked.Exchange(ref _cachedSocketError, linuxErr);
+    }
+
+    internal int ConsumeCachedSocketError()
+    {
+        return Interlocked.Exchange(ref _cachedSocketError, 0);
     }
 
     private void TraceIo(string op, ReadOnlySpan<byte> data, int bytes)
