@@ -42,3 +42,4 @@ tests/openssl/rootfs/
 tests/openssl/build_podman/
 *.xcuserstate
 xcuserdata/
+Fiberish.Tests/TestResults/
