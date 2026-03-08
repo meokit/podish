@@ -42,7 +42,7 @@ struct PodishRootView: View {
                         Button {
                             showSidebar = true
                         } label: {
-                            Label("Containers", systemImage: "sidebar.left")
+                            Label("Containers", systemImage: "line.3.horizontal")
                         }
                     }
                 }
@@ -99,21 +99,16 @@ struct PodishRootView: View {
     }
 
     private var detailContent: some View {
-        ZStack {
-            TerminalWorkspaceView(store: store)
-                .navigationTitle("Podish")
-
+        Group {
             if sidebarSelection == .home {
                 HomeDashboardView {
                     store.showNewContainer()
                 }
-                #if os(macOS)
-                .background(Color(nsColor: .windowBackgroundColor))
-                #else
-                .background(Color(uiColor: .systemBackground))
-                #endif
+            } else {
+                TerminalWorkspaceView(store: store)
             }
         }
+        .navigationTitle("Podish")
     }
 }
 
