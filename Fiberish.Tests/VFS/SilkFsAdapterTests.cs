@@ -429,4 +429,130 @@ public class SilkFsAdapterTests
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
     }
+
+    [Fact]
+    public void Silkfs_PageCache_CanBeReclaimedUnderPressure_AndReadStillCorrect()
+    {
+        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-reclaim-{Guid.NewGuid():N}");
+
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var file = new Dentry("reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            wf.Close();
+
+            var silkInode = Assert.IsType<SilkInode>(file.Inode);
+            var cache = Assert.IsType<MemoryObject>(silkInode.PageCache);
+            Assert.True(cache.PageCount > 0);
+
+            var reclaimed = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
+            Assert.True(reclaimed >= LinuxConstants.PageSize);
+            Assert.Equal(0, cache.PageCount);
+
+            var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
+            var readBuf = new byte[16];
+            var n = file.Inode.Read(rf, readBuf, 0);
+            rf.Close();
+            Assert.Equal(5, n);
+            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_PageCache_AutoReclaim_OnMaintenancePressure()
+    {
+        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        var originalHigh = GlobalPageCacheManager.HighWatermarkBytes;
+        var originalLow = GlobalPageCacheManager.LowWatermarkBytes;
+        var originalInterval = GlobalPageCacheManager.WritebackInterval;
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-auto-reclaim-{Guid.NewGuid():N}");
+
+        GlobalPageCacheManager.HighWatermarkBytes = 0;
+        GlobalPageCacheManager.LowWatermarkBytes = 0;
+        GlobalPageCacheManager.WritebackInterval = TimeSpan.Zero;
+
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var file = new Dentry("auto_reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            wf.Close();
+
+            var silkInode = Assert.IsType<SilkInode>(file.Inode);
+            var cache = Assert.IsType<MemoryObject>(silkInode.PageCache);
+            Assert.True(cache.PageCount > 0);
+
+            GlobalPageCacheManager.MaybeRunMaintenance(mm, engine);
+
+            Assert.Equal(0, cache.PageCount);
+
+            var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
+            var readBuf = new byte[16];
+            var n = file.Inode.Read(rf, readBuf, 0);
+            rf.Close();
+            Assert.Equal(5, n);
+            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+            sm.Close();
+        }
+        finally
+        {
+            GlobalPageCacheManager.HighWatermarkBytes = originalHigh;
+            GlobalPageCacheManager.LowWatermarkBytes = originalLow;
+            GlobalPageCacheManager.WritebackInterval = originalInterval;
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
 }

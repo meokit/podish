@@ -1029,10 +1029,11 @@ public partial class SyscallManager
         if (nr < MaxSyscalls) _syscallHandlers[nr] = handler;
     }
 
-    private static int MapSyscallExceptionToErrno(Exception ex)
+    internal static int MapSyscallExceptionToErrno(Exception ex)
     {
         return ex switch
         {
+            OutOfMemoryException => -(int)Errno.ENOMEM,
             PlatformNotSupportedException => -(int)Errno.ENOSYS,
             NotImplementedException => -(int)Errno.ENOSYS,
             UnauthorizedAccessException => -(int)Errno.EPERM,

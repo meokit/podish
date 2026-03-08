@@ -1505,10 +1505,11 @@ public class FiberTask
         {
             if (error != null)
             {
+                var ret = SyscallManager.MapSyscallExceptionToErrno(error);
                 Logger.LogError(error,
-                    "[HandleAsyncSyscall] Unhandled exception. Failing current syscall with EFAULT. TID={Tid} pendingPresent={PendingPresent}",
-                    TID, PendingSyscall != null);
-                CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
+                    "[HandleAsyncSyscall] Unhandled exception. Failing current syscall. TID={Tid} pendingPresent={PendingPresent} ret={Ret}",
+                    TID, PendingSyscall != null, ret);
+                CPU.RegWrite(Reg.EAX, unchecked((uint)ret));
                 PendingSyscall = null;
                 InterruptingSignal = null;
                 if (!Exited)

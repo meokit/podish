@@ -1,4 +1,6 @@
 using Fiberish.SilkFS;
+using Fiberish.Memory;
+using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
@@ -25,7 +27,7 @@ public sealed class SilkFileSystem : FileSystem
     }
 }
 
-public sealed class SilkSuperBlock : TmpfsSuperBlock
+public sealed class SilkSuperBlock : IndexedMemorySuperBlock
 {
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type, devManager)
     {
@@ -34,15 +36,9 @@ public sealed class SilkSuperBlock : TmpfsSuperBlock
 
     public SilkRepository Repository { get; }
 
-    public override Inode AllocInode()
+    protected override IndexedMemoryInode CreateIndexedInode(ulong ino)
     {
-        lock (Lock)
-        {
-            var inode = new SilkInode(_nextIno++, this, Repository);
-            Inodes.Add(inode);
-            AllInodes.Add(inode);
-            return inode;
-        }
+        return new SilkInode(ino, this, Repository);
     }
 
     public void LoadFromMetadata()
@@ -94,7 +90,7 @@ public sealed class SilkSuperBlock : TmpfsSuperBlock
                 if (!inodeMap.TryGetValue(rec.Ino, out var childInode)) continue;
 
                 var child = new Dentry(rec.Name, childInode, parent, this);
-                if (parent.Inode is TmpfsInode dirInode)
+                if (parent.Inode is IndexedMemoryInode dirInode)
                     dirInode.RegisterChild(parent, rec.Name, child);
                 else
                     parent.Children[rec.Name] = child;
@@ -117,18 +113,20 @@ public sealed class SilkSuperBlock : TmpfsSuperBlock
     }
 }
 
-public sealed class SilkInode : TmpfsInode
+public sealed class SilkInode : IndexedMemoryInode
 {
     private readonly SilkRepository _repository;
     private readonly SilkMetadataStore _metadata;
     private bool _hasPendingPageWriteback;
     private readonly object _persistLock = new();
 
-    public SilkInode(ulong ino, SuperBlock sb, SilkRepository repository) : base(ino, sb)
+    public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
         _repository = repository;
         _metadata = repository.Metadata;
     }
+
+    protected override GlobalPageCacheManager.PageCacheClass CacheClass => GlobalPageCacheManager.PageCacheClass.File;
 
     public static SilkInodeKind MapInodeKind(InodeType type)
     {
@@ -217,6 +215,57 @@ public sealed class SilkInode : TmpfsInode
         }
 
         return pos == len ? result : result[..pos];
+    }
+
+    protected override int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        lock (Lock)
+        {
+            if (Type == InodeType.Directory) return 0;
+            if (Type == InodeType.Symlink)
+                return base.BackendRead(linuxFile, buffer, offset);
+            if (offset < 0) return -(int)Errno.EINVAL;
+
+            var fileSize = (long)Size;
+            if (offset >= fileSize) return 0;
+            var count = Math.Min(buffer.Length, (int)(fileSize - offset));
+            var persisted = ReadPersistedSnapshot();
+            var copied = 0;
+            var pageCache = EnsurePageCacheLocked();
+
+            while (copied < count)
+            {
+                var absolute = offset + copied;
+                var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                var chunk = Math.Min(count - copied, LinuxConstants.PageSize - pageOffset);
+                var pagePtr = pageCache.GetPage(pageIndex);
+                if (pagePtr != IntPtr.Zero)
+                {
+                    unsafe
+                    {
+                        var src = (byte*)pagePtr + pageOffset;
+                        fixed (byte* dst = &buffer[copied])
+                        {
+                            Buffer.MemoryCopy(src, dst, chunk, chunk);
+                        }
+                    }
+                }
+                else
+                {
+                    var available = Math.Max(0, persisted.Length - (int)absolute);
+                    var fromPersisted = Math.Min(chunk, available);
+                    if (fromPersisted > 0)
+                        persisted.AsSpan((int)absolute, fromPersisted).CopyTo(buffer.Slice(copied, fromPersisted));
+                    if (fromPersisted < chunk)
+                        buffer.Slice(copied + fromPersisted, chunk - fromPersisted).Clear();
+                }
+
+                copied += chunk;
+            }
+
+            return count;
+        }
     }
 
     private void SyncDentry(Dentry dentry)
@@ -331,6 +380,7 @@ public sealed class SilkInode : TmpfsInode
         {
             SyncSelf();
             PersistData();
+            ClearPageCacheDirtyState();
         }
         return rc;
     }
@@ -342,6 +392,7 @@ public sealed class SilkInode : TmpfsInode
         {
             SyncSelf();
             PersistData();
+            ClearPageCacheDirtyState();
         }
         return rc;
     }
@@ -371,6 +422,7 @@ public sealed class SilkInode : TmpfsInode
             if (!_hasPendingPageWriteback) return 0;
             SyncSelf();
             PersistData();
+            ClearPageCacheDirtyState();
             _hasPendingPageWriteback = false;
         }
 
@@ -414,5 +466,27 @@ public sealed class SilkInode : TmpfsInode
         var unrefObject = _metadata.DeleteInodeWithObjectRefCount(ino);
         if (!string.IsNullOrEmpty(unrefObject))
             _repository.DeleteObject(unrefObject!);
+    }
+
+    private byte[] ReadPersistedSnapshot()
+    {
+        if (Type != InodeType.File && Type != InodeType.Symlink) return Array.Empty<byte>();
+        var objectId = _metadata.GetInodeObject((long)Ino);
+        if (string.IsNullOrEmpty(objectId)) return Array.Empty<byte>();
+        return _repository.ReadObject(objectId!) ?? Array.Empty<byte>();
+    }
+
+    private void ClearPageCacheDirtyState()
+    {
+        lock (Lock)
+        {
+            if (PageCache != null)
+            {
+                foreach (var state in PageCache.SnapshotPageStates())
+                    PageCache.ClearDirty(state.PageIndex);
+            }
+
+            DirtyPageIndexes.Clear();
+        }
     }
 }
