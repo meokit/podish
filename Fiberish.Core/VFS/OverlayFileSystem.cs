@@ -63,6 +63,7 @@ public class OverlaySuperBlock : SuperBlock
 {
     private readonly Dictionary<string, HashSet<string>> _whiteouts = new(StringComparer.Ordinal);
     private readonly HashSet<string> _opaqueDirs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OverlayFileLockState> _flocks = new(StringComparer.Ordinal);
 
     public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper, DeviceNumberManager? devManager = null) : base(devManager)
     {
@@ -141,6 +142,91 @@ public class OverlaySuperBlock : SuperBlock
         // Overlay inodes are always bonded to underlying inodes.
         // But we might need to allocate a new OverlayInode wrapper.
         return new OverlayInode(this, (Dentry?)null, null);
+    }
+
+    public int Flock(string fileKey, LinuxFile linuxFile, int operation)
+    {
+        var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
+        var op = operation & ~LinuxConstants.LOCK_NB;
+
+        lock (Lock)
+        {
+            while (true)
+            {
+                _flocks.TryGetValue(fileKey, out var state);
+
+                if (op == LinuxConstants.LOCK_UN)
+                {
+                    if (state == null) return 0;
+                    if (state.ExclusiveHolder == linuxFile) state.ExclusiveHolder = null;
+                    state.SharedHolders.Remove(linuxFile);
+                    if (state.ExclusiveHolder == null && state.SharedHolders.Count == 0)
+                    {
+                        state.LockType = 0;
+                        _flocks.Remove(fileKey);
+                    }
+
+                    Monitor.PulseAll(Lock);
+                    return 0;
+                }
+
+                state ??= CreateLockState(fileKey);
+
+                var canAcquire = false;
+                if (op == LinuxConstants.LOCK_SH)
+                {
+                    if (state.ExclusiveHolder == null || state.ExclusiveHolder == linuxFile) canAcquire = true;
+                }
+                else if (op == LinuxConstants.LOCK_EX)
+                {
+                    if (state.LockType == 0) canAcquire = true;
+                    else if (state.ExclusiveHolder == linuxFile) canAcquire = true;
+                    else if (state.SharedHolders.Count == 1 &&
+                             state.SharedHolders.Contains(linuxFile) &&
+                             state.ExclusiveHolder == null)
+                        canAcquire = true;
+                }
+                else
+                {
+                    return -(int)Errno.EINVAL;
+                }
+
+                if (canAcquire)
+                {
+                    if (op == LinuxConstants.LOCK_SH)
+                    {
+                        if (state.ExclusiveHolder == linuxFile) state.ExclusiveHolder = null;
+                        state.SharedHolders.Add(linuxFile);
+                        state.LockType = 1;
+                    }
+                    else
+                    {
+                        state.SharedHolders.Remove(linuxFile);
+                        state.ExclusiveHolder = linuxFile;
+                        state.LockType = 2;
+                    }
+
+                    return 0;
+                }
+
+                if (nonBlock) return -(int)Errno.EAGAIN;
+                Monitor.Wait(Lock);
+            }
+        }
+    }
+
+    private OverlayFileLockState CreateLockState(string fileKey)
+    {
+        var state = new OverlayFileLockState();
+        _flocks[fileKey] = state;
+        return state;
+    }
+
+    private sealed class OverlayFileLockState
+    {
+        public int LockType { get; set; }
+        public HashSet<LinuxFile> SharedHolders { get; } = [];
+        public LinuxFile? ExclusiveHolder { get; set; }
     }
 }
 
@@ -389,7 +475,13 @@ public class OverlayInode : Inode
     public override int Flock(LinuxFile linuxFile, int operation)
     {
         if (UpperInode != null) return UpperInode.Flock(linuxFile, operation);
-        if (LowerInode != null) return LowerInode.Flock(linuxFile, operation);
+        if (LowerInode != null)
+        {
+            var rc = LowerInode.Flock(linuxFile, operation);
+            if (rc != -(int)Errno.ENOSYS) return rc;
+            return ((OverlaySuperBlock)SuperBlock).Flock(GetFileKey(), linuxFile, operation);
+        }
+
         return -(int)Errno.ENOSYS;
     }
 
@@ -644,6 +736,8 @@ public class OverlayInode : Inode
 
     public override void Release(LinuxFile linuxFile)
     {
+        _ = Flock(linuxFile, LinuxConstants.LOCK_UN);
+
         if (UpperInode != null) UpperInode.Release(linuxFile);
         else LowerInode?.Release(linuxFile);
     }
@@ -735,6 +829,13 @@ public class OverlayInode : Inode
     {
         var anchor = UpperDentry ?? LowerDentry ?? Dentries.FirstOrDefault();
         if (anchor == null) return "/";
+        return BuildPath(anchor);
+    }
+
+    private string GetFileKey()
+    {
+        var anchor = UpperDentry ?? LowerDentry ?? Dentries.FirstOrDefault();
+        if (anchor == null) return $"ino:{Ino}";
         return BuildPath(anchor);
     }
 

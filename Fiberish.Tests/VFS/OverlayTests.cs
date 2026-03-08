@@ -1,5 +1,6 @@
 using Fiberish.VFS;
 using Fiberish.Memory;
+using Fiberish.Native;
 using System.Runtime.InteropServices;
 using Xunit;
 
@@ -7,6 +8,56 @@ namespace Fiberish.Tests.VFS;
 
 public class OverlayTests
 {
+    [Fact]
+    public void OverlayFlock_LowerOnlyLayerFile_ShouldNotReturnEnosys()
+    {
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.Directory("lib")
+                .AddChild(LayerNode.Directory("apk")
+                    .AddChild(LayerNode.Directory("db")
+                        .AddChild(LayerNode.File("lock", [])))));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperFsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperFsType.CreateFileSystem().ReadSuper(upperFsType, 0, "ovl-upper-flock", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var lib = overlaySb.Root.Inode!.Lookup("lib");
+        Assert.NotNull(lib);
+        var apk = lib!.Inode!.Lookup("apk");
+        Assert.NotNull(apk);
+        var db = apk!.Inode!.Lookup("db");
+        Assert.NotNull(db);
+        var lockFile = db!.Inode!.Lookup("lock");
+        Assert.NotNull(lockFile);
+
+        var file = new LinuxFile(lockFile!, FileFlags.O_RDWR, null!);
+        try
+        {
+            var inode = Assert.IsType<OverlayInode>(lockFile!.Inode);
+            var ex = inode.Flock(file, LinuxConstants.LOCK_EX | LinuxConstants.LOCK_NB);
+            Assert.Equal(0, ex);
+
+            var un = inode.Flock(file, LinuxConstants.LOCK_UN);
+            Assert.Equal(0, un);
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
     [Fact]
     public void TestRecursiveCopyUpWithHostfs()
     {
