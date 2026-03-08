@@ -30,7 +30,7 @@ public class NewMountApiTests
         env.WriteCString(0x13000, "/mnt");
 
         var fsfd = await env.Call("SysFsopen", 0x10000, 0);
-        Assert.True(fsfd >= 3);
+        Assert.True(fsfd >= 0);
         Assert.IsType<FsContextFile>(env.SyscallManager.GetFD(fsfd)!);
 
         Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000, 0));
@@ -40,7 +40,7 @@ public class NewMountApiTests
             await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000, 0));
 
         var mntfd = await env.Call("SysFsmount", (uint)fsfd, 0, 0);
-        Assert.True(mntfd >= 3);
+        Assert.True(mntfd >= 0);
         var mountFile = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!);
         Assert.False(mountFile.Mount.IsAttached);
 

@@ -119,7 +119,12 @@ public class KernelScheduler
 
     public void CleanupDeadProcess(Process process)
     {
-        TryReleaseProcessMemory(process, process.Syscalls.Engine);
+        var mem = process.Mem;
+        var engine = process.Syscalls?.Engine;
+        if (mem != null && engine != null)
+            TryReleaseProcessMemory(process, engine);
+        else
+            process.MemoryReleased = true;
         DetachProcessTasks(process.TGID);
     }
 

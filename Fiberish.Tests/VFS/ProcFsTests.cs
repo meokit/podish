@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Fiberish.Tests.VFS;
 
+[Collection("ExternalPageManagerSerial")]
 public class ProcFsTests
 {
     [Fact]

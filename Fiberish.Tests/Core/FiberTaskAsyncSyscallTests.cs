@@ -16,12 +16,21 @@ public class FiberTaskAsyncSyscallTests
         var task = new FiberTask(401, process, new MockEngine(), scheduler);
         task.PendingSyscall = () => new ValueTask<int>(Task.FromException<int>(new InvalidOperationException("boom")));
 
-        var method = typeof(FiberTask).GetMethod("HandleAsyncSyscall", BindingFlags.Instance | BindingFlags.NonPublic);
+        var method = typeof(FiberTask).GetMethod("HandleAsyncSyscallAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? typeof(FiberTask).GetMethod("HandleAsyncSyscall", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        method!.Invoke(task, null);
+        var result = method!.Invoke(task, null);
+        if (result is ValueTask vt)
+            await vt;
+
+        var drainEvents = typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(drainEvents);
 
         for (var i = 0; i < 100 && task.PendingSyscall != null; i++)
+        {
+            _ = (bool)drainEvents!.Invoke(scheduler, null)!;
             await Task.Delay(10);
+        }
 
         Assert.Null(task.PendingSyscall);
     }
