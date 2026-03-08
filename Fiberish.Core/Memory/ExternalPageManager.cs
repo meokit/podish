@@ -1,6 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Threading;
-using System.Linq;
 using System.IO.MemoryMappedFiles;
 using Fiberish.Native;
 
