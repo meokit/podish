@@ -112,6 +112,7 @@ public class Process
     public bool HasWaitableStop { get; set; }
     public int StopSignal { get; set; }
     public bool HasWaitableContinue { get; set; }
+    public bool MemoryReleased { get; set; }
     public string ExecutablePath { get; private set; } = string.Empty;
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
@@ -157,6 +158,9 @@ public class Process
 
     internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
+        var oldMem = Mem;
+        var oldEngine = Syscalls.Engine;
+
         // 1. Replace memory with a fresh VMAManager.
         // This is critical for vfork+execve: the child may share the parent's VMAManager
         // via CLONE_VM. We must NOT clear the shared memory — instead, create a private
@@ -164,6 +168,8 @@ public class Process
         var freshMem = new VMAManager(Mem.MemoryObjects);
         Mem = freshMem;
         Syscalls.Mem = freshMem;
+        MemoryReleased = false;
+        oldMem.ReleaseSharedRef(oldEngine);
 
         // Clear old native MMU page tables + JIT cache.
         // FlushCache only clears JIT; ResetMemory also resets the native page directory
@@ -225,5 +231,4 @@ public class Process
         var cmdline = string.Join('\0', args) + '\0';
         CommandLineRaw = Encoding.UTF8.GetBytes(cmdline);
     }
-
 }

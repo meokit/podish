@@ -114,7 +114,7 @@ public sealed class MemoryObject
         }
         else
         {
-            ptr = ExternalPageManager.AllocateExternalPage();
+            ptr = ExternalPageManager.AllocateExternalPage(allocationClass);
         }
 
         if (ptr == IntPtr.Zero)

@@ -179,7 +179,9 @@ public partial class SyscallManager
                             currentProc.Children.Remove(childPid);
                             childProc.State = ProcessState.Dead;
                             kernel.UnregisterProcess(childPid);
+                            kernel.CleanupDeadProcess(childProc);
                         }
+
                         // Also remove from global table? Or let it be garbage collected if no other refs?
                         // If we remove from global table, PID can be reused properly (if allocator reuses).
                         // Current allocator is monotonic increment.
@@ -289,8 +291,10 @@ public partial class SyscallManager
                             {
                                 currentProc.Children.Remove(childPid);
                             }
+
                             childProc.State = ProcessState.Dead;
                             kernel.UnregisterProcess(childPid);
+                            kernel.CleanupDeadProcess(childProc);
                         }
 
                         return 0; // Success
@@ -455,6 +459,8 @@ public partial class SyscallManager
         }
 
         task.Process.StateChangeEvent.Set();
+        task.CommonKernel.TryReleaseProcessMemory(task.Process, task.CPU);
+        task.CommonKernel.DetachProcessTasks(task.Process.TGID);
 
         if (task.CommonKernel.TryAutoReapZombie(task.Process))
         {

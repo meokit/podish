@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
+using Fiberish.Memory;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
@@ -115,6 +117,56 @@ public class KernelScheduler
         }
     }
 
+    public void CleanupDeadProcess(Process process)
+    {
+        TryReleaseProcessMemory(process, process.Syscalls.Engine);
+        DetachProcessTasks(process.TGID);
+    }
+
+    public bool TryReleaseProcessMemory(Process process, Engine engine)
+    {
+        if (process.MemoryReleased) return true;
+
+        var beforeBytes = ExternalPageManager.GetAllocatedBytes();
+        var beforeByClass = ExternalPageManager.GetAllocationClassStatsSummary();
+        var (cowFirstBefore, cowReplaceBefore) = VMAManager.GetCowAllocationCounters();
+        var refsBefore = process.Mem.GetSharedRefCount();
+        var refsAfter = process.Mem.ReleaseSharedRef(engine);
+        process.MemoryReleased = true;
+        var afterBytes = ExternalPageManager.GetAllocatedBytes();
+        var afterByClass = ExternalPageManager.GetAllocationClassStatsSummary();
+        var (cowFirstAfter, cowReplaceAfter) = VMAManager.GetCowAllocationCounters();
+        Logger.LogDebug(
+            "[MemRelease] PID={Pid} released VM pages bytesBefore={BeforeBytes} bytesAfter={AfterBytes} " +
+            "classesBefore=[{BeforeByClass}] classesAfter=[{AfterByClass}] " +
+            "refsBefore={RefsBefore} refsAfter={RefsAfter} " +
+            "cowCountersBefore=first:{CowFirstBefore},replace:{CowReplaceBefore} " +
+            "cowCountersAfter=first:{CowFirstAfter},replace:{CowReplaceAfter}",
+            process.TGID, beforeBytes, afterBytes, beforeByClass, afterByClass,
+            refsBefore, refsAfter,
+            cowFirstBefore, cowReplaceBefore, cowFirstAfter, cowReplaceAfter);
+        return true;
+    }
+
+    public void DetachProcessTasks(int pid)
+    {
+        List<FiberTask> tasksToRemove;
+        lock (_tasks)
+        {
+            tasksToRemove = _tasks.Values.Where(t => t.PID == pid).ToList();
+            foreach (var task in tasksToRemove) _tasks.Remove(task.TID);
+        }
+
+        foreach (var task in tasksToRemove)
+        {
+            task.Status = FiberTaskStatus.Terminated;
+            lock (task.Process.Threads)
+            {
+                task.Process.Threads.Remove(task);
+            }
+        }
+    }
+
     public FiberTask? GetTask(int tid)
     {
         lock (_tasks)
@@ -216,6 +268,7 @@ public class KernelScheduler
         }
 
         process.State = ProcessState.Dead;
+        CleanupDeadProcess(process);
         return true;
     }
 

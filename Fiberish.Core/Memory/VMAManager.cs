@@ -3,12 +3,16 @@ using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using System.Threading;
 
 namespace Fiberish.Memory;
 
 public class VMAManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
+    private static long _cowAllocFirstCount;
+    private static long _cowAllocReplaceCount;
+    private int _sharedRefCount = 1;
     private readonly List<VMA> _vmas = [];
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
@@ -16,6 +20,35 @@ public class VMAManager
     public VMAManager(MemoryObjectManager? memoryObjects = null)
     {
         MemoryObjects = memoryObjects ?? new MemoryObjectManager();
+    }
+
+    public static (long First, long Replace) GetCowAllocationCounters()
+    {
+        return (Interlocked.Read(ref _cowAllocFirstCount), Interlocked.Read(ref _cowAllocReplaceCount));
+    }
+
+    public int GetSharedRefCount()
+    {
+        return Volatile.Read(ref _sharedRefCount);
+    }
+
+    public int AddSharedRef()
+    {
+        return Interlocked.Increment(ref _sharedRefCount);
+    }
+
+    public int ReleaseSharedRef(Engine engine)
+    {
+        var remaining = Interlocked.Decrement(ref _sharedRefCount);
+        if (remaining > 0) return remaining;
+        if (remaining < 0)
+        {
+            Interlocked.Exchange(ref _sharedRefCount, 0);
+            return 0;
+        }
+
+        Clear(engine);
+        return 0;
     }
 
     public IReadOnlyList<VMA> VMAs => _vmas;
@@ -409,6 +442,7 @@ public class VMAManager
             // Clear native memory pages and JIT cache (done in C++ side)
             engine.MemUnmap(vma.Start, vma.End - vma.Start);
             vma.MemoryObject.Release();
+            vma.CowObject?.Release();
         }
 
         ExternalPages.Clear();
@@ -485,6 +519,11 @@ public class VMAManager
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
                         if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow))
                             return false;
+                        Interlocked.Increment(ref _cowAllocReplaceCount);
+                        var owner = engine.Owner as FiberTask;
+                        Logger.LogTrace(
+                            "[COW] Allocate replacement page pid={Pid} vma={Vma} pageIndex={PageIndex} addr=0x{PageStart:x}",
+                            owner?.PID ?? 0, vma.Name, pageIndex, pageStart);
 
                         unsafe
                         {
@@ -553,6 +592,11 @@ public class VMAManager
                     // Allocate private copy from inode cache
                     if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow))
                         return false;
+                    Interlocked.Increment(ref _cowAllocFirstCount);
+                    var owner2 = engine.Owner as FiberTask;
+                    Logger.LogTrace(
+                        "[COW] Allocate first private page pid={Pid} vma={Vma} pageIndex={PageIndex} addr=0x{PageStart:x}",
+                        owner2?.PID ?? 0, vma.Name, pageIndex, pageStart);
 
                     unsafe
                     {
@@ -607,6 +651,8 @@ public class VMAManager
         var tempPerms = mapPerms | Protection.Write;
 
         IntPtr hostPtr;
+        var strictQuota = vma.File == null;
+        var allocationClass = strictQuota ? AllocationClass.Anonymous : AllocationClass.PageCache;
         hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
         {
             if (vma.File == null)
@@ -645,10 +691,22 @@ public class VMAManager
             }
 
             return true;
-        }, out _, vma.File == null, vma.File == null ? AllocationClass.Anonymous : AllocationClass.PageCache);
+        }, out _, strictQuota, allocationClass);
         if (hostPtr == IntPtr.Zero)
         {
-            Logger.LogError("HandleFault: object page allocation failed for 0x{PageStart:x}", pageStart);
+            var allocatedBytes = ExternalPageManager.GetAllocatedBytes();
+            var quotaBytes = ExternalPageManager.MemoryQuotaBytes;
+            var (strictSuccess, strictReclaimSuccess, strictFail, legacyOverQuota) =
+                ExternalPageManager.GetAllocationStats();
+            Logger.LogError(
+                "HandleFault: object page allocation failed page=0x{PageStart:x} fault=0x{Addr:x} write={IsWrite} " +
+                "vma={VmaName} perms={Perms} pageIndex={PageIndex} strictQuota={StrictQuota} class={AllocationClass} " +
+                "quotaBytes={QuotaBytes} allocatedBytes={AllocatedBytes} " +
+                "strictSuccess={StrictSuccess} strictReclaimSuccess={StrictReclaimSuccess} strictFail={StrictFail} " +
+                "legacyOverQuota={LegacyOverQuota}",
+                pageStart, addr, isWrite, vma.Name, vma.Perms, pageIndex, strictQuota, allocationClass,
+                quotaBytes, allocatedBytes,
+                strictSuccess, strictReclaimSuccess, strictFail, legacyOverQuota);
             return false;
         }
 
@@ -674,7 +732,8 @@ public class VMAManager
     public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
     {
         var pageStart = addr & LinuxConstants.PageMask;
-        var hostPtr = ExternalPages.GetOrAllocate(pageStart, out var isNew, strictQuota: true, AllocationClass.Anonymous);
+        var hostPtr =
+            ExternalPages.GetOrAllocate(pageStart, out var isNew, strictQuota: true, AllocationClass.Anonymous);
         if (hostPtr == IntPtr.Zero) return false;
         if (!engine.MapExternalPage(pageStart, hostPtr, (byte)perms))
         {
@@ -777,7 +836,8 @@ public class VMAManager
                 GlobalPageCacheManager.BeginWritebackPages();
                 try
                 {
-                    var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen), pageData, true);
+                    var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen),
+                        pageData, true);
                     if (rc == 0)
                         vma.MemoryObject.ClearDirty(pageIndex);
                 }

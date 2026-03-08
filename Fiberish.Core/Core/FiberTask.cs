@@ -1331,6 +1331,10 @@ public class FiberTask
         else
         {
             var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
+            if (cloneVm)
+            {
+                newMem.AddSharedRef();
+            }
 
             if (!cloneVm)
             {
