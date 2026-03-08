@@ -122,7 +122,7 @@ public partial class SyscallManager
         return PathWalker.PathWalkForCreate(path, startAt);
     }
 
-    public int AllocFD(LinuxFile linuxFile, int minFd = 3)
+    public int AllocFD(LinuxFile linuxFile, int minFd = 0)
     {
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
@@ -130,7 +130,7 @@ public partial class SyscallManager
         return fd;
     }
 
-    public int DupFD(LinuxFile linuxFile, int minFd = 3)
+    public int DupFD(LinuxFile linuxFile, int minFd = 0)
     {
         linuxFile.Get();
         return AllocFD(linuxFile, minFd);
