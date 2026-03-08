@@ -14,12 +14,23 @@ public enum AllocationClass
     KernelInternal
 }
 
+public enum AllocationSource
+{
+    Unknown,
+    AnonFault,
+    AnonMapPreFault,
+    ForkClonePrivateAnon,
+    CowFirstPrivate,
+    CowReplacePrivate
+}
+
 public sealed class ExternalPageManager
 {
     private sealed class GlobalRefEntry
     {
         public int RefCount;
         public AllocationClass Class;
+        public AllocationSource Source;
     }
 
     private static readonly Dictionary<nint, GlobalRefEntry> GlobalRefs = new();
@@ -30,6 +41,8 @@ public sealed class ExternalPageManager
     private static long _legacyAllocOverQuota;
     private static readonly long[] AllocPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
     private static readonly long[] FreedPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
+    private static readonly long[] AllocPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
+    private static readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
 
     private readonly Dictionary<uint, IntPtr> _pages = new();
 
@@ -48,7 +61,8 @@ public sealed class ExternalPageManager
     }
 
     public IntPtr GetOrAllocate(uint pageAddr, out bool isNew, bool strictQuota = false,
-        AllocationClass allocationClass = AllocationClass.KernelInternal)
+        AllocationClass allocationClass = AllocationClass.KernelInternal,
+        AllocationSource allocationSource = AllocationSource.Unknown)
     {
         if (_pages.TryGetValue(pageAddr, out var page))
         {
@@ -59,7 +73,7 @@ public sealed class ExternalPageManager
         IntPtr ptr;
         if (strictQuota)
         {
-            if (!TryAllocateExternalPageStrict(out ptr, allocationClass))
+            if (!TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
             {
                 isNew = false;
                 return IntPtr.Zero;
@@ -67,7 +81,7 @@ public sealed class ExternalPageManager
         }
         else
         {
-            ptr = AllocateExternalPage(allocationClass);
+            ptr = AllocateExternalPage(allocationClass, allocationSource);
         }
 
         if (ptr == IntPtr.Zero)
@@ -157,6 +171,11 @@ public sealed class ExternalPageManager
         long AllocatedPages,
         long FreedPages,
         long LivePages);
+    public readonly record struct AllocationSourceStat(
+        AllocationSource Source,
+        long AllocatedPages,
+        long FreedPages,
+        long LivePages);
 
     public static IReadOnlyList<AllocationClassStat> GetAllocationClassStats()
     {
@@ -181,7 +200,31 @@ public sealed class ExternalPageManager
                 $"{s.Class}:live={s.LivePages},alloc={s.AllocatedPages},free={s.FreedPages}"));
     }
 
-    private static void AddGlobalRef(IntPtr ptr, AllocationClass? allocationClass = null)
+    public static IReadOnlyList<AllocationSourceStat> GetAllocationSourceStats()
+    {
+        var sources = Enum.GetValues<AllocationSource>();
+        var stats = new List<AllocationSourceStat>(sources.Length);
+        foreach (var source in sources)
+        {
+            var idx = (int)source;
+            var allocated = Interlocked.Read(ref AllocPagesBySource[idx]);
+            var freed = Interlocked.Read(ref FreedPagesBySource[idx]);
+            stats.Add(new AllocationSourceStat(source, allocated, freed, Math.Max(0, allocated - freed)));
+        }
+
+        return stats;
+    }
+
+    public static string GetAllocationSourceStatsSummary()
+    {
+        var stats = GetAllocationSourceStats();
+        return string.Join(", ",
+            stats.Select(s =>
+                $"{s.Source}:live={s.LivePages},alloc={s.AllocatedPages},free={s.FreedPages}"));
+    }
+
+    private static void AddGlobalRef(IntPtr ptr, AllocationClass? allocationClass = null,
+        AllocationSource? allocationSource = null)
     {
         lock (GlobalLock)
         {
@@ -193,14 +236,17 @@ public sealed class ExternalPageManager
             }
 
             var cls = allocationClass ?? AllocationClass.KernelInternal;
-            GlobalRefs[key] = new GlobalRefEntry { RefCount = 1, Class = cls };
+            var source = allocationSource ?? AllocationSource.Unknown;
+            GlobalRefs[key] = new GlobalRefEntry { RefCount = 1, Class = cls, Source = source };
             Interlocked.Increment(ref AllocPagesByClass[(int)cls]);
+            Interlocked.Increment(ref AllocPagesBySource[(int)source]);
         }
     }
 
     private static void ReleaseGlobalRef(IntPtr ptr)
     {
         AllocationClass allocationClass;
+        AllocationSource allocationSource;
         lock (GlobalLock)
         {
             var key = (nint)ptr;
@@ -212,10 +258,12 @@ public sealed class ExternalPageManager
             }
 
             allocationClass = entry.Class;
+            allocationSource = entry.Source;
             GlobalRefs.Remove(key);
         }
 
         Interlocked.Increment(ref FreedPagesByClass[(int)allocationClass]);
+        Interlocked.Increment(ref FreedPagesBySource[(int)allocationSource]);
 
         unsafe
         {
@@ -223,7 +271,9 @@ public sealed class ExternalPageManager
         }
     }
 
-    public static IntPtr AllocateExternalPage(AllocationClass allocationClass = AllocationClass.KernelInternal)
+    public static IntPtr AllocateExternalPage(
+        AllocationClass allocationClass = AllocationClass.KernelInternal,
+        AllocationSource allocationSource = AllocationSource.Unknown)
     {
         var overQuota = MemoryQuotaBytes > 0 && GetAllocatedBytes() + LinuxConstants.PageSize > MemoryQuotaBytes;
         IntPtr ptr;
@@ -239,12 +289,15 @@ public sealed class ExternalPageManager
             new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
         }
 
-        AddGlobalRef(ptr, allocationClass);
+        AddGlobalRef(ptr, allocationClass, allocationSource);
         if (overQuota) Interlocked.Increment(ref _legacyAllocOverQuota);
         return ptr;
     }
 
-    public static bool TryAllocateExternalPageStrict(out IntPtr ptr, AllocationClass allocationClass)
+    public static bool TryAllocateExternalPageStrict(
+        out IntPtr ptr,
+        AllocationClass allocationClass,
+        AllocationSource allocationSource = AllocationSource.Unknown)
     {
         ptr = IntPtr.Zero;
         var reclaimed = false;
@@ -261,7 +314,7 @@ public sealed class ExternalPageManager
             }
         }
 
-        ptr = AllocateExternalPage(allocationClass);
+        ptr = AllocateExternalPage(allocationClass, allocationSource);
         if (ptr == IntPtr.Zero)
         {
             Interlocked.Increment(ref _strictAllocFail);

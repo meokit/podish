@@ -396,6 +396,8 @@ public class VMAManager
             if (!hasLeft)
             {
                 // Reuse current slot for middle when there is no left tail.
+                // Move CowObject ownership to reused VMA slot; otherwise mid.CowObject is leaked.
+                var oldCow = vma.CowObject;
                 vma.Start = mid.Start;
                 vma.End = mid.End;
                 vma.Perms = mid.Perms;
@@ -404,8 +406,11 @@ public class VMAManager
                 vma.FileBackingLength = mid.FileBackingLength;
                 vma.Name = mid.Name;
                 vma.ViewPageOffset = mid.ViewPageOffset;
+                vma.CowObject = mid.CowObject;
+                mid.CowObject = null;
                 // Drop the temporary extra ref held by mid.
                 mid.MemoryObject.Release();
+                oldCow?.Release();
 
                 if (right != null)
                 {
@@ -517,7 +522,8 @@ public class VMAManager
                     else
                     {
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
-                        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow))
+                        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow,
+                                AllocationSource.CowReplacePrivate))
                             return false;
                         Interlocked.Increment(ref _cowAllocReplaceCount);
                         var owner = engine.Owner as FiberTask;
@@ -590,7 +596,8 @@ public class VMAManager
                     if (srcPage == IntPtr.Zero) return false;
 
                     // Allocate private copy from inode cache
-                    if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow))
+                    if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow,
+                            AllocationSource.CowFirstPrivate))
                         return false;
                     Interlocked.Increment(ref _cowAllocFirstCount);
                     var owner2 = engine.Owner as FiberTask;
@@ -691,7 +698,7 @@ public class VMAManager
             }
 
             return true;
-        }, out _, strictQuota, allocationClass);
+        }, out _, strictQuota, allocationClass, strictQuota ? AllocationSource.AnonFault : AllocationSource.Unknown);
         if (hostPtr == IntPtr.Zero)
         {
             var allocatedBytes = ExternalPageManager.GetAllocatedBytes();
@@ -732,12 +739,25 @@ public class VMAManager
     public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
     {
         var pageStart = addr & LinuxConstants.PageMask;
-        var hostPtr =
-            ExternalPages.GetOrAllocate(pageStart, out var isNew, strictQuota: true, AllocationClass.Anonymous);
+        var vma = FindVMA(pageStart);
+        if (vma == null)
+            return false;
+
+        var pageIndex = vma.ViewPageOffset + ((pageStart - vma.Start) / LinuxConstants.PageSize);
+        var hostPtr = vma.MemoryObject.GetOrCreatePage(
+            pageIndex,
+            onFirstCreate: null,
+            out _,
+            strictQuota: true,
+            AllocationClass.Anonymous,
+            AllocationSource.AnonMapPreFault);
         if (hostPtr == IntPtr.Zero) return false;
+        if (!ExternalPages.AddMapping(pageStart, hostPtr, out var added))
+            return false;
+
         if (!engine.MapExternalPage(pageStart, hostPtr, (byte)perms))
         {
-            if (isNew) ExternalPages.Release(pageStart);
+            if (added) ExternalPages.Release(pageStart);
             return false;
         }
 

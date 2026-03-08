@@ -88,11 +88,12 @@ public sealed class MemoryObject
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
     {
-        return GetOrCreatePage(pageIndex, onFirstCreate, out isNew, strictQuota: false, AllocationClass.PageCache);
+        return GetOrCreatePage(pageIndex, onFirstCreate, out isNew, strictQuota: false, AllocationClass.PageCache,
+            AllocationSource.Unknown);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew,
-        bool strictQuota, AllocationClass allocationClass)
+        bool strictQuota, AllocationClass allocationClass, AllocationSource allocationSource = AllocationSource.Unknown)
     {
         lock (_lock)
         {
@@ -106,7 +107,7 @@ public sealed class MemoryObject
         IntPtr ptr;
         if (strictQuota)
         {
-            if (!ExternalPageManager.TryAllocateExternalPageStrict(out ptr, allocationClass))
+            if (!ExternalPageManager.TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
             {
                 isNew = false;
                 return IntPtr.Zero;
@@ -114,7 +115,7 @@ public sealed class MemoryObject
         }
         else
         {
-            ptr = ExternalPageManager.AllocateExternalPage(allocationClass);
+            ptr = ExternalPageManager.AllocateExternalPage(allocationClass, allocationSource);
         }
 
         if (ptr == IntPtr.Zero)
@@ -222,7 +223,8 @@ public sealed class MemoryObject
                 {
                     // Anonymous mappings lack CowObject, so they cannot rely on HandleFault COW.
                     // Do a deep copy here to maintain strict isolation for MAP_PRIVATE anon.
-                    if (ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Anonymous))
+                    if (ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Anonymous,
+                            AllocationSource.ForkClonePrivateAnon))
                     {
                         unsafe
                         {
