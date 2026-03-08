@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using Fiberish.Core;
@@ -174,5 +175,43 @@ public class VirtualFDsTests
         // Next read should EAGAIN
         readLen = inode.Read(sfd, buf, 0);
         Assert.Equal(-(int)Errno.EAGAIN, readLen);
+    }
+
+    [Fact]
+    public void EventFd_RegisterWaitHandle_AlreadyReadable_ShouldInvokeImmediately()
+    {
+        using var env = new TestEnv();
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, 1, FileFlags.O_RDWR);
+        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+
+        var fired = 0;
+        using var reg = inode.RegisterWaitHandle(efd, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
+
+        Assert.Equal(1, Volatile.Read(ref fired));
+    }
+
+    [Fact]
+    public void SignalFd_RegisterWaitHandle_PostSignal_ShouldInvokeCallback()
+    {
+        using var env = new TestEnv();
+        var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
+        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+            FileFlags.O_NONBLOCK, null!);
+
+        var fired = 0;
+        using var reg = inode.RegisterWaitHandle(sfd, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
+
+        env.Task.PostSignalInfo(new SigInfo
+        {
+            Signo = (int)Signal.SIGUSR1,
+            Code = 0,
+            Pid = 1234,
+            Uid = 1000,
+            Value = 7
+        });
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref fired) > 0, 200);
+        Assert.Equal(1, Volatile.Read(ref fired));
     }
 }

@@ -402,7 +402,7 @@ public partial class SyscallManager
                 if (sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
                     var revents = file.Dentry.Inode!.Poll(file, pfd.Events);
-                    Logger.LogInformation("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
+                    Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
                         pfd.Events, revents, file.Dentry.Inode!.GetType().Name);
 
                     if (revents != 0)
@@ -413,14 +413,14 @@ public partial class SyscallManager
                 }
                 else
                 {
-                    Logger.LogInformation("[ScanPoll] FD={Fd} (INVALID)", pfd.Fd);
+                    Logger.LogTrace("[ScanPoll] FD={Fd} (INVALID)", pfd.Fd);
                     pfd.Revents = PollEvents.POLLNVAL;
                     readyCount++;
                 }
             }
             else
             {
-                Logger.LogInformation("[ScanPoll] FD={Fd} (IGNORED)", pfd.Fd);
+                Logger.LogTrace("[ScanPoll] FD={Fd} (IGNORED)", pfd.Fd);
             }
 
             WriteStruct(sm.Engine, itemAddr, pfd);

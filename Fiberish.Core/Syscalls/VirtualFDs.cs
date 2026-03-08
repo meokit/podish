@@ -88,6 +88,9 @@ public class EventFdInode : TmpfsInode
 
     public override bool RegisterWait(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
+        if (IsReadyForEvents(events))
+            return false;
+
         lock (_lock)
         {
             _waiters.Add(callback);
@@ -97,6 +100,12 @@ public class EventFdInode : TmpfsInode
 
     public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
+        if (IsReadyForEvents(events))
+        {
+            callback();
+            return NoopWaitRegistration.Instance;
+        }
+
         lock (_lock)
         {
             _waiters.Add(callback);
@@ -116,6 +125,18 @@ public class EventFdInode : TmpfsInode
         foreach (var action in toWake)
         {
             action();
+        }
+    }
+
+    private bool IsReadyForEvents(short events)
+    {
+        lock (_lock)
+        {
+            if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
+                return true;
+            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < ulong.MaxValue - 1)
+                return true;
+            return false;
         }
     }
 

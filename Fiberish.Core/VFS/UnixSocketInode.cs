@@ -174,6 +174,8 @@ public class UnixSocketInode : Inode
                         _partialBuffer = null;
                         _partialOffset = 0;
                     }
+                    if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                        _readWaitQueue.Reset();
                     _queuedBytes -= toCopy;
                     _writeWaitQueue.Set(); // signal backpressure relief 
                     return (toCopy, null); // FDs only on boundary
@@ -193,6 +195,8 @@ public class UnixSocketInode : Inode
                     _queuedBytes -= toCopy;
                     if (_socketType != SocketType.Stream || toCopy >= msg.Data.Length)
                         _queuedBytes -= (msg.Data.Length - toCopy); // discard remainder for dgram
+                    if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                        _readWaitQueue.Reset();
 
                     return (toCopy, msg.Fds);
                 }

@@ -11,6 +11,8 @@ public class SignalFdInode : TmpfsInode
     private readonly object _lock = new();
     private readonly List<Action> _waiters = [];
     private ulong _sigMask;
+    private FiberTask? _hookedTask;
+    private int _openCount;
 
     public SignalFdInode(ulong ino, SuperBlock superBlock, ulong sigMask) : base(ino, superBlock)
     {
@@ -23,6 +25,29 @@ public class SignalFdInode : TmpfsInode
         {
             _sigMask = sigMask;
         }
+    }
+
+    public override void Open(Fiberish.VFS.LinuxFile file)
+    {
+        Interlocked.Increment(ref _openCount);
+    }
+
+    public override void Release(Fiberish.VFS.LinuxFile file)
+    {
+        if (Interlocked.Decrement(ref _openCount) == 0)
+        {
+            lock (_lock)
+            {
+                if (_hookedTask != null)
+                {
+                    _hookedTask.SignalPosted -= OnTaskSignalPosted;
+                    _hookedTask = null;
+                }
+                _waiters.Clear();
+            }
+        }
+
+        base.Release(file);
     }
 
     public override int Read(Fiberish.VFS.LinuxFile file, Span<byte> buffer, long offset)
@@ -123,8 +148,12 @@ public class SignalFdInode : TmpfsInode
 
     public override bool RegisterWait(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
+        var task = KernelScheduler.Current?.CurrentTask;
         lock (_lock)
         {
+            EnsureTaskHooked(task);
+            if (task != null && HasPendingMatchedSignalUnsafe(task))
+                return false;
             _waiters.Add(callback);
         }
         return true;
@@ -132,12 +161,75 @@ public class SignalFdInode : TmpfsInode
 
     public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
+        var task = KernelScheduler.Current?.CurrentTask;
         lock (_lock)
         {
+            EnsureTaskHooked(task);
+            if (task != null && HasPendingMatchedSignalUnsafe(task))
+            {
+                callback();
+                return NoopWaitRegistration.Instance;
+            }
             _waiters.Add(callback);
         }
 
         return new CallbackRegistration(_lock, _waiters, callback);
+    }
+
+    private void OnTaskSignalPosted(int sig)
+    {
+        ulong mask;
+        lock (_lock)
+        {
+            mask = _sigMask;
+        }
+        if (IsSignalInMask((ulong)sig, mask))
+        {
+            NotifyWaiters();
+        }
+    }
+
+    private void NotifyWaiters()
+    {
+        Action[] toWake;
+        lock (_lock)
+        {
+            toWake = [.._waiters];
+            _waiters.Clear();
+        }
+        foreach (var action in toWake)
+        {
+            action();
+        }
+    }
+
+    private void EnsureTaskHooked(FiberTask? task)
+    {
+        if (task == null || ReferenceEquals(_hookedTask, task))
+            return;
+        if (_hookedTask != null)
+        {
+            _hookedTask.SignalPosted -= OnTaskSignalPosted;
+        }
+        _hookedTask = task;
+        _hookedTask.SignalPosted += OnTaskSignalPosted;
+    }
+
+    private bool HasPendingMatchedSignalUnsafe(FiberTask task)
+    {
+        lock (task)
+        {
+            if (task.PendingSignals == 0)
+                return false;
+            for (var i = 1; i <= 64; i++)
+            {
+                if ((task.PendingSignals & (1UL << (i - 1))) == 0)
+                    continue;
+                if (IsSignalInMask((ulong)i, _sigMask))
+                    return true;
+            }
+            return false;
+        }
     }
 
     private static bool IsSignalInMask(ulong sig, ulong mask)

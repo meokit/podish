@@ -113,6 +113,7 @@ public class FiberTask
     // Signal System
     public ulong SignalMask { get; set; }
     public ulong PendingSignals { get; set; } // Bitmask - Access should be synchronized
+    public event Action<int>? SignalPosted;
     public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new());
     public uint AltStackSp { get; set; }
     public uint AltStackSize { get; set; }
@@ -481,6 +482,8 @@ public class FiberTask
                     sig, SignalMask);
             }
         }
+
+        SignalPosted?.Invoke(sig);
 
         var wokeActiveWait = false;
         if (!isBlocked && !isIgnored)

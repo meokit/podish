@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Threading.Tasks;
 using Xunit;
 using Fiberish.Core;
@@ -113,5 +114,34 @@ public class NetworkTests
         Assert.NotNull(recvRes.Fds);
         Assert.Single(recvRes.Fds);
         Assert.Equal(dummyFile, recvRes.Fds[0]);
+    }
+
+    [Fact]
+    public async Task UnixSocketInode_RecvMessageAsync_ShouldResetReadWaitQueueWhenDrained()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file1 = new Fiberish.VFS.LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+        var file2 = new Fiberish.VFS.LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+
+        var readWaitField = typeof(UnixSocketInode).GetField("_readWaitQueue", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(readWaitField);
+        var readWaitQueue = Assert.IsType<AsyncWaitQueue>(readWaitField!.GetValue(sock2));
+
+        var sent = await sock1.SendMessageAsync(file1, [0x2A], null, 0);
+        Assert.Equal(1, sent);
+        Assert.True(readWaitQueue.IsSignaled);
+
+        var recv = await sock2.RecvMessageAsync(file2, new byte[8], 0);
+        Assert.Equal(1, recv.BytesRead);
+
+        // After draining the only queued packet, future waits must block until new data arrives.
+        Assert.False(readWaitQueue.IsSignaled);
     }
 }
