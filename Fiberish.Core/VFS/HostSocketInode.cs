@@ -178,24 +178,17 @@ public sealed class HostSocketInode : Inode
         if (e.UserToken is RegisterWaitToken token && token.TryComplete())
             token.Scheduler.Schedule(token.Callback);
         if (e.UserToken is RegisterWaitToken token2) token2.DetachSaea();
-        TokenProbeClear(e.UserToken);
         e.UserToken = null;
         e.Completed -= OnRegisterWaitCompleted;
         e.Dispose();
     }
 
-    private static void TokenProbeClear(object? tokenObj)
-    {
-        if (tokenObj is RegisterWaitToken token) token.ProbeBuffer[0] = 0;
-    }
-
     private IDisposable? ArmReadWait(Action callback, KernelScheduler scheduler)
     {
         var saea = new SocketAsyncEventArgs();
-        var probe = new byte[1];
-        saea.SetBuffer(probe, 0, 1);
-        saea.SocketFlags = SocketFlags.Peek;
-        var token = new RegisterWaitToken(callback, scheduler, probe, saea);
+        saea.SetBuffer(Array.Empty<byte>());
+        saea.SocketFlags = SocketFlags.None;
+        var token = new RegisterWaitToken(callback, scheduler, saea);
         saea.UserToken = token;
         saea.Completed += OnRegisterWaitCompleted;
 
@@ -206,7 +199,6 @@ public sealed class HostSocketInode : Inode
                 Logger.LogTrace("Host socket RegisterWait POLLIN completed synchronously ino={Ino}", Ino);
                 token.TryComplete();
                 scheduler.Schedule(callback);
-                TokenProbeClear(token);
                 saea.Completed -= OnRegisterWaitCompleted;
                 saea.Dispose();
                 return null;
@@ -220,7 +212,6 @@ public sealed class HostSocketInode : Inode
             Logger.LogTrace(ex, "Host socket RegisterWait POLLIN failed ino={Ino}, scheduling callback", Ino);
             token.TryComplete();
             scheduler.Schedule(callback);
-            TokenProbeClear(token);
             saea.Completed -= OnRegisterWaitCompleted;
             saea.Dispose();
             return null;
@@ -231,7 +222,7 @@ public sealed class HostSocketInode : Inode
     {
         var saea = new SocketAsyncEventArgs();
         saea.SetBuffer(Array.Empty<byte>());
-        var token = new RegisterWaitToken(callback, scheduler, Array.Empty<byte>(), saea);
+        var token = new RegisterWaitToken(callback, scheduler, saea);
         saea.UserToken = token;
         saea.Completed += OnRegisterWaitCompleted;
 
@@ -283,17 +274,15 @@ public sealed class HostSocketInode : Inode
         private int _state; // 0=pending, 1=completed, 2=canceled
         private SocketAsyncEventArgs? _saea;
 
-        public RegisterWaitToken(Action callback, KernelScheduler scheduler, byte[] probeBuffer, SocketAsyncEventArgs saea)
+        public RegisterWaitToken(Action callback, KernelScheduler scheduler, SocketAsyncEventArgs saea)
         {
             Callback = callback;
             Scheduler = scheduler;
-            ProbeBuffer = probeBuffer;
             _saea = saea;
         }
 
         public Action Callback { get; }
         public KernelScheduler Scheduler { get; }
-        public byte[] ProbeBuffer { get; }
 
         public bool TryComplete()
         {
@@ -312,7 +301,6 @@ public sealed class HostSocketInode : Inode
             if (Interlocked.CompareExchange(ref _state, 2, 0) != 0) return;
             var saea = Interlocked.Exchange(ref _saea, null);
             if (saea != null) saea.UserToken = null;
-            if (ProbeBuffer.Length > 0) ProbeBuffer[0] = 0;
         }
     }
 
@@ -349,16 +337,18 @@ public sealed class HostSocketInode : Inode
         }
     }
 
-    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
+    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return 0;
         Logger.LogTrace(
             "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, buffer.Length, flags, (int)file.Flags, NativeSocket!.Connected);
+            Ino, recvLen, flags, (int)file.Flags, NativeSocket!.Connected);
 
         while (true)
             try
             {
-                var n = NativeSocket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
+                var n = NativeSocket.Receive(buffer, 0, recvLen, (SocketFlags)flags);
                 Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }

@@ -30,8 +30,10 @@ public sealed class NetlinkRouteSocketInode : Inode
         return ValueTask.FromResult(HandleWrite(payload.Span));
     }
 
-    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
+    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return 0;
         while (true)
         {
             byte[]? message = null;
@@ -52,7 +54,7 @@ public sealed class NetlinkRouteSocketInode : Inode
 
             if (message != null)
             {
-                var copyLen = Math.Min(buffer.Length, message.Length);
+                var copyLen = Math.Min(recvLen, message.Length);
                 message.AsSpan(0, copyLen).CopyTo(buffer);
                 return copyLen;
             }

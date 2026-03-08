@@ -771,10 +771,10 @@ public partial class SyscallManager
             {
                 int n = file.Dentry.Inode switch
                 {
-                    HostSocketInode host => await host.RecvAsync(file, buffer, flags),
-                    NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags),
-                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, buffer, flags),
-                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, buffer, flags)).BytesRead,
+                    HostSocketInode host => await host.RecvAsync(file, buffer, flags, (int)iov.Len),
+                    NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags, (int)iov.Len),
+                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, buffer, flags, (int)iov.Len),
+                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, buffer, flags, (int)iov.Len)).BytesRead,
                     _ => -(int)Errno.ENOTSOCK
                 };
 

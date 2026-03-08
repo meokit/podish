@@ -215,8 +215,10 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Send(buffer.Span);
     }
 
-    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
+    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return 0;
         if (_socketType == SocketType.Dgram)
         {
             if (_connectedDatagramPeer == null)
@@ -224,7 +226,7 @@ public sealed class NetstackSocketInode : Inode
 
             while (true)
             {
-                var result = await RecvFromAsync(file, buffer, flags);
+                var result = await RecvFromAsync(file, buffer, flags, recvLen);
                 if (result.Bytes < 0)
                     return result.Bytes;
                 if (result.RemoteEndPoint == null || result.RemoteEndPoint.Equals(_connectedDatagramPeer))
@@ -252,7 +254,7 @@ public sealed class NetstackSocketInode : Inode
                 return 0;
         }
 
-        return _stream.Receive(buffer);
+        return _stream.Receive(buffer.AsSpan(0, recvLen));
     }
 
     public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, IPEndPoint endpoint, int flags)
@@ -282,8 +284,10 @@ public sealed class NetstackSocketInode : Inode
         return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
     }
 
-    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags)
+    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return (0, null);
         if (_socketType != SocketType.Dgram)
             return (-(int)Errno.ENOTCONN, null);
         if (_udp == null)
@@ -299,7 +303,7 @@ public sealed class NetstackSocketInode : Inode
                 return (-(int)Errno.ERESTARTSYS, null);
         }
 
-        var bytes = _udp.ReceiveFrom(buffer, out var remoteEndPoint);
+        var bytes = _udp.ReceiveFrom(buffer.AsSpan(0, recvLen), out var remoteEndPoint);
         _lastDatagramPeer = remoteEndPoint;
         return (bytes, remoteEndPoint);
     }

@@ -156,15 +156,17 @@ public class UnixSocketInode : Inode
         _writeWaitQueue.Signal();
     }
 
-    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds)> RecvMessageAsync(LinuxFile file, byte[] buffer, int flags)
+    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds)> RecvMessageAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
     {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return (0, null);
         while (true)
         {
             lock (_lock)
             {
                 if (_partialBuffer != null)
                 {
-                    int toCopy = Math.Min(buffer.Length, _partialBuffer.Length - _partialOffset);
+                    int toCopy = Math.Min(recvLen, _partialBuffer.Length - _partialOffset);
                     Array.Copy(_partialBuffer, _partialOffset, buffer, 0, toCopy);
                     _partialOffset += toCopy;
                     if (_partialOffset >= _partialBuffer.Length)
@@ -179,7 +181,7 @@ public class UnixSocketInode : Inode
 
                 if (_receiveQueue.TryDequeue(out var msg))
                 {
-                    int toCopy = Math.Min(buffer.Length, msg.Data.Length);
+                    int toCopy = Math.Min(recvLen, msg.Data.Length);
                     Array.Copy(msg.Data, 0, buffer, 0, toCopy);
                     
                     if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)

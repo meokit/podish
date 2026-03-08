@@ -266,7 +266,8 @@ public class KernelScheduler
     {
         Current = this;
         var previousSyncContext = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this));
+        var schedulerSyncContext = new KernelSyncContext(this);
+        SynchronizationContext.SetSynchronizationContext(schedulerSyncContext);
         Logger.LogInformation("KernelScheduler started.");
         var exitReason = "running=false";
 
@@ -354,7 +355,16 @@ public class KernelScheduler
 
                     // Execute a slice
                     // We advance time based on how much work the task did
-                    task.RunSlice();
+                    var previous = SynchronizationContext.Current;
+                    SynchronizationContext.SetSynchronizationContext(schedulerSyncContext.WithTaskContext(task));
+                    try
+                    {
+                        task.RunSlice();
+                    }
+                    finally
+                    {
+                        SynchronizationContext.SetSynchronizationContext(previous);
+                    }
 
                     // Time accounting (simplified)
                     // _timerSystem.Advance(1); // Removed: Time is driven by _sw.ElapsedMilliseconds
@@ -410,6 +420,9 @@ public class KernelScheduler
         var (cont, ctx) = item;
         var oldTask = CurrentTask;
         CurrentTask = ctx;
+        var previousSyncContext = SynchronizationContext.Current;
+        if (KernelScheduler.Current == this)
+            SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this, ctx));
         try
         {
             cont();
@@ -420,6 +433,7 @@ public class KernelScheduler
         }
         finally
         {
+            SynchronizationContext.SetSynchronizationContext(previousSyncContext);
             CurrentTask = oldTask;
         }
     }
