@@ -482,12 +482,13 @@ public class FiberTask
             }
         }
 
+        var wokeActiveWait = false;
         if (!isBlocked && !isIgnored)
         {
-            TrySetActiveWaitReason(WakeReason.Signal);
+            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
         }
 
-        if (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped)
+        if (!wokeActiveWait && (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
         {
             CommonKernel.Schedule(this);
         }
@@ -791,6 +792,8 @@ public class FiberTask
 
         Exited = true;
         ExitStatus = 128 + sig;
+        Status = FiberTaskStatus.Terminated;
+        ExecutionMode = TaskExecutionMode.Terminated;
 
         // Notify parent
         var ppid = Process.PPID;
@@ -1087,7 +1090,20 @@ public class FiberTask
                 var c = Continuation;
                 Continuation = null;
                 ExecutionMode = TaskExecutionMode.WaitingContinuation;
-                c();
+                try
+                {
+                    c?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex,
+                        "[RunSlice] Continuation crashed. Terminating task TID={Tid} PID={Pid} mode={Mode}",
+                        TID, PID, ExecutionMode);
+                    TerminateBySignal((int)Signal.SIGSEGV, coreDumped: false);
+                    Status = FiberTaskStatus.Terminated;
+                    ExecutionMode = TaskExecutionMode.Terminated;
+                    return;
+                }
 
                 // Ensure we are not left in Running state — the continuation should
                 // have set us to Ready (via Schedule) or Waiting. If it forgot, park.
@@ -1114,7 +1130,7 @@ public class FiberTask
                 if (!_handlingAsyncSyscall)
                 {
                     Logger.LogTrace("[RunSlice] Starting HandleAsyncSyscall from phase-2 TID={Tid}", TID);
-                    HandleAsyncSyscall();
+                    _ = HandleAsyncSyscallAsync();
                 }
                 else
                 {
@@ -1185,7 +1201,7 @@ public class FiberTask
                     if (!_handlingAsyncSyscall)
                     {
                         Logger.LogTrace("[RunSlice] Starting HandleAsyncSyscall from yield path TID={Tid}", TID);
-                        HandleAsyncSyscall();
+                        _ = HandleAsyncSyscallAsync();
                     }
                     else
                     {
@@ -1434,43 +1450,66 @@ public class FiberTask
 
     private bool _handlingAsyncSyscall;
 
-    private async void HandleAsyncSyscall()
+    private ValueTask HandleAsyncSyscallAsync()
     {
         if (_handlingAsyncSyscall)
         {
             Logger.LogWarning("[HandleAsyncSyscall] Re-entry detected! Ignoring.");
-            return;
+            return ValueTask.CompletedTask;
         }
 
         _handlingAsyncSyscall = true;
         Logger.LogTrace("[HandleAsyncSyscall] Enter TID={Tid} pendingPresent={PendingPresent}", TID,
             PendingSyscall != null);
+        if (PendingSyscall == null)
+        {
+            Logger.LogTrace("[HandleAsyncSyscall] Exit early TID={Tid}: PendingSyscall is null", TID);
+            _handlingAsyncSyscall = false;
+            return ValueTask.CompletedTask;
+        }
+
+        // Keep PendingSyscall set until completion is finalized on scheduler thread.
+        var pending = PendingSyscall;
+        return HandleAsyncSyscallBackgroundAsync(pending!);
+    }
+
+    private async ValueTask HandleAsyncSyscallBackgroundAsync(Func<ValueTask<int>> pending)
+    {
+        int result = 0;
+        Exception? error = null;
         try
         {
-            if (PendingSyscall == null)
-            {
-                Logger.LogTrace("[HandleAsyncSyscall] Exit early TID={Tid}: PendingSyscall is null", TID);
-                return;
-            }
+            Logger.LogTrace("[HandleAsyncSyscall] Await begin TID={Tid}", TID);
+            result = await pending();
+            Logger.LogTrace("[HandleAsyncSyscall] Await done TID={Tid} result={Result}", TID, result);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
 
-            var result = 0;
-            try
-            {
-                var task = PendingSyscall();
-                // do NOT clear PendingSyscall until it finishes, so RunSlice doesn't run ProcessPendingSignals!
-                Logger.LogTrace("[HandleAsyncSyscall] Await begin TID={Tid}", TID);
+        CommonKernel.Schedule(() => FinalizeAsyncSyscall(result, error), this);
+    }
 
-                // Allow the async operation to complete (suspend this method)
-                result = await task;
-                Logger.LogTrace("[HandleAsyncSyscall] Await done TID={Tid} result={Result}", TID, result);
-            }
-            catch (Exception ex)
+    // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.
+    private void FinalizeAsyncSyscall(int result, Exception? error)
+    {
+        try
+        {
+            if (error != null)
             {
-                Console.Error.WriteLine($"[FiberTask] Syscall failed async: {ex}");
-                // Return EFAULT or similar?
+                Logger.LogError(error,
+                    "[HandleAsyncSyscall] Unhandled exception. Failing current syscall with EFAULT. TID={Tid} pendingPresent={PendingPresent}",
+                    TID, PendingSyscall != null);
                 CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EFAULT));
                 PendingSyscall = null;
-                CommonKernel.Schedule(this);
+                InterruptingSignal = null;
+                if (!Exited)
+                {
+                    ExecutionMode = TaskExecutionMode.RunningGuest;
+                    Status = FiberTaskStatus.Ready;
+                    CommonKernel.Schedule(this);
+                }
                 return;
             }
 

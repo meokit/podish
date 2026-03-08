@@ -265,6 +265,8 @@ public class KernelScheduler
     public void Run(long maxTicks = -1)
     {
         Current = this;
+        var previousSyncContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this));
         Logger.LogInformation("KernelScheduler started.");
         var exitReason = "running=false";
 
@@ -367,6 +369,7 @@ public class KernelScheduler
         }
         finally
         {
+            SynchronizationContext.SetSynchronizationContext(previousSyncContext);
             Logger.LogInformation("KernelScheduler stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
                 Running, CurrentTick);
             Current = null;

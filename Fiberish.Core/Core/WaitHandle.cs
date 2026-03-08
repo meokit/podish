@@ -116,17 +116,26 @@ public class AsyncWaitQueue
     private IDisposable? RegisterCancelable(Action continuation, FiberTask? context, FiberTask.WaitToken? token,
         KernelScheduler? scheduler)
     {
+        var effectiveScheduler = scheduler ?? context?.CommonKernel;
         lock (_lock)
         {
             if (IsSignaled)
             {
                 // If already signaled, schedule immediately
                 if (context != null && token != null) context.TrySetWaitReason(token, WakeReason.Event);
-                scheduler?.Schedule(continuation, context);
+                if (effectiveScheduler != null)
+                    effectiveScheduler.Schedule(continuation, context);
+                else
+                    continuation();
                 return NoopRegistration.Instance;
             }
+
+            if (effectiveScheduler == null)
+                throw new InvalidOperationException(
+                    "AsyncWaitQueue.RegisterCancelable requires an active scheduler or a FiberTask context.");
+
             var id = ++_nextWaiterId;
-            _waiters.Add((id, continuation, context, token, scheduler!));
+            _waiters.Add((id, continuation, context, token, effectiveScheduler));
             return new WaitRegistration(this, id);
         }
     }
@@ -180,11 +189,19 @@ public struct WaitQueueAwaiter : INotifyCompletion
         if (currentTask != null)
         {
             _token = currentTask.BeginWaitToken();
-            _queue.Register(continuation, currentTask, _token);
+            var called = 0;
+            void RunOnce()
+            {
+                if (Interlocked.Exchange(ref called, 1) != 0) return;
+                continuation();
+            }
+
+            _queue.Register(RunOnce, currentTask, _token);
             currentTask.ArmSignalSafetyNet(_token, () =>
             {
+                if (Interlocked.Exchange(ref called, 1) != 0) return;
                 currentTask.Continuation = continuation;
-                KernelScheduler.Current?.Schedule(currentTask);
+                currentTask.CommonKernel.Schedule(currentTask);
             });
             return;
         }

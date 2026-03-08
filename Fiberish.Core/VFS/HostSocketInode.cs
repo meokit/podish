@@ -14,8 +14,6 @@ namespace Fiberish.VFS;
 public sealed class HostSocketInode : Inode
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
-    private readonly SaeaAwaitable _readSaea;
-    private readonly SaeaAwaitable _writeSaea;
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
     // SOCK_STREAM = 1, SOCK_DGRAM = 2
@@ -30,8 +28,6 @@ public sealed class HostSocketInode : Inode
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
 
-        _readSaea = SaeaPool.Rent();
-        _writeSaea = SaeaPool.Rent();
     }
 
     // Wrap an accepted socket
@@ -45,8 +41,6 @@ public sealed class HostSocketInode : Inode
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
 
-        _readSaea = SaeaPool.Rent();
-        _writeSaea = SaeaPool.Rent();
     }
 
     public Socket NativeSocket { get; }
@@ -132,8 +126,6 @@ public sealed class HostSocketInode : Inode
             // ignored
         }
 
-        SaeaPool.Return(_readSaea);
-        SaeaPool.Return(_writeSaea);
         base.Release();
     }
 
@@ -324,64 +316,75 @@ public sealed class HostSocketInode : Inode
         }
     }
 
-    // --- Async Operations using SAEA ---
+    // --- Async Operations ---
+
+    private async ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
+    {
+        while (true)
+        {
+            if ((Poll(file, events) & events) != 0)
+                return true;
+
+            var task = KernelScheduler.Current?.CurrentTask;
+            if (task != null && task.HasUnblockedPendingSignal())
+                return false;
+
+            var waitQueue = new AsyncWaitQueue();
+            using var registration = RegisterWaitHandle(file, waitQueue.Signal, events);
+
+            if ((Poll(file, events) & events) != 0)
+                return true;
+
+            if (registration == null)
+            {
+                var spin = await new SleepAwaitable(1);
+                if (spin == AwaitResult.Interrupted)
+                    return false;
+                continue;
+            }
+
+            var result = await waitQueue.WaitAsync();
+            if (result == AwaitResult.Interrupted)
+                return false;
+        }
+    }
 
     public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags)
     {
         Logger.LogTrace(
             "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
             Ino, buffer.Length, flags, (int)file.Flags, NativeSocket!.Connected);
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+
+        while (true)
             try
             {
                 var n = NativeSocket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
-                Logger.LogTrace("Host socket recv nonblock done ino={Ino} bytes={Bytes}", Ino, n);
+                Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
-                Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                return -(int)Errno.EAGAIN;
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return -(int)Errno.EAGAIN;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
             }
             catch (SocketException ex)
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-
-        _readSaea.ResetState();
-        _readSaea.SetBuffer(buffer, 0, buffer.Length);
-        _readSaea.SocketFlags = (SocketFlags)flags;
-        var currentTask = KernelScheduler.Current?.CurrentTask;
-        if (currentTask != null) _readSaea.BeginWait(currentTask);
-
-        Logger.LogTrace("Host socket recv async start ino={Ino} len={Len}", Ino, buffer.Length);
-        if (!NativeSocket.ReceiveAsync(_readSaea))
-        {
-            if (_readSaea.SocketError != SocketError.Success)
-                return MapSocketError(_readSaea.SocketError);
-            Logger.LogTrace("Host socket recv completed sync-from-async ino={Ino} bytes={Bytes}", Ino,
-                _readSaea.BytesTransferred);
-            return _readSaea.BytesTransferred;
-        }
-
-        await _readSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            return -(int)Errno.ERESTARTSYS;
-
-        if (_readSaea.SocketError != SocketError.Success)
-            return MapSocketError(_readSaea.SocketError);
-
-        Logger.LogTrace("Host socket recv async done ino={Ino} bytes={Bytes}", Ino, _readSaea.BytesTransferred);
-        return _readSaea.BytesTransferred;
     }
 
     public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags,
         EndPoint remoteEpTemplate)
     {
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        while (true)
             try
             {
                 var remoteEp = remoteEpTemplate;
@@ -391,38 +394,20 @@ public sealed class HostSocketInode : Inode
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
-                Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                return (-(int)Errno.EAGAIN, null);
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return (-(int)Errno.EAGAIN, null);
+                }
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                if (!ready)
+                    return (-(int)Errno.ERESTARTSYS, null);
             }
             catch (SocketException ex)
             {
                 return (MapSocketError(ex.SocketErrorCode), null);
             }
-
-        _readSaea.ResetState();
-        _readSaea.SetBuffer(buffer, 0, buffer.Length);
-        _readSaea.SocketFlags = (SocketFlags)flags;
-        _readSaea.RemoteEndPoint = remoteEpTemplate;
-        var currentTask2 = KernelScheduler.Current?.CurrentTask;
-        if (currentTask2 != null) _readSaea.BeginWait(currentTask2);
-
-        if (!NativeSocket.ReceiveFromAsync(_readSaea))
-        {
-            if (_readSaea.SocketError != SocketError.Success)
-                return (MapSocketError(_readSaea.SocketError), null);
-            return (_readSaea.BytesTransferred, _readSaea.RemoteEndPoint);
-        }
-
-        await _readSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            return (-(int)Errno.ERESTARTSYS, null);
-
-        if (_readSaea.SocketError != SocketError.Success)
-            return (MapSocketError(_readSaea.SocketError), null);
-
-        return (_readSaea.BytesTransferred, _readSaea.RemoteEndPoint);
     }
 
     public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
@@ -432,58 +417,37 @@ public sealed class HostSocketInode : Inode
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
             Ino, segment.Count, flags, (int)file.Flags, NativeSocket!.Connected);
 
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        while (true)
             try
             {
                 var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
-                Logger.LogTrace("Host socket send nonblock done ino={Ino} bytes={Bytes}", Ino, n);
+                Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
-                Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                return -(int)Errno.EAGAIN;
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return -(int)Errno.EAGAIN;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
             }
             catch (SocketException ex)
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-
-        _writeSaea.ResetState();
-        _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
-        _writeSaea.SocketFlags = (SocketFlags)flags;
-        var currentTask3 = KernelScheduler.Current?.CurrentTask;
-        if (currentTask3 != null) _writeSaea.BeginWait(currentTask3);
-
-        Logger.LogTrace("Host socket send async start ino={Ino} len={Len}", Ino, segment.Count);
-        if (!NativeSocket.SendAsync(_writeSaea))
-        {
-            if (_writeSaea.SocketError != SocketError.Success)
-                return MapSocketError(_writeSaea.SocketError);
-            Logger.LogTrace("Host socket send completed sync-from-async ino={Ino} bytes={Bytes}", Ino,
-                _writeSaea.BytesTransferred);
-            return _writeSaea.BytesTransferred;
-        }
-
-        await _writeSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            return -(int)Errno.ERESTARTSYS;
-
-        if (_writeSaea.SocketError != SocketError.Success)
-            return MapSocketError(_writeSaea.SocketError);
-
-        Logger.LogTrace("Host socket send async done ino={Ino} bytes={Bytes}", Ino, _writeSaea.BytesTransferred);
-        return _writeSaea.BytesTransferred;
     }
 
     public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
     {
         if (!MemoryMarshal.TryGetArray(buffer, out var segment)) segment = new ArraySegment<byte>(buffer.ToArray());
 
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        while (true)
             try
             {
                 return NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
@@ -491,43 +455,25 @@ public sealed class HostSocketInode : Inode
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
-                Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                return -(int)Errno.EAGAIN;
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return -(int)Errno.EAGAIN;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
             }
             catch (SocketException ex)
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-
-        _writeSaea.ResetState();
-        _writeSaea.SetBuffer(segment.Array, segment.Offset, segment.Count);
-        _writeSaea.SocketFlags = (SocketFlags)flags;
-        _writeSaea.RemoteEndPoint = remoteEp;
-        var currentTask4 = KernelScheduler.Current?.CurrentTask;
-        if (currentTask4 != null) _writeSaea.BeginWait(currentTask4);
-
-        if (!NativeSocket.SendToAsync(_writeSaea))
-        {
-            if (_writeSaea.SocketError != SocketError.Success)
-                return MapSocketError(_writeSaea.SocketError);
-            return _writeSaea.BytesTransferred;
-        }
-
-        await _writeSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            return -(int)Errno.ERESTARTSYS;
-
-        if (_writeSaea.SocketError != SocketError.Success)
-            return MapSocketError(_writeSaea.SocketError);
-
-        return _writeSaea.BytesTransferred;
     }
 
     public async ValueTask<int> ConnectAsync(LinuxFile file, EndPoint endpoint)
     {
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        while (true)
             try
             {
                 NativeSocket.Connect(endpoint);
@@ -538,41 +484,35 @@ public sealed class HostSocketInode : Inode
                                              ex.SocketErrorCode == SocketError.InProgress ||
                                              ex.SocketErrorCode == SocketError.AlreadyInProgress)
             {
-                Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                return -(int)Errno.EINPROGRESS;
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return -(int)Errno.EINPROGRESS;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
+
+                var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                if (so is not int soInt)
+                    return -(int)Errno.EIO;
+                var err = (SocketError)soInt;
+                if (err == SocketError.Success || err == SocketError.IsConnected)
+                    return 0;
+                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
+                    continue;
+                return MapSocketError(err);
             }
             catch (SocketException ex)
             {
                 return MapSocketError(ex.SocketErrorCode);
             }
-
-        _writeSaea.ResetState();
-        _writeSaea.RemoteEndPoint = endpoint;
-        var currentTask5 = KernelScheduler.Current?.CurrentTask;
-        if (currentTask5 != null) _writeSaea.BeginWait(currentTask5);
-
-        if (!NativeSocket.ConnectAsync(_writeSaea))
-        {
-            if (_writeSaea.SocketError != SocketError.Success)
-                return MapSocketError(_writeSaea.SocketError);
-            return 0;
-        }
-
-        await _writeSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            return -(int)Errno.ERESTARTSYS;
-
-        if (_writeSaea.SocketError != SocketError.Success)
-            return MapSocketError(_writeSaea.SocketError);
-
-        return 0;
     }
 
     public async ValueTask<Socket> AcceptAsync(LinuxFile file, int flags)
     {
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+        while (true)
             try
             {
                 return NativeSocket.Accept();
@@ -580,31 +520,13 @@ public sealed class HostSocketInode : Inode
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
-                throw new SocketException((int)SocketError.WouldBlock);
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    throw new SocketException((int)SocketError.WouldBlock);
+
+                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                if (!ready)
+                    throw new SocketException((int)SocketError.Interrupted);
             }
-
-        _readSaea.ResetState();
-        _readSaea.AcceptSocket = null;
-        var currentTask6 = KernelScheduler.Current?.CurrentTask;
-        if (currentTask6 != null) _readSaea.BeginWait(currentTask6);
-
-        if (!NativeSocket.AcceptAsync(_readSaea))
-        {
-            if (_readSaea.SocketError != SocketError.Success)
-                throw new SocketException((int)_readSaea.SocketError);
-            return _readSaea.AcceptSocket!;
-        }
-
-        await _readSaea;
-
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && task.HasUnblockedPendingSignal())
-            throw new SocketException((int)SocketError.Interrupted);
-
-        if (_readSaea.SocketError != SocketError.Success)
-            throw new SocketException((int)_readSaea.SocketError);
-
-        return _readSaea.AcceptSocket!;
     }
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)

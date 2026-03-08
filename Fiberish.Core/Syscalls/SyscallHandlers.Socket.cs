@@ -657,19 +657,33 @@ public partial class SyscallManager
         if (file == null) return -(int)Errno.EBADF;
 
         var msgRaw = new byte[28];
-        if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
+        if (!task.CPU.CopyFromUser(msgPtr, msgRaw))
+        {
+            Logger.LogWarning("[Socket] recvmsg failed to read msghdr fd={Fd} msgPtr=0x{MsgPtr:X8}", fd, msgPtr);
+            return -(int)Errno.EFAULT;
+        }
 
         var iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
         var iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
         var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
         var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
+        if (iovLen < 0 || iovLen > 1024)
+        {
+            Logger.LogWarning("[Socket] recvmsg invalid iovLen fd={Fd} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}", fd, iovLen, msgPtr);
+            return -(int)Errno.EINVAL;
+        }
 
         var totalBytes = 0;
         var iovs = new (uint Base, int Len)[iovLen];
         for (var i = 0; i < iovLen; i++)
         {
             var iovRaw = new byte[8];
-            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return -(int)Errno.EFAULT;
+            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw))
+            {
+                Logger.LogWarning("[Socket] recvmsg failed to read iov fd={Fd} iovPtr=0x{IovPtr:X8} i={I} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}",
+                    fd, iovPtr, i, iovLen, msgPtr);
+                return -(int)Errno.EFAULT;
+            }
             iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
                 BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
             totalBytes += iovs[i].Len;
@@ -925,11 +939,20 @@ public partial class SyscallManager
         var argsPtr = a2;
 
         var args = new uint[6];
-        var argsRaw = new byte[24];
-        if (!sm.Engine.CopyFromUser(argsPtr, argsRaw)) return -(int)Errno.EFAULT;
-
-        for (var i = 0; i < 6; i++)
-            args[i] = BinaryPrimitives.ReadUInt32LittleEndian(argsRaw.AsSpan(i * 4, 4));
+        var argCount = GetSocketCallArgCount(call);
+        if (argCount < 0) return -(int)Errno.ENOSYS;
+        if (argCount > 0)
+        {
+            var argsRaw = new byte[argCount * 4];
+            if (!sm.Engine.CopyFromUser(argsPtr, argsRaw))
+            {
+                Logger.LogWarning("[Socket] socketcall failed to read args call={Call} argsPtr=0x{ArgsPtr:X8} argCount={ArgCount}",
+                    call, argsPtr, argCount);
+                return -(int)Errno.EFAULT;
+            }
+            for (var i = 0; i < argCount; i++)
+                args[i] = BinaryPrimitives.ReadUInt32LittleEndian(argsRaw.AsSpan(i * 4, 4));
+        }
 
         return call switch
         {
@@ -954,6 +977,34 @@ public partial class SyscallManager
             19 /* SYS_RECVMMSG */ => await SysRecvMMsg(state, args[0], args[1], args[2], args[3], args[4], 0),
             20 /* SYS_SENDMMSG */ => await SysSendMMsg(state, args[0], args[1], args[2], args[3], 0, 0),
             _ => -(int)Errno.ENOSYS
+        };
+    }
+
+    private static int GetSocketCallArgCount(int call)
+    {
+        return call switch
+        {
+            1 => 3, // socket
+            2 => 3, // bind
+            3 => 3, // connect
+            4 => 2, // listen
+            5 => 3, // accept
+            6 => 3, // getsockname
+            7 => 3, // getpeername
+            8 => 4, // socketpair
+            9 => 4, // send
+            10 => 4, // recv
+            11 => 6, // sendto
+            12 => 6, // recvfrom
+            13 => 2, // shutdown
+            14 => 5, // setsockopt
+            15 => 5, // getsockopt
+            16 => 3, // sendmsg
+            17 => 3, // recvmsg
+            18 => 4, // accept4
+            19 => 5, // recvmmsg
+            20 => 4, // sendmmsg
+            _ => -1
         };
     }
 

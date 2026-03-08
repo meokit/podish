@@ -129,8 +129,6 @@ public partial class SyscallManager
             var token = _token;
             var runOnce = new RunOnceAction(continuation, _task);
 
-            task.Continuation = runOnce.Invoke;
-
             _waiter.Tcs.Task.ContinueWith(_ =>
             {
                 if (task.GetWaitReason(token) == WakeReason.None)
@@ -178,7 +176,7 @@ public partial class SyscallManager
                 if (Interlocked.Exchange(ref _called, 1) == 0)
                 {
                     _task.Continuation = _action;
-                    KernelScheduler.Current?.Schedule(_task);
+                    _task.CommonKernel.Schedule(_task);
                 }
             }
         }

@@ -17,6 +17,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     private KernelScheduler? _scheduler;
     private FiberTask? _task;
     private FiberTask.WaitToken? _waitToken;
+    private bool _enableSignalSafetyNet;
 
     public SaeaOperation()
     {
@@ -45,7 +46,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
 
         // ArmSignalSafetyNet: registers the continuation AND re-checks for signals that
         // arrived before BeginWait() was called — TOCTOU-safe.
-        if (_task != null && _waitToken != null)
+        if (_enableSignalSafetyNet && _task != null && _waitToken != null)
         {
             Logger.LogTrace("[SaeaAwaitable] Arming signal safety net: task={TaskId}", _task.TID);
             _task.ArmSignalSafetyNet(_waitToken, () =>
@@ -103,11 +104,15 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     /// Must be called immediately after ResetState() and before the async socket call,
     /// so that signals can interrupt this wait via <see cref="FiberTask.SetWaitContinuation"/>.
     /// </summary>
-    public void BeginWait(FiberTask task)
+    public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true)
     {
         _task = task;
         _scheduler = KernelScheduler.Current;
-        _waitToken = task.BeginWaitToken();
+        _enableSignalSafetyNet = enableSignalSafetyNet;
+        if (enableSignalSafetyNet)
+            _waitToken = task.BeginWaitToken();
+        else
+            _waitToken = null;
     }
 
     public void ResetState()
@@ -117,6 +122,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         _scheduler = null;
         _task = null;
         _waitToken = null;
+        _enableSignalSafetyNet = false;
         SetBuffer(null, 0, 0);
         AcceptSocket = null;
         RemoteEndPoint = null;
@@ -134,7 +140,8 @@ internal readonly struct SaeaAwaitable
         _operation = operation;
     }
 
-    public void BeginWait(FiberTask task) => _operation.BeginWait(task);
+    public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true) =>
+        _operation.BeginWait(task, enableSignalSafetyNet);
     public void ResetState() => _operation.ResetState();
     public void SetBuffer(byte[]? buffer, int offset, int count) => _operation.SetBuffer(buffer, offset, count);
 
