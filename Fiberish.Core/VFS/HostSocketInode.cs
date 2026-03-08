@@ -144,11 +144,16 @@ public sealed class HostSocketInode : Inode
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            var reg = ArmWriteProbe(callback, scheduler);
-            if (reg != null)
+            // Zero-byte SendAsync is not a reliable readiness probe while connect() is still in progress.
+            // For non-blocking connect, rely on Poll()+SO_ERROR path.
+            if (!IsNonBlockingConnectPending(file))
             {
-                registrations ??= [];
-                registrations.Add(reg);
+                var reg = ArmWriteProbe(callback, scheduler);
+                if (reg != null)
+                {
+                    registrations ??= [];
+                    registrations.Add(reg);
+                }
             }
         }
 
@@ -214,6 +219,43 @@ public sealed class HostSocketInode : Inode
 
             // Keep POLLERR visibility independent of requested mask.
             var hasError = NativeSocket.Poll(0, SelectMode.SelectError);
+
+            // For non-blocking connect completion, SelectError alone is ambiguous on some hosts.
+            // Linux poll semantics require SO_ERROR to disambiguate success (POLLOUT) vs failure (POLLERR).
+            if ((events & PollEvents.POLLOUT) != 0 &&
+                NativeSocket.SocketType == SocketType.Stream &&
+                !NativeSocket.Connected &&
+                (canWrite || hasError))
+            {
+                try
+                {
+                    var soObj = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                    var soError = soObj switch
+                    {
+                        int i => (SocketError)i,
+                        SocketError se => se,
+                        _ => SocketError.SocketError
+                    };
+                    if (soError == SocketError.Success)
+                    {
+                        canWrite = true;
+                        hasError = false;
+                    }
+                    else if (soError != SocketError.WouldBlock && soError != SocketError.InProgress && soError != SocketError.IOPending)
+                    {
+                        hasError = true;
+                        canWrite = false;
+                    }
+                    else
+                    {
+                        hasError = false;
+                    }
+                }
+                catch
+                {
+                    // Fall back to poll bits if SO_ERROR isn't available.
+                }
+            }
 
             if ((events & PollEvents.POLLIN) != 0 && canRead)
                 revents |= PollEvents.POLLIN;
@@ -393,6 +435,13 @@ public sealed class HostSocketInode : Inode
     private bool IsListeningSocket()
     {
         return NativeSocket.SocketType == SocketType.Stream && NativeSocket.IsBound && !NativeSocket.Connected;
+    }
+
+    private bool IsNonBlockingConnectPending(LinuxFile file)
+    {
+        return NativeSocket.SocketType == SocketType.Stream &&
+               !NativeSocket.Connected &&
+               (file.Flags & FileFlags.O_NONBLOCK) != 0;
     }
 
     private IDisposable? ArmReadProbe(Action callback, KernelScheduler scheduler)
@@ -735,8 +784,8 @@ public sealed class HostSocketInode : Inode
             {
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
-                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X})", Ino,
-                        (int)file.Flags);
+                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})", Ino,
+                        (int)file.Flags, endpoint);
                     return -(int)Errno.EINPROGRESS;
                 }
 

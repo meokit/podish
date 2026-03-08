@@ -259,6 +259,49 @@ public class WaitSyscallTests
         Assert.True((pfd.Revents & LinuxConstants.POLLIN) != 0);
     }
 
+    [Fact]
+    public async Task Ppoll_HostNonBlockingConnect_WakesWithPollOutWithoutPollErr()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x21000;
+        const uint tsPtr = 0x22000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(16);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        var inode = new HostSocketInode(202, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        var file = new LinuxFile(new Dentry("host-connect", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        try
+        {
+            inode.NativeSocket.Connect(ep);
+        }
+        catch (SocketException ex)
+        {
+            Assert.Contains(ex.SocketErrorCode, [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+        }
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLOUT, Revents = 0 });
+        WriteTimespecSec(env, tsPtr, 1);
+
+        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+
+        await DrainUntilCompleted(env, pending);
+        var rc = await pending;
+        Assert.Equal(1, rc);
+
+        var pfd = env.ReadStruct<PollFd>(pollfdPtr);
+        Assert.True((pfd.Revents & LinuxConstants.POLLOUT) != 0);
+        Assert.True((pfd.Revents & PollEvents.POLLERR) == 0);
+    }
+
     private static void WriteTimespecSec(TestEnv env, uint tsPtr, int seconds)
     {
         var ts = new byte[8];

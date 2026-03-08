@@ -374,12 +374,14 @@ public class SocketSyscallTests
 
         var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(fd));
         var inode = Assert.IsType<HostSocketInode>(file.Dentry.Inode);
-        Assert.True(inode.NativeSocket.LingerState.Enabled);
-        Assert.Equal(0, inode.NativeSocket.LingerState.LingerTime);
+        var linger = inode.NativeSocket.LingerState;
+        Assert.NotNull(linger);
+        Assert.True(linger.Enabled);
+        Assert.Equal(0, linger.LingerTime);
     }
 
     [Fact]
-    public async Task Shutdown_Both_WithSoLingerZero_AbortsSocketAndSendReturnsEnotconn()
+    public async Task Shutdown_UnconnectedSocket_WithSoLingerZero_ReturnsEnotconnAndKeepsFdAlive()
     {
         using var env = new TestEnv();
 
@@ -394,11 +396,11 @@ public class SocketSyscallTests
         env.WriteInt32(0x1A004, 0);
         Assert.Equal(0, await CallSysSetSockOpt(env, (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_LINGER, 0x1A000, 8));
 
-        Assert.Equal(0, await CallSysShutdown(env, (uint)fd, 2));
+        Assert.Equal(-(int)Errno.ENOTCONN, await CallSysShutdown(env, (uint)fd, 2));
 
         var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(fd));
         var inode = Assert.IsType<HostSocketInode>(file.Dentry.Inode);
-        Assert.Throws<ObjectDisposedException>(() => _ = inode.NativeSocket.Available);
+        _ = inode.NativeSocket.Available;
 
         env.WriteBytes(0x1B000, [1]);
         var sendRc = await CallSysSend(env, (uint)fd, 0x1B000, 1);
