@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Buffers;
 using System.Net.Sockets;
 using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private int _writeProbeInFlight;
     private int _acceptProbeInFlight;
     private int _disposed;
+    private int _readNotifyPending;
+    private int _writeNotifyPending;
+    private int _notifyDispatchScheduled;
 
     private short _readyCacheBits;
     private long _readyCacheExpireAtMs;
@@ -172,9 +176,15 @@ internal sealed class HostSocketProbeEngine : IDisposable
             if ((revents & (events | terminal)) != 0)
                 return true;
 
+            // Prefer runtime async readiness (epoll/kqueue under the hood) over synchronous probing.
+            MaybeArmProbesForPoll(events);
+
+            var writeProbeInFlight = Volatile.Read(ref _writeProbeInFlight) != 0;
+            var readProbeInFlight = Volatile.Read(ref _readProbeInFlight) != 0 || Volatile.Read(ref _acceptProbeInFlight) != 0;
+
             var needWrite = (events & PollEvents.POLLOUT) != 0;
             var canWrite = false;
-            if (needWrite)
+            if (needWrite && !writeProbeInFlight)
             {
                 try
                 {
@@ -191,25 +201,31 @@ internal sealed class HostSocketProbeEngine : IDisposable
             {
                 if (!IsListeningSocket())
                 {
-                    try
+                    if (!readProbeInFlight)
                     {
-                        canRead = _socket.Available > 0;
-                    }
-                    catch (SocketException)
-                    {
-                        // keep false
+                        try
+                        {
+                            canRead = _socket.Available > 0;
+                        }
+                        catch (SocketException)
+                        {
+                            // keep false
+                        }
                     }
                 }
             }
 
             var hasError = false;
-            try
+            if (!writeProbeInFlight)
             {
-                hasError = _socket.Poll(0, SelectMode.SelectError);
-            }
-            catch (SocketException)
-            {
-                hasError = true;
+                try
+                {
+                    hasError = _socket.Poll(0, SelectMode.SelectError);
+                }
+                catch (SocketException)
+                {
+                    hasError = true;
+                }
             }
             if ((events & PollEvents.POLLOUT) != 0 &&
                 _socket.SocketType == SocketType.Stream &&
@@ -284,6 +300,28 @@ internal sealed class HostSocketProbeEngine : IDisposable
         catch
         {
             return false;
+        }
+    }
+
+    private void MaybeArmProbesForPoll(short events)
+    {
+        if (!_dispatcher.CanDispatch || Volatile.Read(ref _disposed) != 0)
+            return;
+
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            if (IsListeningSocket())
+                ArmAcceptProbe();
+            else
+                ArmReadProbe();
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            if (_socket.SocketType == SocketType.Stream && !_socket.Connected)
+                ArmConnectProbe();
+            else
+                ArmWriteProbe();
         }
     }
 
@@ -483,21 +521,80 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (readyHint == 0)
             return;
 
-        WaiterRegistration[] readSnapshot = [];
-        WaiterRegistration[] writeSnapshot = [];
+        if (notifyRead)
+            Volatile.Write(ref _readNotifyPending, 1);
+        if (notifyWrite)
+            Volatile.Write(ref _writeNotifyPending, 1);
 
-        lock (_waitersLock)
+        if (Interlocked.Exchange(ref _notifyDispatchScheduled, 1) == 0)
+            _dispatcher.Post(FlushPendingWaiterNotifications);
+    }
+
+    private void FlushPendingWaiterNotifications()
+    {
+        try
         {
-            if (notifyRead && _readWaiters.Count > 0)
-                readSnapshot = _readWaiters.ToArray();
-            if (notifyWrite && _writeWaiters.Count > 0)
-                writeSnapshot = _writeWaiters.ToArray();
-        }
+            while (true)
+            {
+                var doRead = Interlocked.Exchange(ref _readNotifyPending, 0) != 0;
+                var doWrite = Interlocked.Exchange(ref _writeNotifyPending, 0) != 0;
+                if (!doRead && !doWrite)
+                    break;
 
-        foreach (var w in readSnapshot)
-            w.TryInvoke();
-        foreach (var w in writeSnapshot)
-            w.TryInvoke();
+                WaiterRegistration[]? readArr = null;
+                WaiterRegistration[]? writeArr = null;
+                var readCount = 0;
+                var writeCount = 0;
+
+                try
+                {
+                    lock (_waitersLock)
+                    {
+                        if (doRead && _readWaiters.Count > 0)
+                        {
+                            readCount = _readWaiters.Count;
+                            readArr = ArrayPool<WaiterRegistration>.Shared.Rent(readCount);
+                            _readWaiters.CopyTo(readArr, 0);
+                        }
+
+                        if (doWrite && _writeWaiters.Count > 0)
+                        {
+                            writeCount = _writeWaiters.Count;
+                            writeArr = ArrayPool<WaiterRegistration>.Shared.Rent(writeCount);
+                            _writeWaiters.CopyTo(writeArr, 0);
+                        }
+                    }
+
+                    for (var i = 0; i < readCount; i++)
+                        readArr![i].TryInvoke();
+                    for (var i = 0; i < writeCount; i++)
+                        writeArr![i].TryInvoke();
+                }
+                finally
+                {
+                    if (readArr != null)
+                    {
+                        Array.Clear(readArr, 0, readCount);
+                        ArrayPool<WaiterRegistration>.Shared.Return(readArr);
+                    }
+
+                    if (writeArr != null)
+                    {
+                        Array.Clear(writeArr, 0, writeCount);
+                        ArrayPool<WaiterRegistration>.Shared.Return(writeArr);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _notifyDispatchScheduled, 0);
+            if (Volatile.Read(ref _readNotifyPending) != 0 || Volatile.Read(ref _writeNotifyPending) != 0)
+            {
+                if (Interlocked.Exchange(ref _notifyDispatchScheduled, 1) == 0)
+                    _dispatcher.Post(FlushPendingWaiterNotifications);
+            }
+        }
     }
 
     private static bool ShouldSignalRePoll(SocketAsyncEventArgs e)
