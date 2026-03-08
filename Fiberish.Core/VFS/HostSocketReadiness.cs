@@ -57,16 +57,13 @@ internal sealed class HostSocketReadiness : IDisposable
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            // Zero-byte SendAsync is not a reliable readiness probe while connect() is still in progress.
-            // For non-blocking connect, rely on Poll()+SO_ERROR path.
-            if (!IsNonBlockingConnectPending(file))
+            var reg = IsNonBlockingConnectPending(file)
+                ? ArmConnectProbe(callback, scheduler)
+                : ArmWriteProbe(callback, scheduler);
+            if (reg != null)
             {
-                var reg = ArmWriteProbe(callback, scheduler);
-                if (reg != null)
-                {
-                    registrations ??= [];
-                    registrations.Add(reg);
-                }
+                registrations ??= [];
+                registrations.Add(reg);
             }
         }
 
@@ -185,8 +182,21 @@ internal sealed class HostSocketReadiness : IDisposable
             var needWrite = (events & PollEvents.POLLOUT) != 0;
             var canWrite = needWrite && _socket.Poll(0, SelectMode.SelectWrite);
 
-            var needRead = (events & PollEvents.POLLIN) != 0 || (_socket.Connected && !canWrite);
-            var canRead = needRead && _socket.Poll(0, SelectMode.SelectRead);
+            var canRead = false;
+            if ((events & PollEvents.POLLIN) != 0)
+            {
+                if (!IsListeningSocket())
+                {
+                    try
+                    {
+                        canRead = _socket.Available > 0;
+                    }
+                    catch (SocketException)
+                    {
+                        // leave canRead false; error/hup path below will report state.
+                    }
+                }
+            }
 
             // Keep POLLERR visibility independent of requested mask.
             var hasError = _socket.Poll(0, SelectMode.SelectError);
@@ -236,11 +246,11 @@ internal sealed class HostSocketReadiness : IDisposable
             if (hasError)
                 revents |= PollEvents.POLLERR;
 
-            if (_socket.Connected && canRead && !canWrite)
+            if (_socket.Connected && !canRead && !canWrite)
             {
                 try
                 {
-                    if (_socket.Available == 0)
+                    if (_socket.Poll(0, SelectMode.SelectRead) && _socket.Available == 0)
                         revents |= PollEvents.POLLHUP;
                 }
                 catch (SocketException)
@@ -292,6 +302,7 @@ internal sealed class HostSocketReadiness : IDisposable
             if (!_socket.ReceiveAsync(saea))
             {
                 reg.HandleCompletedSync();
+                scheduler.Schedule(callback);
                 return null;
             }
 
@@ -322,6 +333,7 @@ internal sealed class HostSocketReadiness : IDisposable
             if (!_socket.AcceptAsync(saea))
             {
                 reg.HandleCompletedSync();
+                scheduler.Schedule(callback);
                 return null;
             }
 
@@ -352,12 +364,44 @@ internal sealed class HostSocketReadiness : IDisposable
             if (!_socket.SendAsync(saea))
             {
                 reg.HandleCompletedSync();
+                scheduler.Schedule(callback);
                 return null;
             }
 
             return reg;
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending)
+        {
+            reg.CancelAndRecycleImmediately();
+            return null;
+        }
+        catch
+        {
+            reg.CancelAndRecycleImmediately();
+            scheduler.Schedule(callback);
+            return null;
+        }
+    }
+
+    private IDisposable? ArmConnectProbe(Action callback, KernelScheduler scheduler)
+    {
+        var saea = RentProbeArgs();
+        saea.SetBuffer(null, 0, 0);
+        saea.SocketFlags = SocketFlags.None;
+        saea.AcceptSocket = null;
+        var reg = new AsyncProbeRegistration(this, scheduler, callback, saea, isAcceptProbe: false);
+        try
+        {
+            if (!_socket.ConnectAsync(saea))
+            {
+                reg.HandleCompletedSync();
+                scheduler.Schedule(callback);
+                return null;
+            }
+
+            return reg;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
         {
             reg.CancelAndRecycleImmediately();
             return null;
@@ -504,6 +548,8 @@ internal sealed class HostSocketReadiness : IDisposable
 
             if (e.LastOperation == SocketAsyncOperation.Send && e.SocketError == SocketError.Success)
                 readyHint |= PollEvents.POLLOUT;
+            if (e.LastOperation == SocketAsyncOperation.Connect)
+                readyHint |= PollEvents.POLLOUT | PollEvents.POLLERR;
 
             if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending and not SocketError.OperationAborted and not SocketError.Interrupted)
                 readyHint |= PollEvents.POLLERR;

@@ -209,6 +209,85 @@ public class HostSocketReadinessTests
         Assert.Contains(rc, [-(int)Errno.EINPROGRESS, -(int)Errno.ECONNREFUSED]);
     }
 
+    [Fact(Timeout = TestTimeoutMs)]
+    public async Task RegisterWaitHandle_NonBlockingConnectPending_PollOut_IsArmedOrImmediatelyReady()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        var inode = new HostSocketInode(3009, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        var file = new LinuxFile(new Dentry("readiness-connect-arm", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>());
+
+        try
+        {
+            inode.NativeSocket.Connect(ep);
+        }
+        catch (SocketException ex)
+        {
+            Assert.Contains(ex.SocketErrorCode,
+                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+        }
+
+        using var reg = readiness.RegisterWaitHandle(file, static () => { }, PollEvents.POLLOUT);
+        if (reg == null)
+        {
+            await DrainUntil(() =>
+            {
+                var revents = readiness.Poll(file, PollEvents.POLLOUT);
+                return (revents & PollEvents.POLLOUT) != 0 || (revents & PollEvents.POLLERR) != 0;
+            }, env, 300);
+        }
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
+    public async Task RegisterWaitHandle_NonBlockingConnectPending_PollOut_CallbackFiresOnCompletion()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        var inode = new HostSocketInode(3010, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        var file = new LinuxFile(new Dentry("readiness-connect-callback", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>());
+
+        try
+        {
+            inode.NativeSocket.Connect(ep);
+        }
+        catch (SocketException ex)
+        {
+            Assert.Contains(ex.SocketErrorCode,
+                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+        }
+
+        var fired = 0;
+        using var accepted = listener.Accept();
+        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLOUT);
+        if (reg != null)
+        {
+            await DrainUntil(() => Volatile.Read(ref fired) > 0, env, 300);
+            return;
+        }
+
+        await DrainUntil(() =>
+        {
+            var revents = readiness.Poll(file, PollEvents.POLLOUT);
+            return (revents & PollEvents.POLLOUT) != 0 || (revents & PollEvents.POLLERR) != 0;
+        }, env, 300);
+    }
+
     private static async Task DrainUntil(Func<bool> done, ReadinessEnv env, int timeoutMs = TestTimeoutMs)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
