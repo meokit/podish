@@ -67,7 +67,14 @@ struct PodishRootView: View {
                     store: store,
                     selection: $sidebarSelection,
                     onShowDetails: { container in
-                        detailsContainer = container
+                        if showSidebar {
+                            showSidebar = false
+                            DispatchQueue.main.async {
+                                detailsContainer = container
+                            }
+                        } else {
+                            detailsContainer = container
+                        }
                     },
                     onSelected: {
                         showSidebar = false
