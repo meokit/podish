@@ -126,6 +126,7 @@ public abstract class IndexedMemoryInode : Inode
             inode.Mode = mode;
             inode.Uid = uid;
             inode.Gid = gid;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Create");
 
             dentry.Instantiate(inode);
 
@@ -156,6 +157,7 @@ public abstract class IndexedMemoryInode : Inode
             inode.Mode = mode;
             inode.Uid = uid;
             inode.Gid = gid;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Mkdir");
 
             dentry.Instantiate(inode);
 
@@ -193,6 +195,7 @@ public abstract class IndexedMemoryInode : Inode
             var unlinkedInode = dentry.Inode;
             if (unlinkedInode != null)
             {
+                unlinkedInode.DecLink("IndexedMemoryInode.Unlink");
                 unlinkedInode.DetachAliasDentry(dentry, "IndexedMemoryInode.Unlink");
                 dentry.Inode = null;
             }
@@ -225,6 +228,7 @@ public abstract class IndexedMemoryInode : Inode
 
             primaryDentry.Children.Remove(name);
             var removedInode = dentry.Inode;
+            removedInode!.DecLink("IndexedMemoryInode.Rmdir");
             removedInode!.DetachAliasDentry(dentry, "IndexedMemoryInode.Rmdir");
             dentry.Inode = null;
             ChildNames.Remove(name);
@@ -336,6 +340,7 @@ public abstract class IndexedMemoryInode : Inode
             if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             dentry.Instantiate(oldInode);
+            oldInode.IncLink("IndexedMemoryInode.Link");
 
             lock (IndexedSb.Lock)
             {
@@ -365,6 +370,7 @@ public abstract class IndexedMemoryInode : Inode
             inode.Gid = gid;
             inode.SymlinkData = Encoding.UTF8.GetBytes(target);
             inode.Size = (ulong)inode.SymlinkData.Length;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Symlink");
 
             dentry.Instantiate(inode);
 
@@ -399,6 +405,7 @@ public abstract class IndexedMemoryInode : Inode
             inode.Uid = uid;
             inode.Gid = gid;
             inode.Rdev = rdev;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Mknod");
 
             dentry.Instantiate(inode);
 

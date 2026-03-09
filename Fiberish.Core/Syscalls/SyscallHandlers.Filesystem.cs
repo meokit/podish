@@ -1522,7 +1522,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), inode.Dev);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)inode.Ino); // __st_ino
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), mode);
-        var nlink = inode.GetDebugNlinkForStat("WriteStat64", 1);
+        var nlink = inode.GetDebugNlinkForStat("WriteStat64", inode.GetLinkCountForStat());
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), nlink);
 
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), uid);
@@ -1556,7 +1556,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), (ushort)inode.Dev); // st_dev
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)inode.Ino);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(8), (ushort)mode);
-        var nlink = inode.GetDebugNlinkForStat("WriteStat", 1);
+        var nlink = inode.GetDebugNlinkForStat("WriteStat", inode.GetLinkCountForStat());
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), (ushort)nlink);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12), (ushort)uid);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(14), (ushort)gid);
@@ -1585,7 +1585,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x04), 4096); // blksize
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0x08), 0); // attributes
 
-        var nlink = inode.GetDebugNlinkForStat("WriteStatx", (uint)Math.Max(1, inode.Dentries.Count));
+        var nlink = inode.GetDebugNlinkForStat("WriteStatx", inode.GetLinkCountForStat());
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x10), nlink);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x14), (uint)inode.Uid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x18), (uint)inode.Gid);

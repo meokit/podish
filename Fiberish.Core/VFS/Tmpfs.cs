@@ -13,6 +13,7 @@ public class Tmpfs : FileSystem
         var rootInode = sb.AllocInode();
         rootInode.Type = InodeType.Directory;
         rootInode.Mode = 0x1FF;
+        rootInode.SetInitialLinkCount(1, "Tmpfs.ReadSuper.root");
 
         sb.Root = new Dentry("/", rootInode, null, sb);
         sb.Root.Parent = sb.Root;

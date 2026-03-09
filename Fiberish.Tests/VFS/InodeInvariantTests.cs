@@ -6,7 +6,7 @@ namespace Fiberish.Tests.VFS;
 public class InodeInvariantTests
 {
     [Fact]
-    public void InodePut_Underflow_ThrowsInStrictMode()
+    public void ReleaseRef_Underflow_ThrowsInStrictMode()
     {
         var strictBefore = VfsDebugTrace.StrictInvariants;
         var enabledBefore = VfsDebugTrace.Enabled;
@@ -18,7 +18,8 @@ public class InodeInvariantTests
             var sb = new TestSuperBlock();
             var inode = new TestInode(100, sb);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => inode.Put());
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                inode.ReleaseRef(InodeRefKind.KernelInternal, "test"));
             Assert.Contains("underflow", ex.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(0, inode.RefCount);
         }
@@ -64,7 +65,7 @@ public class InodeInvariantTests
     }
 
     [Fact]
-    public void RefTrace_RecordsGetAndPut()
+    public void RefTrace_RecordsAcquireAndReleaseRef()
     {
         var strictBefore = VfsDebugTrace.StrictInvariants;
         var enabledBefore = VfsDebugTrace.Enabled;
@@ -77,18 +78,44 @@ public class InodeInvariantTests
             var sb = new TestSuperBlock();
             var inode = new TestInode(102, sb);
 
-            inode.Get();
-            inode.Put();
+            inode.AcquireRef(InodeRefKind.KernelInternal, "test");
+            inode.ReleaseRef(InodeRefKind.KernelInternal, "test");
 
             var trace = VfsDebugTrace.SnapshotRefTrace().Where(t => t.Ino == inode.Ino).ToList();
-            Assert.Contains(trace, t => t.Operation == "Inode.Get" && t.RefBefore == 0 && t.RefAfter == 1);
-            Assert.Contains(trace, t => t.Operation == "Inode.Put" && t.RefBefore == 1 && t.RefAfter == 0);
+            Assert.Contains(trace,
+                t => t.Operation == "Inode.AcquireRef.KernelInternal" && t.RefBefore == 0 && t.RefAfter == 1);
+            Assert.Contains(trace,
+                t => t.Operation == "Inode.ReleaseRef.KernelInternal" && t.RefBefore == 1 && t.RefAfter == 0);
         }
         finally
         {
             VfsDebugTrace.StrictInvariants = strictBefore;
             VfsDebugTrace.Enabled = enabledBefore;
             VfsDebugTrace.ClearRefTrace();
+        }
+    }
+
+    [Fact]
+    public void DecLink_Underflow_ThrowsInStrictMode()
+    {
+        var strictBefore = VfsDebugTrace.StrictInvariants;
+        var enabledBefore = VfsDebugTrace.Enabled;
+        try
+        {
+            VfsDebugTrace.StrictInvariants = true;
+            VfsDebugTrace.Enabled = false;
+
+            var sb = new TestSuperBlock();
+            var inode = new TestInode(103, sb);
+            inode.SetInitialLinkCount(0, "test");
+
+            var ex = Assert.Throws<InvalidOperationException>(() => inode.DecLink("test"));
+            Assert.Contains("underflow", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            VfsDebugTrace.StrictInvariants = strictBefore;
+            VfsDebugTrace.Enabled = enabledBefore;
         }
     }
 

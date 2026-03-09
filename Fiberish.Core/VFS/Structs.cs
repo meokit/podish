@@ -48,6 +48,14 @@ public enum FileFlags
     O_CLOEXEC = 524288
 }
 
+public enum InodeRefKind
+{
+    KernelInternal = 0,
+    FileOpen = 1,
+    FileMmap = 2,
+    PathPin = 3
+}
+
 public abstract class FileSystem
 {
     protected FileSystem(DeviceNumberManager? devManager)
@@ -190,28 +198,123 @@ public abstract class Inode : IPageCacheOps
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
+    public int LinkCount { get; private set; }
+    public bool HasExplicitLinkCount { get; private set; }
+    public bool IsEvicted { get; private set; }
 
-    // Reference counting methods
-    public void Get()
+    public void AcquireRef(InodeRefKind kind, string? reason = null)
     {
         var before = RefCount;
+        if (before < 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.AcquireRef invalid ino={Ino} type={Type} ref={before} kind={kind} reason={reason}");
+            return;
+        }
+
+        if (IsEvicted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.AcquireRef on evicted inode ino={Ino} type={Type} kind={kind} reason={reason}");
+            return;
+        }
+
         RefCount++;
-        VfsDebugTrace.RecordRefChange(this, "Inode.Get", before, RefCount, null);
+        VfsDebugTrace.RecordRefChange(this, $"Inode.AcquireRef.{kind}", before, RefCount, reason);
     }
 
-    public void Put()
+    public void ReleaseRef(InodeRefKind kind, string? reason = null)
     {
         var before = RefCount;
         if (before <= 0)
         {
             VfsDebugTrace.FailInvariant(
-                $"Inode.Put underflow ino={Ino} type={Type} ref={before} dentries={Dentries.Count}");
+                $"Inode.ReleaseRef underflow ino={Ino} type={Type} ref={before} kind={kind} reason={reason}");
             return;
         }
 
         RefCount = before - 1;
-        VfsDebugTrace.RecordRefChange(this, "Inode.Put", before, RefCount, null);
+        VfsDebugTrace.RecordRefChange(this, $"Inode.ReleaseRef.{kind}", before, RefCount, reason);
         if (RefCount == 0) Release();
+        TryFinalize($"ReleaseRef.{kind}", reason);
+    }
+
+    public void SetInitialLinkCount(int linkCount, string? reason = null)
+    {
+        if (linkCount < 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.SetInitialLinkCount negative ino={Ino} type={Type} link={linkCount} reason={reason}");
+            return;
+        }
+
+        var before = LinkCount;
+        LinkCount = linkCount;
+        HasExplicitLinkCount = true;
+        VfsDebugTrace.RecordLinkChange(this, "Inode.SetInitialLinkCount", before, LinkCount, reason);
+        TryFinalize("SetInitialLinkCount", reason);
+    }
+
+    public void IncLink(string? reason = null)
+    {
+        EnsureLinkCountInitialized("IncLink");
+        var before = LinkCount;
+        LinkCount++;
+        CTime = DateTime.Now;
+        VfsDebugTrace.RecordLinkChange(this, "Inode.IncLink", before, LinkCount, reason);
+    }
+
+    public void DecLink(string? reason = null)
+    {
+        EnsureLinkCountInitialized("DecLink");
+        var before = LinkCount;
+        if (before <= 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.DecLink underflow ino={Ino} type={Type} link={before} reason={reason}");
+            return;
+        }
+
+        LinkCount = before - 1;
+        CTime = DateTime.Now;
+        VfsDebugTrace.RecordLinkChange(this, "Inode.DecLink", before, LinkCount, reason);
+        TryFinalize("DecLink", reason);
+    }
+
+    public uint GetLinkCountForStat()
+    {
+        if (HasExplicitLinkCount)
+            return (uint)Math.Max(0, LinkCount);
+        return (uint)Math.Max(1, Dentries.Count);
+    }
+
+    public bool TryFinalize(string operation, string? reason = null)
+    {
+        if (IsEvicted) return false;
+        if (!HasExplicitLinkCount) return false;
+        if (RefCount != 0 || LinkCount != 0) return false;
+        IsEvicted = true;
+        VfsDebugTrace.RecordFinalize(this, operation, reason);
+        OnEvict();
+        return true;
+    }
+
+    public void Get()
+    {
+        AcquireRef(InodeRefKind.KernelInternal, "Inode.Get");
+    }
+
+    public void Put()
+    {
+        ReleaseRef(InodeRefKind.KernelInternal, "Inode.Put");
+    }
+
+    private void EnsureLinkCountInitialized(string source)
+    {
+        if (HasExplicitLinkCount) return;
+        LinkCount = Math.Max(0, Dentries.Count);
+        HasExplicitLinkCount = true;
+        VfsDebugTrace.RecordLinkChange(this, $"Inode.{source}.InitFromDentries", 0, LinkCount, null);
     }
 
     internal void AttachAliasDentry(Dentry dentry, string reason)
@@ -249,6 +352,10 @@ public abstract class Inode : IPageCacheOps
     {
         // Subclasses can override to clean up resources
         PageCacheManager?.ReleaseInodePageCache(this);
+    }
+
+    protected virtual void OnEvict()
+    {
     }
 
     // Operations
@@ -693,7 +800,7 @@ public class Dentry
         if (inode != null)
         {
             inode.AttachAliasDentry(this, "Dentry.ctor");
-            inode.Get();
+            inode.AcquireRef(InodeRefKind.KernelInternal, "Dentry.ctor");
             VfsDebugTrace.AssertDentryMembership(this, "Dentry.ctor");
         }
     }
@@ -730,7 +837,7 @@ public class Dentry
         if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
         Inode = inode;
         Inode.AttachAliasDentry(this, "Dentry.Instantiate");
-        Inode.Get();
+        Inode.AcquireRef(InodeRefKind.KernelInternal, "Dentry.Instantiate");
         VfsDebugTrace.AssertDentryMembership(this, "Dentry.Instantiate");
     }
 }
@@ -822,6 +929,22 @@ public static class VfsDebugTrace
             source, inode.Ino, inode.Type, nlink, inode.RefCount, inode.Dentries.Count);
     }
 
+    public static void RecordLinkChange(Inode inode, string operation, int before, int after, string? reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-Link] op={Operation} ino={Ino} type={Type} nlink:{Before}->{After} ref={RefCount} dentries={DentryCount} reason={Reason}",
+            operation, inode.Ino, inode.Type, before, after, inode.RefCount, inode.Dentries.Count, reason ?? "");
+    }
+
+    public static void RecordFinalize(Inode inode, string operation, string? reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-Finalize] op={Operation} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} reason={Reason}",
+            operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount, reason ?? "");
+    }
+
     public static void AssertDentryMembership(Dentry dentry, string source)
     {
         var inode = dentry.Inode;
@@ -855,7 +978,8 @@ public class LinuxFile
         Flags = flags;
         Mount = mount; // The mount this file was opened through
         Kind = referenceKind;
-        dentry.Inode?.Get(); // Increase reference count
+        var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
+        dentry.Inode?.AcquireRef(refKind, "LinuxFile.ctor");
         dentry.Inode?.Open(this);
         // Note: Mount reference is managed by caller if provided
     }
@@ -911,7 +1035,8 @@ public class LinuxFile
         }
 
         Dentry.Inode?.Release(this);
-        Dentry.Inode?.Put(); // Decrease reference count
+        var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
+        Dentry.Inode?.ReleaseRef(refKind, "LinuxFile.Close");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
     }
