@@ -178,6 +178,8 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var fdsAddr = a1;
+        int? rFd = null;
+        int? wFd = null;
 
         try
         {
@@ -186,25 +188,36 @@ public partial class SyscallManager
             // Reader
             var rDentry = new Dentry("pipe:[read]", pipe, sm.Root.Dentry, sm.Root.Dentry!.SuperBlock);
             var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, sm.AnonMount);
-            var rFd = sm.AllocFD(rFile);
+            rFd = sm.AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
             var wDentry = new Dentry("pipe:[write]", pipe, sm.Root.Dentry, sm.Root.Dentry.SuperBlock);
             var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, sm.AnonMount);
-            var wFd = sm.AllocFD(wFile);
+            wFd = sm.AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
             // Write FDs to user memory
-            // Write FDs to user memory
-            var fds = new[] { rFd, wFd };
+            var fds = new[] { rFd.Value, wFd.Value };
             if (!sm.Engine.CopyToUser(fdsAddr, MemoryMarshal.AsBytes(fds.AsSpan())))
+            {
+                if (rFd.HasValue) sm.FreeFD(rFd.Value);
+                if (wFd.HasValue) sm.FreeFD(wFd.Value);
                 return -(int)Errno.EFAULT;
+            }
 
             return 0;
         }
+        catch (OutOfMemoryException)
+        {
+            if (rFd.HasValue) sm.FreeFD(rFd.Value);
+            if (wFd.HasValue) sm.FreeFD(wFd.Value);
+            return -(int)Errno.ENOMEM;
+        }
         catch (Exception ex)
         {
+            if (rFd.HasValue) sm.FreeFD(rFd.Value);
+            if (wFd.HasValue) sm.FreeFD(wFd.Value);
             Logger.LogError(ex, "SysPipe failed");
             return -(int)Errno.ENFILE;
         }
@@ -579,6 +592,9 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        const int O_ACCMODE = 3;
+        if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
+            return -(int)Errno.EBADF;
         if (f.Dentry.Inode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
@@ -1018,12 +1034,15 @@ public partial class SyscallManager
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        var inode = f.Dentry.Inode;
+        if (inode == null) return -(int)Errno.EBADF;
+        if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
 
         var newPos = whence switch
         {
             0 => offset, // SEEK_SET
             1 => f.Position + offset, // SEEK_CUR
-            2 => (long)f.Dentry.Inode!.Size + offset, // SEEK_END
+            2 => (long)inode.Size + offset, // SEEK_END
             _ => -1
         };
 
@@ -1043,12 +1062,15 @@ public partial class SyscallManager
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        var inode = f.Dentry.Inode;
+        if (inode == null) return -(int)Errno.EBADF;
+        if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
 
         var newPos = whence switch
         {
             0 => offset, // SEEK_SET
             1 => f.Position + offset, // SEEK_CUR
-            2 => (long)f.Dentry.Inode!.Size + offset, // SEEK_END
+            2 => (long)inode.Size + offset, // SEEK_END
             _ => -1
         };
 

@@ -409,6 +409,8 @@ public partial class SyscallManager
         bool inIsPipe  = fileIn.Dentry.Inode  is PipeInode;
         bool outIsPipe = fileOut.Dentry.Inode is PipeInode;
         if (!inIsPipe && !outIsPipe) return -(int)Errno.EINVAL;
+        if (inIsPipe && offIn != 0) return -(int)Errno.ESPIPE;
+        if (outIsPipe && offOut != 0) return -(int)Errno.ESPIPE;
 
         // Resolve read offset
         long readOffset = fileIn.Position;
@@ -453,17 +455,41 @@ public partial class SyscallManager
                 }
                 if (bytesRead < 0) return bytesRead;
 
-                int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut, buf.AsSpan(0, bytesRead), writeOffset);
-                if (bytesWritten < 0)
+                int writeConsumed = 0;
+                while (writeConsumed < bytesRead)
                 {
-                    if (totalTransferred > 0) break;
-                    return bytesWritten;
+                    int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut,
+                        buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
+
+                    if (bytesWritten == -(int)Errno.EPIPE)
+                    {
+                        if (sm.Engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
+                        if (totalTransferred > 0) break;
+                        return bytesWritten;
+                    }
+
+                    if (bytesWritten == -(int)Errno.EAGAIN)
+                    {
+                        if (totalTransferred > 0) break;
+                        if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
+                            return -(int)Errno.EAGAIN;
+                        await fileOut.Dentry.Inode.WaitForWrite(fileOut);
+                        continue;
+                    }
+
+                    if (bytesWritten < 0)
+                    {
+                        if (totalTransferred > 0) break;
+                        return bytesWritten;
+                    }
+
+                    writeConsumed += bytesWritten;
+                    writeOffset += bytesWritten;
+                    totalTransferred += bytesWritten;
+                    remaining -= bytesWritten;
                 }
 
                 readOffset   += bytesRead;
-                writeOffset  += bytesWritten;
-                totalTransferred += bytesWritten;
-                remaining    -= bytesWritten;
             }
 
             // Update guest offsets if ptrs were provided
@@ -535,6 +561,14 @@ public partial class SyscallManager
                 if (bytesRead < 0) return bytesRead;
 
                 int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
+                if (bytesWritten == -(int)Errno.EAGAIN)
+                {
+                    if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
+                        return -(int)Errno.EAGAIN;
+                    await fileOut.Dentry.Inode.WaitForWrite(fileOut);
+                    continue;
+                }
+
                 if (bytesWritten < 0) return bytesWritten;
 
                 return bytesWritten;

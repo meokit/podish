@@ -225,23 +225,30 @@ public class PipeInode : Inode
         {
             const int O_ACCMODE = 3;
             var mode = (int)linuxFile.Flags & O_ACCMODE;
+            var canRead = mode == (int)FileFlags.O_RDONLY || mode == (int)FileFlags.O_RDWR;
+            var canWrite = mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR;
 
-            if ((events & POLLIN) != 0 && (mode == (int)FileFlags.O_RDONLY || mode == (int)FileFlags.O_RDWR))
+            if (canRead)
             {
-                // Check if there's data to read or EOF
-                if (_count > 0)
-                    revents |= POLLIN;
-                else if (_writersClosed)
-                    // EOF - no writers left. Linux returns POLLIN|POLLHUP so select() readfds detects EOF.
-                    revents |= (short)(POLLIN | POLLHUP);
+                if (_writersClosed)
+                    revents |= POLLHUP;
+
+                if ((events & POLLIN) != 0)
+                {
+                    if (_count > 0)
+                        revents |= POLLIN;
+                    else if (_writersClosed)
+                        // EOF - no writers left. Keep POLLIN for compatibility with existing select logic.
+                        revents |= POLLIN;
+                }
             }
 
-            if ((events & POLLOUT) != 0 && (mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR))
+            if (canWrite)
             {
-                // Check if there's space to write or broken pipe
                 if (_readersClosed)
                     revents |= POLLERR;
-                else if (_count < BufferSize) revents |= POLLOUT;
+                else if ((events & POLLOUT) != 0 && _count < BufferSize)
+                    revents |= POLLOUT;
             }
         }
 

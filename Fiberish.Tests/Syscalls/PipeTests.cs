@@ -11,6 +11,38 @@ namespace Fiberish.Tests.Syscalls;
 
 public class PipeTests
 {
+    private static ValueTask<int> CallSysRead(TestEnv env, uint fd, uint bufAddr, uint count)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysRead", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufAddr, count, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysWrite(TestEnv env, uint fd, uint bufAddr, uint count)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysWrite", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufAddr, count, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysClose(TestEnv env, uint fd)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysClose", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, 0u, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysLseek(TestEnv env, uint fd, uint offset, uint whence)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysLseek", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, offset, whence, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysSplice(TestEnv env, uint fdIn, uint offInPtr, uint fdOut, uint offOutPtr,
+        uint len, uint flags)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysSplice", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null,
+            [env.Engine.State, fdIn, offInPtr, fdOut, offOutPtr, len, flags])!;
+    }
+
     private static ValueTask<int> CallSysPipe(TestEnv env, uint fdsAddr)
     {
         var method = typeof(SyscallManager).GetMethod("SysPipe", BindingFlags.NonPublic | BindingFlags.Static);
@@ -104,6 +136,97 @@ public class PipeTests
         Assert.Equal(before, env.SyscallManager.FDs.Count);
     }
 
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_ReadOnWriteEnd_ReturnsEbadf()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x13000;
+        const uint bufAddr = 0x14000;
+        env.MapUserPage(fdsAddr);
+        env.MapUserPage(bufAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (_, wfd) = env.ReadPipeFds(fdsAddr);
+
+        var rc = await CallSysRead(env, (uint)wfd, bufAddr, 1);
+        Assert.Equal(-(int)Errno.EBADF, rc);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_Efault_RollsBackAllocatedFds()
+    {
+        using var env = new TestEnv();
+        const uint invalidFdsAddr = 0xDEAD0000;
+        var before = env.SyscallManager.FDs.Count;
+
+        var rc = await CallSysPipe(env, invalidFdsAddr);
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+        Assert.Equal(before, env.SyscallManager.FDs.Count);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_Lseek_ReturnsEspipe()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x15000;
+        env.MapUserPage(fdsAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, _) = env.ReadPipeFds(fdsAddr);
+
+        var rc = await CallSysLseek(env, (uint)rfd, 0, 0);
+        Assert.Equal(-(int)Errno.ESPIPE, rc);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_Poll_ReadEndWithBufferedDataAndClosedWriter_HasPollhup()
+    {
+        using var env = new TestEnv(attachTaskOwner: true);
+        const uint fdsAddr = 0x16000;
+        const uint dataAddr = 0x17000;
+        env.MapUserPage(fdsAddr);
+        env.MapUserPage(dataAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, wfd) = env.ReadPipeFds(fdsAddr);
+        env.WriteBytes(dataAddr, [0x2A]);
+        Assert.Equal(1, await CallSysWrite(env, (uint)wfd, dataAddr, 1));
+        Assert.Equal(0, await CallSysClose(env, (uint)wfd));
+
+        var rFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rfd));
+        var revents = rFile.Dentry.Inode!.Poll(rFile, PollEvents.POLLIN);
+        Assert.True((revents & PollEvents.POLLIN) != 0);
+        Assert.True((revents & PollEvents.POLLHUP) != 0);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Splice_PipeWithNonNullOffsets_ReturnsEspipe()
+    {
+        using var env = new TestEnv(attachTaskOwner: true);
+        const uint inPipeAddr = 0x18000;
+        const uint outPipeAddr = 0x19000;
+        const uint offPtr = 0x1A000;
+        const uint dataAddr = 0x1B000;
+        env.MapUserPage(inPipeAddr);
+        env.MapUserPage(outPipeAddr);
+        env.MapUserPage(offPtr);
+        env.MapUserPage(dataAddr);
+        env.WriteBytes(offPtr, new byte[8]);
+        env.WriteBytes(dataAddr, [0x7F]);
+
+        Assert.Equal(0, await CallSysPipe(env, inPipeAddr));
+        Assert.Equal(0, await CallSysPipe(env, outPipeAddr));
+        var (rfd, wfdIn) = env.ReadPipeFds(inPipeAddr);
+        var (_, wfd) = env.ReadPipeFds(outPipeAddr);
+        Assert.Equal(1, await CallSysWrite(env, (uint)wfdIn, dataAddr, 1));
+
+        var rcOffIn = await CallSysSplice(env, (uint)rfd, offPtr, (uint)wfd, 0, 1, 0);
+        Assert.Equal(-(int)Errno.ESPIPE, rcOffIn);
+
+        var rcOffOut = await CallSysSplice(env, (uint)rfd, 0, (uint)wfd, offPtr, 1, 0);
+        Assert.Equal(-(int)Errno.ESPIPE, rcOffOut);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv(bool attachTaskOwner = false)
@@ -150,6 +273,11 @@ public class PipeTests
             var rfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
             var wfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
             return (rfd, wfd);
+        }
+
+        public void WriteBytes(uint addr, byte[] data)
+        {
+            Assert.True(Engine.CopyToUser(addr, data));
         }
     }
 }
