@@ -11,11 +11,6 @@ using Podish.Core;
 
 namespace Podish.Core.Native;
 
-internal sealed class NativeJob
-{
-    public required Task<(string? ResultJson, Exception? Error)> Task { get; init; }
-}
-
 internal static class NativeIpcProtocol
 {
     public const int OpPollEvent = 1;
@@ -167,11 +162,6 @@ internal sealed class NativeContext : IDisposable
     public (NativeContainer? Container, string? Error, int Code) CreateContainer(PodishRunSpec spec)
     {
         return Invoke(ctx => ctx.CreateContainerUnsafe(spec));
-    }
-
-    public (bool Ok, string? Error) TryRenameContainer(NativeContainer container, string? newName)
-    {
-        return Invoke(ctx => ctx.TryRenameContainerUnsafe(container, newName));
     }
 
     public string GetLastErrorForCurrentThread()
@@ -326,17 +316,6 @@ internal sealed class NativeContext : IDisposable
         _containersById[container.ContainerId] = container;
         IndexContainerNameUnsafe(container);
         return (container, null, PodishNativeApi.PodOk);
-    }
-
-    private (bool Ok, string? Error) TryRenameContainerUnsafe(NativeContainer container, string? newName)
-    {
-        if (!IsNameAvailableUnsafe(newName, container.ContainerId))
-            return (false, "container name already exists");
-
-        RemoveNameMappingsUnsafe(container.ContainerId);
-        container.Rename(newName);
-        IndexContainerNameUnsafe(container);
-        return (true, null);
     }
 
     private NativeContainer? FindLiveContainerUnsafe(string query)
@@ -747,15 +726,6 @@ internal sealed class NativeContainer
         }
     }
 
-    public void Rename(string? newName)
-    {
-        lock (_gate)
-        {
-            _name = string.IsNullOrWhiteSpace(newName) ? null : newName;
-            PersistMetadataLocked(_persistedState);
-        }
-    }
-
     private void DeleteMetadataDirectory()
     {
         PodishContainerMetadataStore.Delete(Owner.Context.ContainersDir, _logicalId);
@@ -1103,39 +1073,6 @@ public static class PodishNativeApi
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_image_pull_async", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodImagePullAsync(IntPtr ctxHandle, IntPtr imageRefUtf8, IntPtr* outJob)
-    {
-        var ctx = FromHandle(ctxHandle);
-        if (ctx == null || outJob == null)
-            return PodEinval;
-
-        var imageRef = PtrToString(imageRefUtf8);
-        if (string.IsNullOrWhiteSpace(imageRef))
-            return SetErrorAndReturn(ctx, "image ref is required", PodEinval);
-
-        var nativeJob = new NativeJob
-        {
-            Task = Task.Run(() =>
-            {
-                try
-                {
-                    ctx.Context.PullImageAsync(imageRef).GetAwaiter().GetResult();
-                    var result = "{\"image\":\"" + JsonEncodedText.Encode(imageRef).ToString() + "\"}";
-                    return (result, (Exception?)null);
-                }
-                catch (Exception ex)
-                {
-                    return ((string?)null, ex);
-                }
-            })
-        };
-
-        var handle = GCHandle.Alloc(nativeJob, GCHandleType.Normal);
-        *outJob = GCHandle.ToIntPtr(handle);
-        return PodOk;
-    }
-
     [UnmanagedCallersOnly(EntryPoint = "pod_image_list_json", CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe int PodImageListJson(IntPtr ctxHandle, byte* buffer, int capacity, int* outLen)
     {
@@ -1172,29 +1109,6 @@ public static class PodishNativeApi
             if (!Directory.Exists(dir))
                 return PodEnoent;
             Directory.Delete(dir, true);
-            return PodOk;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
-        }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_run_json", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerRunJson(IntPtr ctxHandle, IntPtr runSpecJsonUtf8, int* exitCode)
-    {
-        var ctx = FromHandle(ctxHandle);
-        if (ctx == null)
-            return PodEinval;
-
-        try
-        {
-            if (!TryParseRunSpec(ctx, runSpecJsonUtf8, out var spec, out var err))
-                return SetErrorAndReturn(ctx, err, PodEinval);
-
-            var result = ctx.Context.RunAsync(spec!).GetAwaiter().GetResult();
-            if (exitCode != null)
-                *exitCode = result.ExitCode;
             return PodOk;
         }
         catch (Exception ex)
@@ -1283,15 +1197,6 @@ public static class PodishNativeApi
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_start_json", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerStartJson(IntPtr ctxHandle, IntPtr runSpecJsonUtf8, IntPtr* outContainer)
-    {
-        var rc = CreateContainerFromJson(ctxHandle, runSpecJsonUtf8, outContainer);
-        if (rc != PodOk)
-            return rc;
-        return StartContainer(*outContainer);
-    }
-
     [UnmanagedCallersOnly(EntryPoint = "pod_container_list_json", CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe int PodContainerListJson(IntPtr ctxHandle, byte* buffer, int capacity, int* outLen)
     {
@@ -1358,31 +1263,6 @@ public static class PodishNativeApi
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_rename", CallConvs = [typeof(CallConvCdecl)])]
-    public static int PodContainerRename(IntPtr containerHandle, IntPtr nameUtf8)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null)
-            return PodEinval;
-
-        var newName = PtrToString(nameUtf8);
-        var owner = container.Owner;
-
-        try
-        {
-            var (ok, renameError) = owner.TryRenameContainer(container, newName);
-            if (!ok)
-                return SetErrorAndReturn(owner, renameError ?? "container name already exists", PodEbusy);
-
-            owner.EmitContainerStateChanged();
-            return PodOk;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(owner, ex.ToString(), PodEinternal);
-        }
-    }
-
     [UnmanagedCallersOnly(EntryPoint = "pod_container_remove", CallConvs = [typeof(CallConvCdecl)])]
     public static int PodContainerRemove(IntPtr containerHandle, int force)
     {
@@ -1417,129 +1297,6 @@ public static class PodishNativeApi
             return;
 
         handle.Free();
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_destroy", CallConvs = [typeof(CallConvCdecl)])]
-    public static void PodContainerDestroy(IntPtr containerHandle)
-    {
-        if (containerHandle == IntPtr.Zero)
-            return;
-
-        var handle = GCHandle.FromIntPtr(containerHandle);
-        if (!handle.IsAllocated)
-            return;
-
-        if (handle.Target is NativeContainer container)
-        {
-            try
-            {
-                container.ForceDestroy(1000);
-            }
-            catch
-            {
-                // best-effort destroy
-            }
-            finally
-            {
-                container.Owner.UnregisterContainer(container);
-            }
-        }
-
-        handle.Free();
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_write_stdin", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerWriteStdin(IntPtr containerHandle, byte* data, int len, int* written)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null || len < 0)
-            return PodEinval;
-
-        try
-        {
-            if (len == 0 || data == null)
-            {
-                if (written != null)
-                    *written = 0;
-                return PodOk;
-            }
-
-            var span = new ReadOnlySpan<byte>(data, len);
-            var n = container.WriteInput(span);
-            if (written != null)
-                *written = n;
-            return PodOk;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
-        }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_resize", CallConvs = [typeof(CallConvCdecl)])]
-    public static int PodContainerResize(IntPtr containerHandle, ushort rows, ushort cols)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null)
-            return PodEinval;
-
-        try
-        {
-            return container.Resize(rows, cols) ? PodOk : PodEinval;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
-        }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_wait", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerWait(IntPtr containerHandle, int* exitCode)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null)
-            return PodEinval;
-
-        try
-        {
-            var rc = container.WaitAsync().GetAwaiter().GetResult();
-            if (exitCode != null)
-                *exitCode = rc;
-            return PodOk;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
-        }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_wait_async", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerWaitAsync(IntPtr containerHandle, IntPtr* outJob)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null || outJob == null)
-            return PodEinval;
-
-        var nativeJob = new NativeJob
-        {
-            Task = Task.Run(() =>
-            {
-                try
-                {
-                    var rc = container.WaitAsync().GetAwaiter().GetResult();
-                    var result = "{\"exitCode\":" + rc + "}";
-                    return (result, (Exception?)null);
-                }
-                catch (Exception ex)
-                {
-                    return ((string?)null, ex);
-                }
-            })
-        };
-
-        var handle = GCHandle.Alloc(nativeJob, GCHandleType.Normal);
-        *outJob = GCHandle.ToIntPtr(handle);
-        return PodOk;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_terminal_attach", CallConvs = [typeof(CallConvCdecl)])]
@@ -1637,35 +1394,6 @@ public static class PodishNativeApi
             handle.Free();
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_events_read_json", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodEventsReadJson(IntPtr ctxHandle, IntPtr cursorUtf8, int timeoutMs,
-        byte* buffer, int capacity, int* outLen)
-    {
-        var ctx = FromHandle(ctxHandle);
-        if (ctx == null)
-            return PodEinval;
-
-        try
-        {
-            var cursor = PtrToString(cursorUtf8);
-            var offset = 0;
-            if (!string.IsNullOrWhiteSpace(cursor))
-                int.TryParse(cursor, out offset);
-
-            var store = new ContainerEventStore(Path.Combine(ctx.Context.FiberpodDir, "events.jsonl"));
-            var all = store.ReadAll().ToList();
-            if (offset < 0) offset = 0;
-            if (offset > all.Count) offset = all.Count;
-
-            var chunk = new NativeEventsChunk((all.Count).ToString(), all.Skip(offset).Take(256).ToList());
-            return WriteJson(ctx, chunk, PodishNativeJsonContext.Default.NativeEventsChunk, buffer, capacity, outLen);
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
-        }
-    }
-
     [UnmanagedCallersOnly(EntryPoint = "pod_logs_read_json", CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe int PodLogsReadJson(IntPtr containerHandle, IntPtr cursorUtf8, int follow, int timeoutMs,
         byte* buffer, int capacity, int* outLen)
@@ -1708,41 +1436,6 @@ public static class PodishNativeApi
         {
             return SetErrorAndReturn(container.Owner, ex.ToString(), PodEinternal);
         }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_job_poll_json", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodJobPollJson(IntPtr jobHandle, byte* buffer, int capacity, int* outLen)
-    {
-        var job = FromJobHandle(jobHandle);
-        if (job == null)
-            return PodEinval;
-
-        NativeJobPollResponse response;
-        if (!job.Task.IsCompleted)
-        {
-            response = new NativeJobPollResponse("running", null, null);
-        }
-        else
-        {
-            var (resultJson, error) = job.Task.GetAwaiter().GetResult();
-            response = error == null
-                ? new NativeJobPollResponse("succeeded", null, resultJson)
-                : new NativeJobPollResponse("failed", error.ToString(), null);
-        }
-
-        return WriteJsonWithoutContext(response, PodishNativeJsonContext.Default.NativeJobPollResponse, buffer,
-            capacity, outLen);
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_job_destroy", CallConvs = [typeof(CallConvCdecl)])]
-    public static void PodJobDestroy(IntPtr jobHandle)
-    {
-        if (jobHandle == IntPtr.Zero)
-            return;
-
-        var handle = GCHandle.FromIntPtr(jobHandle);
-        if (handle.IsAllocated)
-            handle.Free();
     }
 
     private static List<NativeImageListItem> ListImages(PodishContext context)
@@ -1938,21 +1631,6 @@ public static class PodishNativeApi
         {
             var handle = GCHandle.FromIntPtr(handlePtr);
             return handle.Target as NativeTerminal;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static NativeJob? FromJobHandle(IntPtr handlePtr)
-    {
-        if (handlePtr == IntPtr.Zero)
-            return null;
-        try
-        {
-            var handle = GCHandle.FromIntPtr(handlePtr);
-            return handle.Target as NativeJob;
         }
         catch
         {

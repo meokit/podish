@@ -32,10 +32,7 @@ internal sealed record NativeContainerInspect(
     int? ExitCode,
     PodishRunSpec Spec);
 
-internal sealed record NativeEventsChunk(string Cursor, IReadOnlyList<ContainerEvent> Events);
 internal sealed record NativeLogsChunk(string Cursor, IReadOnlyList<ContainerLogEntry> Entries);
-
-internal sealed record NativeJobPollResponse(string Status, string? Error, string? ResultJson);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(PodishRunSpec))]
@@ -44,11 +41,9 @@ internal sealed record NativeJobPollResponse(string Status, string? Error, strin
 [JsonSerializable(typeof(NativeContainerInspect))]
 [JsonSerializable(typeof(PodishContainerMetadata))]
 [JsonSerializable(typeof(List<PodishContainerMetadata>))]
-[JsonSerializable(typeof(NativeEventsChunk))]
 [JsonSerializable(typeof(NativeLogsChunk))]
 [JsonSerializable(typeof(ContainerLogEntry))]
 [JsonSerializable(typeof(List<ContainerLogEntry>))]
-[JsonSerializable(typeof(NativeJobPollResponse))]
 internal partial class PodishNativeJsonContext : JsonSerializerContext
 {
 }
