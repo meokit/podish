@@ -133,4 +133,126 @@ public class ConcurrencyIsolationTests
             Directory.Delete(root, true);
         }
     }
+
+    [Fact]
+    public void NativeContext_CreateContainer_IsAtomic_ForDuplicateNames()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "podish-native-create-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            using var ctx = new NativeContext
+            {
+                Context = new PodishContext(new PodishContextOptions
+                {
+                    WorkDir = root,
+                    LogFile = Path.Combine(root, "podish.log"),
+                    LogLevel = "error"
+                })
+            };
+
+            var spec = new PodishRunSpec { Name = "dup-name" };
+            var results = new (NativeContainer? Container, string? Error, int Code)[8];
+
+            Parallel.For(0, results.Length, i =>
+            {
+                results[i] = ctx.CreateContainer(spec);
+            });
+
+            var succeeded = results.Count(r => r.Container != null && r.Code == PodishNativeApi.PodOk);
+            var busy = results.Count(r => r.Container == null && r.Code == PodishNativeApi.PodEbusy);
+
+            Assert.Equal(1, succeeded);
+            Assert.Equal(results.Length - 1, busy);
+            Assert.Single(ctx.ContainersSnapshot());
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void NativeContext_OpenContainer_DeduplicatesLiveInstance()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "podish-native-open-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        string containerId;
+        try
+        {
+            using (var writerCtx = new NativeContext
+                   {
+                       Context = new PodishContext(new PodishContextOptions
+                       {
+                           WorkDir = root,
+                           LogFile = Path.Combine(root, "writer.log"),
+                           LogLevel = "error"
+                       })
+                   })
+            {
+                var created = writerCtx.CreateContainer(new PodishRunSpec { Name = "to-open" });
+                Assert.NotNull(created.Container);
+                Assert.Equal(PodishNativeApi.PodOk, created.Code);
+                containerId = created.Container!.ContainerId;
+            }
+
+            using var readerCtx = new NativeContext
+            {
+                Context = new PodishContext(new PodishContextOptions
+                {
+                    WorkDir = root,
+                    LogFile = Path.Combine(root, "reader.log"),
+                    LogLevel = "error"
+                })
+            };
+
+            NativeContainer? first = null;
+            Parallel.For(0, 16, _ =>
+            {
+                var opened = readerCtx.OpenContainerByIdOrName(containerId);
+                Assert.NotNull(opened);
+                Interlocked.CompareExchange(ref first, opened, null);
+                Assert.Same(first, opened);
+            });
+
+            Assert.Single(readerCtx.ContainersSnapshot());
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeContainer_Remove_PreventsFutureStart()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "podish-native-remove-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            using var ctx = new NativeContext
+            {
+                Context = new PodishContext(new PodishContextOptions
+                {
+                    WorkDir = root,
+                    LogFile = Path.Combine(root, "podish.log"),
+                    LogLevel = "error"
+                })
+            };
+
+            var created = ctx.CreateContainer(new PodishRunSpec { Name = "to-remove" });
+            Assert.NotNull(created.Container);
+            Assert.Equal(PodishNativeApi.PodOk, created.Code);
+
+            Assert.True(created.Container!.Remove(force: true, timeoutMs: 0));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => created.Container.StartAsync());
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
 }
