@@ -264,10 +264,7 @@ public partial class SyscallManager
 
                         if (!wnowait)
                         {
-                            lock (currentProc.Children)
-                            {
-                                currentProc.Children.Remove(childPid);
-                            }
+                            currentProc.Children.Remove(childPid);
 
                             childProc.State = ProcessState.Dead;
                             kernel.UnregisterProcess(childPid);
@@ -331,34 +328,31 @@ public partial class SyscallManager
 
     private static bool HasPendingInterruptingSignal(FiberTask task)
     {
-        lock (task)
+        var pending = task.PendingSignals;
+        var unblocked = pending & ~task.SignalMask;
+
+        // SIGKILL/SIGSTOP are unmaskable.
+        var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
+        unblocked |= pending & unmaskable;
+
+        if (unblocked == 0) return false;
+
+        for (var sig = 1; sig <= 64; sig++)
         {
-            var pending = task.PendingSignals;
-            var unblocked = pending & ~task.SignalMask;
+            var mask = 1UL << (sig - 1);
+            if ((unblocked & mask) == 0) continue;
 
-            // SIGKILL/SIGSTOP are unmaskable.
-            var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
-            unblocked |= pending & unmaskable;
-
-            if (unblocked == 0) return false;
-
-            for (var sig = 1; sig <= 64; sig++)
+            if (task.Process.SignalActions.TryGetValue(sig, out var action))
             {
-                var mask = 1UL << (sig - 1);
-                if ((unblocked & mask) == 0) continue;
-
-                if (task.Process.SignalActions.TryGetValue(sig, out var action))
-                {
-                    if (action.Handler == 1) continue; // SIG_IGN
-                    if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
-                    return true;
-                }
-
-                if (!IsDefaultIgnoredSignal(sig)) return true;
+                if (action.Handler == 1) continue; // SIG_IGN
+                if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
+                return true;
             }
 
-            return false;
+            if (!IsDefaultIgnoredSignal(sig)) return true;
         }
+
+        return false;
     }
 
     private static bool IsDefaultIgnoredSignal(int sig)

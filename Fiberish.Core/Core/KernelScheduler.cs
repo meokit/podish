@@ -36,6 +36,7 @@ public class KernelScheduler
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
+    private int _ownerThreadId;
     private int _nextTaskId;
     private int _initPid;
     private int _engineInitReaperEnabled;
@@ -70,6 +71,35 @@ public class KernelScheduler
         set => _current.Value = value;
     }
 
+    public int OwnerThreadId => Volatile.Read(ref _ownerThreadId);
+
+    public bool IsSchedulerThread
+    {
+        get
+        {
+            var owner = OwnerThreadId;
+            return owner == 0 || owner == Environment.CurrentManagedThreadId;
+        }
+    }
+
+    private void BindOwnerThreadIfNeeded()
+    {
+        var currentThreadId = Environment.CurrentManagedThreadId;
+        var previous = Interlocked.CompareExchange(ref _ownerThreadId, currentThreadId, 0);
+        if (previous != 0 && previous != currentThreadId)
+            throw new InvalidOperationException(
+                $"KernelScheduler is already bound to thread {previous}, current thread is {currentThreadId}.");
+    }
+
+    public void AssertSchedulerThread([CallerMemberName] string? caller = null)
+    {
+        var owner = OwnerThreadId;
+        if (owner == 0) return;
+        if (owner == Environment.CurrentManagedThreadId) return;
+        throw new InvalidOperationException(
+            $"KernelScheduler.{caller ?? "<unknown>"} must run on scheduler thread {owner}, current thread is {Environment.CurrentManagedThreadId}. Use ScheduleFromAnyThread.");
+    }
+
     public void WakeUp()
     {
         EnqueueWake();
@@ -77,48 +107,39 @@ public class KernelScheduler
 
     public void RegisterProcess(Process p)
     {
-        lock (_processes)
-        {
-            _processes[p.TGID] = p;
-        }
+        AssertSchedulerThread();
+        _processes[p.TGID] = p;
     }
 
     public void RegisterTask(FiberTask t)
     {
-        lock (_tasks)
-        {
-            _tasks[t.TID] = t;
-        }
+        AssertSchedulerThread();
+        _tasks[t.TID] = t;
 
-        Schedule(t);
+        ScheduleLocal(t);
     }
 
     public Process? GetProcess(int pid)
     {
-        lock (_processes)
-        {
-            return _processes.TryGetValue(pid, out var p) ? p : null;
-        }
+        AssertSchedulerThread();
+        return _processes.TryGetValue(pid, out var p) ? p : null;
     }
 
     public List<Process> GetProcessesSnapshot()
     {
-        lock (_processes)
-        {
-            return _processes.Values.ToList();
-        }
+        AssertSchedulerThread();
+        return _processes.Values.ToList();
     }
 
     public bool UnregisterProcess(int pid)
     {
-        lock (_processes)
-        {
-            return _processes.Remove(pid);
-        }
+        AssertSchedulerThread();
+        return _processes.Remove(pid);
     }
 
     public void CleanupDeadProcess(Process process)
     {
+        AssertSchedulerThread();
         var mem = process.Mem;
         var engine = process.Syscalls?.Engine;
         if (mem != null && engine != null)
@@ -130,6 +151,7 @@ public class KernelScheduler
 
     public bool TryReleaseProcessMemory(Process process, Engine engine)
     {
+        AssertSchedulerThread();
         if (process.MemoryReleased) return true;
 
         var beforeBytes = ExternalPageManager.GetAllocatedBytes();
@@ -155,62 +177,52 @@ public class KernelScheduler
 
     public void DetachProcessTasks(int pid)
     {
-        List<FiberTask> tasksToRemove;
-        lock (_tasks)
-        {
-            tasksToRemove = _tasks.Values.Where(t => t.PID == pid).ToList();
-            foreach (var task in tasksToRemove) _tasks.Remove(task.TID);
-        }
+        AssertSchedulerThread();
+        var tasksToRemove = _tasks.Values.Where(t => t.PID == pid).ToList();
+        foreach (var task in tasksToRemove) _tasks.Remove(task.TID);
 
         foreach (var task in tasksToRemove)
         {
             task.Status = FiberTaskStatus.Terminated;
             task.ExecutionMode = TaskExecutionMode.Terminated;
-            lock (task.Process.Threads)
-            {
-                task.Process.Threads.Remove(task);
-            }
+            task.Process.Threads.Remove(task);
         }
     }
 
     public int DetachTask(FiberTask task)
     {
-        lock (_tasks)
-        {
-            _tasks.Remove(task.TID);
-        }
+        AssertSchedulerThread();
+        _tasks.Remove(task.TID);
 
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;
 
-        lock (task.Process.Threads)
-        {
-            task.Process.Threads.Remove(task);
-            return task.Process.Threads.Count;
-        }
+        task.Process.Threads.Remove(task);
+        return task.Process.Threads.Count;
     }
 
     public FiberTask? GetTask(int tid)
     {
-        lock (_tasks)
-        {
-            return _tasks.TryGetValue(tid, out var t) ? t : null;
-        }
+        AssertSchedulerThread();
+        return _tasks.TryGetValue(tid, out var t) ? t : null;
     }
 
     public int AllocateTaskId()
     {
+        AssertSchedulerThread();
         return Interlocked.Increment(ref _nextTaskId);
     }
 
     public void SetInitPid(int pid)
     {
+        AssertSchedulerThread();
         if (pid <= 0) return;
         Interlocked.CompareExchange(ref _initPid, pid, 0);
     }
 
     public void SetEngineInitReaperEnabled(bool enabled)
     {
+        AssertSchedulerThread();
         Volatile.Write(ref _engineInitReaperEnabled, enabled ? 1 : 0);
     }
 
@@ -223,41 +235,33 @@ public class KernelScheduler
 
     public int ReparentChildren(int fromPid, int toPid)
     {
+        AssertSchedulerThread();
         if (fromPid <= 0 || toPid <= 0 || fromPid == toPid) return 0;
 
         Process? fromProc;
         Process? toProc;
         List<int> adoptedPids = [];
 
-        lock (_processes)
-        {
-            _processes.TryGetValue(fromPid, out fromProc);
-            if (!_processes.TryGetValue(toPid, out toProc)) return 0;
+        _processes.TryGetValue(fromPid, out fromProc);
+        if (!_processes.TryGetValue(toPid, out toProc)) return 0;
 
-            foreach (var proc in _processes.Values)
-            {
-                if (proc.PPID != fromPid) continue;
-                proc.PPID = toPid;
-                adoptedPids.Add(proc.TGID);
-            }
+        foreach (var proc in _processes.Values)
+        {
+            if (proc.PPID != fromPid) continue;
+            proc.PPID = toPid;
+            adoptedPids.Add(proc.TGID);
         }
 
         if (adoptedPids.Count == 0) return 0;
 
         if (fromProc != null)
         {
-            lock (fromProc.Children)
-            {
-                foreach (var pid in adoptedPids) fromProc.Children.Remove(pid);
-            }
+            foreach (var pid in adoptedPids) fromProc.Children.Remove(pid);
         }
 
-        lock (toProc!.Children)
+        foreach (var pid in adoptedPids)
         {
-            foreach (var pid in adoptedPids)
-            {
-                if (!toProc.Children.Contains(pid)) toProc.Children.Add(pid);
-            }
+            if (!toProc!.Children.Contains(pid)) toProc.Children.Add(pid);
         }
 
         var initTask = GetTask(toPid);
@@ -273,46 +277,83 @@ public class KernelScheduler
 
     public bool TryAutoReapZombie(Process process)
     {
+        AssertSchedulerThread();
         if (!EngineInitReaperEnabled) return false;
         if (process.State != ProcessState.Zombie) return false;
         if (process.TGID == InitPid || process.PPID != InitPid) return false;
 
         Process? initProc;
-        lock (_processes)
-        {
-            if (!_processes.TryGetValue(process.TGID, out var live) || !ReferenceEquals(live, process)) return false;
-            if (!_processes.TryGetValue(InitPid, out initProc)) return false;
-            _processes.Remove(process.TGID);
-        }
+        if (!_processes.TryGetValue(process.TGID, out var live) || !ReferenceEquals(live, process)) return false;
+        if (!_processes.TryGetValue(InitPid, out initProc)) return false;
+        _processes.Remove(process.TGID);
 
-        lock (initProc!.Children)
-        {
-            initProc.Children.Remove(process.TGID);
-        }
+        initProc!.Children.Remove(process.TGID);
 
         process.State = ProcessState.Dead;
         CleanupDeadProcess(process);
         return true;
     }
 
-    public void Schedule(FiberTask task)
+    private void EnqueueTask(FiberTask task)
     {
+        AssertSchedulerThread();
         if (task.Status == FiberTaskStatus.Terminated) return;
         // Logger.LogDebug("[Scheduler] Schedule task TID={TID} (from {OldStatus})", task.TID, task.Status);
 
         task.Status = FiberTaskStatus.Ready;
-        lock (_runQueue)
-        {
-            _runQueue.Enqueue(task);
-        }
+        _runQueue.Enqueue(task);
 
         EnqueueWake();
     }
 
-    public void Schedule(Action continuation, FiberTask? context = null)
+    public void ScheduleLocal(FiberTask task)
+    {
+        AssertSchedulerThread();
+        EnqueueTask(task);
+    }
+
+    public void ScheduleFromAnyThread(FiberTask task)
+    {
+        if (IsSchedulerThread)
+        {
+            EnqueueTask(task);
+            return;
+        }
+
+        EnqueueContinuation(() => EnqueueTask(task), task);
+    }
+
+    public void Schedule(FiberTask task)
+    {
+        if (IsSchedulerThread)
+            ScheduleLocal(task);
+        else
+            ScheduleFromAnyThread(task);
+    }
+
+    private void EnqueueContinuation(Action continuation, FiberTask? context)
     {
         _events.Writer.TryWrite((continuation, context));
         EnqueueWake();
+    }
+
+    public void ScheduleLocal(Action continuation, FiberTask? context = null)
+    {
+        AssertSchedulerThread();
+        EnqueueContinuation(continuation, context);
+    }
+
+    public void ScheduleFromAnyThread(Action continuation, FiberTask? context = null)
+    {
+        EnqueueContinuation(continuation, context);
+    }
+
+    public void Schedule(Action continuation, FiberTask? context = null)
+    {
+        if (IsSchedulerThread)
+            ScheduleLocal(continuation, context);
+        else
+            ScheduleFromAnyThread(continuation, context);
     }
 
     public Timer ScheduleTimer(long delayMs, Action callback)
@@ -340,6 +381,7 @@ public class KernelScheduler
 
     public void Run(long maxTicks = -1)
     {
+        BindOwnerThreadIfNeeded();
         Current = this;
         var previousSyncContext = SynchronizationContext.Current;
         var schedulerSyncContext = new KernelSyncContext(this);
@@ -536,15 +578,12 @@ public class KernelScheduler
     {
         var anyWaiting = false;
         var anyAlive = false;
-        lock (_tasks)
-        {
-            foreach (var t in _tasks.Values)
-                if (t.Status != FiberTaskStatus.Terminated && t.Status != FiberTaskStatus.Zombie)
-                {
-                    anyAlive = true;
-                    if (t.Status == FiberTaskStatus.Waiting) anyWaiting = true;
-                }
-        }
+        foreach (var t in _tasks.Values)
+            if (t.Status != FiberTaskStatus.Terminated && t.Status != FiberTaskStatus.Zombie)
+            {
+                anyAlive = true;
+                if (t.Status == FiberTaskStatus.Waiting) anyWaiting = true;
+            }
 
         return (anyAlive, anyWaiting);
     }
@@ -556,13 +595,10 @@ public class KernelScheduler
         sb.AppendLine($"CurrentTick: {CurrentTick}");
         sb.AppendLine($"RunQueue: {_runQueue.Count}");
 
-        lock (_tasks)
-        {
-            sb.AppendLine("Tasks:");
-            foreach (var t in _tasks.Values)
-                sb.AppendLine(
-                    $"  TID={t.TID} PID={t.PID} Status={t.Status} Exited={t.Exited} ExitStatus={t.ExitStatus}");
-        }
+        sb.AppendLine("Tasks:");
+        foreach (var t in _tasks.Values)
+            sb.AppendLine(
+                $"  TID={t.TID} PID={t.PID} Status={t.Status} Exited={t.Exited} ExitStatus={t.ExitStatus}");
 
         var msg = sb.ToString();
         Logger.LogCritical(msg);
@@ -578,78 +614,74 @@ public class KernelScheduler
     /// </summary>
     private void ValidateSchedulerState()
     {
-        lock (_tasks)
-        {
-            foreach (var task in _tasks.Values)
-                switch (task.Status)
-                {
-                    case FiberTaskStatus.Ready:
-                        // Ready task should be in RunQueue
-                        // Note: We can't easily check if task is in queue without iterating
-                        // For now, if we reach here with RunQueue empty and Ready tasks, it's a bug
-                        Panic($"Scheduler Bug: Task TID={task.TID} PID={task.PID} is Ready but RunQueue is empty. " +
-                              $"Task should be scheduled for execution.");
-                        break;
+        foreach (var task in _tasks.Values)
+            switch (task.Status)
+            {
+                case FiberTaskStatus.Ready:
+                    // Ready task should be in RunQueue
+                    // Note: We can't easily check if task is in queue without iterating
+                    // For now, if we reach here with RunQueue empty and Ready tasks, it's a bug
+                    Panic($"Scheduler Bug: Task TID={task.TID} PID={task.PID} is Ready but RunQueue is empty. " +
+                          $"Task should be scheduled for execution.");
+                    break;
 
-                    case FiberTaskStatus.Running:
-                        // Running task should be the current task
-                        if (CurrentTask != task)
-                            Panic($"Scheduler Bug: Task TID={task.TID} PID={task.PID} is Running but not Current. " +
-                                  $"CurrentTask is {(CurrentTask != null ? $"TID={CurrentTask.TID}" : "null")}");
-                        break;
+                case FiberTaskStatus.Running:
+                    // Running task should be the current task
+                    if (CurrentTask != task)
+                        Panic($"Scheduler Bug: Task TID={task.TID} PID={task.PID} is Running but not Current. " +
+                              $"CurrentTask is {(CurrentTask != null ? $"TID={CurrentTask.TID}" : "null")}");
+                    break;
 
-                    case FiberTaskStatus.Waiting:
-                        // Waiting is normal - task is waiting for I/O (terminal, timer, futex, etc.)
-                        // This is NOT a scheduler bug, just normal blocking
-                        // Logger.LogDebug("Task TID={TID} is Waiting (normal I/O block)", task.TID);
-                        break;
+                case FiberTaskStatus.Waiting:
+                    // Waiting is normal - task is waiting for I/O (terminal, timer, futex, etc.)
+                    // This is NOT a scheduler bug, just normal blocking
+                    // Logger.LogDebug("Task TID={TID} is Waiting (normal I/O block)", task.TID);
+                    break;
 
-                    case FiberTaskStatus.Zombie:
-                    case FiberTaskStatus.Terminated:
-                        // These are fine, just need cleanup
-                        break;
-                }
-        }
+                case FiberTaskStatus.Zombie:
+                case FiberTaskStatus.Terminated:
+                    // These are fine, just need cleanup
+                    break;
+            }
     }
 
     private bool TryDequeue(out FiberTask? task)
     {
-        lock (_runQueue)
-        {
-            return _runQueue.TryDequeue(out task!);
-        }
+        return _runQueue.TryDequeue(out task!);
     }
 
     public void SignalProcessGroup(int pgid, int signal)
     {
-        _ = SignalProcessGroupWithCount(pgid, signal);
+        if (IsSchedulerThread)
+        {
+            _ = SignalProcessGroupWithCount(pgid, signal);
+        }
+        else
+        {
+            ScheduleFromAnyThread(() => { _ = SignalProcessGroupWithCount(pgid, signal); });
+        }
     }
 
     public int SignalProcessGroupWithCount(int pgid, int signal)
     {
+        AssertSchedulerThread();
         var count = 0;
-        lock (_processes)
-        {
-            foreach (var p in _processes.Values)
-                if (p.PGID == pgid)
-                {
-                    var target = SelectSignalTarget(p, signal);
-                    if (target == null) continue;
-                    target.PostSignal(signal);
-                    count++;
-                }
-        }
+        foreach (var p in _processes.Values)
+            if (p.PGID == pgid)
+            {
+                var target = SelectSignalTarget(p, signal);
+                if (target == null) continue;
+                target.PostSignal(signal);
+                count++;
+            }
 
         return count;
     }
 
     public bool SignalProcess(int pid, int signal)
     {
-        Process? proc;
-        lock (_processes)
-        {
-            if (!_processes.TryGetValue(pid, out proc)) return false;
-        }
+        AssertSchedulerThread();
+        if (!_processes.TryGetValue(pid, out var proc)) return false;
 
         var target = SelectSignalTarget(proc, signal);
         if (target != null)
@@ -670,11 +702,8 @@ public class KernelScheduler
 
     public bool SignalProcessInfo(int pid, int signal, SigInfo info)
     {
-        Process? proc;
-        lock (_processes)
-        {
-            if (!_processes.TryGetValue(pid, out proc)) return false;
-        }
+        AssertSchedulerThread();
+        if (!_processes.TryGetValue(pid, out var proc)) return false;
 
         var target = SelectSignalTarget(proc, signal);
         if (target != null)
@@ -697,20 +726,17 @@ public class KernelScheduler
         FiberTask? eligible = null;
         FiberTask? fallback = null;
 
-        lock (process.Threads)
+        foreach (var task in process.Threads)
         {
-            foreach (var task in process.Threads)
+            if (task.Status == FiberTaskStatus.Terminated || task.Exited) continue;
+
+            if (fallback == null) fallback = task;
+            if (task.TID == process.TGID) leader = task;
+
+            if (!task.IsSignalIgnoredOrBlocked(signal))
             {
-                if (task.Status == FiberTaskStatus.Terminated || task.Exited) continue;
-
-                if (fallback == null) fallback = task;
-                if (task.TID == process.TGID) leader = task;
-
-                if (!task.IsSignalIgnoredOrBlocked(signal))
-                {
-                    if (task.TID == process.TGID) return task;
-                    if (eligible == null) eligible = task;
-                }
+                if (task.TID == process.TGID) return task;
+                if (eligible == null) eligible = task;
             }
         }
 
@@ -719,15 +745,13 @@ public class KernelScheduler
 
     public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)
     {
+        AssertSchedulerThread();
         List<int> pids = [];
-        lock (_processes)
+        foreach (var p in _processes.Values)
         {
-            foreach (var p in _processes.Values)
-            {
-                if (excludePid.HasValue && p.TGID == excludePid.Value) continue;
-                if (skipInit && p.TGID == 1) continue;
-                pids.Add(p.TGID);
-            }
+            if (excludePid.HasValue && p.TGID == excludePid.Value) continue;
+            if (skipInit && p.TGID == 1) continue;
+            pids.Add(p.TGID);
         }
 
         var count = 0;
@@ -740,17 +764,10 @@ public class KernelScheduler
 
     private int ForwardSignalFromEngineInit(int signal)
     {
-        Process? initProc;
-        lock (_processes)
-        {
-            if (!_processes.TryGetValue(InitPid, out initProc)) return 0;
-        }
+        AssertSchedulerThread();
+        if (!_processes.TryGetValue(InitPid, out var initProc)) return 0;
 
-        List<int> childPids;
-        lock (initProc!.Children)
-        {
-            childPids = [.. initProc.Children];
-        }
+        var childPids = new List<int>(initProc.Children);
 
         var count = 0;
         foreach (var childPid in childPids)
@@ -766,18 +783,27 @@ public class KernelScheduler
 
     public void SignalTask(int tid, int signal)
     {
-        var task = GetTask(tid);
-        task?.PostSignal(signal);
+        if (IsSchedulerThread)
+        {
+            AssertSchedulerThread();
+            var task = GetTask(tid);
+            task?.PostSignal(signal);
+            return;
+        }
+
+        ScheduleFromAnyThread(() =>
+        {
+            var task = GetTask(tid);
+            task?.PostSignal(signal);
+        });
     }
 
     public bool IsValidProcessGroup(int pgid, int sid)
     {
-        lock (_processes)
-        {
-            foreach (var p in _processes.Values)
-                if (p.PGID == pgid && p.SID == sid)
-                    return true;
-        }
+        AssertSchedulerThread();
+        foreach (var p in _processes.Values)
+            if (p.PGID == pgid && p.SID == sid)
+                return true;
 
         return false;
     }

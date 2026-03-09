@@ -1089,7 +1089,7 @@ public partial class SyscallManager
             // Handle Breakpoint (INT 3)
             if (vector == 3)
             {
-                if (engine.Owner is FiberTask t) t.PendingSignals |= 1UL << (5 - 1); // SIGTRAP = 5
+                if (engine.Owner is FiberTask t) t.PostSignal((int)Signal.SIGTRAP);
                 return true;
             }
 
@@ -1314,13 +1314,34 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
 
     public void SignalProcessGroup(int pgid, int signal)
     {
-        KernelScheduler.Current?.SignalProcessGroup(pgid, signal);
+        var scheduler = ResolveScheduler();
+        if (scheduler == null) return;
+
+        if (scheduler.IsSchedulerThread)
+            scheduler.SignalProcessGroup(pgid, signal);
+        else
+            scheduler.ScheduleFromAnyThread(() => scheduler.SignalProcessGroup(pgid, signal));
     }
 
     public void SignalForegroundTask(int signal)
     {
-        // Signal the current task
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null) task.PendingSignals |= 1UL << (signal - 1);
+        var scheduler = ResolveScheduler();
+        if (scheduler == null) return;
+
+        void Deliver()
+        {
+            var task = scheduler.CurrentTask ?? _sm.Engine.Owner as FiberTask;
+            task?.PostSignal(signal);
+        }
+
+        if (scheduler.IsSchedulerThread)
+            Deliver();
+        else
+            scheduler.ScheduleFromAnyThread(Deliver);
+    }
+
+    private KernelScheduler? ResolveScheduler()
+    {
+        return (_sm.Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
     }
 }

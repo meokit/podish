@@ -104,6 +104,45 @@ public class AsyncWaitQueueTests
         Assert.True(resumed);
     }
 
+    [Fact]
+    public void WaitQueueAwaiter_QueueSignaledRace_WithPendingSignal_MustCompleteAsEvent()
+    {
+        var scheduler = new KernelScheduler();
+        KernelScheduler.Current = scheduler;
+        var process = new Process(400, null!, null!);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue();
+        var result = AwaitResult.Interrupted;
+        var resumed = false;
+        var task = new FiberTask(401, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            // Simulate race window:
+            // 1) caller observed IsCompleted=false
+            // 2) queue becomes signaled just before OnCompleted registration.
+            queue.Signal();
+            task.PostSignal((int)Signal.SIGUSR1);
+
+            var awaiter = queue.GetAwaiter();
+            awaiter.OnCompleted(() =>
+            {
+                resumed = true;
+                result = awaiter.GetResult();
+                task.Exited = true;
+                task.Status = FiberTaskStatus.Terminated;
+            });
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.True(resumed);
+        Assert.Equal(AwaitResult.Completed, result);
+    }
+
     private sealed class MockEngine : Engine
     {
         public MockEngine() : base(true)

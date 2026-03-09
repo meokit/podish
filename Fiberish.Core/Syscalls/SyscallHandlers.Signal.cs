@@ -150,20 +150,17 @@ public partial class SyscallManager
 
     private static void CheckAndTriggerPendingSignals(FiberTask task)
     {
-        lock (task)
+        var unblocked = task.PendingSignals & ~task.SignalMask;
+        if (unblocked != 0)
         {
-            var unblocked = task.PendingSignals & ~task.SignalMask;
-            if (unblocked != 0)
+            // Find the first unblocked pending signal and mark as interrupting
+            // so the guest execution loop will pick it up after the syscall returns
+            for (int i = 1; i <= 64; i++)
             {
-                // Find the first unblocked pending signal and mark as interrupting
-                // so the guest execution loop will pick it up after the syscall returns
-                for (int i = 1; i <= 64; i++)
+                if ((unblocked & (1UL << (i - 1))) != 0)
                 {
-                    if ((unblocked & (1UL << (i - 1))) != 0)
-                    {
-                        task.TrySetActiveWaitReason(WakeReason.Signal);
-                        break;
-                    }
+                    task.TrySetActiveWaitReason(WakeReason.Signal);
+                    break;
                 }
             }
         }
@@ -341,11 +338,7 @@ public partial class SyscallManager
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
 
         // Check for pending signals immediately (unblocked by new mask)
-        var hasPending = false;
-        lock (task)
-        {
-            if ((task.PendingSignals & ~mask) != 0) hasPending = true;
-        }
+        var hasPending = (task.PendingSignals & ~mask) != 0;
 
         if (hasPending)
         {

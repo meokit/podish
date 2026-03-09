@@ -69,8 +69,7 @@ public class AsyncWaitQueue
         // Signal() may be called from a background thread where Current is null
         foreach (var (_, continuation, context, token, scheduler) in toWake)
         {
-            if (context != null && token != null) context.TrySetWaitReason(token, WakeReason.Event);
-            scheduler.Schedule(continuation, context);
+            ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
         }
     }
 
@@ -122,9 +121,8 @@ public class AsyncWaitQueue
             if (IsSignaled)
             {
                 // If already signaled, schedule immediately
-                if (context != null && token != null) context.TrySetWaitReason(token, WakeReason.Event);
                 if (effectiveScheduler != null)
-                    effectiveScheduler.Schedule(continuation, context);
+                    ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, context, token);
                 else
                     continuation();
                 return NoopRegistration.Instance;
@@ -138,6 +136,35 @@ public class AsyncWaitQueue
             _waiters.Add((id, continuation, context, token, effectiveScheduler));
             return new WaitRegistration(this, id);
         }
+    }
+
+    private static void ScheduleContinuationWithWaitReason(
+        KernelScheduler scheduler,
+        Action continuation,
+        FiberTask? context,
+        FiberTask.WaitToken? token)
+    {
+        if (context == null || token == null)
+        {
+            scheduler.Schedule(continuation, context);
+            return;
+        }
+
+        // Fast-path for already-signaled queues on scheduler thread:
+        // publish Event wake-reason synchronously so signal safety-net cannot
+        // race and overwrite the completion into Interrupted.
+        if (scheduler.IsSchedulerThread)
+        {
+            context.TrySetWaitReason(token, WakeReason.Event);
+            scheduler.Schedule(continuation, context);
+            return;
+        }
+
+        scheduler.Schedule(() =>
+        {
+            context.TrySetWaitReason(token, WakeReason.Event);
+            continuation();
+        }, context);
     }
 
     private void Unregister(long id)

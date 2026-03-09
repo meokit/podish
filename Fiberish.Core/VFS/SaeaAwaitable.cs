@@ -85,11 +85,22 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         {
             if (_scheduler != null)
             {
-                _task?.TrySetActiveWaitReason(WakeReason.IO);
+                var task = _task;
+                if (task != null)
+                {
+                    _scheduler.Schedule(() =>
+                    {
+                        task.TrySetActiveWaitReason(WakeReason.IO);
+                        c();
+                    }, task);
+                }
+                else
+                {
+                    _scheduler.Schedule(c, null);
+                }
                 Logger.LogTrace(
                     "[SaeaAwaitable] Completed scheduling continuation: task={TaskId} scheduler={HasScheduler}",
                     _task?.TID, true);
-                _scheduler.Schedule(c, _task);
             }
         }
         else

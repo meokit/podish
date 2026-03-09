@@ -55,15 +55,12 @@ internal static class ProcessAddressSpaceSync
             seen.Add(includeEngine.State);
         }
 
-        lock (process.Threads)
+        foreach (var task in process.Threads)
         {
-            foreach (var task in process.Threads)
-            {
-                var cpu = task.CPU;
-                if (cpu.State == IntPtr.Zero) continue;
-                if (!seen.Add(cpu.State)) continue;
-                engines.Add(cpu);
-            }
+            var cpu = task.CPU;
+            if (cpu.State == IntPtr.Zero) continue;
+            if (!seen.Add(cpu.State)) continue;
+            engines.Add(cpu);
         }
 
         return engines;

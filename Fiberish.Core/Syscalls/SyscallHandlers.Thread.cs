@@ -135,7 +135,8 @@ public partial class SyscallManager
             var token = _token;
             var runOnce = new RunOnceAction(continuation, _task);
 
-            _waiter.Tcs.Task.ContinueWith(_ =>
+            var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
+            waiterAwaiter.OnCompleted(() =>
             {
                 if (task.GetWaitReason(token) == WakeReason.None)
                 {

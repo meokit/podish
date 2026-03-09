@@ -36,6 +36,6 @@ internal sealed class SchedulerReadyDispatcher : IReadyDispatcher
             return;
         }
 
-        scheduler.Schedule(callback);
+        scheduler.ScheduleFromAnyThread(callback);
     }
 }

@@ -7,7 +7,7 @@ public class Waiter
 
 public class FutexManager
 {
-    private readonly object _lock = new();
+    // Single-container scheduler-thread ownership: futex queue state is mutated only from scheduler thread.
 
     // Private futex: keyed by guest virtual address (FUTEX_PRIVATE_FLAG or same-process)
     private readonly Dictionary<uint, List<Waiter>> _privateQueues = [];
@@ -17,101 +17,83 @@ public class FutexManager
 
     public Waiter PrepareWait(uint addr)
     {
-        lock (_lock)
+        if (!_privateQueues.TryGetValue(addr, out var list))
         {
-            if (!_privateQueues.TryGetValue(addr, out var list))
-            {
-                list = [];
-                _privateQueues[addr] = list;
-            }
-
-            var w = new Waiter();
-            list.Add(w);
-            return w;
+            list = [];
+            _privateQueues[addr] = list;
         }
+
+        var w = new Waiter();
+        list.Add(w);
+        return w;
     }
 
     public void CancelWait(uint addr, Waiter w)
     {
-        lock (_lock)
+        if (_privateQueues.TryGetValue(addr, out var list))
         {
-            if (_privateQueues.TryGetValue(addr, out var list))
-            {
-                list.Remove(w);
-                if (list.Count == 0) _privateQueues.Remove(addr);
-            }
+            list.Remove(w);
+            if (list.Count == 0) _privateQueues.Remove(addr);
         }
     }
 
     public int Wake(uint addr, int count)
     {
-        lock (_lock)
+        if (!_privateQueues.TryGetValue(addr, out var list) || list.Count == 0) return 0;
+
+        var woken = 0;
+        while (count > 0 && list.Count > 0)
         {
-            if (!_privateQueues.TryGetValue(addr, out var list) || list.Count == 0) return 0;
-
-            var woken = 0;
-            while (count > 0 && list.Count > 0)
-            {
-                var w = list[0];
-                list.RemoveAt(0);
-                w.Tcs.TrySetResult(true);
-                woken++;
-                count--;
-            }
-
-            if (list.Count == 0) _privateQueues.Remove(addr);
-
-            return woken;
+            var w = list[0];
+            list.RemoveAt(0);
+            w.Tcs.TrySetResult(true);
+            woken++;
+            count--;
         }
+
+        if (list.Count == 0) _privateQueues.Remove(addr);
+
+        return woken;
     }
 
     public Waiter PrepareWaitShared(nint hostKey)
     {
-        lock (_lock)
+        if (!_sharedQueues.TryGetValue(hostKey, out var list))
         {
-            if (!_sharedQueues.TryGetValue(hostKey, out var list))
-            {
-                list = [];
-                _sharedQueues[hostKey] = list;
-            }
-
-            var w = new Waiter();
-            list.Add(w);
-            return w;
+            list = [];
+            _sharedQueues[hostKey] = list;
         }
+
+        var w = new Waiter();
+        list.Add(w);
+        return w;
     }
 
     public void CancelWaitShared(nint hostKey, Waiter w)
     {
-        lock (_lock)
+        if (_sharedQueues.TryGetValue(hostKey, out var list))
         {
-            if (_sharedQueues.TryGetValue(hostKey, out var list))
-            {
-                list.Remove(w);
-                if (list.Count == 0) _sharedQueues.Remove(hostKey);
-            }
+            list.Remove(w);
+            if (list.Count == 0) _sharedQueues.Remove(hostKey);
         }
     }
 
     public int WakeShared(nint hostKey, int count)
     {
-        lock (_lock)
+        if (!_sharedQueues.TryGetValue(hostKey, out var list) || list.Count == 0) return 0;
+
+        var woken = 0;
+        while (count > 0 && list.Count > 0)
         {
-            if (!_sharedQueues.TryGetValue(hostKey, out var list) || list.Count == 0) return 0;
-
-            var woken = 0;
-            while (count > 0 && list.Count > 0)
-            {
-                var w = list[0];
-                list.RemoveAt(0);
-                w.Tcs.TrySetResult(true);
-                woken++;
-                count--;
-            }
-
-            if (list.Count == 0) _sharedQueues.Remove(hostKey);
-
-            return woken;
+            var w = list[0];
+            list.RemoveAt(0);
+            w.Tcs.TrySetResult(true);
+            woken++;
+            count--;
         }
+
+        if (list.Count == 0) _sharedQueues.Remove(hostKey);
+
+        return woken;
     }
 }

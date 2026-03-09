@@ -61,37 +61,34 @@ public class SignalFdInode : TmpfsInode
             if (task == null) return -(int)Errno.EINVAL;
 
             SigInfo? sigInfo = null;
-            lock (task)
+            int pendingMatched = 0;
+            if (task.PendingSignals > 0)
             {
-                int pendingMatched = 0;
-                if (task.PendingSignals > 0)
+                for (int i = 1; i <= 64; i++)
                 {
-                    for (int i = 1; i <= 64; i++)
+                    if ((task.PendingSignals & (1UL << (i - 1))) != 0)
                     {
-                        if ((task.PendingSignals & (1UL << (i - 1))) != 0)
+                        if (IsSignalInMask((ulong)i, _sigMask))
                         {
-                            if (IsSignalInMask((ulong)i, _sigMask))
-                            {
-                                pendingMatched = i;
-                                break;
-                            }
+                            pendingMatched = i;
+                            break;
                         }
                     }
                 }
-
-                if (pendingMatched == 0)
-                {
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                    return 0; // Simulated block 
-                }
-
-                sigInfo = task.DequeueSignalUnsafe(pendingMatched);
             }
+
+            if (pendingMatched == 0)
+            {
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
+                return 0; // Simulated block
+            }
+
+            sigInfo = task.DequeueSignalUnsafe(pendingMatched);
 
             if (!sigInfo.HasValue)
             {
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return 0; 
+                return 0;
             }
 
             var info = sigInfo.Value;
@@ -127,17 +124,14 @@ public class SignalFdInode : TmpfsInode
             var task = KernelScheduler.Current?.CurrentTask;
             if (task != null && (events & LinuxConstants.POLLIN) != 0)
             {
-                lock (task)
+                for (int i = 1; i <= 64; i++)
                 {
-                    for (int i = 1; i <= 64; i++)
+                    if ((task.PendingSignals & (1UL << (i - 1))) != 0)
                     {
-                        if ((task.PendingSignals & (1UL << (i - 1))) != 0)
+                        if (IsSignalInMask((ulong)i, _sigMask))
                         {
-                            if (IsSignalInMask((ulong)i, _sigMask))
-                            {
-                                revents |= (short)LinuxConstants.POLLIN;
-                                break;
-                            }
+                            revents |= (short)LinuxConstants.POLLIN;
+                            break;
                         }
                     }
                 }
@@ -217,19 +211,16 @@ public class SignalFdInode : TmpfsInode
 
     private bool HasPendingMatchedSignalUnsafe(FiberTask task)
     {
-        lock (task)
-        {
-            if (task.PendingSignals == 0)
-                return false;
-            for (var i = 1; i <= 64; i++)
-            {
-                if ((task.PendingSignals & (1UL << (i - 1))) == 0)
-                    continue;
-                if (IsSignalInMask((ulong)i, _sigMask))
-                    return true;
-            }
+        if (task.PendingSignals == 0)
             return false;
+        for (var i = 1; i <= 64; i++)
+        {
+            if ((task.PendingSignals & (1UL << (i - 1))) == 0)
+                continue;
+            if (IsSignalInMask((ulong)i, _sigMask))
+                return true;
         }
+        return false;
     }
 
     private static bool IsSignalInMask(ulong sig, ulong mask)

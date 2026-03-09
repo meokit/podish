@@ -61,10 +61,7 @@ public static class ProcessFactory
             var parent = scheduler.GetProcess(parentPid);
             if (parent != null)
             {
-                lock (parent.Children)
-                {
-                    if (!parent.Children.Contains(proc.TGID)) parent.Children.Add(proc.TGID);
-                }
+                if (!parent.Children.Contains(proc.TGID)) parent.Children.Add(proc.TGID);
             }
         }
 

@@ -53,7 +53,6 @@ public class SysVShmManager
     private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
     private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
     private readonly List<SysVShmAttach> _attaches = new();
-    private readonly object _lock = new();
     private readonly MemoryObjectManager _memoryObjects;
     private int _nextShmid = 1;
 
@@ -78,58 +77,56 @@ public class SysVShmManager
         var alignedSize = (size + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
         if (alignedSize == 0) alignedSize = (uint)LinuxConstants.PageSize;
 
-        lock (_lock)
+        // Single-container scheduler-thread ownership: SysV SHM metadata is mutated on scheduler thread.
+        // Check if key exists (and not IPC_PRIVATE)
+        if (key != LinuxConstants.IPC_PRIVATE && _segmentsByKey.TryGetValue(key, out var existing))
         {
-            // Check if key exists (and not IPC_PRIVATE)
-            if (key != LinuxConstants.IPC_PRIVATE && _segmentsByKey.TryGetValue(key, out var existing))
-            {
-                // Key exists - IPC_EXCL only causes EEXIST when combined with IPC_CREAT
-                if ((flags & LinuxConstants.IPC_CREAT) != 0 && (flags & LinuxConstants.IPC_EXCL) != 0)
-                    return -(int)Errno.EEXIST; // IPC_CREAT | IPC_EXCL and exists -> error
+            // Key exists - IPC_EXCL only causes EEXIST when combined with IPC_CREAT
+            if ((flags & LinuxConstants.IPC_CREAT) != 0 && (flags & LinuxConstants.IPC_EXCL) != 0)
+                return -(int)Errno.EEXIST; // IPC_CREAT | IPC_EXCL and exists -> error
 
-                // Check size (must be <= existing size for existing segment)
-                if (size > existing.Size)
-                    return -(int)Errno.EINVAL;
+            // Check size (must be <= existing size for existing segment)
+            if (size > existing.Size)
+                return -(int)Errno.EINVAL;
 
-                // Check permissions
-                if (!CheckPermission(existing, uid, gid, flags))
-                    return -(int)Errno.EACCES;
+            // Check permissions
+            if (!CheckPermission(existing, uid, gid, flags))
+                return -(int)Errno.EACCES;
 
-                return existing.Shmid;
-            }
-
-            // Key doesn't exist or is IPC_PRIVATE
-            if (key != LinuxConstants.IPC_PRIVATE && (flags & LinuxConstants.IPC_CREAT) == 0)
-                return -(int)Errno.ENOENT; // No IPC_CREAT and doesn't exist -> error
-
-            // Create new segment
-            var shmid = _nextShmid++;
-            var segment = new SysVShmSegment
-            {
-                Key = key,
-                Shmid = shmid,
-                Size = alignedSize,
-                Mode = flags & 0x1FF, // Lower 9 bits are permissions
-                Uid = uid,
-                Gid = gid,
-                CUid = uid,
-                CGid = gid,
-                Cpid = pid,
-                Lpid = pid,
-                CTime = DateTime.UtcNow,
-                ATime = DateTime.UtcNow,
-                DTime = DateTime.UtcNow,
-                NAttch = 0,
-                MarkedForDelete = false,
-                BackingObject = _memoryObjects.CreateAnonymous(true) // shared
-            };
-
-            _segmentsByShmid[shmid] = segment;
-            if (key != LinuxConstants.IPC_PRIVATE)
-                _segmentsByKey[key] = segment;
-
-            return shmid;
+            return existing.Shmid;
         }
+
+        // Key doesn't exist or is IPC_PRIVATE
+        if (key != LinuxConstants.IPC_PRIVATE && (flags & LinuxConstants.IPC_CREAT) == 0)
+            return -(int)Errno.ENOENT; // No IPC_CREAT and doesn't exist -> error
+
+        // Create new segment
+        var shmid = _nextShmid++;
+        var segment = new SysVShmSegment
+        {
+            Key = key,
+            Shmid = shmid,
+            Size = alignedSize,
+            Mode = flags & 0x1FF, // Lower 9 bits are permissions
+            Uid = uid,
+            Gid = gid,
+            CUid = uid,
+            CGid = gid,
+            Cpid = pid,
+            Lpid = pid,
+            CTime = DateTime.UtcNow,
+            ATime = DateTime.UtcNow,
+            DTime = DateTime.UtcNow,
+            NAttch = 0,
+            MarkedForDelete = false,
+            BackingObject = _memoryObjects.CreateAnonymous(true) // shared
+        };
+
+        _segmentsByShmid[shmid] = segment;
+        if (key != LinuxConstants.IPC_PRIVATE)
+            _segmentsByKey[key] = segment;
+
+        return shmid;
     }
 
     /// <summary>
@@ -147,19 +144,16 @@ public class SysVShmManager
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         SysVShmSegment segment;
-        lock (_lock)
-        {
-            if (!_segmentsByShmid.TryGetValue(shmid, out segment!))
-                return -(int)Errno.EIDRM; // Segment doesn't exist
+        if (!_segmentsByShmid.TryGetValue(shmid, out segment!))
+            return -(int)Errno.EIDRM; // Segment doesn't exist
 
-            // Check permissions
-            var requiredFlags = (flags & LinuxConstants.SHM_RDONLY) != 0
-                ? LinuxConstants.SHM_R
-                : LinuxConstants.SHM_R | LinuxConstants.SHM_W;
-            if (!CheckPermission(segment, engine.Owner is FiberTask t ? t.Process.EUID : 0,
-                    engine.Owner is FiberTask t2 ? t2.Process.EGID : 0, requiredFlags))
-                return -(int)Errno.EACCES;
-        }
+        // Check permissions
+        var requiredFlags = (flags & LinuxConstants.SHM_RDONLY) != 0
+            ? LinuxConstants.SHM_R
+            : LinuxConstants.SHM_R | LinuxConstants.SHM_W;
+        if (!CheckPermission(segment, engine.Owner is FiberTask t ? t.Process.EUID : 0,
+                engine.Owner is FiberTask t2 ? t2.Process.EGID : 0, requiredFlags))
+            return -(int)Errno.EACCES;
 
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
         // Determine protection
@@ -226,21 +220,18 @@ public class SysVShmManager
             vmaManager.AddVma(vma);
 
             // Record attachment
-            lock (_lock)
+            var attach = new SysVShmAttach
             {
-                var attach = new SysVShmAttach
-                {
-                    Pid = pid,
-                    BaseAddr = attachAddr,
-                    Shmid = shmid,
-                    Prot = prot
-                };
-                _attaches.Add(attach);
+                Pid = pid,
+                BaseAddr = attachAddr,
+                Shmid = shmid,
+                Prot = prot
+            };
+            _attaches.Add(attach);
 
-                segment.NAttch++;
-                segment.ATime = DateTime.UtcNow;
-                segment.Lpid = pid;
-            }
+            segment.NAttch++;
+            segment.ATime = DateTime.UtcNow;
+            segment.Lpid = pid;
 
             return (long)attachAddr;
         }
@@ -262,35 +253,32 @@ public class SysVShmManager
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
-        lock (_lock)
-        {
-            // Find the attachment by address and pid (TGID)
-            // Linux shmdt operates on the calling process's address space
-            var attachIndex = _attaches.FindIndex(a => a.BaseAddr == addr && a.Pid == pid);
-            if (attachIndex < 0)
-                return -(int)Errno.EINVAL; // Not attached at this address for this process
+        // Find the attachment by address and pid (TGID)
+        // Linux shmdt operates on the calling process's address space
+        var attachIndex = _attaches.FindIndex(a => a.BaseAddr == addr && a.Pid == pid);
+        if (attachIndex < 0)
+            return -(int)Errno.EINVAL; // Not attached at this address for this process
 
-            var attach = _attaches[attachIndex];
-            _attaches.RemoveAt(attachIndex);
+        var attach = _attaches[attachIndex];
+        _attaches.RemoveAt(attachIndex);
 
-            // Find the segment
-            if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
-                return -(int)Errno.EIDRM; // Segment was already removed
+        // Find the segment
+        if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
+            return -(int)Errno.EIDRM; // Segment was already removed
 
-            // Unmap the VMA
-            ProcessAddressSpaceSync.Munmap(vmaManager, engine, addr, segment.Size, ownerProcess);
+        // Unmap the VMA
+        ProcessAddressSpaceSync.Munmap(vmaManager, engine, addr, segment.Size, ownerProcess);
 
-            // Update segment
-            segment.NAttch--;
-            segment.DTime = DateTime.UtcNow;
-            segment.Lpid = pid;
+        // Update segment
+        segment.NAttch--;
+        segment.DTime = DateTime.UtcNow;
+        segment.Lpid = pid;
 
-            // Check if we should delete the segment
-            if (segment.MarkedForDelete && segment.NAttch == 0)
-                DestroySegment(segment);
+        // Check if we should delete the segment
+        if (segment.MarkedForDelete && segment.NAttch == 0)
+            DestroySegment(segment);
 
-            return 0;
-        }
+        return 0;
     }
 
     /// <summary>
@@ -306,58 +294,55 @@ public class SysVShmManager
     /// <returns>0 on success, negative errno on failure</returns>
     public int ShmCtl(int shmid, int cmd, uint buf, Engine engine, int uid, int gid, int pid)
     {
-        lock (_lock)
+        if (!_segmentsByShmid.TryGetValue(shmid, out var segment))
+            return -(int)Errno.EIDRM;
+
+        // Handle IPC_64 flag - strip it from cmd
+        var actualCmd = cmd & ~LinuxConstants.IPC_64;
+
+        switch (actualCmd)
         {
-            if (!_segmentsByShmid.TryGetValue(shmid, out var segment))
-                return -(int)Errno.EIDRM;
+            case LinuxConstants.IPC_STAT:
+                // Check read permission
+                if (!CheckPermission(segment, uid, gid, LinuxConstants.SHM_R))
+                    return -(int)Errno.EACCES;
+                return WriteShmidDs(segment, buf, engine);
 
-            // Handle IPC_64 flag - strip it from cmd
-            var actualCmd = cmd & ~LinuxConstants.IPC_64;
+            case LinuxConstants.IPC_SET:
+                // Check write permission and ownership
+                if (segment.Uid != uid && uid != 0)
+                    return -(int)Errno.EPERM;
+                return ReadShmidDsForSet(segment, buf, engine);
 
-            switch (actualCmd)
-            {
-                case LinuxConstants.IPC_STAT:
-                    // Check read permission
-                    if (!CheckPermission(segment, uid, gid, LinuxConstants.SHM_R))
-                        return -(int)Errno.EACCES;
-                    return WriteShmidDs(segment, buf, engine);
+            case LinuxConstants.IPC_RMID:
+                // Check ownership
+                if (segment.CUid != uid && uid != 0)
+                    return -(int)Errno.EPERM;
 
-                case LinuxConstants.IPC_SET:
-                    // Check write permission and ownership
-                    if (segment.Uid != uid && uid != 0)
-                        return -(int)Errno.EPERM;
-                    return ReadShmidDsForSet(segment, buf, engine);
+                segment.MarkedForDelete = true;
+                segment.Lpid = pid;
+                segment.CTime = DateTime.UtcNow;
 
-                case LinuxConstants.IPC_RMID:
-                    // Check ownership
-                    if (segment.CUid != uid && uid != 0)
-                        return -(int)Errno.EPERM;
+                // If no attachments, destroy immediately
+                if (segment.NAttch == 0)
+                    DestroySegment(segment);
 
-                    segment.MarkedForDelete = true;
-                    segment.Lpid = pid;
-                    segment.CTime = DateTime.UtcNow;
+                return 0;
 
-                    // If no attachments, destroy immediately
-                    if (segment.NAttch == 0)
-                        DestroySegment(segment);
+            case LinuxConstants.SHM_LOCK:
+            case LinuxConstants.SHM_UNLOCK:
+                // Requires CAP_IPC_LOCK, which we don't implement
+                // For now, just return success (no-op)
+                return 0;
 
-                    return 0;
+            case LinuxConstants.SHM_STAT:
+            case LinuxConstants.SHM_INFO:
+            case LinuxConstants.SHM_STAT_ANY:
+                // Not implemented in phase 1
+                return -(int)Errno.ENOSYS;
 
-                case LinuxConstants.SHM_LOCK:
-                case LinuxConstants.SHM_UNLOCK:
-                    // Requires CAP_IPC_LOCK, which we don't implement
-                    // For now, just return success (no-op)
-                    return 0;
-
-                case LinuxConstants.SHM_STAT:
-                case LinuxConstants.SHM_INFO:
-                case LinuxConstants.SHM_STAT_ANY:
-                    // Not implemented in phase 1
-                    return -(int)Errno.ENOSYS;
-
-                default:
-                    return -(int)Errno.EINVAL;
-            }
+            default:
+                return -(int)Errno.EINVAL;
         }
     }
 
@@ -368,43 +353,37 @@ public class SysVShmManager
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
-        lock (_lock)
+        for (var i = _attaches.Count - 1; i >= 0; i--)
         {
-            for (var i = _attaches.Count - 1; i >= 0; i--)
+            var attach = _attaches[i];
+            if (attach.Pid != pid) continue;
+
+            _attaches.RemoveAt(i);
+
+            if (_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
             {
-                var attach = _attaches[i];
-                if (attach.Pid != pid) continue;
+                // [P1] Must munmap the VMA to avoid leaking page references
+                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.Size, ownerProcess);
 
-                _attaches.RemoveAt(i);
+                segment.NAttch--;
+                segment.DTime = DateTime.UtcNow;
+                segment.Lpid = pid;
 
-                if (_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
-                {
-                    // [P1] Must munmap the VMA to avoid leaking page references
-                    ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.Size, ownerProcess);
-
-                    segment.NAttch--;
-                    segment.DTime = DateTime.UtcNow;
-                    segment.Lpid = pid;
-
-                    if (segment.MarkedForDelete && segment.NAttch == 0)
-                        DestroySegment(segment);
-                }
+                if (segment.MarkedForDelete && segment.NAttch == 0)
+                    DestroySegment(segment);
             }
         }
     }
 
     public long GetResidentBytesSnapshot()
     {
-        lock (_lock)
+        long bytes = 0;
+        foreach (var segment in _segmentsByShmid.Values)
         {
-            long bytes = 0;
-            foreach (var segment in _segmentsByShmid.Values)
-            {
-                bytes += (long)segment.BackingObject.PageCount * LinuxConstants.PageSize;
-            }
-
-            return bytes;
+            bytes += (long)segment.BackingObject.PageCount * LinuxConstants.PageSize;
         }
+
+        return bytes;
     }
 
     private void DestroySegment(SysVShmSegment segment)

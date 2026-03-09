@@ -329,30 +329,32 @@ public sealed class ContainerRuntimeService
                 scheduler, ttyDiag, loc.Mount!, uts, parentPid: engineInitProc?.TGID ?? 0);
             request.ProcessController?.BindRuntimeControl(() =>
             {
-                try
+                scheduler.ScheduleFromAnyThread(() =>
                 {
-                    // Best-effort container-wide writeback before forced stop.
-                    runtime.Syscalls.SyncContainerPageCache();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Force-stop writeback failed");
-                }
+                    try
+                    {
+                        // Best-effort container-wide writeback before forced stop.
+                        runtime.Syscalls.SyncContainerPageCache();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Force-stop writeback failed");
+                    }
 
-                scheduler.Running = false;
-                scheduler.WakeUp();
+                    scheduler.Running = false;
+                    scheduler.WakeUp();
+                });
             });
             var exposedInitPid = engineInitProc?.TGID ?? mainTask.Process.TGID;
             request.ProcessController?.BindInitProcess(exposedInitPid, sig =>
             {
-                if (request.UseEngineInit)
+                scheduler.ScheduleFromAnyThread(() =>
                 {
-                    _ = scheduler.SignalProcess(exposedInitPid, sig);
-                }
-                else
-                {
-                    mainTask.PostSignal(sig);
-                }
+                    if (request.UseEngineInit)
+                        _ = scheduler.SignalProcess(exposedInitPid, sig);
+                    else
+                        mainTask.PostSignal(sig);
+                });
             });
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
@@ -1061,7 +1063,7 @@ public sealed class ContainerRuntimeService
 
         public void SignalProcessGroup(int pgid, int signal)
         {
-            _scheduler.SignalProcessGroup(pgid, signal);
+            _scheduler.ScheduleFromAnyThread(() => _scheduler.SignalProcessGroup(pgid, signal));
         }
 
         public void SignalForegroundTask(int signal)

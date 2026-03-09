@@ -5,6 +5,7 @@ using Fiberish.X86.Native;
 using Fiberish.Core.Utils;
 using Microsoft.Extensions.Logging;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 
 namespace Fiberish.Core;
 
@@ -77,14 +78,12 @@ public class FiberTask
         TID = tid;
         PID = process.TGID;
         Process = process;
-        lock (Process.Threads)
-        {
-            Process.Threads.Add(this);
-        }
+        CommonKernel = kernel;
+        kernel.AssertSchedulerThread();
+        Process.Threads.Add(this);
 
         CPU = cpu;
         CPU.Owner = this;
-        CommonKernel = kernel;
 
         Logger = kernel.LoggerFactory.CreateLogger($"Fiberish.Task.{TID}");
         CPU.LogHandler = EngineLogHandler;
@@ -135,27 +134,37 @@ public class FiberTask
     public FiberTask? VforkParent { get; set; }
 
     public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
-    private readonly object _waitLock = new();
     private long _nextWaitTokenId;
     private WaitToken? _activeWaitToken;
     private Action? _activeWaitContinuation;
+
+    // Single-thread scheduling model: keep using-scope syntax so future locking
+    // can be introduced centrally without changing call sites.
+    private readonly struct TaskStateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
+    {
+        CommonKernel.AssertSchedulerThread(caller);
+        return default;
+    }
 
     // Compatibility shim: now backed by current active wait token only.
     public WakeReason WakeReason
     {
         get
         {
-            lock (_waitLock)
-            {
-                return _activeWaitToken?.Reason ?? WakeReason.None;
-            }
+            using var scope = EnterTaskStateScope();
+            return _activeWaitToken?.Reason ?? WakeReason.None;
         }
         set
         {
-            lock (_waitLock)
-            {
-                if (_activeWaitToken != null) _activeWaitToken.Reason = value;
-            }
+            using var scope = EnterTaskStateScope();
+            if (_activeWaitToken != null) _activeWaitToken.Reason = value;
         }
     }
 
@@ -175,28 +184,24 @@ public class FiberTask
 
     public WaitToken BeginWaitToken()
     {
-        lock (_waitLock)
-        {
-            var token = new WaitToken(++_nextWaitTokenId);
-            _activeWaitToken = token;
-            return token;
-        }
+        using var scope = EnterTaskStateScope();
+        var token = new WaitToken(++_nextWaitTokenId);
+        _activeWaitToken = token;
+        return token;
     }
 
     public bool TrySetWaitReason(WaitToken token, WakeReason reason)
     {
+        using var scope = EnterTaskStateScope();
         Action? continuationToRun = null;
-        lock (_waitLock)
+        if (!ReferenceEquals(_activeWaitToken, token)) return false;
+        if (token.Reason != WakeReason.None) return false;
+
+        token.Reason = reason;
+        if (_activeWaitContinuation != null)
         {
-            if (!ReferenceEquals(_activeWaitToken, token)) return false;
-            if (token.Reason != WakeReason.None) return false;
-            
-            token.Reason = reason;
-            if (_activeWaitContinuation != null)
-            {
-                continuationToRun = _activeWaitContinuation;
-                _activeWaitContinuation = null;
-            }
+            continuationToRun = _activeWaitContinuation;
+            _activeWaitContinuation = null;
         }
         if (continuationToRun != null)
         {
@@ -207,18 +212,16 @@ public class FiberTask
 
     public bool TrySetActiveWaitReason(WakeReason reason)
     {
+        using var scope = EnterTaskStateScope();
         Action? continuationToRun = null;
-        lock (_waitLock)
+        if (_activeWaitToken == null) return false;
+        if (_activeWaitToken.Reason != WakeReason.None) return false;
+
+        _activeWaitToken.Reason = reason;
+        if (_activeWaitContinuation != null)
         {
-            if (_activeWaitToken == null) return false;
-            if (_activeWaitToken.Reason != WakeReason.None) return false;
-            
-            _activeWaitToken.Reason = reason;
-            if (_activeWaitContinuation != null)
-            {
-                continuationToRun = _activeWaitContinuation;
-                _activeWaitContinuation = null;
-            }
+            continuationToRun = _activeWaitContinuation;
+            _activeWaitContinuation = null;
         }
         if (continuationToRun != null)
         {
@@ -229,29 +232,27 @@ public class FiberTask
 
     private void SetWaitContinuation(WaitToken token, Action continuation)
     {
+        using var scope = EnterTaskStateScope();
         Action? runNow = null;
-        lock (_waitLock)
+        if (ReferenceEquals(_activeWaitToken, token))
         {
-            if (ReferenceEquals(_activeWaitToken, token))
+            if (token.Reason != WakeReason.None)
             {
-                if (token.Reason != WakeReason.None)
-                {
-                    // Already completed or interrupted, run immediately
-                    runNow = continuation;
-                }
-                else
-                {
-                    // Still waiting
-                    _activeWaitContinuation = continuation;
-                }
+                // Already completed or interrupted, run immediately
+                runNow = continuation;
             }
             else
             {
-                // Token already inactive/completed
-                runNow = continuation;
+                // Still waiting
+                _activeWaitContinuation = continuation;
             }
         }
-        
+        else
+        {
+            // Token already inactive/completed
+            runNow = continuation;
+        }
+
         if (runNow != null)
         {
             CommonKernel?.Schedule(runNow, this);
@@ -282,22 +283,18 @@ public class FiberTask
 
     public WakeReason GetWaitReason(WaitToken token)
     {
-        lock (_waitLock)
-        {
-            return ReferenceEquals(_activeWaitToken, token) ? token.Reason : WakeReason.None;
-        }
+        using var scope = EnterTaskStateScope();
+        return ReferenceEquals(_activeWaitToken, token) ? token.Reason : WakeReason.None;
     }
 
     public WakeReason CompleteWaitToken(WaitToken token)
     {
-        lock (_waitLock)
-        {
-            if (!ReferenceEquals(_activeWaitToken, token)) return WakeReason.None;
-            var reason = token.Reason;
-            _activeWaitContinuation = null;
-            _activeWaitToken = null;
-            return reason;
-        }
+        using var scope = EnterTaskStateScope();
+        if (!ReferenceEquals(_activeWaitToken, token)) return WakeReason.None;
+        var reason = token.Reason;
+        _activeWaitContinuation = null;
+        _activeWaitToken = null;
+        return reason;
     }
 
 
@@ -406,12 +403,25 @@ public class FiberTask
         PostSignalInfo(new SigInfo { Signo = sig, Code = 0 /* SI_USER */, Pid = Process.TGID, Uid = 0 });
     }
 
-    /// <summary>
-    ///     Post a signal with full SigInfo payload to this task. Safe to call from any thread.
-    ///     This sets the pending flag, queues the payload, and interrupts any blocking syscall.
-    /// </summary>
     public void PostSignalInfo(SigInfo info)
     {
+        var kernel = CommonKernel;
+        if (kernel != null && !kernel.IsSchedulerThread)
+        {
+            kernel.ScheduleFromAnyThread(() => PostSignalInfoCore(info), this);
+            return;
+        }
+
+        PostSignalInfoCore(info);
+    }
+
+    /// <summary>
+    ///     Core signal enqueue logic. Must run on scheduler thread.
+    /// </summary>
+    private void PostSignalInfoCore(SigInfo info)
+    {
+        var kernel = CommonKernel;
+        kernel?.AssertSchedulerThread();
         int sig = info.Signo;
         if (sig < 1 || sig > 64) return;
 
@@ -420,7 +430,7 @@ public class FiberTask
         var mask = 1UL << (sig - 1);
         bool isIgnored = false;
         bool isBlocked = false;
-        lock (this)
+        using (EnterTaskStateScope())
         {
             if (sig != 9 && sig != 19)
             {
@@ -491,14 +501,17 @@ public class FiberTask
             wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
         }
 
-        if (!wokeActiveWait && (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
+        if (!wokeActiveWait &&
+            kernel != null &&
+            (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
         {
-            CommonKernel.Schedule(this);
+            kernel.Schedule(this);
         }
     }
 
     private void ProcessPendingSignals()
     {
+        using var scope = EnterTaskStateScope();
         if (PendingSignals == 0) return;
 
         for (var i = 1; i <= 64; i++)
@@ -510,7 +523,7 @@ public class FiberTask
 
             SigInfo dequeuedInfo = default;
 
-            lock (this)
+            using (EnterTaskStateScope())
             {
                 if ((PendingSignals & mask) == 0) continue;
 
@@ -562,13 +575,11 @@ public class FiberTask
 
     public bool HasUnblockedPendingSignal()
     {
-        lock (this)
-        {
-            // SIGKILL (9) and SIGSTOP (19) are never blocked
-            var unblocked = PendingSignals & ~SignalMask;
-            var hasUnmaskable = (PendingSignals & (1UL << 8)) != 0 || (PendingSignals & (1UL << 18)) != 0;
-            return unblocked != 0 || hasUnmaskable;
-        }
+        using var scope = EnterTaskStateScope();
+        // SIGKILL (9) and SIGSTOP (19) are never blocked
+        var unblocked = PendingSignals & ~SignalMask;
+        var hasUnmaskable = (PendingSignals & (1UL << 8)) != 0 || (PendingSignals & (1UL << 18)) != 0;
+        return unblocked != 0 || hasUnmaskable;
     }
 
     public bool IsSignalIgnoredOrBlocked(int sig)
@@ -578,7 +589,7 @@ public class FiberTask
         if (sig == 9 || sig == 19) return false;
 
         var mask = 1UL << (sig - 1);
-        lock (this)
+        using (EnterTaskStateScope())
         {
             if ((SignalMask & mask) != 0) return true; // Blocked
             if (Process.SignalActions.TryGetValue(sig, out var action))
@@ -597,7 +608,7 @@ public class FiberTask
     }
 
     /// <summary>
-    /// Must be called under lock(this) to maintain atomic mask sync.
+    /// Must be called within task state scope to maintain atomic mask sync.
     /// </summary>
     public SigInfo? DequeueSignalUnsafe(int sig)
     {
@@ -721,7 +732,7 @@ public class FiberTask
         ulong oldMask;
         SigInfo info;
 
-        lock (this)
+        using (EnterTaskStateScope())
         {
             oldMask = SignalMask;
 
@@ -832,10 +843,7 @@ public class FiberTask
         // Even if not fully stopped, we might need to clear pending stop signals
         // Clear pending stop signals (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU)
         var stopMask = (1UL << 18) | (1UL << 19) | (1UL << 20) | (1UL << 21);
-        lock (this)
-        {
-            PendingSignals &= ~stopMask;
-        }
+        using (EnterTaskStateScope()) PendingSignals &= ~stopMask;
 
         if (Process.State != ProcessState.Stopped) return;
 
@@ -1304,7 +1312,7 @@ public class FiberTask
             return false;
 
         var mask = 1UL << (sig - 1);
-        lock (this)
+        using (EnterTaskStateScope())
         {
             if ((SignalMask & mask) != 0) return true;
             if (Process.SignalActions.TryGetValue(sig, out var action) && action.Handler == 1) return true;
@@ -1549,7 +1557,7 @@ public class FiberTask
                 // not set due to timing, find the first unblocked pending signal.
                 if (!sig.HasValue)
                 {
-                    lock (this)
+                    using (EnterTaskStateScope())
                     {
                         var unblocked = PendingSignals & ~SignalMask;
                         // SIGKILL/SIGSTOP are never blocked
