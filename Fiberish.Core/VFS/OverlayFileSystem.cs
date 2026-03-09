@@ -242,6 +242,7 @@ public class OverlayInode : Inode
         SuperBlock = sb;
         LowerDentries = lowers?.Where(d => d != null).ToList() ?? [];
         UpperDentry = upper;
+        RefreshLinkCountFromSource("OverlayInode.ctor");
     }
 
     private Inode? SourceInode => UpperInode ?? LowerInode;
@@ -422,6 +423,7 @@ public class OverlayInode : Inode
         // Now update the overlay dentry's inode
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry); // Created only in upper
         dentry.Instantiate(newOverlayInode);
+        RefreshLinkCountFromSource("OverlayInode.Create");
 
         return dentry;
     }
@@ -439,6 +441,7 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
+        RefreshLinkCountFromSource("OverlayInode.Mkdir");
 
         return dentry;
     }
@@ -536,6 +539,7 @@ public class OverlayInode : Inode
             osb.AddWhiteout(GetDirectoryKey(), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
+        RefreshLinkCountFromSource("OverlayInode.Rmdir");
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -555,6 +559,8 @@ public class OverlayInode : Inode
         // Common apk path: source is newly created temp file in upper already.
         // For lower-only source entries, full copy-up rename semantics can be added later.
         UpperInode.Rename(oldName, targetParent.UpperInode, newName);
+        RefreshLinkCountFromSource("OverlayInode.Rename.source-parent");
+        targetParent.RefreshLinkCountFromSource("OverlayInode.Rename.target-parent");
     }
 
     public override Dentry Link(Dentry dentry, Inode oldInode)
@@ -587,6 +593,7 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
+        RefreshLinkCountFromSource("OverlayInode.Link");
 
         return dentry;
     }
@@ -611,6 +618,7 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
+        RefreshLinkCountFromSource("OverlayInode.Symlink");
         return dentry;
     }
 
@@ -632,7 +640,17 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
+        RefreshLinkCountFromSource("OverlayInode.Mknod");
         return dentry;
+    }
+
+    private void RefreshLinkCountFromSource(string reason)
+    {
+        var source = SourceInode;
+        var nlink = source != null
+            ? checked((int)Math.Min(int.MaxValue, source.GetLinkCountForStat()))
+            : Type == InodeType.Directory ? 2 : 1;
+        SetInitialLinkCount(Math.Max(0, nlink), reason);
     }
 
     public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)

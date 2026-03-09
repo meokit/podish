@@ -286,6 +286,7 @@ public class LayerInode : Inode
         MTime = entry.MTime ?? DateTime.UnixEpoch;
         ATime = entry.ATime ?? DateTime.UnixEpoch;
         CTime = entry.CTime ?? DateTime.UnixEpoch;
+        SetInitialLinkCount(ComputeInitialLinkCount(sb, path, entry), "LayerInode.ctor");
     }
 
     public override bool SupportsMmap => _entry.Type == InodeType.File;
@@ -299,6 +300,23 @@ public class LayerInode : Inode
 
         var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
         return new Dentry(name, sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
+    }
+
+    private static int ComputeInitialLinkCount(LayerSuperBlock sb, string path, LayerIndexEntry entry)
+    {
+        if (entry.Type != InodeType.Directory)
+            return 1;
+
+        var childDirCount = 0;
+        foreach (var childName in sb.Index.GetChildNames(path))
+        {
+            if (!sb.Index.TryGetChildPath(path, childName, out var childPath)) continue;
+            if (!sb.Index.TryGetEntry(childPath, out var childEntry)) continue;
+            if (childEntry.Type == InodeType.Directory)
+                childDirCount++;
+        }
+
+        return 2 + childDirCount;
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)

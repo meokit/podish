@@ -138,6 +138,7 @@ file sealed class ProcRootInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Directory;
         Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcRootInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -268,6 +269,7 @@ file sealed class ProcPidDirectoryInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Directory;
         Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcPidDirectoryInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -394,6 +396,7 @@ file sealed class ProcPidSymlinkInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Symlink;
         Mode = 0x1FF; // 0777
+        SetInitialLinkCount(1, "ProcPidSymlinkInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -422,6 +425,7 @@ file sealed class ProcPidFdDirectoryInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Directory;
         Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcPidFdDirectoryInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -482,6 +486,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Directory;
         Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcPidFdInfoDirectoryInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -543,6 +548,7 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode
         Ino = sb.AllocateIno();
         Type = InodeType.Symlink;
         Mode = 0x1FF; // 0777
+        SetInitialLinkCount(1, "ProcPidFdSymlinkInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -593,6 +599,7 @@ file sealed class ProcPidFdInfoFileInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.File;
         Mode = 0x124; // 0444
+        SetInitialLinkCount(1, "ProcPidFdInfoFileInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -648,6 +655,7 @@ file sealed class ProcSysRootInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Directory;
         Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcSysRootInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -765,6 +773,7 @@ file sealed class ProcSelfSymlinkInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.Symlink;
         Mode = 0x1FF; // 0777
+        SetInitialLinkCount(1, "ProcSelfSymlinkInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
@@ -795,6 +804,7 @@ file sealed class ProcDynamicFileInode : Inode
         Ino = sb.AllocateIno();
         Type = InodeType.File;
         Mode = mode;
+        SetInitialLinkCount(1, "ProcDynamicFileInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 

@@ -55,7 +55,7 @@ public class InodeInvariantTests
             Assert.Throws<InvalidOperationException>(() =>
                 VfsDebugTrace.AssertDentryMembership(dentry, "InodeInvariantTests"));
 
-            dentry.Inode = null;
+            dentry.UnbindInode("InodeInvariantTests.cleanup");
         }
         finally
         {
@@ -151,6 +151,26 @@ public class InodeInvariantTests
             VfsDebugTrace.StrictInvariants = strictBefore;
             VfsDebugTrace.Enabled = enabledBefore;
         }
+    }
+
+    [Fact]
+    public void LinkCount_DefaultsByInodeType_WhenNotExplicit()
+    {
+        var sb = new TestSuperBlock();
+
+        var fileInode = new TestInode(105, sb) { Type = InodeType.File };
+        Assert.False(fileInode.HasExplicitLinkCount);
+        Assert.Equal(1u, fileInode.GetLinkCountForStat());
+        fileInode.IncLink("test-file");
+        Assert.True(fileInode.HasExplicitLinkCount);
+        Assert.Equal(2, fileInode.LinkCount);
+
+        var dirInode = new TestInode(106, sb) { Type = InodeType.Directory };
+        Assert.False(dirInode.HasExplicitLinkCount);
+        Assert.Equal(2u, dirInode.GetLinkCountForStat());
+        dirInode.DecLink("test-dir");
+        Assert.True(dirInode.HasExplicitLinkCount);
+        Assert.Equal(1, dirInode.LinkCount);
     }
 
     private sealed class TestSuperBlock : SuperBlock

@@ -4,6 +4,8 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 
+using System;
+
 namespace Fiberish.VFS;
 
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
@@ -204,8 +206,10 @@ public abstract class Inode : IPageCacheOps
 
     public SuperBlock SuperBlock { get; set; } = null!;
 
-    // All dentries pointing to this inode (hard links)
-    public List<Dentry> Dentries { get; } = [];
+    // All dentries pointing to this inode (hard links / aliases).
+    // Exposed as read-only; callers must go through BindInode/UnbindInode.
+    private readonly List<Dentry> _dentries = [];
+    public IReadOnlyList<Dentry> Dentries => _dentries;
     public object Lock { get; } = new();
 
     // Reference counting for lifecycle management
@@ -310,7 +314,7 @@ public abstract class Inode : IPageCacheOps
     {
         if (HasExplicitLinkCount)
             return (uint)Math.Max(0, LinkCount);
-        return (uint)Math.Max(1, Dentries.Count);
+        return (uint)GetDefaultLinkCountForType();
     }
 
     public bool TryFinalize(string operation, string? reason = null)
@@ -324,11 +328,13 @@ public abstract class Inode : IPageCacheOps
         return true;
     }
 
+    [Obsolete("Use AcquireRef(InodeRefKind.KernelInternal, reason) instead.")]
     public void Get()
     {
         AcquireRef(InodeRefKind.KernelInternal, "Inode.Get");
     }
 
+    [Obsolete("Use ReleaseRef(InodeRefKind.KernelInternal, reason) instead.")]
     public void Put()
     {
         ReleaseRef(InodeRefKind.KernelInternal, "Inode.Put");
@@ -337,9 +343,14 @@ public abstract class Inode : IPageCacheOps
     private void EnsureLinkCountInitialized(string source)
     {
         if (HasExplicitLinkCount) return;
-        LinkCount = Math.Max(0, Dentries.Count);
+        LinkCount = GetDefaultLinkCountForType();
         HasExplicitLinkCount = true;
-        VfsDebugTrace.RecordLinkChange(this, $"Inode.{source}.InitFromDentries", 0, LinkCount, null);
+        VfsDebugTrace.RecordLinkChange(this, $"Inode.{source}.InitDefault", 0, LinkCount, null);
+    }
+
+    private int GetDefaultLinkCountForType()
+    {
+        return Type == InodeType.Directory ? 2 : 1;
     }
 
     private void IncrementRefKind(InodeRefKind kind)
@@ -395,17 +406,17 @@ public abstract class Inode : IPageCacheOps
             VfsDebugTrace.FailInvariant(
                 $"AttachAliasDentry inode mismatch ino={Ino} dentry={dentry.Name} dentryInode={dentry.Inode?.Ino}");
 
-        if (Dentries.Contains(dentry))
+        if (_dentries.Contains(dentry))
             VfsDebugTrace.FailInvariant($"AttachAliasDentry duplicate ino={Ino} dentry={dentry.Name}");
 
-        Dentries.Add(dentry);
+        _dentries.Add(dentry);
         VfsDebugTrace.RecordDentryBinding(this, dentry, "attach", reason);
         VfsDebugTrace.AssertDentryMembership(dentry, "AttachAliasDentry");
     }
 
     internal bool DetachAliasDentry(Dentry dentry, string reason)
     {
-        var removed = Dentries.Remove(dentry);
+        var removed = _dentries.Remove(dentry);
         VfsDebugTrace.RecordDentryBinding(this, dentry, removed ? "detach" : "detach-miss", reason);
         if (!removed) return false;
         if (dentry.Inode != null && dentry.Inode != this)
@@ -862,7 +873,6 @@ public interface IMagicSymlinkInode
 public class Dentry
 {
     private static long _nextId;
-    private int _refCount = 1;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
@@ -875,7 +885,7 @@ public class Dentry
     public long Id { get; } = Interlocked.Increment(ref _nextId);
 
     public string Name { get; set; }
-    public Inode? Inode { get; set; }
+    public Inode? Inode { get; private set; }
     public Dentry? Parent { get; set; }
     public SuperBlock SuperBlock { get; set; }
     public Dictionary<string, Dentry> Children { get; } = [];
@@ -884,19 +894,17 @@ public class Dentry
     public bool IsMounted { get; set; }
 
     /// <summary>
-    ///     Increment reference count.
+    ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
     /// </summary>
     public void Get()
     {
-        Interlocked.Increment(ref _refCount);
     }
 
     /// <summary>
-    ///     Decrement reference count.
+    ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
     /// </summary>
     public void Put()
     {
-        Interlocked.Decrement(ref _refCount);
     }
 
     public void Instantiate(Inode inode)

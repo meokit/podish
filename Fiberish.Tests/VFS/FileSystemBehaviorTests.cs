@@ -66,6 +66,36 @@ public class FileSystemBehaviorTests
 
     [Theory]
     [MemberData(nameof(MutableFileSystems))]
+    public void DirectoryNlink_MkdirRmdirAndNestedMove_TracksExpectedDelta(string fsName)
+    {
+        using var rig = FileSystemTestRigFactory.Create(fsName);
+        var root = rig.Root;
+        var rootInode = rig.RootInode;
+        var rootStart = rootInode.GetLinkCountForStat();
+
+        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        rootInode.Mkdir(dir, 0x1ED, 0, 0);
+        var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
+
+        Assert.Equal(rootStart + 1, rootInode.GetLinkCountForStat());
+        Assert.Equal(2u, dirInode.GetLinkCountForStat());
+
+        var nested = new Dentry("nested", null, dir, rig.SuperBlock);
+        dirInode.Mkdir(nested, 0x1ED, 0, 0);
+        var nestedInode = Assert.IsAssignableFrom<Inode>(nested.Inode);
+
+        Assert.Equal(3u, dirInode.GetLinkCountForStat());
+        Assert.Equal(2u, nestedInode.GetLinkCountForStat());
+
+        dirInode.Rmdir("nested");
+        Assert.Equal(2u, dirInode.GetLinkCountForStat());
+
+        rootInode.Rmdir("dir");
+        Assert.Equal(rootStart, rootInode.GetLinkCountForStat());
+    }
+
+    [Theory]
+    [MemberData(nameof(MutableFileSystems))]
     public void Rename_FilePreservesInodeAndUpdatesEntries(string fsName)
     {
         using var rig = FileSystemTestRigFactory.Create(fsName);
