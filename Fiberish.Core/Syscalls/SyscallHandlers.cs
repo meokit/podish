@@ -250,6 +250,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.madvise, SysMadvise);
         Register(X86SyscallNumbers.msync, SysMsync);
         Register(X86SyscallNumbers.mremap, SysMremap);
+        Register(X86SyscallNumbers.membarrier, SysMembarrier);
 
         Register(X86SyscallNumbers.kill, SysKill);
         Register(X86SyscallNumbers.tkill, SysTkill);

@@ -1064,8 +1064,8 @@ public partial class SyscallManager
     private static async ValueTask<int> SysClose(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
-        if (sm == null) return -1;
-        sm.FreeFD((int)a1);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (!sm.TryFreeFD((int)a1)) return -(int)Errno.EBADF;
         return 0;
     }
 

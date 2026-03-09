@@ -165,10 +165,28 @@ public class KernelScheduler
         foreach (var task in tasksToRemove)
         {
             task.Status = FiberTaskStatus.Terminated;
+            task.ExecutionMode = TaskExecutionMode.Terminated;
             lock (task.Process.Threads)
             {
                 task.Process.Threads.Remove(task);
             }
+        }
+    }
+
+    public int DetachTask(FiberTask task)
+    {
+        lock (_tasks)
+        {
+            _tasks.Remove(task.TID);
+        }
+
+        task.Status = FiberTaskStatus.Terminated;
+        task.ExecutionMode = TaskExecutionMode.Terminated;
+
+        lock (task.Process.Threads)
+        {
+            task.Process.Threads.Remove(task);
+            return task.Process.Threads.Count;
         }
     }
 
@@ -615,16 +633,9 @@ public class KernelScheduler
             foreach (var p in _processes.Values)
                 if (p.PGID == pgid)
                 {
-                    // Signal all threads? Usually signal is delivered to process, 
-                    // and one thread handles it. But for job control (SIGINT/SIGTSTP), 
-                    // it affects the whole group.
-                    // In Linux, it's sent to all processes in group. 
-                    // For each process, we signal its main thread or all threads?
-                    // Typically signal pending on process, handled by any eligible thread.
-                    // Simplified: Signal the main thread (TID=TGID).
-                    var mainTask = GetTask(p.TGID);
-                    if (mainTask == null) continue;
-                    mainTask.PostSignal(signal);
+                    var target = SelectSignalTarget(p, signal);
+                    if (target == null) continue;
+                    target.PostSignal(signal);
                     count++;
                 }
         }
@@ -640,10 +651,10 @@ public class KernelScheduler
             if (!_processes.TryGetValue(pid, out proc)) return false;
         }
 
-        var mainTask = GetTask(proc.TGID);
-        if (mainTask != null)
+        var target = SelectSignalTarget(proc, signal);
+        if (target != null)
         {
-            mainTask.PostSignal(signal);
+            target.PostSignal(signal);
             return true;
         }
 
@@ -665,10 +676,10 @@ public class KernelScheduler
             if (!_processes.TryGetValue(pid, out proc)) return false;
         }
 
-        var mainTask = GetTask(proc.TGID);
-        if (mainTask != null)
+        var target = SelectSignalTarget(proc, signal);
+        if (target != null)
         {
-            mainTask.PostSignalInfo(info);
+            target.PostSignalInfo(info);
             return true;
         }
 
@@ -678,6 +689,32 @@ public class KernelScheduler
         }
 
         return false;
+    }
+
+    private static FiberTask? SelectSignalTarget(Process process, int signal)
+    {
+        FiberTask? leader = null;
+        FiberTask? eligible = null;
+        FiberTask? fallback = null;
+
+        lock (process.Threads)
+        {
+            foreach (var task in process.Threads)
+            {
+                if (task.Status == FiberTaskStatus.Terminated || task.Exited) continue;
+
+                if (fallback == null) fallback = task;
+                if (task.TID == process.TGID) leader = task;
+
+                if (!task.IsSignalIgnoredOrBlocked(signal))
+                {
+                    if (task.TID == process.TGID) return task;
+                    if (eligible == null) eligible = task;
+                }
+            }
+        }
+
+        return leader ?? eligible ?? fallback;
     }
 
     public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)

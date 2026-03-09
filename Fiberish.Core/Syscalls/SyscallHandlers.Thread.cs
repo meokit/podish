@@ -43,24 +43,30 @@ public partial class SyscallManager
                 : sm.Futex.PrepareWaitShared(physKey);
 
             var task = sm.Engine.Owner as FiberTask;
-            if (task != null)
+            if (task == null)
             {
-                Logger.LogInformation(
-                    "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
-                    task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
-                var result = await new FutexAwaitable(waiter, task);
-                Logger.LogInformation(
-                    "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
-                    task.TID, result, task.WakeReason, task.PendingSignals);
-                if (result == AwaitResult.Interrupted)
-                {
-                    // Cancel the waiter to avoid leaking it in the queue
-                    if (isPrivate)
-                        sm.Futex.CancelWait(uaddr, waiter);
-                    else
-                        sm.Futex.CancelWaitShared(physKey, waiter);
-                    return -(int)Errno.ERESTARTSYS;
-                }
+                if (isPrivate)
+                    sm.Futex.CancelWait(uaddr, waiter);
+                else
+                    sm.Futex.CancelWaitShared(physKey, waiter);
+                return -(int)Errno.EINVAL;
+            }
+
+            Logger.LogInformation(
+                "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
+                task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
+            var result = await new FutexAwaitable(waiter, task);
+            Logger.LogInformation(
+                "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
+                task.TID, result, task.WakeReason, task.PendingSignals);
+            if (result == AwaitResult.Interrupted)
+            {
+                // Cancel the waiter to avoid leaking it in the queue
+                if (isPrivate)
+                    sm.Futex.CancelWait(uaddr, waiter);
+                else
+                    sm.Futex.CancelWaitShared(physKey, waiter);
+                return -(int)Errno.ERESTARTSYS;
             }
 
             return 0;
@@ -213,6 +219,12 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is FiberTask task)
+        {
+            task.ChildClearTidPtr = a1;
+            return task.TID;
+        }
+
         if (sm.GetTID != null) return sm.GetTID(sm.Engine);
         return 1;
     }

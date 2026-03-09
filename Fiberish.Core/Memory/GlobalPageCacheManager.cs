@@ -98,7 +98,7 @@ public static class GlobalPageCacheManager
         // 1) Periodic writeback of mmap-shared dirty pages.
         try
         {
-            mm.SyncAllMappedSharedFiles(engine);
+            ProcessAddressSpaceSync.SyncAllMappedSharedFiles(mm, engine);
         }
         catch
         {

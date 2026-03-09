@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 
@@ -16,6 +17,7 @@ public partial class SyscallManager
         if (newBrk < sm.BrkBase)
             return (int)sm.BrkAddr;
 
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(sm.Engine);
         if (newBrk > sm.BrkAddr)
         {
             var start = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
@@ -25,8 +27,9 @@ public partial class SyscallManager
                 try
                 {
                     // Map anonymous
-                    sm.Mem.Mmap(start, end - start, Protection.Read | Protection.Write,
-                        MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "HEAP", sm.Engine);
+                    ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, start, end - start,
+                        Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0,
+                        "HEAP");
                 }
                 catch
                 {
@@ -43,7 +46,9 @@ public partial class SyscallManager
             var start = (newBrk + 0xFFF) & ~0xFFFu;
             var end = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
             if (end > start)
-                sm.Mem.Munmap(start, end - start, sm.Engine);
+            {
+                ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, start, end - start);
+            }
             sm.BrkAddr = newBrk;
         }
 
@@ -109,8 +114,8 @@ public partial class SyscallManager
         try
         {
             long trueFileSz = (long)(f?.Dentry.Inode?.Size ?? 0);
-            var res = sm.Mem.Mmap(addr, len, (Protection)prot, (MapFlags)flags, f, offset, trueFileSz, "MMAP2",
-                sm.Engine);
+            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags, f,
+                offset, trueFileSz, "MMAP2");
             return (int)res;
         }
         catch
@@ -125,7 +130,7 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         if (a2 == 0) return -(int)Errno.EINVAL;
         if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
-        sm.Mem.Munmap(a1, a2, sm.Engine);
+        ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, a1, a2);
         return 0;
     }
 
@@ -141,9 +146,7 @@ public partial class SyscallManager
         if (len == 0) return 0;
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
 
-        // Invalidate cache since permissions are changing (e.g. RW -> RX)
-        sm.Engine.InvalidateRange(addr, len);
-        return sm.Mem.Mprotect(addr, len, prot, sm.Engine);
+        return ProcessAddressSpaceSync.Mprotect(sm.Mem, sm.Engine, addr, len, prot);
     }
 
     private static async ValueTask<int> SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -156,8 +159,7 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -1;
-        var end = addr + len;
-        foreach (var vma in sm.Mem.FindVMAsInRange(addr, end)) VMAManager.SyncVMA(vma, sm.Engine, addr, end);
+        ProcessAddressSpaceSync.SyncSharedRange(sm.Mem, sm.Engine, addr, len);
         return 0;
     }
 
@@ -185,6 +187,7 @@ public partial class SyscallManager
         if (isFixed && !mayMove) return -(int)Errno.EINVAL;
         if (isFixed && (newAddr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
 
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(sm.Engine);
         // Align sizes to page boundaries
         var oldLenAligned = (oldLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
         var newLenAligned = (newLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
@@ -199,14 +202,9 @@ public partial class SyscallManager
         // Case 1: Shrinking
         if (newLenAligned < oldLenAligned)
         {
-            // Unmap the tail portion
-            if (newLenAligned < oldLenAligned)
-            {
-                var unmapStart = oldAddr + newLenAligned;
-                var unmapLen = oldLenAligned - newLenAligned;
-                sm.Mem.Munmap(unmapStart, unmapLen, sm.Engine);
-            }
-
+            var unmapStart = oldAddr + newLenAligned;
+            var unmapLen = oldLenAligned - newLenAligned;
+            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, unmapStart, unmapLen);
             return (int)oldAddr;
         }
 
@@ -242,9 +240,9 @@ public partial class SyscallManager
             // and extend via a new mapping
             try
             {
-                sm.Mem.Mmap(growStart, growLen, oldVma.Perms,
+                ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, growStart, growLen, oldVma.Perms,
                     MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
-                    null, 0, 0, oldVma.Name, sm.Engine);
+                    null, 0, 0, oldVma.Name);
                 return (int)oldAddr;
             }
             catch
@@ -262,7 +260,7 @@ public partial class SyscallManager
         {
             targetAddr = newAddr;
             // MREMAP_FIXED acts like MAP_FIXED — unmap anything at the target
-            sm.Mem.Munmap(targetAddr, newLenAligned, sm.Engine);
+            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
         }
         else
         {
@@ -273,9 +271,9 @@ public partial class SyscallManager
         try
         {
             // Allocate new region
-            sm.Mem.Mmap(targetAddr, newLenAligned, oldVma.Perms,
+            ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, targetAddr, newLenAligned, oldVma.Perms,
                 MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
-                null, 0, 0, oldVma.Name, sm.Engine);
+                null, 0, 0, oldVma.Name);
 
             // Copy old content to new location
             var copyLen = Math.Min(oldLenAligned, newLenAligned);
@@ -284,7 +282,7 @@ public partial class SyscallManager
             sm.Engine.CopyToUser(targetAddr, buf);
 
             // Unmap old region
-            sm.Mem.Munmap(oldAddr, oldLenAligned, sm.Engine);
+            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, oldAddr, oldLenAligned);
 
             return (int)targetAddr;
         }

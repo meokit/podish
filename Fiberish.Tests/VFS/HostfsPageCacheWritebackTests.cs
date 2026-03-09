@@ -114,6 +114,57 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public async Task MapShared_Fsync_WritesBackDirtyPagesFromPeerThreadEngine()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-fsync-peer-thread-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        var oldCurrent = KernelScheduler.Current;
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+
+            var scheduler = new KernelScheduler();
+            KernelScheduler.Current = scheduler;
+            var process = new Process(5001, mm, sm);
+            scheduler.RegisterProcess(process);
+            var task = new FiberTask(5001, process, engine, scheduler);
+            engine.Owner = task;
+
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+
+            const uint mapAddr = 0x43100000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+            Assert.True(mm.HandleFault(mapAddr, true, engine));
+
+            var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
+            Assert.True(peer.CPU.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
+
+            var rc = await CallSys("SysFsync", engine.State, (uint)fd);
+            Assert.Equal(0, rc);
+            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+
+            sm.FreeFD(fd);
+            GC.KeepAlive(peer);
+        }
+        finally
+        {
+            KernelScheduler.Current = oldCurrent;
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Sync_WritesBackMappedDirtyPagesAcrossFds()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-sync-writeback-" + Guid.NewGuid().ToString("N"));

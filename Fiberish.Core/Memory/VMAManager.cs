@@ -89,12 +89,7 @@ public class VMAManager
 
         var end = addr + len;
         if (CheckOverlap(addr, end))
-        {
-            if ((flags & MapFlags.Fixed) != 0)
-                Munmap(addr, len, engine);
-            else
-                throw new InvalidOperationException("Overlap detected");
-        }
+            throw new InvalidOperationException("Overlap detected");
 
         var isShared = (flags & MapFlags.Shared) != 0;
         MemoryObject memObj;

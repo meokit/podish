@@ -793,26 +793,14 @@ public class FiberTask
     {
         if (Exited) return;
 
+        SignalVforkDone();
+        ExitRobustList();
+        ClearChildTidAndWake();
         Exited = true;
         ExitStatus = 128 + sig;
         Status = FiberTaskStatus.Terminated;
         ExecutionMode = TaskExecutionMode.Terminated;
-
-        // Notify parent
-        var ppid = Process.PPID;
-        if (ppid > 0)
-        {
-            var parentTask = CommonKernel.GetTask(ppid);
-            parentTask?.PostSignal((int)Signal.SIGCHLD);
-        }
-
-        // If main thread exits, entire process becomes zombie
-        if (TID == Process.TGID)
-        {
-            ProcFsManager.OnProcessExit(Process.Syscalls, Process.TGID);
-            SyscallManager.MarkProcessExitAndReparent(this, ExitStatus, exitedBySignal: true, termSignal: sig,
-                coreDumped);
-        }
+        SyscallManager.FinalizeProcessExit(this, ExitStatus, exitedBySignal: true, termSignal: sig, coreDumped);
     }
 
     private void StopBySignal(int sig)
@@ -1273,6 +1261,15 @@ public class FiberTask
         Logger.LogWarning("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
             faultName, CPU.Eip, sig);
 
+        if (MustForceDefaultForSynchronousFault((int)sig))
+        {
+            Logger.LogWarning(
+                "Synchronous fault signal {Sig} is blocked or ignored; forcing default action.",
+                sig);
+            ApplyDefaultSignalAction((int)sig, GetDefaultSignalAction((int)sig));
+            return;
+        }
+
         if (vector == 6)
         {
             var ip = CPU.Eip;
@@ -1298,6 +1295,24 @@ public class FiberTask
         CommonKernel.Schedule(this);
     }
 
+    private bool MustForceDefaultForSynchronousFault(int sig)
+    {
+        if (sig != (int)Signal.SIGBUS &&
+            sig != (int)Signal.SIGFPE &&
+            sig != (int)Signal.SIGILL &&
+            sig != (int)Signal.SIGSEGV)
+            return false;
+
+        var mask = 1UL << (sig - 1);
+        lock (this)
+        {
+            if ((SignalMask & mask) != 0) return true;
+            if (Process.SignalActions.TryGetValue(sig, out var action) && action.Handler == 1) return true;
+        }
+
+        return false;
+    }
+
 #pragma warning disable CS1998 // Async method lacks await operators
     public async ValueTask<FiberTask> Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
     {
@@ -1306,7 +1321,7 @@ public class FiberTask
         const int CLONE_VFORK = 0x00004000;
         const int CLONE_THREAD = 0x00010000;
         const int CLONE_SETTLS = 0x00080000;
-        const int CLONE_PARENT_SETTID = 0x00001000;
+        const int CLONE_PARENT_SETTID = (int)LinuxConstants.CLONE_PARENT_SETTID;
         const int CLONE_CHILD_CLEARTID = 0x00200000;
         const int CLONE_CHILD_SETTID = 0x01000000;
 
@@ -1715,6 +1730,9 @@ public class FiberTask
         if (pendingOp && owner == 0)
         {
             sm.Futex.Wake(uaddr, 1);
+            var pendingHostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
+            if (pendingHostPtr != IntPtr.Zero)
+                sm.Futex.WakeShared((nint)pendingHostPtr, 1);
             return;
         }
 
@@ -1728,6 +1746,29 @@ public class FiberTask
         if ((uval & LinuxConstants.FUTEX_WAITERS) != 0)
         {
             sm.Futex.Wake(uaddr, 1);
+            var hostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
+            if (hostPtr != IntPtr.Zero)
+                sm.Futex.WakeShared((nint)hostPtr, 1);
         }
+    }
+
+    public void ClearChildTidAndWake()
+    {
+        var clearTidPtr = ChildClearTidPtr;
+        if (clearTidPtr == 0) return;
+
+        // One-shot semantics: prevent duplicate wake attempts across exit paths.
+        ChildClearTidPtr = 0;
+
+        var zero = new byte[4];
+        if (!CPU.CopyToUser(clearTidPtr, zero)) return;
+
+        // Wake private-key waiters.
+        Process.Syscalls.Futex.Wake(clearTidPtr, 1);
+
+        // Also wake shared-key waiters used by non-private futex operations.
+        var hostPtr = CPU.GetPhysicalAddressSafe(clearTidPtr, false);
+        if (hostPtr != IntPtr.Zero)
+            Process.Syscalls.Futex.WakeShared((nint)hostPtr, 1);
     }
 }

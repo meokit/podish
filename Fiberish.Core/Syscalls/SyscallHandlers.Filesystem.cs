@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using Fiberish.Auth.Permission;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -1347,7 +1348,7 @@ public partial class SyscallManager
         var inode = file.Dentry.Inode;
         if (inode == null) return -(int)Errno.EBADF;
 
-        sm.Mem.SyncMappedFile(file, sm.Engine);
+        ProcessAddressSpaceSync.SyncMappedFile(sm.Mem, sm.Engine, file);
         var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue, true));
         if (writebackRc < 0 && writebackRc != -(int)Errno.EOPNOTSUPP && writebackRc != -(int)Errno.EROFS)
             return writebackRc;

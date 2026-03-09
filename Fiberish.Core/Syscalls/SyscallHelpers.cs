@@ -1,6 +1,7 @@
 using System.Text;
 using System.Linq;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -130,9 +131,9 @@ public partial class SyscallManager
         FDs[fd] = linuxFile;
         var cloexec = closeOnExec ?? ((linuxFile.Flags & FileFlags.O_CLOEXEC) != 0);
         if (cloexec)
-            _fdCloseOnExec.Add(fd);
+            FdCloseOnExecSet.Add(fd);
         else
-            _fdCloseOnExec.Remove(fd);
+            FdCloseOnExecSet.Remove(fd);
         return fd;
     }
 
@@ -156,27 +157,34 @@ public partial class SyscallManager
 
     public bool IsFdCloseOnExec(int fd)
     {
-        return _fdCloseOnExec.Contains(fd);
+        return FdCloseOnExecSet.Contains(fd);
     }
 
     public void SetFdCloseOnExec(int fd, bool closeOnExec)
     {
         if (!FDs.ContainsKey(fd)) return;
         if (closeOnExec)
-            _fdCloseOnExec.Add(fd);
+            FdCloseOnExecSet.Add(fd);
         else
-            _fdCloseOnExec.Remove(fd);
+            FdCloseOnExecSet.Remove(fd);
     }
 
     public IReadOnlyList<int> GetCloseOnExecFds()
     {
-        return _fdCloseOnExec.ToList();
+        return FdCloseOnExecSet.ToList();
     }
 
     public void FreeFD(int fd)
     {
-        _fdCloseOnExec.Remove(fd);
-        if (FDs.Remove(fd, out var f)) f.Close();
+        TryFreeFD(fd);
+    }
+
+    public bool TryFreeFD(int fd)
+    {
+        FdCloseOnExecSet.Remove(fd);
+        if (!FDs.Remove(fd, out var f)) return false;
+        f.Close();
+        return true;
     }
 
     public void CloseAllFileDescriptors()
@@ -184,7 +192,7 @@ public partial class SyscallManager
         var fds = FDs.Keys.ToList();
         foreach (var fd in fds)
             FreeFD(fd);
-        _fdCloseOnExec.Clear();
+        FdCloseOnExecSet.Clear();
     }
 
     /// <summary>
@@ -195,18 +203,27 @@ public partial class SyscallManager
     {
         var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
         var managers = new HashSet<SyscallManager>();
+        var managerToProcess = new Dictionary<SyscallManager, Process>();
         if (scheduler != null)
             foreach (var process in scheduler.GetProcessesSnapshot())
                 if (process.Syscalls != null)
+                {
                     managers.Add(process.Syscalls);
+                    managerToProcess[process.Syscalls] = process;
+                }
 
         if (managers.Count == 0)
+        {
             managers.Add(this);
+            if (Engine.Owner is FiberTask fallbackTask)
+                managerToProcess[this] = fallbackTask.Process;
+        }
 
         foreach (var manager in managers)
             try
             {
-                manager.Mem.SyncAllMappedSharedFiles(manager.Engine);
+                managerToProcess.TryGetValue(manager, out var process);
+                ProcessAddressSpaceSync.SyncAllMappedSharedFiles(manager.Mem, manager.Engine, process);
             }
             catch (Exception ex)
             {

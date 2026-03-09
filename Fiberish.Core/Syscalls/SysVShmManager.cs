@@ -142,8 +142,10 @@ public class SysVShmManager
     /// <param name="vmaManager">VMA manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>Attached address on success, negative errno on failure</returns>
-    public long ShmAt(int shmid, uint addr, int flags, int pid, VMAManager vmaManager, Engine engine)
+    public long ShmAt(int shmid, uint addr, int flags, int pid, VMAManager vmaManager, Engine engine,
+        Process? process = null)
     {
+        var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         SysVShmSegment segment;
         lock (_lock)
         {
@@ -159,6 +161,7 @@ public class SysVShmManager
                 return -(int)Errno.EACCES;
         }
 
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
         // Determine protection
         var prot = (flags & LinuxConstants.SHM_RDONLY) != 0
             ? Protection.Read
@@ -171,7 +174,7 @@ public class SysVShmManager
             // Auto-allocate: find free region
             attachAddr = FindFreeRegion(vmaManager, segment.Size);
             if (attachAddr == 0)
-                return -(int)Errno.ENOMEM;
+                return (long)-(int)Errno.ENOMEM;
         }
         else
         {
@@ -181,7 +184,7 @@ public class SysVShmManager
 
             // Check alignment
             if ((attachAddr & 0xFFFu) != 0)
-                return -(int)Errno.EINVAL;
+                return (long)-(int)Errno.EINVAL;
 
             // Check for overlapping VMAs unless SHM_REMAP is specified
             var existingVmas = vmaManager.FindVMAsInRange(attachAddr, attachAddr + segment.Size);
@@ -190,12 +193,12 @@ public class SysVShmManager
                 if ((flags & LinuxConstants.SHM_REMAP) != 0)
                 {
                     // SHM_REMAP: unmap existing mappings at this address
-                    vmaManager.Munmap(attachAddr, segment.Size, engine);
+                    ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
                 }
                 else
                 {
                     // Without SHM_REMAP, overlapping mappings are an error
-                    return -(int)Errno.EINVAL;
+                    return (long)-(int)Errno.EINVAL;
                 }
             }
         }
@@ -239,11 +242,11 @@ public class SysVShmManager
                 segment.Lpid = pid;
             }
 
-            return attachAddr;
+            return (long)attachAddr;
         }
         catch
         {
-            return -(int)Errno.ENOMEM;
+            return (long)-(int)Errno.ENOMEM;
         }
     }
 
@@ -255,8 +258,10 @@ public class SysVShmManager
     /// <param name="vmaManager">VMA manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>0 on success, negative errno on failure</returns>
-    public int ShmDt(uint addr, int pid, VMAManager vmaManager, Engine engine)
+    public int ShmDt(uint addr, int pid, VMAManager vmaManager, Engine engine, Process? process = null)
     {
+        var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
         lock (_lock)
         {
             // Find the attachment by address and pid (TGID)
@@ -273,7 +278,7 @@ public class SysVShmManager
                 return -(int)Errno.EIDRM; // Segment was already removed
 
             // Unmap the VMA
-            vmaManager.Munmap(addr, segment.Size, engine);
+            ProcessAddressSpaceSync.Munmap(vmaManager, engine, addr, segment.Size, ownerProcess);
 
             // Update segment
             segment.NAttch--;
@@ -359,8 +364,10 @@ public class SysVShmManager
     /// <summary>
     /// Called when a process exits to detach all its shared memory attachments.
     /// </summary>
-    public void OnProcessExit(int pid, VMAManager vmaManager, Engine engine)
+    public void OnProcessExit(int pid, VMAManager vmaManager, Engine engine, Process? process = null)
     {
+        var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
         lock (_lock)
         {
             for (var i = _attaches.Count - 1; i >= 0; i--)
@@ -373,7 +380,7 @@ public class SysVShmManager
                 if (_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
                 {
                     // [P1] Must munmap the VMA to avoid leaking page references
-                    vmaManager.Munmap(attach.BaseAddr, segment.Size, engine);
+                    ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.Size, ownerProcess);
 
                     segment.NAttch--;
                     segment.DTime = DateTime.UtcNow;

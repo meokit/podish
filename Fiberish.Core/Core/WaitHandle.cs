@@ -389,10 +389,9 @@ public readonly struct ChildStateAwaitable
                 if (childProc == null) continue;
                 if (!MatchesTarget(childPid, childProc)) continue;
 
-                // Skip if already signaled - IsCompleted check should have caught this
-                // but we check again to avoid duplicate scheduling
-                if (childProc.StateChangeEvent.IsSignaled) continue;
-
+                // Child state notifications are edge-triggered in wait* semantics.
+                // Clear stale sticky state so we can register for the next transition.
+                if (childProc.StateChangeEvent.IsSignaled) childProc.StateChangeEvent.Reset();
                 childProc.StateChangeEvent.Register(runOnce.Invoke, _task, _token);
                 registered = true;
             }

@@ -8,6 +8,7 @@ using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 using System.IO;
+using System.Linq;
 using System.Threading;
 
 namespace Fiberish.Syscalls;
@@ -35,7 +36,7 @@ public partial class SyscallManager
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
-    private readonly HashSet<int> _fdCloseOnExec = [];
+    private readonly SharedFdTable _sharedFdTable;
     private readonly FileSystemType _devptsFsType;
     private readonly DeviceNumberManager _devNumberManager = new();
     private SharedLoopbackNetNamespace? _privateNetNamespace;
@@ -43,9 +44,29 @@ public partial class SyscallManager
     internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
     internal DeviceNumberManager DeviceNumbers => _devNumberManager;
 
+    private sealed class SharedFdTable
+    {
+        private int _refCount = 1;
+
+        public Dictionary<int, LinuxFile> Fds { get; } = [];
+        public HashSet<int> CloseOnExec { get; } = [];
+
+        public SharedFdTable AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public bool ReleaseRef()
+        {
+            return Interlocked.Decrement(ref _refCount) == 0;
+        }
+    }
+
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
         _mountNamespace = new MountNamespace();
+        _sharedFdTable = new SharedFdTable();
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
@@ -91,7 +112,7 @@ public partial class SyscallManager
         SetupVDSO();
     }
 
-    private SyscallManager(VMAManager mem, Dictionary<int, LinuxFile> fds, HashSet<int> fdCloseOnExec,
+    private SyscallManager(VMAManager mem, SharedFdTable sharedFdTable,
         FutexManager futex,
         SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
@@ -104,8 +125,7 @@ public partial class SyscallManager
         SharedLoopbackNetNamespace? privateNetNamespace)
     {
         Mem = mem;
-        FDs = fds;
-        _fdCloseOnExec = fdCloseOnExec;
+        _sharedFdTable = sharedFdTable;
         Futex = futex;
         SysVShm = sysvShm;
         SysVSem = sysvSem;
@@ -165,7 +185,7 @@ public partial class SyscallManager
     public SysVSemManager SysVSem { get; }
 
     // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, LinuxFile> FDs { get; } = [];
+    public Dictionary<int, LinuxFile> FDs => _sharedFdTable.Fds;
 
     public FutexManager Futex { get; }
 
@@ -220,6 +240,8 @@ public partial class SyscallManager
 
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
+
+    private HashSet<int> FdCloseOnExecSet => _sharedFdTable.CloseOnExec;
 
     public void InitializeRoot(Dentry root, Mount rootMount)
     {
@@ -404,8 +426,8 @@ public partial class SyscallManager
     {
         // Map vDSO page (RX) at a fixed high address to avoid overlap
         uint vdsoAddr = 0x7FFF0000;
-        Mem.Mmap(vdsoAddr, 4096, Protection.Read | Protection.Exec,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]", Engine);
+        ProcessAddressSpaceSync.Mmap(Mem, Engine, vdsoAddr, 4096, Protection.Read | Protection.Exec,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]");
 
         // Directly allocate the page in the engine with RW permissions for initial setup
         if (!Mem.MapAnonymousPage(vdsoAddr, Engine, Protection.Read | Protection.Write))
@@ -983,35 +1005,40 @@ public partial class SyscallManager
         }
     }
 
+    public void UnregisterEngine(Engine engine)
+    {
+        lock (_registryLock)
+        {
+            _registry.Remove(engine.State);
+        }
+    }
+
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
     {
-        Dictionary<int, LinuxFile> newFds;
-        HashSet<int> newFdCloseOnExec;
+        SharedFdTable newSharedFdTable;
         if (shareFiles)
         {
-            newFds = FDs;
-            newFdCloseOnExec = _fdCloseOnExec;
+            newSharedFdTable = _sharedFdTable.AddRef();
         }
         else
         {
-            newFds = [];
-            newFdCloseOnExec = [];
+            newSharedFdTable = new SharedFdTable();
             foreach (var kv in FDs)
             {
                 // fork/clone (without CLONE_FILES) should duplicate fd table entries,
                 // but still reference the same open file description.
                 kv.Value.Get();
-                newFds[kv.Key] = kv.Value;
+                newSharedFdTable.Fds[kv.Key] = kv.Value;
             }
 
-            foreach (var fd in _fdCloseOnExec)
-                newFdCloseOnExec.Add(fd);
+            foreach (var fd in FdCloseOnExecSet)
+                newSharedFdTable.CloseOnExec.Add(fd);
         }
 
         // Share the mount namespace (mounts are shared across fork/clone by default)
         var sharedNamespace = _mountNamespace.Share();
 
-        var newSys = new SyscallManager(newMem, newFds, newFdCloseOnExec, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
+        var newSys = new SyscallManager(newMem, newSharedFdTable, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
             Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
@@ -1231,8 +1258,12 @@ public partial class SyscallManager
 
         lock (_registryLock)
         {
-            if (Engine != null)
-                _registry.Remove(Engine.State);
+            var staleStates = _registry
+                .Where(kv => ReferenceEquals(kv.Value, this))
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var state in staleStates)
+                _registry.Remove(state);
         }
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
@@ -1248,12 +1279,13 @@ public partial class SyscallManager
         CurrentWorkingDirectory.Dentry?.Inode?.Put();
         ProcessRoot.Dentry?.Inode?.Put();
 
-        foreach (var fd in FDs.Values)
-            // Note: If shareFiles is true, this might be dangerous if multiple tasks close the same FDs
-            // But usually SyscallManager.Close is called when the task/process actually dies.
-            fd.Close();
-        FDs.Clear();
-        _fdCloseOnExec.Clear();
+        if (_sharedFdTable.ReleaseRef())
+        {
+            foreach (var fd in FDs.Values)
+                fd.Close();
+            FDs.Clear();
+            FdCloseOnExecSet.Clear();
+        }
     }
 
     private class PlaceholderInode : Inode

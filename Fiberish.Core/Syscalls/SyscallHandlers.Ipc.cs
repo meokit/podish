@@ -82,7 +82,8 @@ public partial class SyscallManager
     /// </summary>
     private static int DoShmAt(SyscallManager sm, int shmid, uint shmaddr, int shmflg, uint ptr, int pid)
     {
-        var result = sm.SysVShm.ShmAt(shmid, shmaddr, shmflg, pid, sm.Mem, sm.Engine);
+        var process = (sm.Engine.Owner as FiberTask)?.Process;
+        var result = sm.SysVShm.ShmAt(shmid, shmaddr, shmflg, pid, sm.Mem, sm.Engine, process);
 
         if (result < 0)
             return (int)result;
@@ -95,7 +96,7 @@ public partial class SyscallManager
             if (!sm.Engine.CopyToUser(ptr, addrBytes))
             {
                 // [P2] Rollback the mapping on EFAULT - detaching cleans up the VMA
-                sm.SysVShm.ShmDt((uint)result, pid, sm.Mem, sm.Engine);
+                sm.SysVShm.ShmDt((uint)result, pid, sm.Mem, sm.Engine, process);
                 return -(int)Errno.EFAULT;
             }
 
@@ -113,7 +114,8 @@ public partial class SyscallManager
     /// </summary>
     private static int DoShmDt(SyscallManager sm, uint shmaddr, int pid)
     {
-        return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, sm.Engine);
+        var process = (sm.Engine.Owner as FiberTask)?.Process;
+        return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, sm.Engine, process);
     }
 
     /// <summary>

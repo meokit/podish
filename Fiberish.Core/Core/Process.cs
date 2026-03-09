@@ -113,6 +113,7 @@ public class Process
     public int StopSignal { get; set; }
     public bool HasWaitableContinue { get; set; }
     public bool MemoryReleased { get; set; }
+    public int MembarrierRegisteredCommands { get; set; }
     public string ExecutablePath { get; private set; } = string.Empty;
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;

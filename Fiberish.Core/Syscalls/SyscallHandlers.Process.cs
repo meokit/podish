@@ -23,27 +23,14 @@ public partial class SyscallManager
             task.SignalVforkDone();
 
             task.ExitRobustList();
+            task.ClearChildTidAndWake();
 
             task.Exited = true;
             task.ExitStatus = exitCode;
-
-            // Notify Parent
-            var ppid = task.Process.PPID;
-            if (ppid > 0)
-            {
-                var parentTask = task.CommonKernel.GetTask(ppid);
-                parentTask?.PostSignal(17); // SIGCHLD = 17
-            }
-
-            // If main thread exits, entire process group becomes zombie
-            if (task.TID == task.Process.TGID)
-            {
-                sm.Close(); // Close all file descriptors
-
-                ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-                sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
-                MarkProcessExitAndReparent(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
-            }
+            sm.UnregisterEngine(task.CPU);
+            var remainingThreads = task.CommonKernel.DetachTask(task);
+            if (remainingThreads == 0)
+                FinalizeProcessExit(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, false);
@@ -63,23 +50,11 @@ public partial class SyscallManager
             task.SignalVforkDone();
 
             task.ExitRobustList();
+            task.ClearChildTidAndWake();
 
             task.Exited = true;
             task.ExitStatus = exitCode;
-
-            // Notify Parent
-            var ppid = task.Process.PPID;
-            if (ppid > 0)
-            {
-                var parentTask = task.CommonKernel.GetTask(ppid);
-                parentTask?.PostSignal(17); // SIGCHLD = 17
-            }
-
-            sm.Close(); // Close all file descriptors
-
-            ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-            sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, sm.Engine);
-            MarkProcessExitAndReparent(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
+            FinalizeProcessExit(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, true);
@@ -97,6 +72,8 @@ public partial class SyscallManager
         var flags = a1;
         var stackPtr = a2;
         var ptidPtr = a3;
+        // x86 clone(2) raw syscall argument order:
+        // clone(flags, child_stack, ptid, tls, ctid)
         var tlsPtr = a4;
         var ctidPtr = a5;
 
@@ -440,9 +417,30 @@ public partial class SyscallManager
         return sm.Engine.CopyToUser(addr, buf);
     }
 
+    internal static void FinalizeProcessExit(FiberTask task, int exitStatus, bool exitedBySignal, int termSignal,
+        bool coreDumped)
+    {
+        if (task.Process.State is ProcessState.Zombie or ProcessState.Dead) return;
+
+        var sm = task.Process.Syscalls;
+
+        var ppid = task.Process.PPID;
+        if (ppid > 0)
+        {
+            var parentTask = task.CommonKernel.GetTask(ppid);
+            parentTask?.PostSignal((int)Signal.SIGCHLD);
+        }
+
+        sm.Close();
+        ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+        sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, task.CPU, task.Process);
+        MarkProcessExitAndReparent(task, exitStatus, exitedBySignal, termSignal, coreDumped);
+    }
+
     internal static void MarkProcessExitAndReparent(FiberTask task, int exitStatus, bool exitedBySignal, int termSignal,
         bool coreDumped)
     {
+        if (task.Process.State is ProcessState.Zombie or ProcessState.Dead) return;
         task.Process.State = ProcessState.Zombie;
         task.Process.ExitStatus = exitStatus;
         task.Process.ExitedBySignal = exitedBySignal;

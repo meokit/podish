@@ -19,6 +19,18 @@ public partial class SyscallManager
     private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
     private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
     private static readonly long SysinfoUptimeStartTimestamp = Stopwatch.GetTimestamp();
+    private const int SupportedMembarrierCommands =
+        LinuxConstants.MEMBARRIER_CMD_GLOBAL |
+        LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE |
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
+    private const int MembarrierRegisterCommands =
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED |
+        LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
 
     private static long GetVirtualCpuCycles()
     {
@@ -564,6 +576,53 @@ public partial class SyscallManager
                 Logger.LogWarning($"[SysPrctl] Unhandled option: {option}");
                 return 0; // Success for many non-critical options
         }
+    }
+
+    private static async ValueTask<int> SysMembarrier(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var sm = Get(state);
+        if (sm == null) return -(int)Errno.EPERM;
+        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var cmd = (int)a1;
+        var flags = a2;
+        if (flags != 0) return -(int)Errno.EINVAL;
+
+        if ((cmd & ~SupportedMembarrierCommands) != 0 && cmd != LinuxConstants.MEMBARRIER_CMD_QUERY)
+            return -(int)Errno.EINVAL;
+
+        var registered = task.Process.MembarrierRegisteredCommands;
+        return cmd switch
+        {
+            LinuxConstants.MEMBARRIER_CMD_QUERY => SupportedMembarrierCommands,
+            LinuxConstants.MEMBARRIER_CMD_GLOBAL => 0,
+            LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED => RegisterMembarrier(task.Process,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED),
+            LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED => RequireMembarrierRegistration(registered,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED),
+            LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => RegisterMembarrier(task.Process,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED),
+            LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED => RequireMembarrierRegistration(registered,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED),
+            LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => RegisterMembarrier(task.Process,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE),
+            LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE => RequireMembarrierRegistration(registered,
+                LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE),
+            _ => -(int)Errno.EINVAL
+        };
+    }
+
+    private static int RegisterMembarrier(Fiberish.Core.Process process, int registerCmd)
+    {
+        if ((registerCmd & MembarrierRegisterCommands) == 0) return -(int)Errno.EINVAL;
+        process.MembarrierRegisteredCommands |= registerCmd;
+        return 0;
+    }
+
+    private static int RequireMembarrierRegistration(int registeredMask, int requiredRegisterCmd)
+    {
+        return (registeredMask & requiredRegisterCmd) != 0 ? 0 : -(int)Errno.EPERM;
     }
 
     private static async ValueTask<int> SysGetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,

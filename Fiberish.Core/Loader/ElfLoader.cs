@@ -96,8 +96,8 @@ public class ElfLoader
 
         // Setup Stack
         var stackStart = StackTop - StackSize;
-        mm.Mmap(stackStart, StackSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "STACK", engine);
+        ProcessAddressSpaceSync.Mmap(mm, engine, stackStart, StackSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "STACK");
 
         var sp = StackTop;
         var stackData = new byte[StackSize];
@@ -268,8 +268,8 @@ public class ElfLoader
                     {
                         var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount!);
                         var trueFileSz = (long)(dentry.Inode?.Size ?? 0);
-                        mm.Mmap(pageStart, fileMapLen, perms, MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset,
-                            trueFileSz, "ELF_LOAD", engine);
+                        ProcessAddressSpaceSync.Mmap(mm, engine, pageStart, fileMapLen, perms,
+                            MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, trueFileSz, "ELF_LOAD");
                     }
 
                     // Zero-fill the BSS portion on the last file page
@@ -290,9 +290,8 @@ public class ElfLoader
                     {
                         var anonLen = (uint)((bssEnd - fileMapEnd + LinuxConstants.PageOffsetMask) &
                                              LinuxConstants.PageMask);
-                        mm.Mmap(fileMapEnd, anonLen, perms, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous,
-                            null, 0,
-                            0, "ELF_BSS", engine);
+                        ProcessAddressSpaceSync.Mmap(mm, engine, fileMapEnd, anonLen, perms,
+                            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "ELF_BSS");
                     }
                 }
 
