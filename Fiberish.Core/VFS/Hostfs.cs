@@ -872,9 +872,9 @@ public partial class HostInode : Inode
         if (info.LinkTarget != null || File.Exists(subPath))
         {
             var dentry = sb.GetDentry(subPath, name, null);
-            NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
             File.Delete(subPath);
             sb.MetadataStore.Remove(subPath);
+            NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
             dentry?.UnbindInode("HostInode.Unlink");
             if (Dentries.Count > 0)
                 Dentries[0].Children.Remove(name);
@@ -895,9 +895,9 @@ public partial class HostInode : Inode
 
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(subPath, name, null);
-        NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Rmdir");
         Directory.Delete(subPath, false);
         sb.MetadataStore.Remove(subPath);
+        NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Rmdir");
         dentry?.UnbindInode("HostInode.Rmdir");
         if (Dentries.Count > 0)
             Dentries[0].Children.Remove(name);

@@ -78,4 +78,32 @@ public class InodeRefLinkCountTests
         Assert.False(inode.HasActiveRuntimeRefs);
         Assert.False(rig.SuperBlock.HasActiveInodes());
     }
+
+    [Fact]
+    public void Tmpfs_RenameOverwrite_DropsReplacedInodeLinkCount()
+    {
+        using var rig = FileSystemTestRigFactory.Create("tmpfs");
+        var root = rig.Root;
+        var rootInode = rig.RootInode;
+
+        var src = new Dentry("src.txt", null, root, rig.SuperBlock);
+        rootInode.Create(src, 0x1A4, 0, 0);
+        var srcInode = src.Inode!;
+
+        var dst = new Dentry("dst.txt", null, root, rig.SuperBlock);
+        rootInode.Create(dst, 0x1A4, 0, 0);
+        var dstInode = dst.Inode!;
+
+        Assert.Equal(1, srcInode.LinkCount);
+        Assert.Equal(1, dstInode.LinkCount);
+
+        rootInode.Rename("src.txt", rootInode, "dst.txt");
+
+        var renamed = rootInode.Lookup("dst.txt");
+        Assert.NotNull(renamed);
+        Assert.Same(srcInode, renamed!.Inode);
+        Assert.Equal(1, srcInode.LinkCount);
+        Assert.Equal(0, dstInode.LinkCount);
+        Assert.True(dstInode.IsEvicted);
+    }
 }
