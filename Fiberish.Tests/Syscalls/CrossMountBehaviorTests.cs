@@ -387,6 +387,8 @@ public class CrossMountBehaviorTests
 
     private sealed class TestEnv : IDisposable
     {
+        private uint _nextUserPageAddr = 0x40000;
+
         public TestEnv()
         {
             Engine = new Engine();
@@ -501,12 +503,19 @@ public class CrossMountBehaviorTests
 
         public async ValueTask<int> OpenDirectory(string path)
         {
-            var addr = 0x20000u;
-            MapUserPage(addr);
+            var addr = AllocateMappedUserPage();
             WriteCString(addr, path);
             var fd = await Call("SysOpen", addr, 0, 0);
             Assert.True(fd >= 0);
             return fd;
+        }
+
+        private uint AllocateMappedUserPage()
+        {
+            var addr = _nextUserPageAddr;
+            _nextUserPageAddr += LinuxConstants.PageSize;
+            MapUserPage(addr);
+            return addr;
         }
     }
 }
