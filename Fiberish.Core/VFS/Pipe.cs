@@ -1,4 +1,6 @@
 using Fiberish.Native;
+using System.Runtime.CompilerServices;
+using Fiberish.Core;
 using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 // For Errno
@@ -10,7 +12,6 @@ public class PipeInode : Inode
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
     private readonly byte[] _buffer;
-    private readonly object _lock = new();
 
     // Notification handles
     private readonly WaitHandle _readHandle = new();
@@ -23,6 +24,19 @@ public class PipeInode : Inode
     private int _writerCount;
     private bool _writersClosed;
 
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
+
     public PipeInode()
     {
         Type = InodeType.Fifo;
@@ -34,7 +48,7 @@ public class PipeInode : Inode
 
     public void AddReader()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _readerCount++;
             _readersClosed = false;
@@ -43,7 +57,7 @@ public class PipeInode : Inode
 
     public void AddWriter()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _writerCount++;
             _writersClosed = false;
@@ -53,7 +67,7 @@ public class PipeInode : Inode
 
     public void RemoveReader()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _readerCount--;
             if (_readerCount <= 0)
@@ -66,7 +80,7 @@ public class PipeInode : Inode
 
     public void RemoveWriter()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _writerCount--;
             if (_writerCount <= 0)
@@ -94,7 +108,7 @@ public class PipeInode : Inode
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_count > 0)
             {
@@ -129,7 +143,7 @@ public class PipeInode : Inode
 
     public int Peek(Span<byte> buffer)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_count > 0)
             {
@@ -156,7 +170,7 @@ public class PipeInode : Inode
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_readersClosed)
                 // Broken pipe
@@ -221,7 +235,7 @@ public class PipeInode : Inode
 
         short revents = 0;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             const int O_ACCMODE = 3;
             var mode = (int)linuxFile.Flags & O_ACCMODE;
@@ -261,7 +275,7 @@ public class PipeInode : Inode
         const short POLLOUT = 0x0004;
         var registered = false;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & POLLIN) != 0)
             {
@@ -287,7 +301,7 @@ public class PipeInode : Inode
         const short POLLOUT = 0x0004;
         var registrations = new List<IDisposable>(2);
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & POLLIN) != 0)
             {

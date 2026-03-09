@@ -1,5 +1,7 @@
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using Fiberish.Core;
 
 namespace Fiberish.VFS;
 
@@ -11,7 +13,7 @@ namespace Fiberish.VFS;
 public class MountNamespace
 {
     private int _refCount = 1;
-    private readonly object _lock = new();
+    private Mount? _rootMount;
     public readonly record struct MountInfoEntry(
         long Id,
         long ParentId,
@@ -19,6 +21,19 @@ public class MountNamespace
         string Target,
         string FsType,
         string Options);
+
+    private readonly struct NamespaceScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
 
     /// <summary>
     ///     List of all Mount objects in this namespace.
@@ -34,26 +49,60 @@ public class MountNamespace
     /// <summary>
     ///     The root mount (for the filesystem namespace).
     /// </summary>
-    public Mount? RootMount { get; set; }
+    public Mount? RootMount
+    {
+        get
+        {
+            using (EnterNamespaceScope())
+            {
+                return _rootMount;
+            }
+        }
+        set
+        {
+            using (EnterNamespaceScope())
+            {
+                _rootMount = value;
+            }
+        }
+    }
 
     /// <summary>
     ///     Gets read-only view of all mounts in this namespace.
     /// </summary>
-    public IReadOnlyList<Mount> Mounts => _mounts;
+    public IReadOnlyList<Mount> Mounts
+    {
+        get
+        {
+            using (EnterNamespaceScope())
+            {
+                return _mounts;
+            }
+        }
+    }
 
     public int RefCount => _refCount;
 
     /// <summary>
     ///     Gets the number of mounts in this namespace.
     /// </summary>
-    public int Count => _mounts.Count;
+    public int Count
+    {
+        get
+        {
+            using (EnterNamespaceScope())
+            {
+                return _mounts.Count;
+            }
+        }
+    }
 
     /// <summary>
     ///     Registers a mount in the namespace and attaches it to a mount point.
     /// </summary>
     public void RegisterMount(Mount mount, Mount? parent, Dentry mountPoint)
     {
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             if (!mount.IsAttached)
                 mount.Attach(mountPoint, parent);
@@ -71,7 +120,7 @@ public class MountNamespace
     /// </summary>
     public void UnregisterMount(Mount mount)
     {
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             var parent = mount.Parent;
             var mountPoint = mount.MountPoint;
@@ -92,7 +141,7 @@ public class MountNamespace
     /// </summary>
     public Mount? FindMount(Mount? parent, Dentry dentry)
     {
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             return _mountHash.GetValueOrDefault((parent, dentry));
         }
@@ -103,7 +152,7 @@ public class MountNamespace
     /// </summary>
     public bool HasMountAt(Mount? parent, Dentry dentry)
     {
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             return _mountHash.ContainsKey((parent, dentry));
         }
@@ -124,7 +173,7 @@ public class MountNamespace
     /// </summary>
     public List<Mount>.Enumerator GetEnumerator()
     {
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             return _mounts.ToList().GetEnumerator();
         }
@@ -166,7 +215,7 @@ public class MountNamespace
     public IEnumerable<(string Source, string Target, string FsType, string Options)> GetMountInfos()
     {
         List<Mount> mountsSnapshot;
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             mountsSnapshot = _mounts.ToList();
         }
@@ -180,7 +229,7 @@ public class MountNamespace
     public IEnumerable<MountInfoEntry> GetMountInfoEntries()
     {
         List<Mount> mountsSnapshot;
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             mountsSnapshot = _mounts.ToList();
         }
@@ -209,7 +258,7 @@ public class MountNamespace
             return;
 
         List<Mount> mountsToRelease;
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
             mountsToRelease = _mounts.ToList();
         }
@@ -217,9 +266,9 @@ public class MountNamespace
         foreach (var mount in mountsToRelease)
             UnregisterMount(mount);
 
-        lock (_lock)
+        using (EnterNamespaceScope())
         {
-            RootMount = null;
+            _rootMount = null;
         }
     }
 }
