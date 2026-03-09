@@ -132,4 +132,74 @@ public class InodeRefLinkCountTests
         Assert.Same(inode, aliasAfter!.Inode);
         Assert.Equal(2, inode.LinkCount);
     }
+
+    [Fact]
+    public void Tmpfs_MkdirAndRmdir_TracksDirectoryLinkCount()
+    {
+        using var rig = FileSystemTestRigFactory.Create("tmpfs");
+        var root = rig.Root;
+        var rootInode = rig.RootInode;
+
+        Assert.Equal(2, rootInode.LinkCount);
+
+        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        rootInode.Mkdir(dir, 0x1ED, 0, 0);
+        var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
+
+        Assert.Equal(3, rootInode.LinkCount);
+        Assert.Equal(2, dirInode.LinkCount);
+
+        var nested = new Dentry("nested", null, dir, rig.SuperBlock);
+        dirInode.Mkdir(nested, 0x1ED, 0, 0);
+        var nestedInode = Assert.IsAssignableFrom<Inode>(nested.Inode);
+
+        Assert.Equal(3, dirInode.LinkCount);
+        Assert.Equal(2, nestedInode.LinkCount);
+
+        dirInode.Rmdir("nested");
+        Assert.Equal(2, dirInode.LinkCount);
+        Assert.Equal(0, nestedInode.LinkCount);
+        Assert.True(nestedInode.IsEvicted);
+
+        rootInode.Rmdir("dir");
+        Assert.Equal(2, rootInode.LinkCount);
+        Assert.Equal(0, dirInode.LinkCount);
+        Assert.True(dirInode.IsEvicted);
+    }
+
+    [Fact]
+    public void Tmpfs_RenameDirectoryAcrossParents_AdjustsParentLinkCount()
+    {
+        using var rig = FileSystemTestRigFactory.Create("tmpfs");
+        var root = rig.Root;
+        var rootInode = rig.RootInode;
+
+        var from = new Dentry("from", null, root, rig.SuperBlock);
+        rootInode.Mkdir(from, 0x1ED, 0, 0);
+        var fromInode = Assert.IsAssignableFrom<Inode>(from.Inode);
+
+        var to = new Dentry("to", null, root, rig.SuperBlock);
+        rootInode.Mkdir(to, 0x1ED, 0, 0);
+        var toInode = Assert.IsAssignableFrom<Inode>(to.Inode);
+
+        var child = new Dentry("child", null, from, rig.SuperBlock);
+        fromInode.Mkdir(child, 0x1ED, 0, 0);
+        var childInode = Assert.IsAssignableFrom<Inode>(child.Inode);
+
+        Assert.Equal(4, rootInode.LinkCount);
+        Assert.Equal(3, fromInode.LinkCount);
+        Assert.Equal(2, toInode.LinkCount);
+        Assert.Equal(2, childInode.LinkCount);
+
+        fromInode.Rename("child", toInode, "moved");
+
+        Assert.Equal(4, rootInode.LinkCount);
+        Assert.Equal(2, fromInode.LinkCount);
+        Assert.Equal(3, toInode.LinkCount);
+        Assert.Equal(2, childInode.LinkCount);
+
+        var moved = toInode.Lookup("moved");
+        Assert.NotNull(moved);
+        Assert.Same(childInode, moved!.Inode);
+    }
 }

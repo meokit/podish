@@ -287,6 +287,51 @@ public class NewMountApiTests
         Assert.DoesNotContain("nosuid", loc.Mount.Options);
     }
 
+    [Fact]
+    public async Task Umount_Hostfs_WithOpenFile_IsBusy_UntilClose()
+    {
+        var hostDir = Path.Combine(Path.GetTempPath(), $"hostfs-umount-busy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(hostDir);
+        File.WriteAllText(Path.Combine(hostDir, "x.txt"), "x");
+
+        using var env = new TestEnv();
+        env.MapUserPage(0x60000);
+        env.MapUserPage(0x61000);
+        env.MapUserPage(0x62000);
+        env.MapUserPage(0x63000);
+        env.MapUserPage(0x64000);
+
+        try
+        {
+            var root = env.SyscallManager.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mnt = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
+                root.Children["mnt"] = mnt;
+            }
+
+            env.WriteCString(0x60000, hostDir);
+            env.WriteCString(0x61000, "/mnt");
+            env.WriteCString(0x62000, "hostfs");
+            env.WriteCString(0x63000, "rw");
+            Assert.Equal(0, await env.Call("SysMount", 0x60000, 0x61000, 0x62000, 0, 0x63000));
+
+            env.WriteCString(0x64000, "/mnt/x.txt");
+            var fd = await env.Call("SysOpen", 0x64000, (uint)FileFlags.O_RDONLY, 0);
+            Assert.True(fd >= 0);
+
+            Assert.Equal(-(int)Errno.EBUSY, await env.Call("SysUmount", 0x61000));
+            Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+            Assert.Equal(0, await env.Call("SysUmount", 0x61000));
+        }
+        finally
+        {
+            env.SyscallManager.Close();
+            if (Directory.Exists(hostDir)) Directory.Delete(hostDir, true);
+        }
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

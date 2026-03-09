@@ -36,6 +36,64 @@ public class StatNlinkSyscallTests
     }
 
     [Fact]
+    public async Task Statx_Nlink_ForDirectories_TracksMkdirRmdir()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x14000);
+        env.MapUserPage(0x15000);
+        env.MapUserPage(0x16000);
+        env.MapUserPage(0x17000);
+        env.MapUserPage(0x18000);
+
+        env.WriteCString(0x14000, "/");
+        env.WriteCString(0x15000, "/a");
+        env.WriteCString(0x16000, "/a/b");
+
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x14000, 0x17000));
+
+        Assert.Equal(0, await env.Call("SysMkdir", 0x15000, 0x1ED));
+        Assert.Equal(3u, await ReadStatxNlink(env, 0x14000, 0x17000));
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x15000, 0x18000));
+
+        Assert.Equal(0, await env.Call("SysMkdir", 0x16000, 0x1ED));
+        Assert.Equal(3u, await ReadStatxNlink(env, 0x15000, 0x18000));
+
+        Assert.Equal(0, await env.Call("SysRmdir", 0x16000));
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x15000, 0x18000));
+        Assert.Equal(0, await env.Call("SysRmdir", 0x15000));
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x14000, 0x17000));
+    }
+
+    [Fact]
+    public async Task Statx_Nlink_ForDirectoryRenameAcrossParents_TracksParentCounts()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x19000);
+        env.MapUserPage(0x1A000);
+        env.MapUserPage(0x1B000);
+        env.MapUserPage(0x1C000);
+        env.MapUserPage(0x1D000);
+        env.MapUserPage(0x1E000);
+
+        env.WriteCString(0x19000, "/from");
+        env.WriteCString(0x1A000, "/to");
+        env.WriteCString(0x1B000, "/from/child");
+        env.WriteCString(0x1C000, "/to/moved");
+
+        Assert.Equal(0, await env.Call("SysMkdir", 0x19000, 0x1ED));
+        Assert.Equal(0, await env.Call("SysMkdir", 0x1A000, 0x1ED));
+        Assert.Equal(0, await env.Call("SysMkdir", 0x1B000, 0x1ED));
+
+        Assert.Equal(3u, await ReadStatxNlink(env, 0x19000, 0x1D000));
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x1A000, 0x1E000));
+
+        Assert.Equal(0, await env.Call("SysRename", 0x1B000, 0x1C000));
+
+        Assert.Equal(2u, await ReadStatxNlink(env, 0x19000, 0x1D000));
+        Assert.Equal(3u, await ReadStatxNlink(env, 0x1A000, 0x1E000));
+    }
+
+    [Fact]
     public async Task RenameOverwrite_DropsReplacedInodeNlink_AndPathNlinkStaysOne()
     {
         using var env = new TestEnv();

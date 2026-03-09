@@ -186,6 +186,110 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
+    public void Silkfs_Remount_PreservesDirectoryNlinkAfterCrossParentRename()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");
+
+        try
+        {
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                var mntInode = loc.Dentry!.Inode!;
+
+                var from = new Dentry("from", null, loc.Dentry, loc.Dentry.SuperBlock);
+                mntInode.Mkdir(from, 0x1ED, 0, 0);
+                var fromInode = Assert.IsAssignableFrom<Inode>(from.Inode);
+
+                var to = new Dentry("to", null, loc.Dentry, loc.Dentry.SuperBlock);
+                mntInode.Mkdir(to, 0x1ED, 0, 0);
+                var toInode = Assert.IsAssignableFrom<Inode>(to.Inode);
+
+                var child = new Dentry("child", null, from, from.SuperBlock);
+                fromInode.Mkdir(child, 0x1ED, 0, 0);
+                Assert.Equal(3, fromInode.LinkCount);
+                Assert.Equal(2, toInode.LinkCount);
+
+                fromInode.Rename("child", toInode, "moved");
+                Assert.Equal(2, fromInode.LinkCount);
+                Assert.Equal(3, toInode.LinkCount);
+
+                sm.Close();
+            }
+
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var fromLoc = sm.PathWalkWithFlags("/mnt/from", LookupFlags.FollowSymlink);
+                var toLoc = sm.PathWalkWithFlags("/mnt/to", LookupFlags.FollowSymlink);
+                Assert.True(fromLoc.IsValid);
+                Assert.True(toLoc.IsValid);
+                Assert.Equal(2, fromLoc.Dentry!.Inode!.LinkCount);
+                Assert.Equal(3, toLoc.Dentry!.Inode!.LinkCount);
+
+                var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+                repo.Initialize();
+                var fromIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "from");
+                var toIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "to");
+                Assert.NotNull(fromIno);
+                Assert.NotNull(toIno);
+
+                var fromRec = repo.Metadata.GetInode(fromIno!.Value);
+                var toRec = repo.Metadata.GetInode(toIno!.Value);
+                Assert.NotNull(fromRec);
+                Assert.NotNull(toRec);
+                Assert.Equal(2, fromRec!.Value.Nlink);
+                Assert.Equal(3, toRec!.Value.Nlink);
+
+                sm.Close();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public void Silkfs_ObjectRefCount_CleansUnusedObjectsOnRewriteAndUnlink()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");

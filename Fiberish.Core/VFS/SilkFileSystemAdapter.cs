@@ -60,8 +60,11 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
                 Rdev = (uint)rec.Rdev,
                 Size = (ulong)Math.Max(0, rec.Size)
             };
-            Inodes.Add(inode);
-            AllInodes.Add(inode);
+            var persistedNlink = (int)Math.Max(0, rec.Nlink);
+            if (rec.Ino == SilkMetadataStore.RootInode && inode.Type == InodeType.Directory && persistedNlink < 2)
+                persistedNlink = 2;
+            inode.SetInitialLinkCount(persistedNlink, "SilkSuperBlock.LoadFromMetadata");
+            TrackInode(inode);
             inodeMap[rec.Ino] = inode;
             if (rec.Ino > maxIno) maxIno = rec.Ino;
         }
@@ -71,7 +74,9 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
             rootInode = (SilkInode)AllocInode();
             rootInode.Type = InodeType.Directory;
             rootInode.Mode = 0x1FF;
-            Repository.Metadata.UpsertInode((long)rootInode.Ino, SilkInodeKind.Directory, rootInode.Mode, 0, 0);
+            rootInode.SetInitialLinkCount(2, "SilkSuperBlock.LoadFromMetadata.root-init");
+            Repository.Metadata.UpsertInode((long)rootInode.Ino, SilkInodeKind.Directory, rootInode.Mode, 0, 0,
+                nlink: rootInode.LinkCount);
             inodeMap[(long)rootInode.Ino] = rootInode;
             maxIno = Math.Max(maxIno, (long)rootInode.Ino);
         }
@@ -197,7 +202,7 @@ public sealed class SilkInode : IndexedMemoryInode
             Mode,
             Uid,
             Gid,
-            nlink: 1,
+            nlink: LinkCount,
             rdev: Rdev,
             size: (long)Size);
     }
@@ -290,13 +295,19 @@ public sealed class SilkInode : IndexedMemoryInode
             dentry.Inode.Mode,
             dentry.Inode.Uid,
             dentry.Inode.Gid,
-            nlink: 1,
+            nlink: dentry.Inode.LinkCount,
             rdev: dentry.Inode.Rdev,
             size: (long)dentry.Inode.Size);
 
         var parentIno = (long)Ino;
         _metadata.UpsertDentry(parentIno, dentry.Name, ino);
         _metadata.ClearWhiteout(parentIno, dentry.Name);
+    }
+
+    private static void SyncSilkInodeMetadata(Inode? inode)
+    {
+        if (inode is SilkInode silkInode)
+            silkInode.SyncSelf();
     }
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
@@ -312,6 +323,7 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var created = base.Mkdir(dentry, mode, uid, gid);
         SyncDentry(created);
+        SyncSelf();
         return created;
     }
 
@@ -350,6 +362,7 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var victim = Lookup(name)?.Inode;
         base.Unlink(name);
+        SyncSilkInodeMetadata(victim);
         _metadata.RemoveDentry((long)Ino, name);
         _metadata.ClearWhiteout((long)Ino, name);
         TryCleanupOrphan(victim);
@@ -359,6 +372,8 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var victim = Lookup(name)?.Inode;
         base.Rmdir(name);
+        SyncSelf();
+        SyncSilkInodeMetadata(victim);
         _metadata.RemoveDentry((long)Ino, name);
         _metadata.ClearWhiteout((long)Ino, name);
         TryCleanupOrphan(victim);
@@ -378,7 +393,12 @@ public sealed class SilkInode : IndexedMemoryInode
             var parentIno = (long)newParent.Ino;
             var ino = (long)moved.Inode.Ino;
             _metadata.UpsertDentry(parentIno, newName, ino);
+            SyncSilkInodeMetadata(moved.Inode);
         }
+
+        SyncSelf();
+        SyncSilkInodeMetadata(newParent);
+        SyncSilkInodeMetadata(overwrittenInode);
 
         // If the rename overwrote an existing file, purge its stale data from the DB.
         // Without this, re-opening the file path after rename would reload old content.

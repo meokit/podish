@@ -64,6 +64,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
         if (new FileInfo(hostPath).LinkTarget != null)
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Symlink);
+            TrackInode(newInode);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             lock (Lock)
@@ -76,6 +77,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
         if (Directory.Exists(hostPath))
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Directory);
+            TrackInode(newInode);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             lock (Lock)
@@ -88,6 +90,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
         if (File.Exists(hostPath))
         {
             var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.File);
+            TrackInode(newInode);
             MetadataStore.ApplyToInode(hostPath, newInode);
             var newDentry = new Dentry(name, newInode, parent, this);
             lock (Lock)
@@ -163,6 +166,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
         if (new FileInfo(hostPath).LinkTarget != null) type = InodeType.Symlink;
 
         var inode = new HostInode(_nextIno++, this, hostPath, type);
+        TrackInode(inode);
         if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
         MetadataStore.ApplyToInode(hostPath, inode);
         dentry.Instantiate(inode);
@@ -699,6 +703,7 @@ public partial class HostInode : Inode
         Type = type;
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
+        SetInitialLinkCount(1, "HostInode.ctor");
     }
 
     public string HostPath

@@ -20,6 +20,7 @@ public readonly record struct SilkInodeRecord(
     int Mode,
     int Uid,
     int Gid,
+    long Nlink,
     long Rdev,
     long Size);
 
@@ -140,7 +141,7 @@ public sealed class SilkMetadataStore
             using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
             cmd.CommandText =
-                "INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns) VALUES (1, @kind, @mode, 0, 0, 1, 0, 0, @now, @now, @now);";
+                "INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns) VALUES (1, @kind, @mode, 0, 0, 2, 0, 0, @now, @now, @now);";
             cmd.Parameters.AddWithValue("@kind", (int)SilkInodeKind.Directory);
             cmd.Parameters.AddWithValue("@mode", 0x1FF);
             cmd.Parameters.AddWithValue("@now", now);
@@ -211,7 +212,7 @@ public sealed class SilkMetadataStore
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, rdev, size FROM inodes WHERE ino = @ino;";
+        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size FROM inodes WHERE ino = @ino;";
         cmd.Parameters.AddWithValue("@ino", ino);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
@@ -222,14 +223,15 @@ public sealed class SilkMetadataStore
             reader.GetInt32(3),
             reader.GetInt32(4),
             reader.GetInt64(5),
-            reader.GetInt64(6));
+            reader.GetInt64(6),
+            reader.GetInt64(7));
     }
 
     public List<SilkInodeRecord> ListInodes()
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, rdev, size FROM inodes ORDER BY ino ASC;";
+        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size FROM inodes ORDER BY ino ASC;";
         using var reader = cmd.ExecuteReader();
         var result = new List<SilkInodeRecord>();
         while (reader.Read())
@@ -241,7 +243,8 @@ public sealed class SilkMetadataStore
                 reader.GetInt32(3),
                 reader.GetInt32(4),
                 reader.GetInt64(5),
-                reader.GetInt64(6)));
+                reader.GetInt64(6),
+                reader.GetInt64(7)));
         }
 
         return result;

@@ -26,8 +26,7 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
         lock (Lock)
         {
             var inode = CreateIndexedInode(_nextIno++);
-            Inodes.Add(inode);
-            AllInodes.Add(inode);
+            TrackInode(inode);
             return inode;
         }
     }
@@ -157,7 +156,7 @@ public abstract class IndexedMemoryInode : Inode
             inode.Mode = mode;
             inode.Uid = uid;
             inode.Gid = gid;
-            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Mkdir");
+            NamespaceOps.OnDirectoryCreated(this, inode, "IndexedMemoryInode.Mkdir");
 
             dentry.Instantiate(inode);
 
@@ -225,8 +224,11 @@ public abstract class IndexedMemoryInode : Inode
 
             primaryDentry.Children.Remove(name);
             var removedInode = dentry.Inode;
-            NamespaceOps.OnEntryRemoved(removedInode, "IndexedMemoryInode.Rmdir");
-            dentry.UnbindInode("IndexedMemoryInode.Rmdir");
+            if (removedInode != null)
+            {
+                NamespaceOps.OnDirectoryRemoved(this, removedInode, "IndexedMemoryInode.Rmdir");
+                dentry.UnbindInode("IndexedMemoryInode.Rmdir");
+            }
             ChildNames.Remove(name);
         }
     }
@@ -313,6 +315,9 @@ public abstract class IndexedMemoryInode : Inode
                 }
             }
 
+            var sourceIsDirectory = dentry.Inode.Type == InodeType.Directory;
+            var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
+
             IndexedSb.Dentries.Remove(oldKey);
             IndexedSb.Dentries[newKey] = dentry;
 
@@ -324,6 +329,9 @@ public abstract class IndexedMemoryInode : Inode
 
             newPrimary.Children[newName] = dentry;
             targetParent.ChildNames.Add(newName);
+
+            if (movedAcrossParents)
+                NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "IndexedMemoryInode.Rename");
         }
     }
 

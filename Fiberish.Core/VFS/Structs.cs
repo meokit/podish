@@ -142,10 +142,22 @@ public abstract class SuperBlock
     {
     }
 
+    protected void TrackInode(Inode inode)
+    {
+        lock (Lock)
+        {
+            if (!AllInodes.Add(inode)) return;
+            Inodes.Add(inode);
+        }
+    }
+
     internal void RemoveInodeFromTracking(Inode inode)
     {
-        Inodes.Remove(inode);
-        AllInodes.Remove(inode);
+        lock (Lock)
+        {
+            Inodes.Remove(inode);
+            AllInodes.Remove(inode);
+        }
     }
 }
 
@@ -416,6 +428,7 @@ public abstract class Inode : IPageCacheOps
 
     protected virtual void OnEvict()
     {
+        SuperBlock?.RemoveInodeFromTracking(this);
     }
 
     // Operations

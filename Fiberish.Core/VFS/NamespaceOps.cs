@@ -23,9 +23,31 @@ public static class NamespaceOps
         inode.IncLink(reason);
     }
 
+    public static void OnDirectoryCreated(Inode parentDirectory, Inode childDirectory, string reason)
+    {
+        childDirectory.SetInitialLinkCount(2, $"{reason}.child-init");
+        parentDirectory.IncLink($"{reason}.parent-inc");
+    }
+
     public static void OnEntryRemoved(Inode? inode, string reason)
     {
         inode?.DecLink(reason);
+    }
+
+    public static void OnDirectoryRemoved(Inode parentDirectory, Inode removedDirectory, string reason)
+    {
+        parentDirectory.DecLink($"{reason}.parent-dec");
+        removedDirectory.DecLink($"{reason}.child-dec-parent");
+        removedDirectory.DecLink($"{reason}.child-dec-dot");
+    }
+
+    public static void OnDirectoryMovedAcrossParents(Inode oldParentDirectory, Inode newParentDirectory, string reason)
+    {
+        if (ReferenceEquals(oldParentDirectory, newParentDirectory))
+            return;
+
+        oldParentDirectory.DecLink($"{reason}.old-parent-dec");
+        newParentDirectory.IncLink($"{reason}.new-parent-inc");
     }
 
     public static void OnRenameOverwrite(Inode? sourceInode, Inode? replacedInode, string reason)
