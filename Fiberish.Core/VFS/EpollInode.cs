@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Fiberish.Core;
 
@@ -21,7 +22,6 @@ public class EpollInode : TmpfsInode
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
     private readonly List<EpollItem> _readyList = new();
     private readonly AsyncWaitQueue _waitQueue = new();
-    private readonly object _lock = new();
 
     public EpollInode(ulong ino, SuperBlock sb) : base(ino, sb)
     {
@@ -31,54 +31,53 @@ public class EpollInode : TmpfsInode
 
     public int Ctl(int op, int fd, LinuxFile targetFile, uint events, ulong data)
     {
-        lock (_lock)
+        AssertSchedulerThread();
+        if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_ADD)
         {
-            if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_ADD)
-            {
-                if (_watches.ContainsKey(targetFile)) return -(int)Fiberish.Native.Errno.EEXIST;
+            if (_watches.ContainsKey(targetFile)) return -(int)Fiberish.Native.Errno.EEXIST;
 
-                var item = new EpollItem { Fd = fd, File = targetFile, Events = events, Data = data };
-                _watches[targetFile] = item;
+            var item = new EpollItem { Fd = fd, File = targetFile, Events = events, Data = data };
+            _watches[targetFile] = item;
 
-                // Add initial poll and callback registration
-                CheckAndRegisterLocked(item);
-            }
-            else if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_DEL)
-            {
-                if (!_watches.ContainsKey(targetFile)) return -(int)Fiberish.Native.Errno.ENOENT;
-                if (_watches.TryGetValue(targetFile, out var oldItem))
-                    oldItem.WaitRegistration?.Dispose();
-                _watches.Remove(targetFile);
-                _readyList.RemoveAll(x => x.File == targetFile);
-            }
-            else if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_MOD)
-            {
-                if (!_watches.TryGetValue(targetFile, out var item)) return -(int)Fiberish.Native.Errno.ENOENT;
-                item.Events = events;
-                item.Data = data;
-                item.WaitRegistration?.Dispose();
-                item.WaitRegistration = null;
-
-                // For MOD, we re-evaluate readiness
-                if (item.IsReady)
-                {
-                    _readyList.Remove(item);
-                    item.IsReady = false;
-                }
-
-                CheckAndRegisterLocked(item);
-            }
-            else
-            {
-                return -(int)Fiberish.Native.Errno.EINVAL;
-            }
-
-            return 0;
+            // Add initial poll and callback registration
+            CheckAndRegister(item);
         }
+        else if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_DEL)
+        {
+            if (!_watches.ContainsKey(targetFile)) return -(int)Fiberish.Native.Errno.ENOENT;
+            if (_watches.TryGetValue(targetFile, out var oldItem))
+                oldItem.WaitRegistration?.Dispose();
+            _watches.Remove(targetFile);
+            _readyList.RemoveAll(x => x.File == targetFile);
+        }
+        else if (op == Fiberish.Native.LinuxConstants.EPOLL_CTL_MOD)
+        {
+            if (!_watches.TryGetValue(targetFile, out var item)) return -(int)Fiberish.Native.Errno.ENOENT;
+            item.Events = events;
+            item.Data = data;
+            item.WaitRegistration?.Dispose();
+            item.WaitRegistration = null;
+
+            // For MOD, we re-evaluate readiness
+            if (item.IsReady)
+            {
+                _readyList.Remove(item);
+                item.IsReady = false;
+            }
+
+            CheckAndRegister(item);
+        }
+        else
+        {
+            return -(int)Fiberish.Native.Errno.EINVAL;
+        }
+
+        return 0;
     }
 
-    private void CheckAndRegisterLocked(EpollItem item)
+    private void CheckAndRegister(EpollItem item)
     {
+        AssertSchedulerThread();
         item.WaitRegistration?.Dispose();
         item.WaitRegistration = null;
 
@@ -102,36 +101,29 @@ public class EpollInode : TmpfsInode
             }
 
             // Item is already ready - no need to register a wait callback.
-            // When HarvestEventsLocked processes this item, for LT it will call
-            // CheckAndRegisterLocked again to re-arm if data still available.
+            // When HarvestEvents processes this item, for LT it will call CheckAndRegister again.
             return;
         }
 
-        // Item is NOT ready. Register a callback on the target Inode so we get notified of future changes.
-        // We only do this when not ready to avoid firing the callback synchronously
-        // while holding _lock (which would deadlock since the callback also acquires _lock).
-        item.WaitRegistration = item.File.Dentry.Inode.RegisterWaitHandle(item.File, () =>
+        // Callback dispatch-to-scheduler is owned by readiness providers (e.g. HostSocketProbeEngine).
+        // EpollInode itself is strict scheduler-thread-only.
+        void RePoll()
         {
-            lock (_lock)
-            {
-                if (_watches.ContainsValue(item))
-                {
-                    // Re-evaluate on wakeup
-                    CheckAndRegisterLocked(item);
-                }
-            }
-        }, watchEvents);
+            AssertSchedulerThread();
+            if (_watches.ContainsValue(item))
+                CheckAndRegister(item);
+        }
+
+        item.WaitRegistration = item.File.Dentry.Inode.RegisterWaitHandle(item.File, RePoll, watchEvents);
     }
 
 
     public int TryHarvestNow(byte[] eventsBuffer, int maxEvents)
     {
-        lock (_lock)
-        {
-            if (_readyList.Count > 0)
-                return HarvestEventsLocked(eventsBuffer, maxEvents);
-            return 0;
-        }
+        AssertSchedulerThread();
+        if (_readyList.Count > 0)
+            return HarvestEvents(eventsBuffer, maxEvents);
+        return 0;
     }
 
     public EpollAwaitable WaitAsync(byte[] eventsBuffer, int maxEvents, int timeout)
@@ -181,6 +173,7 @@ public class EpollInode : TmpfsInode
         private bool _hasTimedOut;
         private int _reschedulePending;
         private int _result;
+        private KernelScheduler _scheduler = null!;
         private FiberTask _task = null!;
         private FiberTask.WaitToken? _token;
         private Fiberish.Core.Timer? _timer;
@@ -196,9 +189,15 @@ public class EpollInode : TmpfsInode
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current!;
-            _task = scheduler.CurrentTask!;
+            var scheduler = KernelScheduler.Current ??
+                            throw new InvalidOperationException("EpollAwaitState.OnCompleted requires an active KernelScheduler.");
+            scheduler.AssertSchedulerThread();
+            var task = scheduler.CurrentTask ??
+                       throw new InvalidOperationException("EpollAwaitState.OnCompleted requires an active FiberTask.");
             _continuation = continuation;
+
+            _scheduler = scheduler;
+            _task = task;
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
@@ -228,7 +227,7 @@ public class EpollInode : TmpfsInode
         {
             if (System.Threading.Interlocked.Exchange(ref _reschedulePending, 1) == 0)
             {
-                KernelScheduler.Current!.Schedule(() =>
+                _scheduler.ScheduleFromAnyThread(() =>
                 {
                     _reschedulePending = 0;
                     DoPoll();
@@ -238,6 +237,7 @@ public class EpollInode : TmpfsInode
 
         private void DoPoll()
         {
+            _scheduler.AssertSchedulerThread();
             if (_completed) return;
             _queueWaitRegistration?.Dispose();
             _queueWaitRegistration = null;
@@ -251,13 +251,9 @@ public class EpollInode : TmpfsInode
                 return;
             }
 
-            int ready;
-            lock (_inode._lock)
-            {
-                ready = _inode._readyList.Count > 0
-                    ? _inode.HarvestEventsLocked(_buffer, _maxEvents)
-                    : 0;
-            }
+            var ready = _inode._readyList.Count > 0
+                ? _inode.HarvestEvents(_buffer, _maxEvents)
+                : 0;
 
             if (ready > 0)
             {
@@ -280,8 +276,9 @@ public class EpollInode : TmpfsInode
         }
     }
 
-    private int HarvestEventsLocked(byte[] buffer, int maxEvents)
+    private int HarvestEvents(byte[] buffer, int maxEvents)
     {
+        AssertSchedulerThread();
         int count = Math.Min(_readyList.Count, maxEvents);
         int structSize = 12; // Linux i386 struct epoll_event is 12 bytes packed (__uint32_t events, __uint64_t data)
 
@@ -336,10 +333,17 @@ public class EpollInode : TmpfsInode
         {
             if (_watches.ContainsValue(item))
             {
-                CheckAndRegisterLocked(item);
+                CheckAndRegister(item);
             }
         }
 
         return harvested;
+    }
+
+    private static void AssertSchedulerThread([CallerMemberName] string? caller = null)
+    {
+        var scheduler = KernelScheduler.Current ??
+                        throw new InvalidOperationException($"EpollInode.{caller ?? "<unknown>"} requires an active KernelScheduler.");
+        scheduler.AssertSchedulerThread(caller);
     }
 }

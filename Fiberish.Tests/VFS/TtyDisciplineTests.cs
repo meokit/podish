@@ -879,8 +879,10 @@ public class TtyDisciplineTests
 
         // Input data from "background thread"
         _tty.Input(Encoding.ASCII.GetBytes("test\n"));
+        Assert.False(_tty.DataAvailable.IsSignaled);
 
-        // DataAvailable should now be signaled (unified signaling via OnInputEnqueued)
+        // DataAvailable is signaled after scheduler thread processes device input.
+        _tty.ProcessPendingInput();
         Assert.True(_tty.DataAvailable.IsSignaled);
     }
 
@@ -928,9 +930,10 @@ public class TtyDisciplineTests
 
         var buffer = new byte[100];
 
-        // First, verify DataAvailable is signaled when input arrives
+        // First, verify DataAvailable is signaled after pending input is processed
         Assert.False(_tty.DataAvailable.IsSignaled);
         _tty.Input(Encoding.ASCII.GetBytes("data\n"));
+        _tty.ProcessPendingInput();
         Assert.True(_tty.DataAvailable.IsSignaled);
 
         // Read should succeed and DataAvailable should still be signaled for next read
@@ -939,6 +942,7 @@ public class TtyDisciplineTests
 
         // After read, event might be reset, but if more data arrives, it should be signaled again
         _tty.Input(Encoding.ASCII.GetBytes("more\n"));
+        _tty.ProcessPendingInput();
         Assert.True(_tty.DataAvailable.IsSignaled);
     }
 

@@ -110,11 +110,6 @@ public class TtyDiscipline
         _broadcaster = broadcaster;
         _logger = logger;
         Device = new TtyDevice();
-        // Unify signaling: when data arrives in the device buffer (from background thread),
-        // signal the input queue's wait handle so waiting readers are woken up.
-        // This prevents the "lost wakeup" race condition where Read() might reset the event
-        // just as new data arrives.
-        Device.OnInputEnqueued += () => _inq.DataAvailable.Signal();
         InitializeDefaults();
     }
 

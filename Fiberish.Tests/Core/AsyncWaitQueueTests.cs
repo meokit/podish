@@ -1,6 +1,8 @@
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
@@ -141,6 +143,53 @@ public class AsyncWaitQueueTests
 
         Assert.True(resumed);
         Assert.Equal(AwaitResult.Completed, result);
+    }
+
+    [Fact]
+    public void AsyncWaitQueue_BoundQueue_NonSchedulerThreadMutation_Throws()
+    {
+        var scheduler = new KernelScheduler();
+        var process = new Process(500, null!, null!);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue();
+        var task = new FiberTask(501, process, new MockEngine(), scheduler);
+        Exception? captured = null;
+
+        void Entry()
+        {
+            // Bind queue ownership to current scheduler thread.
+            queue.Signal();
+
+            using var done = new ManualResetEventSlim(false);
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    queue.Reset();
+                }
+                catch (Exception ex)
+                {
+                    captured = ex;
+                }
+                finally
+                {
+                    done.Set();
+                }
+            });
+
+            Assert.True(done.Wait(1000), "Background queue mutation did not complete in time.");
+
+            task.Exited = true;
+            task.Status = FiberTaskStatus.Terminated;
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.NotNull(captured);
+        Assert.IsType<InvalidOperationException>(captured);
     }
 
     private sealed class MockEngine : Engine

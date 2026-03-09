@@ -3,19 +3,19 @@ using System.Runtime.CompilerServices;
 namespace Fiberish.Core;
 
 /// <summary>
-///     A lightweight, thread-safe async coordination primitive.
+///     A lightweight async coordination primitive owned by a single KernelScheduler.
 ///     Allows tasks (FiberTasks) to await events like I/O, timers, or process exit.
 ///     Replaces standard WaitHandle/ManualResetEvent for our cooperative scheduler.
 /// </summary>
 public class AsyncWaitQueue
 {
-    private readonly object _lock = new();
+    private KernelScheduler? _ownerScheduler;
     private long _nextWaiterId;
+    private bool _isSignaled;
 
     // List of continuations to resume when Signaled.
     // Each entry stores the continuation Action, FiberTask context, and the KernelScheduler reference.
-    // We capture the scheduler at registration time because Signal() may be called from a
-    // background thread where KernelScheduler.Current is null (AsyncLocal doesn't flow to other threads).
+    // Signal/Reset/Register are scheduler-thread-only; callers must hop to the owner scheduler first.
     private readonly List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
             Scheduler)>
         _waiters = new();
@@ -46,27 +46,32 @@ public class AsyncWaitQueue
         }
     }
 
-    public bool IsSignaled { get; private set; }
+    public bool IsSignaled
+    {
+        get
+        {
+            AssertSchedulerThread();
+            return _isSignaled;
+        }
+    }
 
     public void Signal()
     {
+        AssertSchedulerThread();
+
         List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler Scheduler)>
             toWake;
-        lock (_lock)
-        {
-            if (IsSignaled) return;
-            IsSignaled = true;
-            if (_waiters.Count == 0) return;
-            toWake =
-                new List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
-                        Scheduler)>(
-                    _waiters);
-            _waiters.Clear();
-        }
+        if (_isSignaled) return;
+        _isSignaled = true;
+        if (_waiters.Count == 0) return;
+        toWake =
+            new List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
+                    Scheduler)>(
+                _waiters);
+        _waiters.Clear();
 
-        // Resume all waiters outside the lock
-        // Use the captured scheduler reference (not KernelScheduler.Current) because
-        // Signal() may be called from a background thread where Current is null
+        // Resume all waiters after queue state has been updated.
+        // Use the captured scheduler reference (not KernelScheduler.Current) for explicit ownership.
         foreach (var (_, continuation, context, token, scheduler) in toWake)
         {
             ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
@@ -75,11 +80,9 @@ public class AsyncWaitQueue
 
     public void Reset()
     {
-        lock (_lock)
-        {
-            IsSignaled = false;
-            _waiters.Clear();
-        }
+        AssertSchedulerThread();
+        _isSignaled = false;
+        _waiters.Clear();
     }
 
     public WaitQueueAwaitable WaitAsync()
@@ -116,26 +119,28 @@ public class AsyncWaitQueue
         KernelScheduler? scheduler)
     {
         var effectiveScheduler = scheduler ?? context?.CommonKernel;
-        lock (_lock)
+        if (effectiveScheduler != null)
+            AssertSchedulerThread(effectiveScheduler);
+        else
+            AssertSchedulerThread();
+
+        if (_isSignaled)
         {
-            if (IsSignaled)
-            {
-                // If already signaled, schedule immediately
-                if (effectiveScheduler != null)
-                    ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, context, token);
-                else
-                    continuation();
-                return NoopRegistration.Instance;
-            }
-
-            if (effectiveScheduler == null)
-                throw new InvalidOperationException(
-                    "AsyncWaitQueue.RegisterCancelable requires an active scheduler or a FiberTask context.");
-
-            var id = ++_nextWaiterId;
-            _waiters.Add((id, continuation, context, token, effectiveScheduler));
-            return new WaitRegistration(this, id);
+            // If already signaled, schedule immediately
+            if (effectiveScheduler != null)
+                ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, context, token);
+            else
+                continuation();
+            return NoopRegistration.Instance;
         }
+
+        if (effectiveScheduler == null)
+            throw new InvalidOperationException(
+                "AsyncWaitQueue.RegisterCancelable requires an active scheduler or a FiberTask context.");
+
+        var id = ++_nextWaiterId;
+        _waiters.Add((id, continuation, context, token, effectiveScheduler));
+        return new WaitRegistration(this, id);
     }
 
     private static void ScheduleContinuationWithWaitReason(
@@ -169,11 +174,28 @@ public class AsyncWaitQueue
 
     private void Unregister(long id)
     {
-        lock (_lock)
+        AssertSchedulerThread();
+        var idx = _waiters.FindIndex(x => x.Id == id);
+        if (idx >= 0) _waiters.RemoveAt(idx);
+    }
+
+    private void AssertSchedulerThread(KernelScheduler? schedulerHint = null, [CallerMemberName] string? caller = null)
+    {
+        var scheduler = schedulerHint ?? _ownerScheduler ?? KernelScheduler.Current;
+        if (scheduler == null)
+            return;
+
+        if (_ownerScheduler == null)
         {
-            var idx = _waiters.FindIndex(x => x.Id == id);
-            if (idx >= 0) _waiters.RemoveAt(idx);
+            _ownerScheduler = scheduler;
         }
+        else if (!ReferenceEquals(_ownerScheduler, scheduler))
+        {
+            throw new InvalidOperationException(
+                $"AsyncWaitQueue.{caller ?? "<unknown>"} is bound to a different KernelScheduler instance.");
+        }
+
+        scheduler.AssertSchedulerThread(caller);
     }
 
     // Support for GetAwaiter directly on the instance (like Task)

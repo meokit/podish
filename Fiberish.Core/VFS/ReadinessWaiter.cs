@@ -29,6 +29,7 @@ internal sealed class ReadinessWaiter
                 return true;
 
             var task = _currentTaskAccessor();
+            var scheduler = task?.CommonKernel;
             if (task != null && task.HasUnblockedPendingSignal())
                 return false;
 
@@ -36,7 +37,7 @@ internal sealed class ReadinessWaiter
             IDisposable? registration = null;
             try
             {
-                registration = _registerWaitHandle(file, waitQueue.Signal, events);
+                registration = _registerWaitHandle(file, () => DispatchSignal(waitQueue, scheduler), events);
 
                 if (registration == null)
                 {
@@ -71,5 +72,12 @@ internal sealed class ReadinessWaiter
     {
         queue.Reset();
         WaitQueuePool.Add(queue);
+    }
+
+    private static void DispatchSignal(AsyncWaitQueue queue, KernelScheduler? scheduler)
+    {
+        if (scheduler == null)
+            throw new InvalidOperationException("ReadinessWaiter callback requires an active scheduler-bound task context.");
+        scheduler.ScheduleFromAnyThread(queue.Signal);
     }
 }

@@ -731,14 +731,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         {
             if (Volatile.Read(ref _disposed) != 0)
                 return;
-            try
-            {
-                _callback();
-            }
-            catch
-            {
-                // Keep notification fan-out robust even when one callback misbehaves.
-            }
+            _callback();
         }
 
         public void Dispose()
