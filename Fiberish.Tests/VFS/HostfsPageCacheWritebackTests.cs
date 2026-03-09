@@ -287,6 +287,57 @@ public class HostfsPageCacheWritebackTests
         }
     }
 
+    [Fact]
+    public async Task Mmap_HoldsFileReference_AfterFdCloseUntilMunmap()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-mmap-file-ref-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+            var inode = loc.Dentry.Inode!;
+            var refBeforeMmap = inode.RefCount;
+
+            const uint mapAddr = 0x46000000;
+            var mmapRc = await CallSys(
+                "SysMmap2",
+                engine.State,
+                mapAddr,
+                LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write),
+                (uint)(MapFlags.Shared | MapFlags.Fixed),
+                (uint)fd,
+                0);
+            Assert.Equal((int)mapAddr, mmapRc);
+            Assert.Equal(refBeforeMmap + 1, inode.RefCount);
+
+            sm.FreeFD(fd);
+            Assert.Equal(refBeforeMmap, inode.RefCount);
+
+            Assert.True(mm.HandleFault(mapAddr, true, engine));
+            Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
+
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+            Assert.Equal(refBeforeMmap - 1, inode.RefCount);
+            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static LinuxFile OpenHostFile(string rootDir, string relativePath)
     {
         var fsType = new FileSystemType { Name = "hostfs" };

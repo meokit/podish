@@ -253,6 +253,141 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
+    public void Silkfs_UnlinkOpenFile_DefersObjectDeletionUntilClose()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-open-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var file = new Dentry("held.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            wf.Close();
+
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "held.txt");
+            Assert.NotNull(ino);
+            var obj = repo.Metadata.GetInodeObject(ino!.Value);
+            Assert.False(string.IsNullOrEmpty(obj));
+            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
+
+            var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
+            loc.Dentry.Inode!.Unlink("held.txt");
+
+            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
+            Assert.NotNull(repo.ReadObject(obj));
+            var readBuf = new byte[16];
+            var n = file.Inode!.Read(rf, readBuf, 0);
+            Assert.Equal(5, n);
+            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+
+            rf.Close();
+
+            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj));
+            Assert.Null(repo.ReadObject(obj));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_UnlinkMmapHold_DefersObjectDeletionUntilMunmap()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-mmap-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var file = new Dentry("mapheld.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            wf.Close();
+
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "mapheld.txt");
+            Assert.NotNull(ino);
+            var obj = repo.Metadata.GetInodeObject(ino!.Value);
+            Assert.False(string.IsNullOrEmpty(obj));
+            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
+
+            var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!, LinuxFile.ReferenceKind.MmapHold);
+            const uint mapAddr = 0x58000000;
+            mm.Mmap(
+                mapAddr,
+                LinuxConstants.PageSize,
+                Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed,
+                mappedFile,
+                0,
+                (long)file.Inode!.Size,
+                "MAP_SHARED",
+                engine);
+
+            loc.Dentry.Inode!.Unlink("mapheld.txt");
+            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj));
+            Assert.NotNull(repo.ReadObject(obj));
+
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+
+            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj));
+            Assert.Null(repo.ReadObject(obj));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public void Silkfs_MapSharedWriteback_PersistsAcrossRemount()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-mmap-writeback-{Guid.NewGuid():N}");
