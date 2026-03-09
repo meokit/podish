@@ -854,15 +854,9 @@ public class Dentry
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
         Name = name;
-        Inode = inode;
         Parent = parent;
         SuperBlock = sb;
-        if (inode != null)
-        {
-            inode.AttachAliasDentry(this, "Dentry.ctor");
-            inode.AcquireRef(InodeRefKind.KernelInternal, "Dentry.ctor");
-            VfsDebugTrace.AssertDentryMembership(this, "Dentry.ctor");
-        }
+        if (inode != null) BindInode(inode, "Dentry.ctor");
     }
 
     public long Id { get; } = Interlocked.Increment(ref _nextId);
@@ -895,10 +889,27 @@ public class Dentry
     public void Instantiate(Inode inode)
     {
         if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
+        BindInode(inode, "Dentry.Instantiate");
+    }
+
+    public void BindInode(Inode inode, string reason)
+    {
+        if (Inode != null) throw new InvalidOperationException("Dentry already bound");
         Inode = inode;
-        Inode.AttachAliasDentry(this, "Dentry.Instantiate");
-        Inode.AcquireRef(InodeRefKind.KernelInternal, "Dentry.Instantiate");
-        VfsDebugTrace.AssertDentryMembership(this, "Dentry.Instantiate");
+        Inode.AttachAliasDentry(this, reason);
+        Inode.AcquireRef(InodeRefKind.KernelInternal, reason);
+        VfsDebugTrace.AssertDentryMembership(this, reason);
+    }
+
+    public bool UnbindInode(string reason)
+    {
+        var inode = Inode;
+        if (inode == null) return false;
+        var detached = inode.DetachAliasDentry(this, reason);
+        Inode = null;
+        if (detached)
+            inode.ReleaseRef(InodeRefKind.KernelInternal, reason);
+        return detached;
     }
 }
 

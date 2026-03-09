@@ -196,12 +196,9 @@ public abstract class IndexedMemoryInode : Inode
             if (unlinkedInode != null)
             {
                 unlinkedInode.DecLink("IndexedMemoryInode.Unlink");
-                unlinkedInode.DetachAliasDentry(dentry, "IndexedMemoryInode.Unlink");
-                dentry.Inode = null;
+                dentry.UnbindInode("IndexedMemoryInode.Unlink");
             }
             ChildNames.Remove(name);
-
-            unlinkedInode?.ReleaseRef(InodeRefKind.KernelInternal, "IndexedMemoryInode.Unlink");
         }
     }
 
@@ -229,10 +226,8 @@ public abstract class IndexedMemoryInode : Inode
             primaryDentry.Children.Remove(name);
             var removedInode = dentry.Inode;
             removedInode!.DecLink("IndexedMemoryInode.Rmdir");
-            removedInode!.DetachAliasDentry(dentry, "IndexedMemoryInode.Rmdir");
-            dentry.Inode = null;
+            dentry.UnbindInode("IndexedMemoryInode.Rmdir");
             ChildNames.Remove(name);
-            removedInode.ReleaseRef(InodeRefKind.KernelInternal, "IndexedMemoryInode.Rmdir");
         }
     }
 

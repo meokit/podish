@@ -119,6 +119,40 @@ public class InodeInvariantTests
         }
     }
 
+    [Fact]
+    public void UnbindInode_RemovesMembershipAndKernelInternalRef()
+    {
+        var strictBefore = VfsDebugTrace.StrictInvariants;
+        var enabledBefore = VfsDebugTrace.Enabled;
+        try
+        {
+            VfsDebugTrace.StrictInvariants = true;
+            VfsDebugTrace.Enabled = false;
+
+            var sb = new TestSuperBlock();
+            var parent = new Dentry("/", null, null, sb);
+            parent.Parent = parent;
+            sb.Root = parent;
+
+            var inode = new TestInode(104, sb);
+            var dentry = new Dentry("file", inode, parent, sb);
+            Assert.Equal(1, inode.RefCount);
+            Assert.Equal(1, inode.KernelInternalRefCount);
+            Assert.Contains(dentry, inode.Dentries);
+
+            Assert.True(dentry.UnbindInode("test"));
+            Assert.Null(dentry.Inode);
+            Assert.DoesNotContain(dentry, inode.Dentries);
+            Assert.Equal(0, inode.RefCount);
+            Assert.Equal(0, inode.KernelInternalRefCount);
+        }
+        finally
+        {
+            VfsDebugTrace.StrictInvariants = strictBefore;
+            VfsDebugTrace.Enabled = enabledBefore;
+        }
+    }
+
     private sealed class TestSuperBlock : SuperBlock
     {
         public TestSuperBlock()

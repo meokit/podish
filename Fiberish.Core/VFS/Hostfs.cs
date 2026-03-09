@@ -874,7 +874,7 @@ public partial class HostInode : Inode
             var dentry = sb.GetDentry(subPath, name, null);
             File.Delete(subPath);
             sb.MetadataStore.Remove(subPath);
-            dentry?.Inode?.ReleaseRef(InodeRefKind.KernelInternal, "HostInode.Unlink");
+            dentry?.UnbindInode("HostInode.Unlink");
             if (Dentries.Count > 0)
                 Dentries[0].Children.Remove(name);
             sb.RemoveDentry(subPath);
@@ -896,7 +896,7 @@ public partial class HostInode : Inode
         var dentry = sb.GetDentry(subPath, name, null);
         Directory.Delete(subPath, false);
         sb.MetadataStore.Remove(subPath);
-        dentry?.Inode?.ReleaseRef(InodeRefKind.KernelInternal, "HostInode.Rmdir");
+        dentry?.UnbindInode("HostInode.Rmdir");
         if (Dentries.Count > 0)
             Dentries[0].Children.Remove(name);
         sb.RemoveDentry(subPath);
@@ -941,7 +941,7 @@ public partial class HostInode : Inode
                 File.Delete(newFullPath);
             }
 
-            targetDentry?.Inode?.ReleaseRef(InodeRefKind.KernelInternal, "HostInode.Rename.overwrite-target");
+            targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 targetParent.Dentries[0].Children.Remove(newName);
             sb.RemoveDentry(newFullPath);
