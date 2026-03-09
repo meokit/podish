@@ -703,7 +703,7 @@ public partial class HostInode : Inode
         Type = type;
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
-        SetInitialLinkCount(1, "HostInode.ctor");
+        SetInitialLinkCount(ComputeInitialLinkCount(), "HostInode.ctor");
     }
 
     public string HostPath
@@ -838,6 +838,8 @@ public partial class HostInode : Inode
         var sb = (HostSuperBlock)SuperBlock;
         sb.MetadataStore.Remove(subPath);
         sb.InstantiateDentry(dentry, subPath, true, mode);
+        if (dentry.Inode != null)
+            NamespaceOps.OnDirectoryCreated(this, dentry.Inode, "HostInode.Mkdir");
         return dentry;
     }
 
@@ -902,8 +904,11 @@ public partial class HostInode : Inode
         var dentry = sb.GetDentry(subPath, name, null);
         Directory.Delete(subPath, false);
         sb.MetadataStore.Remove(subPath);
-        NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Rmdir");
-        dentry?.UnbindInode("HostInode.Rmdir");
+        if (dentry?.Inode != null)
+        {
+            NamespaceOps.OnDirectoryRemoved(this, dentry.Inode, "HostInode.Rmdir");
+            dentry.UnbindInode("HostInode.Rmdir");
+        }
         if (Dentries.Count > 0)
             Dentries[0].Children.Remove(name);
         sb.RemoveDentry(subPath);
@@ -922,6 +927,7 @@ public partial class HostInode : Inode
         var dentry = sb.GetDentry(oldFullPath, oldName, null) ??
                      throw new FileNotFoundException("Source not found", oldName);
         var sourceIsDirectory = dentry.Inode!.Type == InodeType.Directory;
+        var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
 
         // Handle overwrite
         if (File.Exists(newFullPath) || Directory.Exists(newFullPath) || new FileInfo(newFullPath).LinkTarget != null)
@@ -942,6 +948,9 @@ public partial class HostInode : Inode
                     throw new InvalidOperationException("Directory not empty");
 
                 Directory.Delete(newFullPath, false);
+                if (targetDentry?.Inode != null)
+                    NamespaceOps.OnDirectoryRemoved(targetParent, targetDentry.Inode,
+                        "HostInode.Rename.overwrite-target-dir");
             }
             else
             {
@@ -949,9 +958,8 @@ public partial class HostInode : Inode
                     throw new InvalidOperationException("Not a directory");
 
                 File.Delete(newFullPath);
+                NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
             }
-
-            NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 targetParent.Dentries[0].Children.Remove(newName);
@@ -976,6 +984,9 @@ public partial class HostInode : Inode
             dentry.Parent = targetParent.Dentries[0];
             dentry.Parent.Children[newName] = dentry;
         }
+
+        if (movedAcrossParents)
+            NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "HostInode.Rename");
     }
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
@@ -1449,6 +1460,34 @@ public partial class HostInode : Inode
         if (_xattrs != null) return;
         var sb = (HostSuperBlock)SuperBlock;
         _xattrs = sb.MetadataStore.LoadXAttrs(HostPath);
+    }
+
+    private int ComputeInitialLinkCount()
+    {
+        if (Type != InodeType.Directory) return 1;
+
+        var nlink = 2; // '.' and '..'
+        try
+        {
+            foreach (var entryPath in Directory.EnumerateFileSystemEntries(HostPath))
+            {
+                var name = Path.GetFileName(entryPath);
+                if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
+                    continue;
+
+                var info = new FileInfo(entryPath);
+                if (info.LinkTarget != null)
+                    continue; // symlink entries do not contribute to parent nlink
+                if (Directory.Exists(entryPath))
+                    nlink++;
+            }
+        }
+        catch
+        {
+            // Keep minimal valid directory nlink when host probing fails.
+        }
+
+        return nlink;
     }
 
     private void PersistXAttrs()

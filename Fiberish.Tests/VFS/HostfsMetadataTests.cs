@@ -318,6 +318,136 @@ public class HostfsMetadataTests
     }
 
     [Fact]
+    public void Hostfs_MkdirAndRmdir_TrackDirectoryLinkCount()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            Assert.Equal(2u, rootInode.GetLinkCountForStat());
+
+            var dir = new Dentry("dir", null, sb.Root, sb);
+            rootInode.Mkdir(dir, 0x1ED, 0, 0);
+            var dirInode = Assert.IsType<HostInode>(dir.Inode);
+
+            Assert.Equal(3u, rootInode.GetLinkCountForStat());
+            Assert.Equal(2u, dirInode.GetLinkCountForStat());
+
+            var nested = new Dentry("nested", null, dir, sb);
+            dirInode.Mkdir(nested, 0x1ED, 0, 0);
+            var nestedInode = Assert.IsType<HostInode>(nested.Inode);
+
+            Assert.Equal(3u, dirInode.GetLinkCountForStat());
+            Assert.Equal(2u, nestedInode.GetLinkCountForStat());
+
+            dirInode.Rmdir("nested");
+            Assert.Equal(2u, dirInode.GetLinkCountForStat());
+            Assert.Equal(0u, nestedInode.GetLinkCountForStat());
+            Assert.True(nestedInode.IsEvicted);
+
+            rootInode.Rmdir("dir");
+            Assert.Equal(2u, rootInode.GetLinkCountForStat());
+            Assert.Equal(0u, dirInode.GetLinkCountForStat());
+            Assert.True(dirInode.IsEvicted);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_RenameDirectoryAcrossParents_AdjustsParentLinkCount()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var from = new Dentry("from", null, sb.Root, sb);
+            rootInode.Mkdir(from, 0x1ED, 0, 0);
+            var fromInode = Assert.IsType<HostInode>(from.Inode);
+
+            var to = new Dentry("to", null, sb.Root, sb);
+            rootInode.Mkdir(to, 0x1ED, 0, 0);
+            var toInode = Assert.IsType<HostInode>(to.Inode);
+
+            var child = new Dentry("child", null, from, sb);
+            fromInode.Mkdir(child, 0x1ED, 0, 0);
+            var childInode = Assert.IsType<HostInode>(child.Inode);
+
+            Assert.Equal(4u, rootInode.GetLinkCountForStat());
+            Assert.Equal(3u, fromInode.GetLinkCountForStat());
+            Assert.Equal(2u, toInode.GetLinkCountForStat());
+            Assert.Equal(2u, childInode.GetLinkCountForStat());
+
+            fromInode.Rename("child", toInode, "moved");
+
+            Assert.Equal(4u, rootInode.GetLinkCountForStat());
+            Assert.Equal(2u, fromInode.GetLinkCountForStat());
+            Assert.Equal(3u, toInode.GetLinkCountForStat());
+            Assert.Equal(2u, childInode.GetLinkCountForStat());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_RenameDirectoryOverwrite_DropsVictimAndUpdatesParentNlink()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(Path.Combine(tempRoot, "src"));
+        Directory.CreateDirectory(Path.Combine(tempRoot, "dst"));
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var src = rootInode.Lookup("src");
+            var dst = rootInode.Lookup("dst");
+            Assert.NotNull(src);
+            Assert.NotNull(dst);
+            var srcInode = src!.Inode!;
+            var dstInode = dst!.Inode!;
+
+            Assert.Equal(4u, rootInode.GetLinkCountForStat());
+            Assert.Equal(2u, srcInode.GetLinkCountForStat());
+            Assert.Equal(2u, dstInode.GetLinkCountForStat());
+
+            rootInode.Rename("src", rootInode, "dst");
+
+            Assert.Equal(3u, rootInode.GetLinkCountForStat());
+            Assert.Equal(2u, srcInode.GetLinkCountForStat());
+            Assert.Equal(0u, dstInode.GetLinkCountForStat());
+            Assert.True(dstInode.IsEvicted);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
     public void Hostfs_RenameOverwrite_DropsReplacedInodeLinkCount()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
