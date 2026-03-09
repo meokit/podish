@@ -161,6 +161,12 @@ public class Process
     {
         var oldMem = Mem;
         var oldEngine = Syscalls.Engine;
+        var shouldDetachSysVShm = oldMem.GetSharedRefCount() == 1;
+
+        // Linux execve semantics: detach SysV SHM segments from the old address space.
+        // For shared address spaces, defer detach to the final owner.
+        if (shouldDetachSysVShm)
+            Syscalls.SysVShm.OnProcessExit(TGID, oldMem, oldEngine, this);
 
         // 1. Replace memory with a fresh VMAManager.
         // This is critical for vfork+execve: the child may share the parent's VMAManager

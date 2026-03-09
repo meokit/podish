@@ -427,7 +427,8 @@ public partial class SyscallManager
 
         sm.Close();
         ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-        sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, task.CPU, task.Process);
+        if (task.Process.Mem.GetSharedRefCount() == 1)
+            sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, task.CPU, task.Process);
         MarkProcessExitAndReparent(task, exitStatus, exitedBySignal, termSignal, coreDumped);
     }
 

@@ -42,6 +42,7 @@ public class SysVShmAttach
     public uint BaseAddr { get; set; } // Virtual address where attached
     public int Shmid { get; set; } // Segment ID
     public Protection Prot { get; set; } // Mapping protection
+    public VMAManager AddressSpace { get; set; } = null!; // Address space that owns this attach
 }
 
 /// <summary>
@@ -161,6 +162,9 @@ public class SysVShmManager
             ? Protection.Read
             : Protection.Read | Protection.Write;
 
+        if ((flags & LinuxConstants.SHM_REMAP) != 0 && addr == 0)
+            return (long)-(int)Errno.EINVAL;
+
         // Determine address
         var attachAddr = addr;
         if (attachAddr == 0)
@@ -179,21 +183,25 @@ public class SysVShmManager
             // Check alignment
             if ((attachAddr & 0xFFFu) != 0)
                 return (long)-(int)Errno.EINVAL;
+        }
 
-            // Check for overlapping VMAs unless SHM_REMAP is specified
-            var existingVmas = vmaManager.FindVMAsInRange(attachAddr, attachAddr + segment.Size);
-            if (existingVmas.Count > 0)
+        if (!TryComputeRangeEnd(attachAddr, segment.Size, out var attachEnd))
+            return (long)-(int)Errno.EINVAL;
+
+        // Check for overlapping VMAs unless SHM_REMAP is specified
+        var existingVmas = vmaManager.FindVMAsInRange(attachAddr, attachEnd);
+        if (existingVmas.Count > 0)
+        {
+            if ((flags & LinuxConstants.SHM_REMAP) != 0)
             {
-                if ((flags & LinuxConstants.SHM_REMAP) != 0)
-                {
-                    // SHM_REMAP: unmap existing mappings at this address
-                    ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
-                }
-                else
-                {
-                    // Without SHM_REMAP, overlapping mappings are an error
-                    return (long)-(int)Errno.EINVAL;
-                }
+                // SHM_REMAP: unmap existing mappings at this address
+                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
+                DropAttachmentsInRange(vmaManager, attachAddr, attachEnd, pid);
+            }
+            else
+            {
+                // Without SHM_REMAP, overlapping mappings are an error
+                return (long)-(int)Errno.EINVAL;
             }
         }
 
@@ -204,7 +212,7 @@ public class SysVShmManager
             var vma = new VMA
             {
                 Start = attachAddr,
-                End = attachAddr + segment.Size,
+                End = attachEnd,
                 Perms = prot,
                 Flags = MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous,
                 File = null,
@@ -225,7 +233,8 @@ public class SysVShmManager
                 Pid = pid,
                 BaseAddr = attachAddr,
                 Shmid = shmid,
-                Prot = prot
+                Prot = prot,
+                AddressSpace = vmaManager
             };
             _attaches.Add(attach);
 
@@ -253,9 +262,9 @@ public class SysVShmManager
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
-        // Find the attachment by address and pid (TGID)
-        // Linux shmdt operates on the calling process's address space
-        var attachIndex = _attaches.FindIndex(a => a.BaseAddr == addr && a.Pid == pid);
+        // Find the attachment by address and address-space ownership.
+        // In CLONE_VM-like shared mm, peer processes can detach by address.
+        var attachIndex = _attaches.FindIndex(a => a.BaseAddr == addr && ReferenceEquals(a.AddressSpace, vmaManager));
         if (attachIndex < 0)
             return -(int)Errno.EINVAL; // Not attached at this address for this process
 
@@ -353,10 +362,16 @@ public class SysVShmManager
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
+
+        // Shared address space is still alive (e.g. CLONE_VM non-thread peer process exists).
+        // Detach is tied to address-space teardown, not individual process exit in this case.
+        if (vmaManager.GetSharedRefCount() > 1)
+            return;
+
         for (var i = _attaches.Count - 1; i >= 0; i--)
         {
             var attach = _attaches[i];
-            if (attach.Pid != pid) continue;
+            if (!ReferenceEquals(attach.AddressSpace, vmaManager)) continue;
 
             _attaches.RemoveAt(i);
 
@@ -424,12 +439,15 @@ public class SysVShmManager
 
     private uint FindFreeRegion(VMAManager vmaManager, uint size)
     {
+        if (size == 0 || size > LinuxConstants.TaskSize32)
+            return 0;
+
         // Start from a reasonable address
         var addr = 0x10000000u; // 256 MB
-        var end = addr + size;
-
-        while (end < LinuxConstants.TaskSize32)
+        while (addr < LinuxConstants.TaskSize32)
         {
+            if (!TryComputeRangeEnd(addr, size, out var end))
+                return 0;
             var vmas = vmaManager.FindVMAsInRange(addr, end);
             if (vmas.Count == 0)
                 return addr;
@@ -441,10 +459,39 @@ public class SysVShmManager
                     maxEnd = vma.End;
 
             addr = (maxEnd + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
-            end = addr + size;
         }
 
         return 0; // No free region found
+    }
+
+    private void DropAttachmentsInRange(VMAManager vmaManager, uint start, uint end, int lpid)
+    {
+        for (var i = _attaches.Count - 1; i >= 0; i--)
+        {
+            var attach = _attaches[i];
+            if (!ReferenceEquals(attach.AddressSpace, vmaManager)) continue;
+            if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment)) continue;
+            if (!TryComputeRangeEnd(attach.BaseAddr, segment.Size, out var attachEnd)) continue;
+            if (attach.BaseAddr >= end || attachEnd <= start) continue;
+
+            _attaches.RemoveAt(i);
+
+            segment.NAttch--;
+            segment.DTime = DateTime.UtcNow;
+            segment.Lpid = lpid;
+            if (segment.MarkedForDelete && segment.NAttch == 0)
+                DestroySegment(segment);
+        }
+    }
+
+    private static bool TryComputeRangeEnd(uint start, uint size, out uint end)
+    {
+        end = 0;
+        if (size == 0) return false;
+        var end64 = (ulong)start + size;
+        if (end64 > LinuxConstants.TaskSize32) return false;
+        end = (uint)end64;
+        return end > start;
     }
 
     private int WriteShmidDs(SysVShmSegment segment, uint buf, Engine engine)

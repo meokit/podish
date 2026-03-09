@@ -84,6 +84,29 @@ public class SysVShmManagerTests
     }
 
     [Fact]
+    public void ShmDt_ShouldWorkAcrossProcessesSharingAddressSpace()
+    {
+        var manager = new SysVShmManager();
+        var sharedVma = new VMAManager();
+        sharedVma.AddSharedRef();
+
+        using var p1 = new TestContext(manager, processId: 3101, vma: sharedVma);
+        using var p2 = new TestContext(manager, processId: 3102, vma: sharedVma);
+
+        var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3101);
+        Assert.True(shmid > 0);
+
+        const uint addr = 0x21400000;
+        var attachRet = manager.ShmAt(shmid, addr, 0, 3101, p1.Vma, p1.Engine, p1.Process);
+        Assert.Equal((long)addr, attachRet);
+
+        // Shared VM (CLONE_VM-style): peer process should be able to detach by address space.
+        var detachRet = manager.ShmDt(addr, 3102, p2.Vma, p2.Engine, p2.Process);
+        Assert.Equal(0, detachRet);
+        Assert.Equal(-(int)Errno.EINVAL, manager.ShmDt(addr, 3101, p1.Vma, p1.Engine, p1.Process));
+    }
+
+    [Fact]
     public void OnProcessExit_ShouldDetachAndUnmapAllAttachments()
     {
         using var ctx = new TestContext();
@@ -99,6 +122,31 @@ public class SysVShmManagerTests
         ctx.Manager.OnProcessExit(3001, ctx.Vma, ctx.Engine);
 
         Assert.Empty(ctx.Vma.FindVMAsInRange(addr, addr + 4096));
+    }
+
+    [Fact]
+    public void OnProcessExit_WithSharedAddressSpace_MustNotDetach()
+    {
+        var manager = new SysVShmManager();
+        var sharedVma = new VMAManager();
+        sharedVma.AddSharedRef();
+
+        using var p1 = new TestContext(manager, processId: 3201, vma: sharedVma);
+        using var p2 = new TestContext(manager, processId: 3202, vma: sharedVma);
+
+        var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3201);
+        Assert.True(shmid > 0);
+
+        const uint addr = 0x22400000;
+        var attachRet = manager.ShmAt(shmid, addr, 0, 3201, p1.Vma, p1.Engine, p1.Process);
+        Assert.Equal((long)addr, attachRet);
+        Assert.NotEmpty(sharedVma.FindVMAsInRange(addr, addr + 4096));
+
+        manager.OnProcessExit(3201, p1.Vma, p1.Engine, p1.Process);
+
+        // Address space is still shared, so attachment must remain live.
+        Assert.NotEmpty(sharedVma.FindVMAsInRange(addr, addr + 4096));
+        Assert.Equal(0, manager.ShmDt(addr, 3202, p2.Vma, p2.Engine, p2.Process));
     }
 
     [Fact]
@@ -125,28 +173,72 @@ public class SysVShmManagerTests
         Assert.Empty(p1.Vma.FindVMAsInRange(addr, addr + 4096));
     }
 
+    [Fact]
+    public void ShmAt_WithShmRemapAndNullAddress_ShouldReturnEinval()
+    {
+        using var ctx = new TestContext();
+        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 2000);
+        Assert.True(shmid > 0);
+
+        var ret = ctx.Manager.ShmAt(shmid, 0, LinuxConstants.SHM_REMAP, 2000, ctx.Vma, ctx.Engine, ctx.Process);
+        Assert.Equal(-(int)Errno.EINVAL, (int)ret);
+    }
+
+    [Fact]
+    public void ShmAt_WithShmRemap_MustDropReplacedAttachmentRecord()
+    {
+        using var ctx = new TestContext();
+        var shmid1 = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3001);
+        var shmid2 = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3001);
+        Assert.True(shmid1 > 0);
+        Assert.True(shmid2 > 0);
+
+        const uint addr = 0x22800000;
+        Assert.Equal((long)addr, ctx.Manager.ShmAt(shmid1, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+        Assert.Equal((long)addr,
+            ctx.Manager.ShmAt(shmid2, addr, LinuxConstants.SHM_REMAP, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+
+        // Only the new mapping should remain attached.
+        Assert.Equal(0, ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+        Assert.Equal(-(int)Errno.EINVAL, ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+    }
+
+    [Fact]
+    public void ShmAt_WithAddressRangeOverflow_ShouldReturnEinval()
+    {
+        using var ctx = new TestContext();
+        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, (uint)(LinuxConstants.PageSize * 2), 0x1FF, 0, 0,
+            3001);
+        Assert.True(shmid > 0);
+
+        var addr = LinuxConstants.TaskSize32 - (uint)LinuxConstants.PageSize;
+        var ret = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process);
+        Assert.Equal(-(int)Errno.EINVAL, (int)ret);
+    }
+
     private sealed class TestContext : IDisposable
     {
         private readonly FiberTask _task;
 
-        public TestContext(SysVShmManager? manager = null, int processId = 2000)
+        public TestContext(SysVShmManager? manager = null, int processId = 2000, VMAManager? vma = null)
         {
             Engine = new Engine();
-            Vma = new VMAManager();
+            Vma = vma ?? new VMAManager();
             Manager = manager ?? new SysVShmManager();
 
             var kernel = new KernelScheduler();
-            var process = new Process(processId, Vma, null!)
+            Process = new Process(processId, Vma, null!)
             {
                 EUID = 0,
                 EGID = 0
             };
-            _task = new FiberTask(processId, process, Engine, kernel);
+            _task = new FiberTask(processId, Process, Engine, kernel);
         }
 
         public Engine Engine { get; }
         public VMAManager Vma { get; }
         public SysVShmManager Manager { get; }
+        public Process Process { get; }
 
         public void MapUserPage(uint addr)
         {
