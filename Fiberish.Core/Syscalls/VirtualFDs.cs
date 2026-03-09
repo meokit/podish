@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -11,7 +12,19 @@ public class EventFdInode : TmpfsInode
     private ulong _counter;
     private readonly bool _isSemaphore;
     private readonly List<Action> _waiters = [];
-    private readonly object _lock = new();
+
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
 
     public EventFdInode(ulong ino, SuperBlock superBlock, ulong initval, FileFlags flags) : base(ino, superBlock)
     {
@@ -23,7 +36,7 @@ public class EventFdInode : TmpfsInode
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_counter == 0)
             {
@@ -59,7 +72,7 @@ public class EventFdInode : TmpfsInode
         var add = BinaryPrimitives.ReadUInt64LittleEndian(buffer[..8]);
         if (add == 0xFFFFFFFFFFFFFFFF) return -(int)Errno.EINVAL;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (ulong.MaxValue - _counter < add)
             {
@@ -76,7 +89,7 @@ public class EventFdInode : TmpfsInode
     public override short Poll(Fiberish.VFS.LinuxFile file, short events)
     {
         short revents = 0;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
                 revents |= LinuxConstants.POLLIN;
@@ -91,7 +104,7 @@ public class EventFdInode : TmpfsInode
         if (IsReadyForEvents(events))
             return false;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             _waiters.Add(callback);
         }
@@ -106,18 +119,18 @@ public class EventFdInode : TmpfsInode
             return NoopWaitRegistration.Instance;
         }
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             _waiters.Add(callback);
         }
 
-        return new CallbackRegistration(_lock, _waiters, callback);
+        return new CallbackRegistration(this, _waiters, callback);
     }
 
     private void NotifyWaiters()
     {
         Action[] toWake;
-        lock (_lock)
+        using (EnterStateScope())
         {
             toWake = [.._waiters];
             _waiters.Clear(); // They will re-register if they poll again
@@ -130,7 +143,7 @@ public class EventFdInode : TmpfsInode
 
     private bool IsReadyForEvents(short events)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
                 return true;
@@ -142,13 +155,13 @@ public class EventFdInode : TmpfsInode
 
     private sealed class CallbackRegistration : IDisposable
     {
-        private readonly object _lock;
+        private readonly EventFdInode _owner;
         private List<Action>? _waiters;
         private readonly Action _callback;
 
-        public CallbackRegistration(object @lock, List<Action> waiters, Action callback)
+        public CallbackRegistration(EventFdInode owner, List<Action> waiters, Action callback)
         {
-            _lock = @lock;
+            _owner = owner;
             _waiters = waiters;
             _callback = callback;
         }
@@ -157,7 +170,7 @@ public class EventFdInode : TmpfsInode
         {
             var waiters = Interlocked.Exchange(ref _waiters, null);
             if (waiters == null) return;
-            lock (_lock)
+            using (_owner.EnterStateScope())
             {
                 waiters.Remove(_callback);
             }
@@ -169,11 +182,23 @@ public class TimerFdInode : TmpfsInode
 {
     private ulong _expirations;
     private Fiberish.Core.Timer? _timer;
-    private readonly object _lock = new();
     private readonly List<Action> _waiters = [];
     
     private long _intervalTicks;
     private long _valueTicks; // Absolute expiration tick
+
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
 
     public TimerFdInode(ulong ino, SuperBlock superBlock) : base(ino, superBlock)
     {
@@ -181,7 +206,7 @@ public class TimerFdInode : TmpfsInode
 
     public void SetTime(long intervalTicks, long valueTicks, bool isAbsolute)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _timer?.Cancel();
             _timer = null;
@@ -205,7 +230,7 @@ public class TimerFdInode : TmpfsInode
 
     public void GetTime(out long intervalTicks, out long valueTicks)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             intervalTicks = _intervalTicks;
             if (_valueTicks > 0)
@@ -230,7 +255,7 @@ public class TimerFdInode : TmpfsInode
 
     private void TimerCallback()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _expirations++;
             
@@ -252,7 +277,7 @@ public class TimerFdInode : TmpfsInode
         }
         
         List<Action> toWake;
-        lock (_lock)
+        using (EnterStateScope())
         {
             toWake = [.._waiters];
             _waiters.Clear();
@@ -264,7 +289,7 @@ public class TimerFdInode : TmpfsInode
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_expirations == 0)
             {
@@ -286,7 +311,7 @@ public class TimerFdInode : TmpfsInode
     public override short Poll(Fiberish.VFS.LinuxFile file, short events)
     {
         short revents = 0;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
                 revents |= LinuxConstants.POLLIN;
@@ -296,7 +321,7 @@ public class TimerFdInode : TmpfsInode
 
     public override bool RegisterWait(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
             {
@@ -310,25 +335,25 @@ public class TimerFdInode : TmpfsInode
 
     public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
                 return null;
             _waiters.Add(callback);
         }
 
-        return new CallbackRegistration(_lock, _waiters, callback);
+        return new CallbackRegistration(this, _waiters, callback);
     }
 
     private sealed class CallbackRegistration : IDisposable
     {
-        private readonly object _lock;
+        private readonly TimerFdInode _owner;
         private List<Action>? _waiters;
         private readonly Action _callback;
 
-        public CallbackRegistration(object @lock, List<Action> waiters, Action callback)
+        public CallbackRegistration(TimerFdInode owner, List<Action> waiters, Action callback)
         {
-            _lock = @lock;
+            _owner = owner;
             _waiters = waiters;
             _callback = callback;
         }
@@ -337,7 +362,7 @@ public class TimerFdInode : TmpfsInode
         {
             var waiters = Interlocked.Exchange(ref _waiters, null);
             if (waiters == null) return;
-            lock (_lock)
+            using (_owner.EnterStateScope())
             {
                 waiters.Remove(_callback);
             }

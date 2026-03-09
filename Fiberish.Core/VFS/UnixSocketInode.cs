@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Threading;
 using Fiberish.Core;
@@ -18,7 +19,6 @@ public class UnixMessage
 
 public class UnixSocketInode : Inode
 {
-    private readonly object _lock = new();
     private readonly AsyncWaitQueue _readWaitQueue = new();
     private readonly AsyncWaitQueue _writeWaitQueue = new();
     
@@ -45,6 +45,21 @@ public class UnixSocketInode : Inode
     private const int MaxSendBuffer = 262144; // 256KB
     private int _queuedBytes;
 
+    // Single-thread scheduling model: keep a using-scope shape so lock semantics
+    // can be introduced centrally later without changing call sites.
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
+
     public UnixSocketInode(ulong ino, SuperBlock sb, SocketType type)
     {
         Ino = ino;
@@ -61,7 +76,7 @@ public class UnixSocketInode : Inode
     {
         get
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 return _listening;
             }
@@ -72,7 +87,7 @@ public class UnixSocketInode : Inode
     {
         get
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 return _peer != null;
             }
@@ -83,7 +98,7 @@ public class UnixSocketInode : Inode
     {
         get
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 return _localSunPathRaw != null;
             }
@@ -92,7 +107,7 @@ public class UnixSocketInode : Inode
 
     public void ConnectPair(UnixSocketInode peer)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _peer = peer;
             _peerWriteClosed = false;
@@ -102,7 +117,7 @@ public class UnixSocketInode : Inode
 
     public void DisconnectPeer()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _peer = null;
             _peerWriteClosed = false;
@@ -115,7 +130,7 @@ public class UnixSocketInode : Inode
     {
         if (_socketType == SocketType.Dgram) return -(int)Errno.EOPNOTSUPP;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_peer != null) return -(int)Errno.EINVAL;
             _listening = true;
@@ -126,7 +141,7 @@ public class UnixSocketInode : Inode
 
     public int EnqueueConnection(UnixSocketInode accepted)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (!_listening) return -(int)Errno.ECONNREFUSED;
             if (_pendingConnections.Count >= _listenBacklog) return -(int)Errno.EAGAIN;
@@ -138,14 +153,14 @@ public class UnixSocketInode : Inode
 
     public async ValueTask<(int Rc, UnixSocketInode? Inode)> AcceptAsync(LinuxFile file, int flags)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (!_listening) return (-(int)Errno.EINVAL, null);
         }
 
         while (true)
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 if (_pendingConnections.TryDequeue(out var accepted))
                 {
@@ -175,7 +190,7 @@ public class UnixSocketInode : Inode
         switch (how)
         {
             case 0: // SHUT_RD
-                lock (_lock)
+                using (EnterStateScope())
                 {
                     _shutDownRead = true;
                     _peerWriteClosed = true;
@@ -184,14 +199,14 @@ public class UnixSocketInode : Inode
                     while (_receiveQueue.TryDequeue(out var dropped))
                         ReleaseQueuedFds(dropped.Fds);
                     _queuedBytes = 0;
-                    UpdateWriteWaitQueueLocked();
+                    UpdateWriteWaitQueueState();
                 }
                 _readWaitQueue.Set();
                 _writeWaitQueue.Set();
                 return 0;
 
             case 1: // SHUT_WR
-                lock (_lock)
+                using (EnterStateScope())
                 {
                     if (_shutDownWrite) return 0;
                     _shutDownWrite = true;
@@ -201,7 +216,7 @@ public class UnixSocketInode : Inode
                 return 0;
 
             case 2: // SHUT_RDWR
-                lock (_lock)
+                using (EnterStateScope())
                 {
                     _shutDownRead = true;
                     _shutDownWrite = true;
@@ -212,7 +227,7 @@ public class UnixSocketInode : Inode
                         ReleaseQueuedFds(dropped.Fds);
                     _queuedBytes = 0;
                     peerToNotifyWriteClosed = _peer;
-                    UpdateWriteWaitQueueLocked();
+                    UpdateWriteWaitQueueState();
                 }
                 peerToNotifyWriteClosed?.NotifyPeerWriteClosed();
                 _readWaitQueue.Set();
@@ -226,7 +241,7 @@ public class UnixSocketInode : Inode
 
     private void NotifyPeerWriteClosed()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _peerWriteClosed = true;
         }
@@ -236,7 +251,7 @@ public class UnixSocketInode : Inode
 
     public void SetLocalSunPathRaw(byte[]? raw)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _localSunPathRaw = raw == null ? null : [.. raw];
         }
@@ -244,7 +259,7 @@ public class UnixSocketInode : Inode
 
     public byte[]? GetLocalSunPathRaw()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             return _localSunPathRaw == null ? null : [.. _localSunPathRaw];
         }
@@ -252,7 +267,7 @@ public class UnixSocketInode : Inode
 
     public void SetPeerSunPathRaw(byte[]? raw)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _peerSunPathRaw = raw == null ? null : [.. raw];
         }
@@ -260,7 +275,7 @@ public class UnixSocketInode : Inode
 
     public byte[]? GetPeerSunPathRaw()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             return _peerSunPathRaw == null ? null : [.. _peerSunPathRaw];
         }
@@ -268,7 +283,7 @@ public class UnixSocketInode : Inode
 
     public void SetReleaseUnbindCallback(Action<UnixSocketInode>? callback)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _releaseUnbindCallback = callback;
         }
@@ -277,7 +292,7 @@ public class UnixSocketInode : Inode
     public override short Poll(LinuxFile file, short events)
     {
         short revents = 0;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & PollEvents.POLLIN) != 0)
             {
@@ -376,7 +391,7 @@ public class UnixSocketInode : Inode
 
     public void EnqueueMessage(UnixMessage msg)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_shutDownRead || _peerWriteClosed)
             {
@@ -385,20 +400,20 @@ public class UnixSocketInode : Inode
             }
             _receiveQueue.Enqueue(msg);
             _queuedBytes += msg.Data.Length;
-            UpdateWriteWaitQueueLocked();
+            UpdateWriteWaitQueueState();
         }
         _readWaitQueue.Set(); // Signal that data is available (like PipeInode)
     }
 
     public void PeerDisconnected()
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _shutDownRead = true;
             _shutDownWrite = true;
             _peerWriteClosed = true;
             _peer = null;
-            UpdateWriteWaitQueueLocked();
+            UpdateWriteWaitQueueState();
         }
         _readWaitQueue.Signal();
         _writeWaitQueue.Signal();
@@ -413,7 +428,7 @@ public class UnixSocketInode : Inode
                           (flags & LinuxConstants.MSG_DONTWAIT) != 0;
         while (true)
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 if (_partialBuffer != null)
                 {
@@ -428,7 +443,7 @@ public class UnixSocketInode : Inode
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
                     _queuedBytes -= toCopy;
-                    UpdateWriteWaitQueueLocked();
+                    UpdateWriteWaitQueueState();
                     _writeWaitQueue.Set(); // signal backpressure relief
                     return (toCopy, null, null); // FDs only on boundary
                 }
@@ -447,7 +462,7 @@ public class UnixSocketInode : Inode
                     _queuedBytes -= toCopy;
                     if (_socketType != SocketType.Stream || toCopy >= msg.Data.Length)
                         _queuedBytes -= (msg.Data.Length - toCopy); // discard remainder for dgram
-                    UpdateWriteWaitQueueLocked();
+                    UpdateWriteWaitQueueState();
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
 
@@ -480,7 +495,7 @@ public class UnixSocketInode : Inode
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||
                           (flags & LinuxConstants.MSG_DONTWAIT) != 0;
         UnixSocketInode? peer;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_shutDownWrite) return -(int)Errno.EPIPE;
             if (_listening) return -(int)Errno.EINVAL;
@@ -493,7 +508,7 @@ public class UnixSocketInode : Inode
         // Backpressure: check peer's queued bytes
         while (true)
         {
-            lock (peer._lock)
+            using (peer.EnterStateScope())
             {
                 if (peer._shutDownRead) return -(int)Errno.EPIPE;
                 if (peer._queuedBytes < MaxSendBuffer)
@@ -506,7 +521,7 @@ public class UnixSocketInode : Inode
             await peer._writeWaitQueue.WaitAsync();
 
             // Re-check connection after wakeup
-            lock (_lock)
+            using (EnterStateScope())
             {
                 if (_shutDownWrite) return -(int)Errno.EPIPE;
                 var currentPeer = explicitPeer ?? _peer;
@@ -534,7 +549,7 @@ public class UnixSocketInode : Inode
     {
         Action<UnixSocketInode>? callback;
         UnixSocketInode? peerToNotify;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_lifecycleClosed) return;
             _lifecycleClosed = true;
@@ -552,7 +567,7 @@ public class UnixSocketInode : Inode
                 ReleaseQueuedFds(msg.Fds);
             }
             _queuedBytes = 0;
-            UpdateWriteWaitQueueLocked();
+            UpdateWriteWaitQueueState();
         }
 
         peerToNotify?.PeerDisconnected();
@@ -574,7 +589,7 @@ public class UnixSocketInode : Inode
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_partialBuffer != null)
             {
@@ -590,7 +605,7 @@ public class UnixSocketInode : Inode
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
                     _queuedBytes -= toCopy;
-                    UpdateWriteWaitQueueLocked();
+                    UpdateWriteWaitQueueState();
                     _writeWaitQueue.Set(); // backpressure relief 
                     return toCopy;
                 }
@@ -618,7 +633,7 @@ public class UnixSocketInode : Inode
                 _queuedBytes -= msg.Data.Length;
                 if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
                     _queuedBytes += (msg.Data.Length - toCopy); // partial still queued
-                UpdateWriteWaitQueueLocked();
+                UpdateWriteWaitQueueState();
                 _writeWaitQueue.Set(); // backpressure relief
 
                 return toCopy;
@@ -634,7 +649,7 @@ public class UnixSocketInode : Inode
     public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         UnixSocketInode? peer;
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_shutDownWrite) return -(int)Errno.EPIPE;
             if (_listening) return -(int)Errno.EINVAL;
@@ -644,7 +659,7 @@ public class UnixSocketInode : Inode
         }
 
         // Backpressure check for synchronous write
-        lock (peer._lock)
+        using (peer.EnterStateScope())
         {
             if (peer._shutDownRead)
                 return -(int)Errno.EPIPE;
@@ -664,7 +679,7 @@ public class UnixSocketInode : Inode
         foreach (var f in fds) f.Close();
     }
 
-    private void UpdateWriteWaitQueueLocked()
+    private void UpdateWriteWaitQueueState()
     {
         if (_queuedBytes >= MaxSendBuffer || _shutDownRead)
             _writeWaitQueue.Reset();

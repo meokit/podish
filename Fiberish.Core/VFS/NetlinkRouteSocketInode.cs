@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System;
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Native;
@@ -11,10 +12,23 @@ namespace Fiberish.VFS;
 
 public sealed class NetlinkRouteSocketInode : Inode
 {
-    private readonly object _lock = new();
     private AsyncWaitQueue _readWaitQueue = new();
     private readonly Queue<byte[]> _responses = new();
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
+
+    // Single-thread scheduling model: keep using-scope syntax for future lock insertion.
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
 
     public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, Func<NetDeviceSetSnapshot> snapshotProvider)
     {
@@ -38,7 +52,7 @@ public sealed class NetlinkRouteSocketInode : Inode
         {
             byte[]? message = null;
             AsyncWaitQueue? waitQueue = null;
-            lock (_lock)
+            using (EnterStateScope())
             {
                 if (_responses.Count > 0)
                 {
@@ -79,7 +93,7 @@ public sealed class NetlinkRouteSocketInode : Inode
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             if (_responses.Count == 0)
                 return -(int)Errno.EAGAIN;
@@ -100,7 +114,7 @@ public sealed class NetlinkRouteSocketInode : Inode
         if ((events & PollEvents.POLLOUT) != 0)
             revents |= PollEvents.POLLOUT;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             if ((events & PollEvents.POLLIN) != 0 && _responses.Count > 0)
                 revents |= PollEvents.POLLIN;
@@ -113,7 +127,7 @@ public sealed class NetlinkRouteSocketInode : Inode
     {
         if ((events & PollEvents.POLLIN) == 0)
             return null;
-        lock (_lock)
+        using (EnterStateScope())
         {
             return _readWaitQueue.RegisterCancelable(callback);
         }
@@ -267,7 +281,7 @@ public sealed class NetlinkRouteSocketInode : Inode
             return payload.Length;
 
         AsyncWaitQueue waitQueue;
-        lock (_lock)
+        using (EnterStateScope())
         {
             foreach (var response in responses)
                 _responses.Enqueue(response);

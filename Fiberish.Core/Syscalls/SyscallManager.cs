@@ -7,8 +7,10 @@ using Fiberish.Native;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Fiberish.Syscalls;
@@ -31,8 +33,7 @@ public partial class SyscallManager
 
     private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
-    private static readonly Dictionary<IntPtr, SyscallManager> _registry = [];
-    private static readonly object _registryLock = new();
+    private static readonly ConcurrentDictionary<IntPtr, SyscallManager> _registry = new();
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
@@ -72,6 +73,19 @@ public partial class SyscallManager
         private readonly Dictionary<string, UnixSocketInode> _abstractSockets = new(StringComparer.Ordinal);
         private readonly Dictionary<UnixSocketInode, string> _abstractKeysBySocket = [];
 
+        private readonly struct NamespaceScope : IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
+
+        private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
+        {
+            KernelScheduler.Current?.AssertSchedulerThread(caller);
+            return default;
+        }
+
         public SharedUnixSocketNamespace AddRef()
         {
             Interlocked.Increment(ref _refCount);
@@ -85,47 +99,65 @@ public partial class SyscallManager
 
         public bool TryBindPath(Inode pathInode, UnixSocketInode socketInode)
         {
-            if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
-            if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
-            _pathSocketsByInode[pathInode] = socketInode;
-            _pathInodesBySocket[socketInode] = pathInode;
-            return true;
+            using (EnterNamespaceScope())
+            {
+                if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
+                if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
+                _pathSocketsByInode[pathInode] = socketInode;
+                _pathInodesBySocket[socketInode] = pathInode;
+                return true;
+            }
         }
 
         public bool TryBindAbstract(string key, UnixSocketInode socketInode)
         {
-            if (_abstractSockets.ContainsKey(key)) return false;
-            if (_abstractKeysBySocket.ContainsKey(socketInode)) return false;
-            _abstractSockets[key] = socketInode;
-            _abstractKeysBySocket[socketInode] = key;
-            return true;
+            using (EnterNamespaceScope())
+            {
+                if (_abstractSockets.ContainsKey(key)) return false;
+                if (_abstractKeysBySocket.ContainsKey(socketInode)) return false;
+                _abstractSockets[key] = socketInode;
+                _abstractKeysBySocket[socketInode] = key;
+                return true;
+            }
         }
 
         public UnixSocketInode? LookupPath(Inode pathInode)
         {
-            return _pathSocketsByInode.GetValueOrDefault(pathInode);
+            using (EnterNamespaceScope())
+            {
+                return _pathSocketsByInode.GetValueOrDefault(pathInode);
+            }
         }
 
         public UnixSocketInode? LookupAbstract(string key)
         {
-            return _abstractSockets.GetValueOrDefault(key);
+            using (EnterNamespaceScope())
+            {
+                return _abstractSockets.GetValueOrDefault(key);
+            }
         }
 
         public void Unbind(UnixSocketInode inode)
         {
-            if (_pathInodesBySocket.Remove(inode, out var pathInode))
-                _pathSocketsByInode.Remove(pathInode);
+            using (EnterNamespaceScope())
+            {
+                if (_pathInodesBySocket.Remove(inode, out var pathInode))
+                    _pathSocketsByInode.Remove(pathInode);
 
-            if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
-                _abstractSockets.Remove(abstractKey);
+                if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
+                    _abstractSockets.Remove(abstractKey);
+            }
         }
 
         public void Clear()
         {
-            _pathSocketsByInode.Clear();
-            _pathInodesBySocket.Clear();
-            _abstractSockets.Clear();
-            _abstractKeysBySocket.Clear();
+            using (EnterNamespaceScope())
+            {
+                _pathSocketsByInode.Clear();
+                _pathInodesBySocket.Clear();
+                _abstractSockets.Clear();
+                _abstractKeysBySocket.Clear();
+            }
         }
     }
 
@@ -1068,18 +1100,12 @@ public partial class SyscallManager
 
     public void RegisterEngine(Engine engine)
     {
-        lock (_registryLock)
-        {
-            _registry[engine.State] = this;
-        }
+        _registry[engine.State] = this;
     }
 
     public void UnregisterEngine(Engine engine)
     {
-        lock (_registryLock)
-        {
-            _registry.Remove(engine.State);
-        }
+        _registry.TryRemove(engine.State, out _);
     }
 
     public SyscallManager Clone(VMAManager newMem, bool shareFiles)
@@ -1124,10 +1150,7 @@ public partial class SyscallManager
 
     public static SyscallManager? Get(IntPtr state)
     {
-        lock (_registryLock)
-        {
-            return _registry.TryGetValue(state, out var sm) ? sm : null;
-        }
+        return _registry.TryGetValue(state, out var sm) ? sm : null;
     }
 
     private void Register(uint nr, SyscallHandler handler)
@@ -1325,14 +1348,13 @@ public partial class SyscallManager
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
 
-        lock (_registryLock)
+        var staleStates = _registry
+            .Where(kv => ReferenceEquals(kv.Value, this))
+            .Select(kv => kv.Key)
+            .ToList();
+        foreach (var state in staleStates)
         {
-            var staleStates = _registry
-                .Where(kv => ReferenceEquals(kv.Value, this))
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var state in staleStates)
-                _registry.Remove(state);
+            _registry.TryRemove(state, out _);
         }
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -8,11 +9,23 @@ namespace Fiberish.Syscalls;
 
 public class SignalFdInode : TmpfsInode
 {
-    private readonly object _lock = new();
     private readonly List<Action> _waiters = [];
     private ulong _sigMask;
     private FiberTask? _hookedTask;
     private int _openCount;
+
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
 
     public SignalFdInode(ulong ino, SuperBlock superBlock, ulong sigMask) : base(ino, superBlock)
     {
@@ -21,7 +34,7 @@ public class SignalFdInode : TmpfsInode
 
     public void SetMask(ulong sigMask)
     {
-        lock (_lock)
+        using (EnterStateScope())
         {
             _sigMask = sigMask;
         }
@@ -36,7 +49,7 @@ public class SignalFdInode : TmpfsInode
     {
         if (Interlocked.Decrement(ref _openCount) == 0)
         {
-            lock (_lock)
+            using (EnterStateScope())
             {
                 if (_hookedTask != null)
                 {
@@ -55,7 +68,7 @@ public class SignalFdInode : TmpfsInode
         // struct signalfd_siginfo is 128 bytes
         if (buffer.Length < 128) return -(int)Errno.EINVAL;
 
-        lock (_lock)
+        using (EnterStateScope())
         {
             var task = KernelScheduler.Current?.CurrentTask;
             if (task == null) return -(int)Errno.EINVAL;
@@ -119,7 +132,7 @@ public class SignalFdInode : TmpfsInode
     public override short Poll(Fiberish.VFS.LinuxFile file, short events)
     {
         short revents = 0;
-        lock (_lock)
+        using (EnterStateScope())
         {
             var task = KernelScheduler.Current?.CurrentTask;
             if (task != null && (events & LinuxConstants.POLLIN) != 0)
@@ -143,7 +156,7 @@ public class SignalFdInode : TmpfsInode
     public override bool RegisterWait(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
         var task = KernelScheduler.Current?.CurrentTask;
-        lock (_lock)
+        using (EnterStateScope())
         {
             EnsureTaskHooked(task);
             if (task != null && HasPendingMatchedSignalUnsafe(task))
@@ -156,7 +169,7 @@ public class SignalFdInode : TmpfsInode
     public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
     {
         var task = KernelScheduler.Current?.CurrentTask;
-        lock (_lock)
+        using (EnterStateScope())
         {
             EnsureTaskHooked(task);
             if (task != null && HasPendingMatchedSignalUnsafe(task))
@@ -167,13 +180,13 @@ public class SignalFdInode : TmpfsInode
             _waiters.Add(callback);
         }
 
-        return new CallbackRegistration(_lock, _waiters, callback);
+        return new CallbackRegistration(this, _waiters, callback);
     }
 
     private void OnTaskSignalPosted(int sig)
     {
         ulong mask;
-        lock (_lock)
+        using (EnterStateScope())
         {
             mask = _sigMask;
         }
@@ -186,7 +199,7 @@ public class SignalFdInode : TmpfsInode
     private void NotifyWaiters()
     {
         Action[] toWake;
-        lock (_lock)
+        using (EnterStateScope())
         {
             toWake = [.._waiters];
             _waiters.Clear();
@@ -231,13 +244,13 @@ public class SignalFdInode : TmpfsInode
 
     private sealed class CallbackRegistration : IDisposable
     {
-        private readonly object _lock;
+        private readonly SignalFdInode _owner;
         private List<Action>? _waiters;
         private readonly Action _callback;
 
-        public CallbackRegistration(object @lock, List<Action> waiters, Action callback)
+        public CallbackRegistration(SignalFdInode owner, List<Action> waiters, Action callback)
         {
-            _lock = @lock;
+            _owner = owner;
             _waiters = waiters;
             _callback = callback;
         }
@@ -246,7 +259,7 @@ public class SignalFdInode : TmpfsInode
         {
             var waiters = Interlocked.Exchange(ref _waiters, null);
             if (waiters == null) return;
-            lock (_lock)
+            using (_owner.EnterStateScope())
             {
                 waiters.Remove(_callback);
             }
