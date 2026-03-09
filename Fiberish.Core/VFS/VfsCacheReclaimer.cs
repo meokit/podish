@@ -62,7 +62,7 @@ public static class VfsCacheReclaimer
             if (inode != null)
             {
                 if (inode.DetachAliasDentry(current, "VfsCacheReclaimer.DetachCachedSubtree"))
-                    inode.Put();
+                    inode.ReleaseRef(InodeRefKind.KernelInternal, "VfsCacheReclaimer.DetachCachedSubtree");
                 current.Inode = null;
             }
 

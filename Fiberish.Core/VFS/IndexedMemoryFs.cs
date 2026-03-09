@@ -201,7 +201,7 @@ public abstract class IndexedMemoryInode : Inode
             }
             ChildNames.Remove(name);
 
-            unlinkedInode?.Put();
+            unlinkedInode?.ReleaseRef(InodeRefKind.KernelInternal, "IndexedMemoryInode.Unlink");
         }
     }
 
@@ -232,7 +232,7 @@ public abstract class IndexedMemoryInode : Inode
             removedInode!.DetachAliasDentry(dentry, "IndexedMemoryInode.Rmdir");
             dentry.Inode = null;
             ChildNames.Remove(name);
-            removedInode.Put();
+            removedInode.ReleaseRef(InodeRefKind.KernelInternal, "IndexedMemoryInode.Rmdir");
         }
     }
 

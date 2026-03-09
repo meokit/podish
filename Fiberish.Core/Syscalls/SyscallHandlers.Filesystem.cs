@@ -1096,7 +1096,7 @@ public partial class SyscallManager
                         {
                             var victimInode = victimDentry.Inode;
                             if (victimInode.DetachAliasDentry(victimDentry, "SysRename.cleanup-replaced-target"))
-                                victimInode.Put();
+                                victimInode.ReleaseRef(InodeRefKind.KernelInternal, "SysRename.cleanup-replaced-target");
                             victimDentry.Inode = null;
                         }
                         pDentry.Children.Remove(newName);
