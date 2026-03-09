@@ -4,9 +4,26 @@ import SwiftUI
 import AppKit
 
 final class PodishApplicationDelegate: NSObject, NSApplicationDelegate {
+    var onBeforeTerminate: ((@escaping () -> Void) -> Void)?
+    private var terminationInProgress = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationInProgress else { return .terminateLater }
+        guard let onBeforeTerminate else { return .terminateNow }
+
+        terminationInProgress = true
+        onBeforeTerminate { [weak self] in
+            DispatchQueue.main.async {
+                NSApplication.shared.reply(toApplicationShouldTerminate: true)
+                self?.terminationInProgress = false
+            }
+        }
+        return .terminateLater
     }
 }
 #endif
@@ -20,7 +37,11 @@ struct PodishApp: App {
     var body: some Scene {
         WindowGroup("Podish") {
             #if os(macOS)
-            PodishRootView()
+            PodishRootView(onSessionReady: { session in
+                appDelegate.onBeforeTerminate = { completion in
+                    session.stopForAppTermination(completion: completion)
+                }
+            })
                 .frame(minWidth: 1200, minHeight: 760)
             #else
             PodishRootView()

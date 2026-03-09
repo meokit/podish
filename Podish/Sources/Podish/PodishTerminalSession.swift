@@ -301,12 +301,12 @@ actor PodishRuntimeActor {
         return try listContainers()
     }
 
-    func stopContainer(containerId: String) throws -> [NativeContainerListItem] {
+    func stopContainer(containerId: String, signal: Int32 = 15, timeoutMs: Int32 = 2000) throws -> [NativeContainerListItem] {
         try ensureContext()
         let handle = try openContainer(containerId: containerId)
         defer { pod_container_close(handle) }
 
-        let rc = pod_container_stop(handle, 15, 2000)
+        let rc = pod_container_stop(handle, signal, timeoutMs)
         if rc != 0 {
             throw PodishRuntimeError.native(code: rc, message: lastError())
         }
@@ -396,6 +396,24 @@ actor PodishRuntimeActor {
             pod_ctx_destroy(c)
             ctx = nil
         }
+    }
+
+    func shutdownForAppExit(stopTimeoutMs: Int32 = 10_000) async {
+        if ctx != nil {
+            let runningIds = ((try? listContainers()) ?? [])
+                .filter { $0.running }
+                .map(\.containerId)
+
+            for containerId in runningIds {
+                do {
+                    _ = try stopContainer(containerId: containerId, signal: 15, timeoutMs: stopTimeoutMs)
+                } catch {
+                    onLogLine?("shutdown: stop container \(containerId) failed: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        await stop()
     }
 
     private func startReadLoop(containerId: String) {
@@ -712,6 +730,7 @@ final class PodishTerminalSession: ObservableObject {
     @Published private(set) var activeContainerId: String?
 
     private var started = false
+    private var shutdownTask: Task<Void, Never>?
     var onContainerList: (([NativeContainerListItem]) -> Void)?
     var onContainerStateChanged: (([NativeContainerListItem]) -> Void)?
     var onImageList: (([NativeImageListItem]) -> Void)?
@@ -812,8 +831,41 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func stop() {
-        Task {
-            await runtime.stop()
+        stopForAppTermination()
+    }
+
+    func stopForAppTermination(completion: (() -> Void)? = nil) {
+        if let shutdownTask {
+            Task { @MainActor in
+                await shutdownTask.value
+                completion?()
+            }
+            return
+        }
+
+        let task = Task { [runtime] in
+            await runtime.shutdownForAppExit()
+        }
+        shutdownTask = task
+
+        Task { @MainActor [weak self] in
+            await task.value
+            guard let self else {
+                completion?()
+                return
+            }
+
+            self.shutdownTask = nil
+            self.started = false
+            self.activeContainerId = nil
+            self.lastContainerSnapshot = []
+            self.terminalViews.removeAll()
+            self.terminalDelegates.removeAll()
+            #if os(macOS)
+            self.displayView.terminal = self.placeholderView.terminal
+            self.requestDisplayRefresh()
+            #endif
+            completion?()
         }
     }
 

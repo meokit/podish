@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct PodishRootView: View {
+    var onSessionReady: ((PodishTerminalSession) -> Void)?
+
     @StateObject private var store = PodishUiStore()
     @StateObject private var session = PodishTerminalSession()
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
@@ -43,6 +45,7 @@ struct PodishRootView: View {
         .navigationSplitViewStyle(.automatic)
         .onAppear {
             bindSessionIfNeeded()
+            onSessionReady?(session)
             session.startIfNeeded()
             store.onShowNewContainer = {
                 DispatchQueue.main.async {
@@ -73,6 +76,7 @@ struct PodishRootView: View {
         }
         .onAppear {
             bindSessionIfNeeded()
+            onSessionReady?(session)
             session.startIfNeeded()
             store.onShowNewContainer = {
                 DispatchQueue.main.async {
