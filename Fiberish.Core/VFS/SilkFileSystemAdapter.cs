@@ -1,6 +1,7 @@
 using Fiberish.SilkFS;
 using Fiberish.Memory;
 using Fiberish.Native;
+using System.Threading;
 
 namespace Fiberish.VFS;
 
@@ -119,6 +120,10 @@ public sealed class SilkInode : IndexedMemoryInode
     private readonly SilkMetadataStore _metadata;
     private bool _hasPendingPageWriteback;
     private readonly object _persistLock = new();
+    private readonly object _mappedCacheLock = new();
+    private MappedFilePageCache? _mappedPageCache;
+    private int _openRefCount;
+    private int _mmapRefCount;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -167,9 +172,16 @@ public sealed class SilkInode : IndexedMemoryInode
     public void LoadDataFromMetadata()
     {
         if (Type != InodeType.File && Type != InodeType.Symlink) return;
-        var objectId = _metadata.GetInodeObject((long)Ino);
-        if (string.IsNullOrEmpty(objectId)) return;
-        var data = _repository.ReadObject(objectId!);
+        var data = _repository.ReadLiveInodeData((long)Ino);
+        if (data == null)
+        {
+            var objectId = _metadata.GetInodeObject((long)Ino);
+            if (string.IsNullOrEmpty(objectId)) return;
+            data = _repository.ReadObject(objectId!);
+            if (data != null)
+                _repository.WriteLiveInodeData((long)Ino, data);
+        }
+
         if (data == null) return;
 
         _ = base.Truncate(0);
@@ -194,6 +206,7 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         if (Type != InodeType.File && Type != InodeType.Symlink) return;
         var data = ReadAllData();
+        _repository.WriteLiveInodeData((long)Ino, data);
         var objectId = _repository.PutObject(data);
         var binding = _metadata.SetInodeObjectWithRefCount((long)Ino, objectId);
         if (!string.IsNullOrEmpty(binding.UnreferencedObjectId))
@@ -339,7 +352,7 @@ public sealed class SilkInode : IndexedMemoryInode
         base.Unlink(name);
         _metadata.RemoveDentry((long)Ino, name);
         _metadata.ClearWhiteout((long)Ino, name);
-        CleanupOrphan(victim);
+        TryCleanupOrphan(victim);
     }
 
     public override void Rmdir(string name)
@@ -348,7 +361,7 @@ public sealed class SilkInode : IndexedMemoryInode
         base.Rmdir(name);
         _metadata.RemoveDentry((long)Ino, name);
         _metadata.ClearWhiteout((long)Ino, name);
-        CleanupOrphan(victim);
+        TryCleanupOrphan(victim);
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -370,25 +383,44 @@ public sealed class SilkInode : IndexedMemoryInode
         // If the rename overwrote an existing file, purge its stale data from the DB.
         // Without this, re-opening the file path after rename would reload old content.
         if (overwrittenInode != null && overwrittenInode != newParent.Lookup(newName)?.Inode)
-            CleanupOrphan(overwrittenInode);
+            TryCleanupOrphan(overwrittenInode);
+    }
+
+    private (int OpenRefs, int MapRefs) GetRuntimeRefSnapshot()
+    {
+        return (Math.Max(0, Volatile.Read(ref _openRefCount)), Math.Max(0, Volatile.Read(ref _mmapRefCount)));
+    }
+
+    public override void Open(LinuxFile linuxFile)
+    {
+        base.Open(linuxFile);
+        if (linuxFile.Kind == LinuxFile.ReferenceKind.MmapHold)
+            Interlocked.Increment(ref _mmapRefCount);
+        else
+            Interlocked.Increment(ref _openRefCount);
+    }
+
+    public override void Release(LinuxFile linuxFile)
+    {
+        if (linuxFile.Kind == LinuxFile.ReferenceKind.MmapHold)
+        {
+            if (Interlocked.Decrement(ref _mmapRefCount) < 0)
+                Interlocked.Exchange(ref _mmapRefCount, 0);
+        }
+        else
+        {
+            if (Interlocked.Decrement(ref _openRefCount) < 0)
+                Interlocked.Exchange(ref _openRefCount, 0);
+        }
+
+        base.Release(linuxFile);
+        TryCleanupOrphan(this);
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         var rc = base.Write(linuxFile, buffer, offset);
         if (rc > 0)
-        {
-            SyncSelf();
-            PersistData();
-            ClearPageCacheDirtyState();
-        }
-        return rc;
-    }
-
-    public override int Truncate(long size)
-    {
-        var rc = base.Truncate(size);
-        if (rc == 0)
         {
             SyncSelf();
             PersistData();
@@ -457,20 +489,37 @@ public sealed class SilkInode : IndexedMemoryInode
         return rc;
     }
 
-    private void CleanupOrphan(Inode? inode)
+    private bool TryCleanupOrphan(Inode? inode)
     {
-        if (inode == null) return;
+        if (inode == null) return false;
         var ino = (long)inode.Ino;
-        if (ino == SilkMetadataStore.RootInode) return;
-        if (_metadata.CountDentryRefs(ino) != 0) return;
+        if (ino == SilkMetadataStore.RootInode) return false;
+        var linkRefs = _metadata.CountDentryRefs(ino);
+        if (linkRefs != 0) return false;
+
+        if (inode is SilkInode silk)
+        {
+            var (openRefs, mapRefs) = silk.GetRuntimeRefSnapshot();
+            if (openRefs > 0 || mapRefs > 0) return false;
+        }
+        else
+        {
+            var transientRefs = Math.Max(0, inode.RefCount - inode.Dentries.Count);
+            if (transientRefs > 0) return false;
+        }
+
         var unrefObject = _metadata.DeleteInodeWithObjectRefCount(ino);
         if (!string.IsNullOrEmpty(unrefObject))
             _repository.DeleteObject(unrefObject!);
+        _repository.DeleteLiveInodeData(ino);
+        return true;
     }
 
     private byte[] ReadPersistedSnapshot()
     {
         if (Type != InodeType.File && Type != InodeType.Symlink) return Array.Empty<byte>();
+        var live = _repository.ReadLiveInodeData((long)Ino);
+        if (live != null) return live;
         var objectId = _metadata.GetInodeObject((long)Ino);
         if (string.IsNullOrEmpty(objectId)) return Array.Empty<byte>();
         return _repository.ReadObject(objectId!) ?? Array.Empty<byte>();
@@ -488,5 +537,54 @@ public sealed class SilkInode : IndexedMemoryInode
 
             DirtyPageIndexes.Clear();
         }
+    }
+
+    public override int Truncate(long size)
+    {
+        var rc = base.Truncate(size);
+        if (rc == 0)
+        {
+            _repository.TruncateLiveInodeData((long)Ino, size);
+            lock (_mappedCacheLock)
+            {
+                _mappedPageCache?.Truncate(size);
+            }
+
+            SyncSelf();
+            PersistData();
+            ClearPageCacheDirtyState();
+        }
+
+        return rc;
+    }
+
+    public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
+        out IPageHandle? pageHandle)
+    {
+        pageHandle = null;
+        if (Type != InodeType.File && Type != InodeType.Symlink) return false;
+        if (absoluteFileOffset < 0) return false;
+        if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
+
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache ??= new MappedFilePageCache(_repository.GetLiveInodePath((long)Ino), writable: true);
+            return _mappedPageCache.TryAcquirePageHandle(
+                absoluteFileOffset / LinuxConstants.PageSize,
+                (long)Size,
+                out pageHandle);
+        }
+    }
+
+    protected override void Release()
+    {
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.Dispose();
+            _mappedPageCache = null;
+        }
+
+        TryCleanupOrphan(this);
+        base.Release();
     }
 }

@@ -95,6 +95,7 @@ public sealed class ExternalPageManager
         public nint RawViewPointer;
         public bool PointerAcquired;
         public int LivePages;
+        public IDisposable? ExternalOwner;
     }
 
     private sealed class PageRefEntry
@@ -302,7 +303,7 @@ public sealed class ExternalPageManager
     }
 
     private static void AddGlobalRef(IntPtr ptr, AllocationClass? allocationClass = null,
-        AllocationSource? allocationSource = null)
+        AllocationSource? allocationSource = null, IDisposable? externalOwner = null)
     {
         if (ptr == IntPtr.Zero) return;
         var state = CurrentState;
@@ -312,6 +313,7 @@ public sealed class ExternalPageManager
             if (state.PageRefs.TryGetValue(key, out var existing))
             {
                 existing.RefCount++;
+                externalOwner?.Dispose();
                 return;
             }
 
@@ -333,7 +335,8 @@ public sealed class ExternalPageManager
                 ViewAccessor = null,
                 RawViewPointer = 0,
                 PointerAcquired = false,
-                LivePages = 1
+                LivePages = 1,
+                ExternalOwner = externalOwner
             };
             state.PageRefs[key] = new PageRefEntry
             {
@@ -363,7 +366,8 @@ public sealed class ExternalPageManager
             ViewAccessor = null,
             RawViewPointer = 0,
             PointerAcquired = false,
-            LivePages = 1
+            LivePages = 1,
+            ExternalOwner = null
         };
 
         state.PageRefs[ptr] = new PageRefEntry
@@ -431,6 +435,10 @@ public sealed class ExternalPageManager
                     NativeMemory.AlignedFree((void*)segmentToFree.BasePtr);
                 }
             }
+        }
+        else
+        {
+            segmentToFree?.ExternalOwner?.Dispose();
         }
     }
 
@@ -570,7 +578,8 @@ public sealed class ExternalPageManager
                 ViewAccessor = viewAccessor,
                 RawViewPointer = rawViewPointer,
                 PointerAcquired = pointerAcquired,
-                LivePages = pageCount
+                LivePages = pageCount,
+                ExternalOwner = null
             };
 
             for (var i = 0; i < pageCount; i++)
@@ -643,10 +652,10 @@ public sealed class ExternalPageManager
         return next <= state.MemoryQuotaBytes;
     }
 
-    public static void AddRefPtr(IntPtr ptr)
+    public static void AddRefPtr(IntPtr ptr, IDisposable? externalOwner = null)
     {
         if (ptr == IntPtr.Zero) return;
-        AddGlobalRef(ptr);
+        AddGlobalRef(ptr, externalOwner: externalOwner);
     }
 
     public static void ReleasePtr(IntPtr ptr)

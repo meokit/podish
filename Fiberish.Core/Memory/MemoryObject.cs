@@ -70,6 +70,24 @@ public sealed class MemoryObject
         }
     }
 
+    internal IntPtr SetPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
+    {
+        lock (_lock)
+        {
+            if (_pages.TryGetValue(pageIndex, out var existing))
+            {
+                inserted = false;
+                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+                return existing;
+            }
+
+            _pages[pageIndex] = ptr;
+            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+            inserted = true;
+            return ptr;
+        }
+    }
+
     public void Release()
     {
         List<IntPtr>? toRelease = null;

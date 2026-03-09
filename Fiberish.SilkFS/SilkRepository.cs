@@ -17,6 +17,7 @@ public sealed class SilkRepository
     {
         Directory.CreateDirectory(Options.RootPath);
         Directory.CreateDirectory(Options.ObjectsPath);
+        Directory.CreateDirectory(Options.LiveDataPath);
 
         if (!File.Exists(Options.MetadataPath))
         {
@@ -65,5 +66,38 @@ public sealed class SilkRepository
     {
         var shard = objectId.Length >= 2 ? objectId[..2] : "00";
         return Path.Combine(Options.ObjectsPath, shard, objectId);
+    }
+
+    public string GetLiveInodePath(long ino)
+    {
+        return Path.Combine(Options.LiveDataPath, $"{ino}.bin");
+    }
+
+    public byte[]? ReadLiveInodeData(long ino)
+    {
+        var path = GetLiveInodePath(ino);
+        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
+    public void WriteLiveInodeData(long ino, ReadOnlySpan<byte> data)
+    {
+        var path = GetLiveInodePath(ino);
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
+        File.WriteAllBytes(path, data.ToArray());
+    }
+
+    public void TruncateLiveInodeData(long ino, long size)
+    {
+        var path = GetLiveInodePath(ino);
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
+        using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+        fs.SetLength(Math.Max(0, size));
+    }
+
+    public void DeleteLiveInodeData(long ino)
+    {
+        var path = GetLiveInodePath(ino);
+        if (File.Exists(path))
+            File.Delete(path);
     }
 }

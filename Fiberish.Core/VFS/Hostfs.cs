@@ -686,19 +686,33 @@ public partial class HostInode : Inode
     private readonly object _xattrLock = new();
     private readonly object _dirtyPageLock = new();
     private readonly HashSet<long> _dirtyPageIndexes = [];
+    private readonly object _mappedCacheLock = new();
+    private MappedFilePageCache? _mappedPageCache;
+    private string _hostPath;
     private Dictionary<string, byte[]>? _xattrs;
 
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type)
     {
         Ino = ino;
         SuperBlock = sb;
-        HostPath = hostPath;
+        _hostPath = hostPath;
         Type = type;
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
     }
 
-    public string HostPath { get; set; }
+    public string HostPath
+    {
+        get => _hostPath;
+        set
+        {
+            _hostPath = value;
+            lock (_mappedCacheLock)
+            {
+                _mappedPageCache?.UpdatePath(value);
+            }
+        }
+    }
     public override bool SupportsMmap => Type == InodeType.File;
 
     public override ulong Size
@@ -1285,6 +1299,10 @@ public partial class HostInode : Inode
         if (size < 0) return -(int)Errno.EINVAL;
         using var handle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         RandomAccess.SetLength(handle, size);
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.Truncate(size);
+        }
         if (PageCache != null)
         {
             PageCache.TruncateToSize(size);
@@ -1298,6 +1316,35 @@ public partial class HostInode : Inode
         Size = (ulong)size;
         MTime = DateTime.Now;
         return 0;
+    }
+
+    public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
+        out IPageHandle? pageHandle)
+    {
+        pageHandle = null;
+        if (Type != InodeType.File) return false;
+        if (absoluteFileOffset < 0) return false;
+        if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
+
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache ??= new MappedFilePageCache(HostPath, writable: true);
+            return _mappedPageCache.TryAcquirePageHandle(
+                absoluteFileOffset / LinuxConstants.PageSize,
+                (long)Size,
+                out pageHandle);
+        }
+    }
+
+    protected override void Release()
+    {
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.Dispose();
+            _mappedPageCache = null;
+        }
+
+        base.Release();
     }
 
     public override List<DirectoryEntry> GetEntries()

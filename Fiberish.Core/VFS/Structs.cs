@@ -497,6 +497,17 @@ public abstract class Inode : IPageCacheOps
         return AopsSetPageDirty(pageIndex);
     }
 
+    /// <summary>
+    ///     Optional fast path: allow filesystem to provide an externally-owned mapped page.
+    ///     Return false to use regular in-memory page cache allocation + ReadPage fallback.
+    /// </summary>
+    public virtual bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
+        out IPageHandle? pageHandle)
+    {
+        pageHandle = null;
+        return false;
+    }
+
     // Async blocking support
     public virtual ValueTask WaitForRead(LinuxFile linuxFile)
     {
@@ -681,11 +692,18 @@ public class LinuxFile
 {
     private int _refCount = 1;
 
-    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount)
+    public enum ReferenceKind
+    {
+        Normal = 0,
+        MmapHold = 1
+    }
+
+    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal)
     {
         Dentry = dentry;
         Flags = flags;
         Mount = mount; // The mount this file was opened through
+        Kind = referenceKind;
         dentry.Inode?.Get(); // Increase reference count
         dentry.Inode?.Open(this);
         // Note: Mount reference is managed by caller if provided
@@ -697,6 +715,7 @@ public class LinuxFile
     public Mount Mount { get; set; }
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
+    public ReferenceKind Kind { get; }
 
     /// <summary>
     ///     Check if write operation is allowed (mount read-only check).

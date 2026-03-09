@@ -77,6 +77,7 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
 
         VFS.LinuxFile? f = null;
+        VFS.LinuxFile? mmapFile = null;
         var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
         var isShared = (flags & (int)MapFlags.Shared) != 0;
         var isPrivate = (flags & (int)MapFlags.Private) != 0;
@@ -114,13 +115,21 @@ public partial class SyscallManager
         try
         {
             long trueFileSz = (long)(f?.Dentry.Inode?.Size ?? 0);
-            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags, f,
+            if (f != null)
+                mmapFile = new VFS.LinuxFile(f.Dentry, f.Flags, f.Mount, VFS.LinuxFile.ReferenceKind.MmapHold);
+
+            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags, mmapFile,
                 offset, trueFileSz, "MMAP2");
+            mmapFile = null; // ownership transferred to VMAs
             return (int)res;
         }
         catch
         {
             return -(int)Errno.ENOMEM;
+        }
+        finally
+        {
+            mmapFile?.Close();
         }
     }
 

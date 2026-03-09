@@ -68,6 +68,7 @@ public class VMA
 
         // COW object: private per-process — deep-copy existing COW pages on fork
         MemoryObject? cowObj = CowObject?.ForkCloneForPrivate();
+        File?.Get();
 
         return new VMA
         {

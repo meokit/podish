@@ -5,9 +5,11 @@ public sealed class SilkFsOptions
     public required string RootPath { get; init; }
     public string MetadataFileName { get; init; } = "metadata.sqlite3";
     public string ObjectsDirName { get; init; } = "objects";
+    public string LiveDataDirName { get; init; } = "live";
 
     public string MetadataPath => Path.Combine(RootPath, MetadataFileName);
     public string ObjectsPath => Path.Combine(RootPath, ObjectsDirName);
+    public string LiveDataPath => Path.Combine(RootPath, LiveDataDirName);
 
     public static SilkFsOptions FromSource(string source)
     {

@@ -189,6 +189,7 @@ public class VMAManager
                 SyncVMA(vma, engine, vma.Start, vma.End);
                 vma.MemoryObject.Release();
                 vma.CowObject?.Release();
+                vma.File?.Close();
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -224,6 +225,7 @@ public class VMAManager
                     CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = vma.ViewPageOffset + ((tailStart - vma.Start) / LinuxConstants.PageSize)
                 };
+                vma.File?.Get();
                 vma.MemoryObject.AddRef();
 
                 _vmas.Insert(i + 1, tailVMA);
@@ -346,6 +348,8 @@ public class VMAManager
             // Left tail stays in the existing VMA.
             var hasLeft = overlapStart > oldStart;
             var hasRight = overlapEnd < oldEnd;
+            if (hasLeft)
+                mid.File?.Get();
 
             if (hasLeft)
             {
@@ -378,6 +382,7 @@ public class VMAManager
                     CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = oldViewPageOffset + ((uint)rightDiff / LinuxConstants.PageSize)
                 };
+                right.File?.Get();
                 vma.MemoryObject.AddRef();
                 if (vma.File != null)
                 {
@@ -443,6 +448,7 @@ public class VMAManager
             engine.MemUnmap(vma.Start, vma.End - vma.Start);
             vma.MemoryObject.Release();
             vma.CowObject?.Release();
+            vma.File?.Close();
         }
 
         ExternalPages.Clear();
@@ -549,44 +555,48 @@ public class VMAManager
                 else
                 {
                     // Not in CowObject yet. We need to copy from the inode cache.
-                    var srcPage = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
+                    // 1. Relative coordinate (Relative to VMA Start)
+                    long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
+                    // 2. Absolute coordinate (Absolute within the File)
+                    var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
+
+                    IntPtr srcPage;
+                    if (!TryResolveMappedFilePage(vma, pageIndex, absoluteFileOffset, out srcPage))
                     {
-                        if (vma.File == null)
+                        srcPage = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
                         {
+                            if (vma.File == null)
+                            {
+                                unsafe
+                                {
+                                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                                }
+
+                                return true;
+                            }
+
+                            var readLen = LinuxConstants.PageSize;
+                            if (vma.FileBackingLength > 0)
+                            {
+                                // Relative length - relative offset = valid file bytes remaining to read in this page
+                                var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
+
+                                if (remainingBackingBytes <= 0) readLen = 0;
+                                else if (remainingBackingBytes < LinuxConstants.PageSize)
+                                    readLen = (int)remainingBackingBytes;
+                            }
+
                             unsafe
                             {
-                                new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                                Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
+                                var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
+                                var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                                if (rc < 0) return false;
                             }
 
                             return true;
-                        }
-
-                        // 1. Relative coordinate (Relative to VMA Start)
-                        long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
-                        // 2. Absolute coordinate (Absolute within the File)
-                        var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
-
-                        var readLen = LinuxConstants.PageSize;
-                        if (vma.FileBackingLength > 0)
-                        {
-                            // Relative length - relative offset = valid file bytes remaining to read in this page
-                            var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
-
-                            if (remainingBackingBytes <= 0) readLen = 0;
-                            else if (remainingBackingBytes < LinuxConstants.PageSize)
-                                readLen = (int)remainingBackingBytes;
-                        }
-
-                        unsafe
-                        {
-                            Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-                            var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
-                            var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
-                            if (rc < 0) return false;
-                        }
-
-                        return true;
-                    }, out _);
+                        }, out _);
+                    }
 
                     if (srcPage == IntPtr.Zero) return false;
 
@@ -652,48 +662,49 @@ public class VMAManager
 
         var tempPerms = mapPerms | Protection.Write;
 
-        IntPtr hostPtr;
+        // For file-backed mappings, try filesystem-provided direct file mapping first.
+        // This makes mmap-shared dirty pages survive process termination through host kernel page cache.
+        long normalRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
+        var normalAbsoluteFileOffset = vma.Offset + normalRelativeOffset;
         var strictQuota = vma.File == null;
         var allocationClass = strictQuota ? AllocationClass.Anonymous : AllocationClass.PageCache;
-        hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
+
+        IntPtr hostPtr;
+        if (!TryResolveMappedFilePage(vma, pageIndex, normalAbsoluteFileOffset, out hostPtr))
         {
-            if (vma.File == null)
+            hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
             {
+                if (vma.File == null)
+                {
+                    unsafe
+                    {
+                        new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                    }
+
+                    return true;
+                }
+
+                var readLen = LinuxConstants.PageSize;
+                if (vma.FileBackingLength > 0)
+                {
+                    // Relative length - relative offset = valid file bytes remaining to read in this page
+                    var remainingBackingBytes = vma.FileBackingLength - normalRelativeOffset;
+
+                    if (remainingBackingBytes <= 0) readLen = 0;
+                    else if (remainingBackingBytes < LinuxConstants.PageSize) readLen = (int)remainingBackingBytes;
+                }
+
                 unsafe
                 {
-                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                    Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
+                    var req = new PageIoRequest(pageIndex, normalAbsoluteFileOffset, Math.Max(0, readLen));
+                    var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                    if (rc < 0) return false;
                 }
 
                 return true;
-            }
-
-            // For COW vmaps, pageIndex is in file-coordinate space
-            // (ViewPageOffset + page-within-vma). Compute file byte offset accordingly.
-            // 1. Relative coordinate (Relative to VMA Start)
-            long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
-            // 2. Absolute coordinate (Absolute within the File)
-            var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
-
-            var readLen = LinuxConstants.PageSize;
-            if (vma.FileBackingLength > 0)
-            {
-                // Relative length - relative offset = valid file bytes remaining to read in this page
-                var remainingBackingBytes = vma.FileBackingLength - vmaRelativeOffset;
-
-                if (remainingBackingBytes <= 0) readLen = 0;
-                else if (remainingBackingBytes < LinuxConstants.PageSize) readLen = (int)remainingBackingBytes;
-            }
-
-            unsafe
-            {
-                Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-                var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
-                var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
-                if (rc < 0) return false;
-            }
-
-            return true;
-        }, out _, strictQuota, allocationClass, strictQuota ? AllocationSource.AnonFault : AllocationSource.Unknown);
+            }, out _, strictQuota, allocationClass, strictQuota ? AllocationSource.AnonFault : AllocationSource.Unknown);
+        }
         if (hostPtr == IntPtr.Zero)
         {
             var allocatedBytes = ExternalPageManager.GetAllocatedBytes();
@@ -729,6 +740,39 @@ public class VMAManager
         if (tempPerms != mapPerms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)mapPerms);
 
         return true;
+    }
+
+    private static bool TryResolveMappedFilePage(VMA vma, uint pageIndex, long absoluteFileOffset, out IntPtr pagePtr)
+    {
+        pagePtr = IntPtr.Zero;
+        var inode = vma.File?.Dentry.Inode;
+        if (inode == null) return false;
+        if (!inode.TryAcquireMappedPageHandle(vma.File, pageIndex, absoluteFileOffset, out var pageHandle))
+            return false;
+        if (pageHandle == null) return false;
+
+        var mappedPtr = pageHandle.Pointer;
+        if (mappedPtr == IntPtr.Zero)
+        {
+            pageHandle.Dispose();
+            return false;
+        }
+
+        var existing = vma.MemoryObject.GetPage(pageIndex);
+        if (existing != IntPtr.Zero)
+        {
+            pageHandle.Dispose();
+            pagePtr = existing;
+            return true;
+        }
+
+        ExternalPageManager.AddRefPtr(mappedPtr, pageHandle);
+        var finalPtr = vma.MemoryObject.SetPageIfAbsent(pageIndex, mappedPtr, out var inserted);
+        if (!inserted)
+            ExternalPageManager.ReleasePtr(mappedPtr);
+
+        pagePtr = finalPtr;
+        return pagePtr != IntPtr.Zero;
     }
 
     public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
