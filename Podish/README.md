@@ -2,6 +2,8 @@
 
 A minimal SwiftUI macOS app that embeds a `SwiftTerm` terminal view.
 
+Current native artifacts are built for Apple Silicon (`osx-arm64`) on macOS.
+
 ## Open in Xcode
 
 Open `/Users/jiangyiheng/repos/x86emu/Podish/Package.swift` in Xcode.

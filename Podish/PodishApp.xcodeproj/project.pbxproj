@@ -21,6 +21,7 @@
 		A0000000000000000000003D /* Sources/Podish/PodishLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002E /* Sources/Podish/PodishLog.swift */; };
 		A0000000000000000000003E /* PodishApp/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002F /* PodishApp/Assets.xcassets */; };
 		A0000000000000000000003C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000082 /* SwiftTerm */; };
+		A00000000000000000000083 /* MessagePack in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000085 /* MessagePack */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0000000000000000000003C /* SwiftTerm in Frameworks */,
+				A00000000000000000000083 /* MessagePack in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -110,6 +112,7 @@
 			name = Podish;
 			packageProductDependencies = (
 				A00000000000000000000082 /* SwiftTerm */,
+				A00000000000000000000085 /* MessagePack */,
 			);
 			productName = Podish;
 			productReference = A00000000000000000000011 /* Podish.app */;
@@ -141,6 +144,7 @@
 			mainGroup = A00000000000000000000001;
 				packageReferences = (
 					A00000000000000000000081 /* XCLocalSwiftPackageReference "SwiftTerm" */,
+					A00000000000000000000084 /* XCRemoteSwiftPackageReference "MessagePack" */,
 				);
 			productRefGroup = A00000000000000000000010 /* Products */;
 			projectDirPath = "";
@@ -230,8 +234,9 @@
 					CODE_SIGN_STYLE = Automatic;
 					CURRENT_PROJECT_VERSION = 1;
 					DEVELOPMENT_TEAM = 4P59922UZ6;
-					ENABLE_PREVIEWS = YES;
-					"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+						ENABLE_PREVIEWS = YES;
+						"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+						"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 					FRAMEWORK_SEARCH_PATHS = "$(inherited)";
 					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
 					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
@@ -294,9 +299,10 @@
 					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 					ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 1;
-					DEVELOPMENT_TEAM = 4P59922UZ6;
-					"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+						CURRENT_PROJECT_VERSION = 1;
+						DEVELOPMENT_TEAM = 4P59922UZ6;
+						"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+						"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 					FRAMEWORK_SEARCH_PATHS = "$(inherited)";
 					"FRAMEWORK_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
 					"FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64";
@@ -383,11 +389,27 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A00000000000000000000084 /* XCRemoteSwiftPackageReference "MessagePack" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Flight-School/MessagePack.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A00000000000000000000082 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A00000000000000000000081 /* XCLocalSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
+		};
+		A00000000000000000000085 /* MessagePack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000084 /* XCRemoteSwiftPackageReference "MessagePack" */;
+			productName = MessagePack;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

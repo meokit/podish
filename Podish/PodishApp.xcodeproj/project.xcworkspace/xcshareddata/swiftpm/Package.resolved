@@ -1,6 +1,15 @@
 {
-  "originHash" : "b23cba8933f5034484ffb73de3c8b1574642cc257abe4e28257bab1bb3cc1718",
+  "originHash" : "754f932dc0da6185c365f4ac8410da7cb067e42cc34b4df027e2ec13ea87ceaf",
   "pins" : [
+    {
+      "identity" : "messagepack",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Flight-School/MessagePack.git",
+      "state" : {
+        "revision" : "bbc5ab6362db234f2051e73e67296ebf5c3d2042",
+        "version" : "1.2.4"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
