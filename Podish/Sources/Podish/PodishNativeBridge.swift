@@ -1,17 +1,9 @@
 import Foundation
 
-typealias PodLogCallback = @convention(c) (
-    UnsafeMutableRawPointer?,
-    Int32,
-    UnsafePointer<UInt8>?,
-    Int32
-) -> Void
-
-typealias PodContainerStateCallback = @convention(c) (
-    UnsafeMutableRawPointer?,
-    UnsafePointer<UInt8>?,
-    Int32
-) -> Void
+let POD_IPC_OP_POLL_EVENT: Int32 = 1
+let POD_IPC_EVENT_NONE: Int32 = 0
+let POD_IPC_EVENT_LOG_LINE: Int32 = 1
+let POD_IPC_EVENT_CONTAINER_STATE_CHANGED: Int32 = 2
 
 struct PodCtxOptionsNative {
     var work_dir_utf8: UnsafePointer<CChar>?
@@ -31,18 +23,15 @@ func pod_ctx_destroy(_ ctx: UnsafeMutableRawPointer?)
 @_silgen_name("pod_ctx_last_error")
 func pod_ctx_last_error(_ ctx: UnsafeMutableRawPointer?, _ buffer: UnsafeMutablePointer<UInt8>?, _ capacity: Int32) -> Int32
 
-@_silgen_name("pod_ctx_set_log_callback")
-func pod_ctx_set_log_callback(
+@_silgen_name("pod_ctx_call_msgpack")
+func pod_ctx_call_msgpack(
     _ ctx: UnsafeMutableRawPointer?,
-    _ callback: PodLogCallback?,
-    _ user_data: UnsafeMutableRawPointer?
-) -> Int32
-
-@_silgen_name("pod_ctx_set_container_state_callback")
-func pod_ctx_set_container_state_callback(
-    _ ctx: UnsafeMutableRawPointer?,
-    _ callback: PodContainerStateCallback?,
-    _ user_data: UnsafeMutableRawPointer?
+    _ op_id: Int32,
+    _ args: UnsafePointer<UInt8>?,
+    _ args_len: Int32,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32,
+    _ out_len: UnsafeMutablePointer<Int32>?
 ) -> Int32
 
 @_silgen_name("pod_image_pull")

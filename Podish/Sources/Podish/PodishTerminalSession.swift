@@ -1,36 +1,60 @@
 import Foundation
+import MessagePack
 import SwiftUI
 @preconcurrency import SwiftTerm
 
-private final class NativeCallbackBox: @unchecked Sendable {
-    let onLog: @Sendable (String) -> Void
-    let onState: @Sendable ([NativeContainerListItem]) -> Void
+private enum NativeIpcEvent {
+    case none
+    case log(level: Int32, message: String)
+    case containerStateChanged
+}
 
-    init(
-        onLog: @escaping @Sendable (String) -> Void,
-        onState: @escaping @Sendable ([NativeContainerListItem]) -> Void
-    ) {
-        self.onLog = onLog
-        self.onState = onState
+private struct PollEventArgs: Encodable {
+    let timeoutMs: Int32
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.unkeyedContainer()
+        try container.encode(timeoutMs)
     }
 }
 
-private let podishLogCallbackImpl: PodLogCallback = { userData, _, data, len in
-    guard let userData, let data, len > 0 else { return }
-    let box = Unmanaged<NativeCallbackBox>.fromOpaque(userData).takeUnretainedValue()
-    let bytes = UnsafeBufferPointer(start: data, count: Int(len))
-    let line = String(decoding: bytes, as: UTF8.self)
-    if !line.isEmpty {
-        box.onLog(line)
+private struct NativeIpcEventEnvelope: Decodable {
+    let event: NativeIpcEvent
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        let eventType = try container.decode(Int32.self)
+        switch eventType {
+        case POD_IPC_EVENT_NONE:
+            event = NativeIpcEvent.none
+        case POD_IPC_EVENT_LOG_LINE:
+            let level = try container.decode(Int32.self)
+            let message = try container.decode(String.self)
+            event = .log(level: level, message: message)
+        case POD_IPC_EVENT_CONTAINER_STATE_CHANGED:
+            event = .containerStateChanged
+        default:
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unsupported ipc event: \(eventType)")
+        }
     }
 }
 
-private let podishContainerStateCallbackImpl: PodContainerStateCallback = { userData, data, len in
-    guard let userData, let data, len > 0 else { return }
-    let box = Unmanaged<NativeCallbackBox>.fromOpaque(userData).takeUnretainedValue()
-    let payload = Data(bytes: data, count: Int(len))
-    guard let items = try? JSONDecoder().decode([NativeContainerListItem].self, from: payload) else { return }
-    box.onState(items)
+private func encodePollEventArgs(timeoutMs: Int32) -> [UInt8] {
+    do {
+        let data = try MessagePackEncoder().encode(PollEventArgs(timeoutMs: timeoutMs))
+        return [UInt8](data)
+    } catch {
+        return []
+    }
+}
+
+private func decodeNativeIpcEvent(_ frame: [UInt8]) -> NativeIpcEvent? {
+    do {
+        let decoded = try MessagePackDecoder().decode(NativeIpcEventEnvelope.self, from: Data(frame))
+        return decoded.event
+    } catch {
+        return nil
+    }
 }
 
 private struct PodishRunSpec: Codable {
@@ -107,7 +131,7 @@ actor PodishRuntimeActor {
 
     private let workDir: String
     private var ctx: UnsafeMutableRawPointer?
-    private var callbackUserData: UnsafeMutableRawPointer?
+    private var eventTask: Task<Void, Never>?
 
     private var sessions: [String: RuntimeTerminalSession] = [:]
     private var onOutput: (@Sendable (String, [UInt8]) -> Void)?
@@ -132,7 +156,7 @@ actor PodishRuntimeActor {
         self.onLogLine = onLog
         self.onContainerState = onContainerState
         guard ctx != nil else { return }
-        installCallbacks()
+        startEventLoop()
     }
 
     func startDefaultShell() throws -> StartupState {
@@ -355,13 +379,19 @@ actor PodishRuntimeActor {
         _ = pod_terminal_resize(term, safeRows, safeCols)
     }
 
-    func stop() {
+    func stop() async {
+        let runningEventTask = eventTask
+        eventTask = nil
+        runningEventTask?.cancel()
+        if let runningEventTask {
+            await runningEventTask.value
+        }
+
         for (containerId, _) in sessions {
             closeTerminalSession(containerId: containerId)
         }
         sessions.removeAll()
 
-        uninstallCallbacks()
         if let c = ctx {
             pod_ctx_destroy(c)
             ctx = nil
@@ -426,43 +456,88 @@ actor PodishRuntimeActor {
         }
 
         ctx = out
-        installCallbacks()
+        startEventLoop()
     }
 
-    private func installCallbacks() {
-        guard let c = ctx else { return }
-        uninstallCallbacks()
-
-        let onLog = onLogLine ?? { _ in }
-        let onState = onContainerState ?? { _ in }
-        let box = NativeCallbackBox(onLog: onLog, onState: onState)
-        let retained = Unmanaged.passRetained(box)
-        let userData = retained.toOpaque()
-
-        let rcLog = pod_ctx_set_log_callback(c, podishLogCallbackImpl, userData)
-        if rcLog != 0 {
-            retained.release()
-            return
+    private func startEventLoop() {
+        guard eventTask == nil, let c = ctx else { return }
+        let ctxAddress = UInt(bitPattern: c)
+        eventTask = Task { [weak self] in
+            guard let self else { return }
+            await self.eventLoop(ctxAddress: ctxAddress)
         }
-
-        let rcState = pod_ctx_set_container_state_callback(c, podishContainerStateCallbackImpl, userData)
-        if rcState != 0 {
-            _ = pod_ctx_set_log_callback(c, nil, nil)
-            retained.release()
-            return
-        }
-
-        callbackUserData = userData
     }
 
-    private func uninstallCallbacks() {
-        guard let c = ctx else { return }
-        _ = pod_ctx_set_log_callback(c, nil, nil)
-        _ = pod_ctx_set_container_state_callback(c, nil, nil)
+    private func eventLoop(ctxAddress: UInt) async {
+        while !Task.isCancelled {
+            let (rc, frame) = await Task.detached(priority: .utility) { () -> (Int32, [UInt8]) in
+                guard let ctxPtr = UnsafeMutableRawPointer(bitPattern: ctxAddress) else {
+                    return (Int32(22), [])
+                }
 
-        if let userData = callbackUserData {
-            Unmanaged<NativeCallbackBox>.fromOpaque(userData).release()
-            callbackUserData = nil
+                let args = encodePollEventArgs(timeoutMs: 200)
+                var capacity = 1024
+
+                while true {
+                    var response = [UInt8](repeating: 0, count: capacity)
+                    var outLen: Int32 = 0
+
+                    let rc = args.withUnsafeBufferPointer { argsPtr in
+                        response.withUnsafeMutableBufferPointer { responsePtr in
+                            pod_ctx_call_msgpack(
+                                ctxPtr,
+                                POD_IPC_OP_POLL_EVENT,
+                                argsPtr.baseAddress,
+                                Int32(argsPtr.count),
+                                responsePtr.baseAddress,
+                                Int32(responsePtr.count),
+                                &outLen
+                            )
+                        }
+                    }
+
+                    if rc == 22 && Int(outLen) > capacity && capacity < 1_048_576 {
+                        capacity = max(capacity * 2, Int(outLen))
+                        continue
+                    }
+
+                    if rc != 0 {
+                        return (rc, [])
+                    }
+
+                    let n = max(0, min(Int(outLen), response.count))
+                    return (rc, Array(response.prefix(n)))
+                }
+            }.value
+
+            if Task.isCancelled {
+                return
+            }
+
+            if rc != 0 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
+            }
+
+            guard let event = decodeNativeIpcEvent(frame) else {
+                continue
+            }
+
+            switch event {
+            case .none:
+                continue
+            case .log(_, let message):
+                if !message.isEmpty {
+                    onLogLine?(message)
+                }
+            case .containerStateChanged:
+                do {
+                    let items = try listContainers()
+                    onContainerState?(items)
+                } catch {
+                    continue
+                }
+            }
         }
     }
 

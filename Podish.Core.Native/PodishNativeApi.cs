@@ -1,9 +1,11 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading.Channels;
+using MessagePack;
 using Microsoft.Extensions.Logging;
 using Podish.Core;
 
@@ -14,14 +16,95 @@ internal sealed class NativeJob
     public required Task<(string? ResultJson, Exception? Error)> Task { get; init; }
 }
 
+internal static class NativeIpcProtocol
+{
+    public const int OpPollEvent = 1;
+
+    public const int EventNone = 0;
+    public const int EventLogLine = 1;
+    public const int EventContainerStateChanged = 2;
+
+    public static readonly byte[] NoEventFrame = BuildNoEventFrame();
+    public static readonly byte[] ContainerStateChangedFrame = BuildContainerStateChangedFrame();
+
+    public static byte[] BuildLogLineFrame(int level, string message)
+    {
+        var buffer = new ArrayBufferWriter<byte>(Math.Max(32, message.Length + 16));
+        var writer = new MessagePackWriter(buffer);
+        writer.WriteArrayHeader(3);
+        writer.Write(EventLogLine);
+        writer.Write(level);
+        writer.Write(message);
+        writer.Flush();
+        return buffer.WrittenMemory.ToArray();
+    }
+
+    public static bool TryReadPollTimeout(ReadOnlySpan<byte> packedArgs, out int timeoutMs)
+    {
+        timeoutMs = 0;
+        if (packedArgs.IsEmpty)
+            return true;
+
+        try
+        {
+            var reader = new MessagePackReader(new ReadOnlySequence<byte>(packedArgs.ToArray()));
+            var argCount = reader.ReadArrayHeader();
+            if (argCount <= 0)
+                return true;
+
+            timeoutMs = reader.ReadInt32();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static byte[] BuildNoEventFrame()
+    {
+        var buffer = new ArrayBufferWriter<byte>(8);
+        var writer = new MessagePackWriter(buffer);
+        writer.WriteArrayHeader(1);
+        writer.Write(EventNone);
+        writer.Flush();
+        return buffer.WrittenMemory.ToArray();
+    }
+
+    private static byte[] BuildContainerStateChangedFrame()
+    {
+        var buffer = new ArrayBufferWriter<byte>(8);
+        var writer = new MessagePackWriter(buffer);
+        writer.WriteArrayHeader(1);
+        writer.Write(EventContainerStateChanged);
+        writer.Flush();
+        return buffer.WrittenMemory.ToArray();
+    }
+}
+
 internal sealed class NativeContext : IDisposable
 {
-    public required PodishContext Context { get; init; }
+    private PodishContext _context = null!;
+    public required PodishContext Context
+    {
+        get => _context;
+        init
+        {
+            _context = value;
+            _context.SetLogObserver(OnLogLine);
+        }
+    }
 
     private readonly Channel<Func<NativeContext, ValueTask>> _commandQueue =
         Channel.CreateUnbounded<Func<NativeContext, ValueTask>>(new UnboundedChannelOptions
         {
             SingleReader = true,
+            SingleWriter = false
+        });
+    private readonly Channel<byte[]> _ipcEvents =
+        Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+        {
+            SingleReader = false,
             SingleWriter = false
         });
 
@@ -35,9 +118,6 @@ internal sealed class NativeContext : IDisposable
     private readonly Dictionary<string, NativeContainer> _containersById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _containerIdByName = new(StringComparer.Ordinal);
 
-    private unsafe NativeLogCallbackState? _logCallbackState;
-    private unsafe NativeContainerStateCallbackState? _stateCallbackState;
-
     public NativeContext()
     {
         _runtimeLoop = Task.Run(ProcessCommandsAsync);
@@ -48,7 +128,9 @@ internal sealed class NativeContext : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
+        _context.SetLogObserver(null);
         _commandQueue.Writer.TryComplete();
+        _ipcEvents.Writer.TryComplete();
         _runtimeLoop.GetAwaiter().GetResult();
     }
 
@@ -105,39 +187,9 @@ internal sealed class NativeContext : IDisposable
         _lastErrorByThread[Environment.CurrentManagedThreadId] = safe;
     }
 
-    public unsafe void SetLogCallback(delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
-        IntPtr userData)
+    public void EmitContainerStateChanged()
     {
-        var next = callback == null ? null : new NativeLogCallbackState(callback, userData);
-        var prev = Interlocked.Exchange(ref _logCallbackState, next);
-        Context.SetLogObserver(next == null ? null : OnLogLine);
-        prev?.RetireAndWait();
-    }
-
-    public unsafe void SetContainerStateCallback(delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback,
-        IntPtr userData)
-    {
-        var next = callback == null ? null : new NativeContainerStateCallbackState(callback, userData);
-        var prev = Interlocked.Exchange(ref _stateCallbackState, next);
-        prev?.RetireAndWait();
-    }
-
-    public unsafe void EmitContainerStateChanged(IReadOnlyList<NativeContainerListItem> snapshot)
-    {
-        var state = Volatile.Read(ref _stateCallbackState);
-        if (state == null)
-            return;
-
-        try
-        {
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot,
-                PodishNativeJsonContext.Default.ListNativeContainerListItem);
-            state.Invoke(bytes);
-        }
-        catch
-        {
-            // best-effort callback
-        }
+        EnqueueIpcEvent(NativeIpcProtocol.ContainerStateChangedFrame);
     }
 
     private async Task ProcessCommandsAsync()
@@ -346,91 +398,52 @@ internal sealed class NativeContext : IDisposable
         if (string.IsNullOrEmpty(line))
             return;
 
-        var state = Volatile.Read(ref _logCallbackState);
-        if (state == null)
-            return;
-
-        var bytes = Encoding.UTF8.GetBytes(line);
-        state.Invoke((int)level, bytes);
+        EnqueueIpcEvent(NativeIpcProtocol.BuildLogLineFrame((int)level, line));
     }
 
-    private abstract class CallbackStateBase
+    public bool TryReadIpcEventFrame(int timeoutMs, out byte[] frame)
     {
-        private int _inflight;
-        private int _retired;
+        if (_ipcEvents.Reader.TryRead(out frame!))
+            return true;
 
-        protected bool TryEnter()
+        if (timeoutMs == 0)
         {
-            if (Volatile.Read(ref _retired) != 0)
-                return false;
-
-            Interlocked.Increment(ref _inflight);
-            if (Volatile.Read(ref _retired) == 0)
-                return true;
-
-            Interlocked.Decrement(ref _inflight);
+            frame = NativeIpcProtocol.NoEventFrame;
             return false;
         }
 
-        protected void Exit()
+        try
         {
-            Interlocked.Decrement(ref _inflight);
-        }
+            if (timeoutMs < 0)
+            {
+                frame = _ipcEvents.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+                return true;
+            }
 
-        public void RetireAndWait()
+            using var cts = new CancellationTokenSource(timeoutMs);
+            frame = _ipcEvents.Reader.ReadAsync(cts.Token).AsTask().GetAwaiter().GetResult();
+            return true;
+        }
+        catch (OperationCanceledException)
         {
-            Interlocked.Exchange(ref _retired, 1);
-            var spinner = new SpinWait();
-            while (Volatile.Read(ref _inflight) != 0)
-                spinner.SpinOnce();
+            frame = NativeIpcProtocol.NoEventFrame;
+            return false;
+        }
+        catch (ChannelClosedException)
+        {
+            frame = NativeIpcProtocol.NoEventFrame;
+            return false;
         }
     }
 
-    private unsafe sealed class NativeLogCallbackState(
-        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
-        IntPtr userData) : CallbackStateBase
+    private void EnqueueIpcEvent(byte[] frame)
     {
-        public void Invoke(int level, byte[] bytes)
-        {
-            if (bytes.Length == 0 || !TryEnter())
-                return;
+        if (frame.Length == 0 || Volatile.Read(ref _disposed) != 0)
+            return;
 
-            try
-            {
-                fixed (byte* ptr = bytes)
-                {
-                    callback(userData, level, ptr, bytes.Length);
-                }
-            }
-            finally
-            {
-                Exit();
-            }
-        }
+        _ipcEvents.Writer.TryWrite(frame);
     }
 
-    private unsafe sealed class NativeContainerStateCallbackState(
-        delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback,
-        IntPtr userData) : CallbackStateBase
-    {
-        public void Invoke(byte[] bytes)
-        {
-            if (bytes.Length == 0 || !TryEnter())
-                return;
-
-            try
-            {
-                fixed (byte* ptr = bytes)
-                {
-                    callback(userData, ptr, bytes.Length);
-                }
-            }
-            finally
-            {
-                Exit();
-            }
-        }
-    }
 }
 
 internal sealed class NativeContainer
@@ -445,8 +458,6 @@ internal sealed class NativeContainer
     private int? _exitCode;
     private bool _removed;
     private string _persistedState;
-
-    private NativeOutputCallbackState? _outputCallbackState;
 
     public required NativeContext Owner { get; init; }
     public required PodishRunSpec Spec { get; init; }
@@ -564,7 +575,6 @@ internal sealed class NativeContainer
             _session = session;
             _exitCode = null;
             _persistedState = "created";
-            ApplyOutputCallbackLocked();
             PersistMetadataLocked("created");
         }
 
@@ -726,39 +736,6 @@ internal sealed class NativeContainer
         return session.Resize(rows, cols);
     }
 
-    public unsafe void SetOutputCallback(delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
-        IntPtr userData)
-    {
-        var next = callback == null ? null : new NativeOutputCallbackState(callback, userData);
-        var previous = Interlocked.Exchange(ref _outputCallbackState, next);
-
-        lock (_gate)
-            ApplyOutputCallbackLocked();
-
-        previous?.RetireAndWait();
-    }
-
-    private void ApplyOutputCallbackLocked()
-    {
-        if (_session == null)
-            return;
-
-        if (Volatile.Read(ref _outputCallbackState) == null)
-        {
-            _session.SetOutputHandler(null);
-            return;
-        }
-
-        _session.SetOutputHandler((kind, data) =>
-        {
-            var state = Volatile.Read(ref _outputCallbackState);
-            if (state == null || data.Length == 0)
-                return;
-
-            state.Invoke(kind == Fiberish.Core.VFS.TTY.TtyEndpointKind.Stderr ? 2 : 1, data);
-        });
-    }
-
     public void InitializeMetadata()
     {
         lock (_gate)
@@ -901,8 +878,7 @@ internal sealed class NativeContainer
 
     private void NotifyContainerStateChanged()
     {
-        var snapshot = PodishNativeApi.BuildContainerListSnapshot(Owner);
-        Owner.EmitContainerStateChanged(snapshot);
+        Owner.EmitContainerStateChanged();
     }
 
     private static void StopAndForceIfNeeded(PodishContainerSession session, int timeoutMs)
@@ -928,60 +904,6 @@ internal sealed class NativeContainer
         }
     }
 
-    private abstract class CallbackStateBase
-    {
-        private int _inflight;
-        private int _retired;
-
-        protected bool TryEnter()
-        {
-            if (Volatile.Read(ref _retired) != 0)
-                return false;
-
-            Interlocked.Increment(ref _inflight);
-            if (Volatile.Read(ref _retired) == 0)
-                return true;
-
-            Interlocked.Decrement(ref _inflight);
-            return false;
-        }
-
-        protected void Exit()
-        {
-            Interlocked.Decrement(ref _inflight);
-        }
-
-        public void RetireAndWait()
-        {
-            Interlocked.Exchange(ref _retired, 1);
-            var spinner = new SpinWait();
-            while (Volatile.Read(ref _inflight) != 0)
-                spinner.SpinOnce();
-        }
-    }
-
-    private unsafe sealed class NativeOutputCallbackState(
-        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback,
-        IntPtr userData) : CallbackStateBase
-    {
-        public void Invoke(int streamKind, byte[] data)
-        {
-            if (data.Length == 0 || !TryEnter())
-                return;
-
-            try
-            {
-                fixed (byte* ptr = data)
-                {
-                    callback(userData, streamKind, ptr, data.Length);
-                }
-            }
-            finally
-            {
-                Exit();
-            }
-        }
-    }
 }
 
 internal sealed class NativeTerminal
@@ -1004,6 +926,10 @@ public static class PodishNativeApi
     internal const int PodEnoent = 2;
     internal const int PodEbusy = 16;
     internal const int PodEinternal = 10000;
+    public const int PodIpcOpPollEvent = NativeIpcProtocol.OpPollEvent;
+    public const int PodIpcEventNone = NativeIpcProtocol.EventNone;
+    public const int PodIpcEventLogLine = NativeIpcProtocol.EventLogLine;
+    public const int PodIpcEventContainerStateChanged = NativeIpcProtocol.EventContainerStateChanged;
 
     [UnmanagedCallersOnly(EntryPoint = "pod_ctx_create", CallConvs = [typeof(CallConvCdecl)])]
     public static unsafe int PodCtxCreate(PodCtxOptionsNative* options, IntPtr* outCtx)
@@ -1077,8 +1003,6 @@ public static class PodishNativeApi
                 }
             }
 
-            nativeContext.SetLogCallback(null, IntPtr.Zero);
-            nativeContext.SetContainerStateCallback(null, IntPtr.Zero);
             nativeContext.Dispose();
             nativeContext.Context.Dispose();
         }
@@ -1105,37 +1029,47 @@ public static class PodishNativeApi
         return copy;
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_ctx_set_log_callback", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodCtxSetLogCallback(IntPtr ctxHandle,
-        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback, IntPtr userData)
+    [UnmanagedCallersOnly(EntryPoint = "pod_ctx_call_msgpack", CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe int PodCtxCallMsgPack(IntPtr ctxHandle, int opId, byte* args, int argsLen, byte* buffer,
+        int capacity, int* outLen)
     {
-        var ctx = FromHandle(ctxHandle);
-        if (ctx == null)
-            return PodEinval;
+        return PodCtxCallMsgPackCore(ctxHandle, opId, args, argsLen, buffer, capacity, outLen);
+    }
 
-        try
+    internal static int PodCtxCallMsgPackManaged(IntPtr ctxHandle, int opId, ReadOnlySpan<byte> args, Span<byte> buffer,
+        out int outLen)
+    {
+        unsafe
         {
-            ctx.SetLogCallback(callback, userData);
-            return PodOk;
-        }
-        catch (Exception ex)
-        {
-            return SetErrorAndReturn(ctx, ex.ToString(), PodEinternal);
+            fixed (byte* argsPtr = args)
+            fixed (byte* bufferPtr = buffer)
+            {
+                int len = 0;
+                var rc = PodCtxCallMsgPackCore(ctxHandle, opId, argsPtr, args.Length, bufferPtr, buffer.Length, &len);
+                outLen = len;
+                return rc;
+            }
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "pod_ctx_set_container_state_callback", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodCtxSetContainerStateCallback(IntPtr ctxHandle,
-        delegate* unmanaged[Cdecl]<IntPtr, byte*, int, void> callback, IntPtr userData)
+    private static unsafe int PodCtxCallMsgPackCore(IntPtr ctxHandle, int opId, byte* args, int argsLen, byte* buffer,
+        int capacity, int* outLen)
     {
         var ctx = FromHandle(ctxHandle);
-        if (ctx == null)
+        if (ctx == null || argsLen < 0)
             return PodEinval;
+
+        if (args == null && argsLen != 0)
+            return SetErrorAndReturn(ctx, "invalid msgpack args", PodEinval);
 
         try
         {
-            ctx.SetContainerStateCallback(callback, userData);
-            return PodOk;
+            ReadOnlySpan<byte> argSpan = argsLen == 0 ? ReadOnlySpan<byte>.Empty : new ReadOnlySpan<byte>(args, argsLen);
+            return opId switch
+            {
+                PodIpcOpPollEvent => HandleIpcPollEvent(ctx, argSpan, buffer, capacity, outLen),
+                _ => SetErrorAndReturn(ctx, $"unsupported ipc op id: {opId}", PodEinval)
+            };
         }
         catch (Exception ex)
         {
@@ -1440,7 +1374,7 @@ public static class PodishNativeApi
             if (!ok)
                 return SetErrorAndReturn(owner, renameError ?? "container name already exists", PodEbusy);
 
-            owner.EmitContainerStateChanged(BuildContainerListSnapshot(owner));
+            owner.EmitContainerStateChanged();
             return PodOk;
         }
         catch (Exception ex)
@@ -1462,8 +1396,7 @@ public static class PodishNativeApi
                 return PodEbusy;
 
             container.Owner.UnregisterContainer(container);
-            var snapshot = BuildContainerListSnapshot(container.Owner);
-            container.Owner.EmitContainerStateChanged(snapshot);
+            container.Owner.EmitContainerStateChanged();
         }
         catch (Exception ex)
         {
@@ -1513,17 +1446,6 @@ public static class PodishNativeApi
         }
 
         handle.Free();
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "pod_container_set_output_callback", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe int PodContainerSetOutputCallback(IntPtr containerHandle,
-        delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, void> callback, IntPtr userData)
-    {
-        var container = FromContainerHandle(containerHandle);
-        if (container == null)
-            return PodEinval;
-        container.SetOutputCallback(callback, userData);
-        return PodOk;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "pod_container_write_stdin", CallConvs = [typeof(CallConvCdecl)])]
@@ -2081,6 +2003,37 @@ public static class PodishNativeApi
             buffer[i] = bytes[i];
         buffer[copy] = 0;
         return bytes.Length < capacity ? PodOk : PodEinval;
+    }
+
+    private static unsafe int HandleIpcPollEvent(NativeContext ctx, ReadOnlySpan<byte> args, byte* buffer, int capacity,
+        int* outLen)
+    {
+        if (!NativeIpcProtocol.TryReadPollTimeout(args, out var timeoutMs))
+            return SetErrorAndReturn(ctx, "invalid msgpack args for poll_event", PodEinval);
+
+        var ok = ctx.TryReadIpcEventFrame(timeoutMs, out var frame);
+        if (!ok)
+            frame = NativeIpcProtocol.NoEventFrame;
+
+        return WriteBinary(ctx, frame, buffer, capacity, outLen);
+    }
+
+    private static unsafe int WriteBinary(NativeContext ctx, ReadOnlySpan<byte> payload, byte* buffer, int capacity,
+        int* outLen)
+    {
+        if (outLen != null)
+            *outLen = payload.Length;
+
+        if (buffer == null || capacity <= 0)
+            return PodOk;
+
+        if (capacity < payload.Length)
+            return SetErrorAndReturn(ctx, "buffer too small", PodEinval);
+
+        for (var i = 0; i < payload.Length; i++)
+            buffer[i] = payload[i];
+
+        return PodOk;
     }
 
     private static unsafe string? PtrToString(IntPtr ptr)

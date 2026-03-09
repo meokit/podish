@@ -17,10 +17,14 @@ int pod_ctx_create(const pod_ctx_options_t* options, void** out_ctx);
 void pod_ctx_destroy(void* ctx);
 
 int pod_ctx_last_error(void* ctx, uint8_t* buffer, int capacity);
-typedef void (*pod_log_cb)(void* user_data, int level, const uint8_t* data, int len);
-int pod_ctx_set_log_callback(void* ctx, pod_log_cb callback, void* user_data);
-typedef void (*pod_container_state_cb)(void* user_data, const uint8_t* data, int len);
-int pod_ctx_set_container_state_callback(void* ctx, pod_container_state_cb callback, void* user_data);
+
+// MsgPack IPC (args is a msgpack array, response is msgpack payload).
+#define POD_IPC_OP_POLL_EVENT 1
+#define POD_IPC_EVENT_NONE 0
+#define POD_IPC_EVENT_LOG_LINE 1
+#define POD_IPC_EVENT_CONTAINER_STATE_CHANGED 2
+int pod_ctx_call_msgpack(void* ctx, int op_id, const uint8_t* args, int args_len, uint8_t* buffer, int capacity,
+                         int* out_len);
 
 int pod_image_pull(void* ctx, const char* image_ref_utf8);
 int pod_image_pull_async(void* ctx, const char* image_ref_utf8, void** out_job);
@@ -29,8 +33,6 @@ int pod_image_remove(void* ctx, const char* image_ref_utf8, int force);
 
 // run_spec_json uses UTF-8 JSON matching PodishRunSpec fields.
 int pod_container_run_json(void* ctx, const char* run_spec_json_utf8, int* exit_code);
-
-typedef void (*pod_terminal_output_cb)(void* user_data, int stream_kind, const uint8_t* data, int len);
 
 int pod_container_create_json(void* ctx, const char* run_spec_json_utf8, void** out_container);
 int pod_container_start_json(void* ctx, const char* run_spec_json_utf8, void** out_container);
@@ -42,7 +44,6 @@ int pod_container_stop(void* container, int signal, int timeout_ms);
 int pod_container_remove(void* container, int force);
 void pod_container_close(void* container);
 void pod_container_destroy(void* container);
-int pod_container_set_output_callback(void* container, pod_terminal_output_cb callback, void* user_data);
 int pod_container_write_stdin(void* container, const uint8_t* data, int len, int* written);
 int pod_container_resize(void* container, uint16_t rows, uint16_t cols);
 int pod_container_wait(void* container, int* exit_code);

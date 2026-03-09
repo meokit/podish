@@ -26,4 +26,8 @@
     <DirectPInvoke Include="fiberish_netstack" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.4" />
+  </ItemGroup>
+
 </Project>

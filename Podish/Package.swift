@@ -11,7 +11,8 @@ let package = Package(
         .executable(name: "Podish", targets: ["Podish"])
     ],
     dependencies: [
-        .package(path: "Vendor/SwiftTerm")
+        .package(path: "Vendor/SwiftTerm"),
+        .package(url: "https://github.com/Flight-School/MessagePack.git", from: "1.2.4")
     ],
     targets: [
         .binaryTarget(
@@ -22,7 +23,8 @@ let package = Package(
             name: "Podish",
             dependencies: [
                 "PodishCoreBinary",
-                .product(name: "SwiftTerm", package: "SwiftTerm")
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "MessagePack", package: "MessagePack")
             ],
             linkerSettings: [
                 .unsafeFlags([
