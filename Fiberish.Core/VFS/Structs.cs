@@ -121,7 +121,7 @@ public abstract class SuperBlock
 
     public bool HasActiveInodes()
     {
-        return AllInodes.Any(i => i.RefCount > i.Dentries.Count);
+        return AllInodes.Any(i => i.HasActiveRuntimeRefs);
     }
 
     protected virtual void Shutdown()
@@ -198,6 +198,11 @@ public abstract class Inode : IPageCacheOps
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
+    public int FileOpenRefCount { get; private set; }
+    public int FileMmapRefCount { get; private set; }
+    public int PathPinRefCount { get; private set; }
+    public int KernelInternalRefCount { get; private set; }
+    public bool HasActiveRuntimeRefs => FileOpenRefCount > 0 || FileMmapRefCount > 0 || PathPinRefCount > 0;
     public int LinkCount { get; private set; }
     public bool HasExplicitLinkCount { get; private set; }
     public bool IsEvicted { get; private set; }
@@ -219,6 +224,7 @@ public abstract class Inode : IPageCacheOps
             return;
         }
 
+        IncrementRefKind(kind);
         RefCount++;
         VfsDebugTrace.RecordRefChange(this, $"Inode.AcquireRef.{kind}", before, RefCount, reason);
     }
@@ -230,6 +236,13 @@ public abstract class Inode : IPageCacheOps
         {
             VfsDebugTrace.FailInvariant(
                 $"Inode.ReleaseRef underflow ino={Ino} type={Type} ref={before} kind={kind} reason={reason}");
+            return;
+        }
+
+        if (!DecrementRefKind(kind))
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.ReleaseRef kind underflow ino={Ino} type={Type} kind={kind} reason={reason}");
             return;
         }
 
@@ -315,6 +328,53 @@ public abstract class Inode : IPageCacheOps
         LinkCount = Math.Max(0, Dentries.Count);
         HasExplicitLinkCount = true;
         VfsDebugTrace.RecordLinkChange(this, $"Inode.{source}.InitFromDentries", 0, LinkCount, null);
+    }
+
+    private void IncrementRefKind(InodeRefKind kind)
+    {
+        switch (kind)
+        {
+            case InodeRefKind.FileOpen:
+                FileOpenRefCount++;
+                break;
+            case InodeRefKind.FileMmap:
+                FileMmapRefCount++;
+                break;
+            case InodeRefKind.PathPin:
+                PathPinRefCount++;
+                break;
+            case InodeRefKind.KernelInternal:
+                KernelInternalRefCount++;
+                break;
+            default:
+                VfsDebugTrace.FailInvariant($"Inode.IncrementRefKind unknown kind={kind} ino={Ino}");
+                break;
+        }
+    }
+
+    private bool DecrementRefKind(InodeRefKind kind)
+    {
+        switch (kind)
+        {
+            case InodeRefKind.FileOpen:
+                if (FileOpenRefCount <= 0) return false;
+                FileOpenRefCount--;
+                return true;
+            case InodeRefKind.FileMmap:
+                if (FileMmapRefCount <= 0) return false;
+                FileMmapRefCount--;
+                return true;
+            case InodeRefKind.PathPin:
+                if (PathPinRefCount <= 0) return false;
+                PathPinRefCount--;
+                return true;
+            case InodeRefKind.KernelInternal:
+                if (KernelInternalRefCount <= 0) return false;
+                KernelInternalRefCount--;
+                return true;
+            default:
+                return false;
+        }
     }
 
     internal void AttachAliasDentry(Dentry dentry, string reason)
