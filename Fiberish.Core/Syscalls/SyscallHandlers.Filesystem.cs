@@ -134,10 +134,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        var oldCwd = sm.CurrentWorkingDirectory;
-        sm.CurrentWorkingDirectory = loc;
-        loc.Dentry.Inode!.Get();
-        oldCwd.Dentry?.Inode?.Put();
+        sm.UpdateCurrentWorkingDirectory(loc, "SysChdir");
         return 0;
     }
 
@@ -151,10 +148,7 @@ public partial class SyscallManager
         if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
         if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        var oldCwd = sm.CurrentWorkingDirectory;
-        sm.CurrentWorkingDirectory = new PathLocation(f.Dentry, f.Mount);
-        f.Dentry.Inode!.Get();
-        oldCwd.Dentry?.Inode?.Put();
+        sm.UpdateCurrentWorkingDirectory(new PathLocation(f.Dentry, f.Mount), "SysFchdir");
         return 0;
     }
 
@@ -2067,7 +2061,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR; // ENOTDIR
 
-        sm.ProcessRoot = loc;
+        sm.UpdateProcessRoot(loc, "SysChroot");
         return 0;
     }
 

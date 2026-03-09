@@ -246,9 +246,9 @@ public partial class SyscallManager
         _mountNamespace = mountNamespace;
         _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl(this));
 
-        Root.Dentry!.Inode!.Get();
-        CurrentWorkingDirectory.Dentry!.Inode!.Get();
-        ProcessRoot.Dentry!.Inode!.Get();
+        PinPathLocation(Root, "root:ctor");
+        PinPathLocation(CurrentWorkingDirectory, "cwd:ctor");
+        PinPathLocation(ProcessRoot, "procroot:ctor");
 
         RegisterHandlers();
 
@@ -318,6 +318,32 @@ public partial class SyscallManager
 
     private int _closed;
 
+    private static void PinPathLocation(PathLocation loc, string reason)
+    {
+        loc.Dentry?.Inode?.AcquireRef(InodeRefKind.PathPin, reason);
+    }
+
+    private static void UnpinPathLocation(PathLocation loc, string reason)
+    {
+        loc.Dentry?.Inode?.ReleaseRef(InodeRefKind.PathPin, reason);
+    }
+
+    internal void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
+    {
+        var old = CurrentWorkingDirectory;
+        CurrentWorkingDirectory = next;
+        PinPathLocation(next, $"cwd:{reason}");
+        UnpinPathLocation(old, $"cwd:{reason}");
+    }
+
+    internal void UpdateProcessRoot(PathLocation next, string reason)
+    {
+        var old = ProcessRoot;
+        ProcessRoot = next;
+        PinPathLocation(next, $"procroot:{reason}");
+        UnpinPathLocation(old, $"procroot:{reason}");
+    }
+
     /// <summary>
     ///     Gets mount information for /proc/mounts.
     ///     Dynamically generated from the current mount namespace state.
@@ -346,14 +372,22 @@ public partial class SyscallManager
 
     public void InitializeRoot(Dentry root, Mount rootMount)
     {
+        var oldRoot = Root;
+        var oldProcRoot = ProcessRoot;
+        var oldCwd = CurrentWorkingDirectory;
+
         Root = new PathLocation(root, rootMount);
         RootMount = rootMount;
         ProcessRoot = Root;
         CurrentWorkingDirectory = Root;
 
-        Root.Dentry!.Inode!.Get();
-        ProcessRoot.Dentry!.Inode!.Get();
-        CurrentWorkingDirectory.Dentry!.Inode!.Get();
+        PinPathLocation(Root, "root:initialize");
+        PinPathLocation(ProcessRoot, "procroot:initialize");
+        PinPathLocation(CurrentWorkingDirectory, "cwd:initialize");
+
+        UnpinPathLocation(oldRoot, "root:initialize-old");
+        UnpinPathLocation(oldProcRoot, "procroot:initialize-old");
+        UnpinPathLocation(oldCwd, "cwd:initialize-old");
 
         RegisterMount(RootMount, null, root);
     }
@@ -1366,9 +1400,9 @@ public partial class SyscallManager
         // Mount detach/unmount is controlled by umount(2), not by process exit.
         _mountNamespace.Put();
 
-        Root.Dentry?.Inode?.Put();
-        CurrentWorkingDirectory.Dentry?.Inode?.Put();
-        ProcessRoot.Dentry?.Inode?.Put();
+        UnpinPathLocation(Root, "root:close");
+        UnpinPathLocation(CurrentWorkingDirectory, "cwd:close");
+        UnpinPathLocation(ProcessRoot, "procroot:close");
 
         if (_sharedFdTable.ReleaseRef())
         {
