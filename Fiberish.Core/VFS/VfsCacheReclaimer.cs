@@ -59,8 +59,12 @@ public static class VfsCacheReclaimer
                 current.Parent.Children.Remove(current.Name);
 
             var inode = current.Inode;
-            if (inode != null && inode.Dentries.Remove(current))
-                inode.Put();
+            if (inode != null)
+            {
+                if (inode.DetachAliasDentry(current, "VfsCacheReclaimer.DetachCachedSubtree"))
+                    inode.Put();
+                current.Inode = null;
+            }
 
             dropped++;
         }

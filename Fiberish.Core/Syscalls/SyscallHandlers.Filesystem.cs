@@ -1100,8 +1100,9 @@ public partial class SyscallManager
                     {
                         if (victimDentry.Inode != null)
                         {
-                            victimDentry.Inode.Dentries.Remove(victimDentry);
-                            victimDentry.Inode.Put();
+                            var victimInode = victimDentry.Inode;
+                            if (victimInode.DetachAliasDentry(victimDentry, "SysRename.cleanup-replaced-target"))
+                                victimInode.Put();
                             victimDentry.Inode = null;
                         }
                         pDentry.Children.Remove(newName);
@@ -1521,7 +1522,8 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), inode.Dev);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12), (uint)inode.Ino); // __st_ino
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16), mode);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), 1); // nlink
+        var nlink = inode.GetDebugNlinkForStat("WriteStat64", 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(20), nlink);
 
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(24), uid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(28), gid);
@@ -1554,7 +1556,8 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0), (ushort)inode.Dev); // st_dev
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4), (uint)inode.Ino);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(8), (ushort)mode);
-        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), 1); // nlink
+        var nlink = inode.GetDebugNlinkForStat("WriteStat", 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(10), (ushort)nlink);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12), (ushort)uid);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(14), (ushort)gid);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), (ushort)inode.Rdev); // st_rdev
@@ -1582,7 +1585,8 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x04), 4096); // blksize
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0x08), 0); // attributes
 
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x10), (uint)Math.Max(1, inode.Dentries.Count));
+        var nlink = inode.GetDebugNlinkForStat("WriteStatx", (uint)Math.Max(1, inode.Dentries.Count));
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x10), nlink);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x14), (uint)inode.Uid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x18), (uint)inode.Gid);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0x1C), (ushort)((uint)inode.Mode | (uint)inode.Type));

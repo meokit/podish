@@ -1,6 +1,8 @@
 using Fiberish.Core;
+using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
@@ -192,12 +194,55 @@ public abstract class Inode : IPageCacheOps
     // Reference counting methods
     public void Get()
     {
+        var before = RefCount;
         RefCount++;
+        VfsDebugTrace.RecordRefChange(this, "Inode.Get", before, RefCount, null);
     }
 
     public void Put()
     {
-        if (--RefCount <= 0) Release();
+        var before = RefCount;
+        if (before <= 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.Put underflow ino={Ino} type={Type} ref={before} dentries={Dentries.Count}");
+            return;
+        }
+
+        RefCount = before - 1;
+        VfsDebugTrace.RecordRefChange(this, "Inode.Put", before, RefCount, null);
+        if (RefCount == 0) Release();
+    }
+
+    internal void AttachAliasDentry(Dentry dentry, string reason)
+    {
+        if (dentry.Inode != this)
+            VfsDebugTrace.FailInvariant(
+                $"AttachAliasDentry inode mismatch ino={Ino} dentry={dentry.Name} dentryInode={dentry.Inode?.Ino}");
+
+        if (Dentries.Contains(dentry))
+            VfsDebugTrace.FailInvariant($"AttachAliasDentry duplicate ino={Ino} dentry={dentry.Name}");
+
+        Dentries.Add(dentry);
+        VfsDebugTrace.RecordDentryBinding(this, dentry, "attach", reason);
+        VfsDebugTrace.AssertDentryMembership(dentry, "AttachAliasDentry");
+    }
+
+    internal bool DetachAliasDentry(Dentry dentry, string reason)
+    {
+        var removed = Dentries.Remove(dentry);
+        VfsDebugTrace.RecordDentryBinding(this, dentry, removed ? "detach" : "detach-miss", reason);
+        if (!removed) return false;
+        if (dentry.Inode != null && dentry.Inode != this)
+            VfsDebugTrace.FailInvariant(
+                $"DetachAliasDentry inode mismatch ino={Ino} dentry={dentry.Name} dentryInode={dentry.Inode?.Ino}");
+        return true;
+    }
+
+    public uint GetDebugNlinkForStat(string source, uint nlink)
+    {
+        VfsDebugTrace.RecordStatNlink(this, source, nlink);
+        return nlink;
     }
 
     protected virtual void Release()
@@ -647,8 +692,9 @@ public class Dentry
         SuperBlock = sb;
         if (inode != null)
         {
-            inode.Dentries.Add(this);
+            inode.AttachAliasDentry(this, "Dentry.ctor");
             inode.Get();
+            VfsDebugTrace.AssertDentryMembership(this, "Dentry.ctor");
         }
     }
 
@@ -683,8 +729,113 @@ public class Dentry
     {
         if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
         Inode = inode;
-        Inode.Dentries.Add(this);
+        Inode.AttachAliasDentry(this, "Dentry.Instantiate");
         Inode.Get();
+        VfsDebugTrace.AssertDentryMembership(this, "Dentry.Instantiate");
+    }
+}
+
+public readonly record struct InodeRefTrace(
+    DateTime TimestampUtc,
+    ulong Ino,
+    InodeType InodeType,
+    string Operation,
+    int RefBefore,
+    int RefAfter,
+    int DentryCount,
+    string? Detail);
+
+public static class VfsDebugTrace
+{
+    private static readonly ILogger Logger = Logging.CreateLogger("Fiberish.VFS.RefTrace");
+    private static readonly object TraceLock = new();
+    private const int MaxTraceEntries = 4096;
+    private static readonly Queue<InodeRefTrace> RefTraceQueue = [];
+
+    public static bool Enabled { get; set; } =
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    public static bool StrictInvariants { get; set; } =
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    public static IReadOnlyList<InodeRefTrace> SnapshotRefTrace()
+    {
+        lock (TraceLock)
+        {
+            return RefTraceQueue.ToList();
+        }
+    }
+
+    public static void ClearRefTrace()
+    {
+        lock (TraceLock)
+        {
+            RefTraceQueue.Clear();
+        }
+    }
+
+    public static void RecordRefChange(Inode inode, string operation, int before, int after, string? detail)
+    {
+        var entry = new InodeRefTrace(
+            DateTime.UtcNow,
+            inode.Ino,
+            inode.Type,
+            operation,
+            before,
+            after,
+            inode.Dentries.Count,
+            detail);
+        lock (TraceLock)
+        {
+            RefTraceQueue.Enqueue(entry);
+            while (RefTraceQueue.Count > MaxTraceEntries)
+                RefTraceQueue.Dequeue();
+        }
+
+        if (Enabled)
+            Logger.LogDebug(
+                "[VFS-Ref] op={Operation} ino={Ino} type={Type} ref:{Before}->{After} dentries={DentryCount} detail={Detail}",
+                operation, inode.Ino, inode.Type, before, after, inode.Dentries.Count, detail ?? "");
+    }
+
+    public static void RecordDentryBinding(Inode inode, Dentry dentry, string operation, string reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-Dentry] op={Operation} reason={Reason} ino={Ino} dentry={Name} dentryId={DentryId} parent={Parent} dentries={DentryCount}",
+            operation, reason, inode.Ino, dentry.Name, dentry.Id, dentry.Parent?.Name ?? "<null>", inode.Dentries.Count);
+    }
+
+    public static void RecordStatNlink(Inode inode, string source, uint nlink)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-StatNlink] source={Source} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} dentries={DentryCount}",
+            source, inode.Ino, inode.Type, nlink, inode.RefCount, inode.Dentries.Count);
+    }
+
+    public static void AssertDentryMembership(Dentry dentry, string source)
+    {
+        var inode = dentry.Inode;
+        if (inode == null) return;
+        if (inode.Dentries.Contains(dentry)) return;
+        FailInvariant(
+            $"Dentry membership invariant broken source={source} dentry={dentry.Name} inode={inode.Ino} dentryId={dentry.Id}");
+    }
+
+    public static void FailInvariant(string message)
+    {
+        Logger.LogError("[VFS-Invariant] {Message}", message);
+        if (StrictInvariants)
+            throw new InvalidOperationException(message);
     }
 }
 
