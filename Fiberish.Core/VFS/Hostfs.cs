@@ -872,6 +872,7 @@ public partial class HostInode : Inode
         if (info.LinkTarget != null || File.Exists(subPath))
         {
             var dentry = sb.GetDentry(subPath, name, null);
+            NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
             File.Delete(subPath);
             sb.MetadataStore.Remove(subPath);
             dentry?.UnbindInode("HostInode.Unlink");
@@ -894,6 +895,7 @@ public partial class HostInode : Inode
 
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(subPath, name, null);
+        NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Rmdir");
         Directory.Delete(subPath, false);
         sb.MetadataStore.Remove(subPath);
         dentry?.UnbindInode("HostInode.Rmdir");
@@ -941,6 +943,7 @@ public partial class HostInode : Inode
                 File.Delete(newFullPath);
             }
 
+            NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 targetParent.Dentries[0].Children.Remove(newName);
@@ -1000,6 +1003,7 @@ public partial class HostInode : Inode
 
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
+        NamespaceOps.OnLinkAdded(oldInode, "HostInode.Link");
         sb.AddDentry(newPath, dentry);
         if (Dentries.Count > 0)
             Dentries[0].Children[dentry.Name] = dentry;

@@ -300,7 +300,7 @@ public class SilkFsAdapterTests
             Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
             Assert.NotNull(repo.ReadObject(obj));
             var readBuf = new byte[16];
-            var n = file.Inode!.Read(rf, readBuf, 0);
+            var n = rf.OpenedInode!.Read(rf, readBuf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
 

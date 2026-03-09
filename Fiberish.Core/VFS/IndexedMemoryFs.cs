@@ -195,7 +195,7 @@ public abstract class IndexedMemoryInode : Inode
             var unlinkedInode = dentry.Inode;
             if (unlinkedInode != null)
             {
-                unlinkedInode.DecLink("IndexedMemoryInode.Unlink");
+                NamespaceOps.OnEntryRemoved(unlinkedInode, "IndexedMemoryInode.Unlink");
                 dentry.UnbindInode("IndexedMemoryInode.Unlink");
             }
             ChildNames.Remove(name);
@@ -225,7 +225,7 @@ public abstract class IndexedMemoryInode : Inode
 
             primaryDentry.Children.Remove(name);
             var removedInode = dentry.Inode;
-            removedInode!.DecLink("IndexedMemoryInode.Rmdir");
+            NamespaceOps.OnEntryRemoved(removedInode, "IndexedMemoryInode.Rmdir");
             dentry.UnbindInode("IndexedMemoryInode.Rmdir");
             ChildNames.Remove(name);
         }
@@ -335,7 +335,7 @@ public abstract class IndexedMemoryInode : Inode
             if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
 
             dentry.Instantiate(oldInode);
-            oldInode.IncLink("IndexedMemoryInode.Link");
+            NamespaceOps.OnLinkAdded(oldInode, "IndexedMemoryInode.Link");
 
             lock (IndexedSb.Lock)
             {
