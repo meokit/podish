@@ -971,6 +971,7 @@ public partial class SyscallManager
             ? sm.PathWalkWithFlags(newPath, newStart.Value, LookupFlags.None)
             : sm.PathWalkWithFlags(newPath, LookupFlags.None);
         var targetExists = targetLoc.IsValid && targetLoc.Dentry?.Inode != null;
+        var replacedTargetInode = targetExists ? targetLoc.Dentry!.Inode : null;
         if (targetExists && !ReferenceEquals(newParentLoc.Mount, targetLoc.Mount))
             return -(int)Errno.EBUSY;
         if (targetExists && ReferenceEquals(oldLoc.Mount, targetLoc.Mount) && ReferenceEquals(oldLoc.Dentry, targetLoc.Dentry))
@@ -1091,9 +1092,11 @@ public partial class SyscallManager
             {
                 foreach (var pDentry in newParentInode.Dentries.ToList())
                 {
-                    // If there's an existing dentry for the target name, we need to
-                    // properly clean it up to avoid inode reference leaks.
-                    if (pDentry.Children.TryGetValue(newName, out var victimDentry))
+                    // Clean up only the pre-existing target dentry that got replaced.
+                    // Do not tear down the freshly moved source dentry.
+                    if (replacedTargetInode != null &&
+                        pDentry.Children.TryGetValue(newName, out var victimDentry) &&
+                        ReferenceEquals(victimDentry.Inode, replacedTargetInode))
                     {
                         if (victimDentry.Inode != null)
                         {

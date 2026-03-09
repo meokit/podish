@@ -37,6 +37,7 @@ public partial class SyscallManager
     private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly SharedFdTable _sharedFdTable;
+    private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
     private readonly FileSystemType _devptsFsType;
     private readonly DeviceNumberManager _devNumberManager = new();
     private SharedLoopbackNetNamespace? _privateNetNamespace;
@@ -63,10 +64,76 @@ public partial class SyscallManager
         }
     }
 
+    private sealed class SharedUnixSocketNamespace
+    {
+        private int _refCount = 1;
+        private readonly Dictionary<Inode, UnixSocketInode> _pathSocketsByInode = [];
+        private readonly Dictionary<UnixSocketInode, Inode> _pathInodesBySocket = [];
+        private readonly Dictionary<string, UnixSocketInode> _abstractSockets = new(StringComparer.Ordinal);
+        private readonly Dictionary<UnixSocketInode, string> _abstractKeysBySocket = [];
+
+        public SharedUnixSocketNamespace AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public bool ReleaseRef()
+        {
+            return Interlocked.Decrement(ref _refCount) == 0;
+        }
+
+        public bool TryBindPath(Inode pathInode, UnixSocketInode socketInode)
+        {
+            if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
+            if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
+            _pathSocketsByInode[pathInode] = socketInode;
+            _pathInodesBySocket[socketInode] = pathInode;
+            return true;
+        }
+
+        public bool TryBindAbstract(string key, UnixSocketInode socketInode)
+        {
+            if (_abstractSockets.ContainsKey(key)) return false;
+            if (_abstractKeysBySocket.ContainsKey(socketInode)) return false;
+            _abstractSockets[key] = socketInode;
+            _abstractKeysBySocket[socketInode] = key;
+            return true;
+        }
+
+        public UnixSocketInode? LookupPath(Inode pathInode)
+        {
+            return _pathSocketsByInode.GetValueOrDefault(pathInode);
+        }
+
+        public UnixSocketInode? LookupAbstract(string key)
+        {
+            return _abstractSockets.GetValueOrDefault(key);
+        }
+
+        public void Unbind(UnixSocketInode inode)
+        {
+            if (_pathInodesBySocket.Remove(inode, out var pathInode))
+                _pathSocketsByInode.Remove(pathInode);
+
+            if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
+                _abstractSockets.Remove(abstractKey);
+        }
+
+        public void Clear()
+        {
+            _pathSocketsByInode.Clear();
+            _pathInodesBySocket.Clear();
+            _abstractSockets.Clear();
+            _abstractKeysBySocket.Clear();
+        }
+    }
+
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
         _mountNamespace = new MountNamespace();
         _sharedFdTable = new SharedFdTable();
+        _sharedUnixSocketNamespace = new SharedUnixSocketNamespace();
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
@@ -113,6 +180,7 @@ public partial class SyscallManager
     }
 
     private SyscallManager(VMAManager mem, SharedFdTable sharedFdTable,
+        SharedUnixSocketNamespace sharedUnixSocketNamespace,
         FutexManager futex,
         SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
@@ -126,6 +194,7 @@ public partial class SyscallManager
     {
         Mem = mem;
         _sharedFdTable = sharedFdTable;
+        _sharedUnixSocketNamespace = sharedUnixSocketNamespace;
         Futex = futex;
         SysVShm = sysvShm;
         SysVSem = sysvSem;
@@ -1038,7 +1107,7 @@ public partial class SyscallManager
         // Share the mount namespace (mounts are shared across fork/clone by default)
         var sharedNamespace = _mountNamespace.Share();
 
-        var newSys = new SyscallManager(newMem, newSharedFdTable, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
+        var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
             Strace, Root,
             CurrentWorkingDirectory,
             ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
@@ -1286,6 +1355,34 @@ public partial class SyscallManager
             FDs.Clear();
             FdCloseOnExecSet.Clear();
         }
+
+        if (_sharedUnixSocketNamespace.ReleaseRef())
+            _sharedUnixSocketNamespace.Clear();
+    }
+
+    internal bool TryBindUnixPathSocket(Inode pathInode, UnixSocketInode inode)
+    {
+        return _sharedUnixSocketNamespace.TryBindPath(pathInode, inode);
+    }
+
+    internal bool TryBindUnixAbstractSocket(string key, UnixSocketInode inode)
+    {
+        return _sharedUnixSocketNamespace.TryBindAbstract(key, inode);
+    }
+
+    internal UnixSocketInode? LookupUnixPathSocket(Inode pathInode)
+    {
+        return _sharedUnixSocketNamespace.LookupPath(pathInode);
+    }
+
+    internal UnixSocketInode? LookupUnixAbstractSocket(string key)
+    {
+        return _sharedUnixSocketNamespace.LookupAbstract(key);
+    }
+
+    internal void UnbindUnixSocket(UnixSocketInode inode)
+    {
+        _sharedUnixSocketNamespace.Unbind(inode);
     }
 
     private class PlaceholderInode : Inode

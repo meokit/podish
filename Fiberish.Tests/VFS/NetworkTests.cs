@@ -144,4 +144,15 @@ public class NetworkTests
         // After draining the only queued packet, future waits must block until new data arrives.
         Assert.False(readWaitQueue.IsSignaled);
     }
+
+    [Fact]
+    public void UnixSocketInode_Poll_FreshSocket_DoesNotReportHangup()
+    {
+        using var env = new TestEnv();
+        var sock = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream);
+        var file = new Fiberish.VFS.LinuxFile(new Dentry("s", sock, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+
+        var revents = sock.Poll(file, (short)(PollEvents.POLLIN | PollEvents.POLLOUT | PollEvents.POLLHUP));
+        Assert.Equal(0, revents & PollEvents.POLLHUP);
+    }
 }

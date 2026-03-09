@@ -66,6 +66,12 @@ public class SocketSyscallTests
         return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
     }
 
+    private static ValueTask<int> CallSysSocketPair(TestEnv env, uint domain, uint type, uint protocol, uint svPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysSocketPair", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, domain, type, protocol, svPtr, 0u, 0u])!;
+    }
+
     private static ValueTask<int> CallSysSendMsg(TestEnv env, uint fd, uint msgPtr, uint flags)
     {
         var method = typeof(SyscallManager).GetMethod("SysSendMsg", BindingFlags.NonPublic | BindingFlags.Static);
@@ -112,6 +118,30 @@ public class SocketSyscallTests
     {
         var method = typeof(SyscallManager).GetMethod("SysWrite", BindingFlags.NonPublic | BindingFlags.Static);
         return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysUnlink(TestEnv env, uint pathPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysUnlink", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, pathPtr, 0u, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysLink(TestEnv env, uint oldPathPtr, uint newPathPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysLink", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysRename(TestEnv env, uint oldPathPtr, uint newPathPtr)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysRename", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u])!;
+    }
+
+    private static ValueTask<int> CallSysClose(TestEnv env, uint fd)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysClose", BindingFlags.NonPublic | BindingFlags.Static);
+        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, 0u, 0u, 0u, 0u, 0u])!;
     }
 
     [Fact]
@@ -755,6 +785,286 @@ public class SocketSyscallTests
         Assert.Equal(-(int)Errno.EPIPE, await CallSysSend(env, (uint)clientFd, 0x32000u, 4u));
     }
 
+    [Fact]
+    public async Task Socket_UnixPath_BindListenConnectAccept_SendRecv_Works()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x33000);
+        env.MapUserPage(0x34000);
+        env.MapUserPage(0x35000);
+        env.MapUserPage(0x36000);
+
+        var path = $"/sock_unix_syscall_test_{Guid.NewGuid():N}";
+        var sockaddrLen = WriteSockaddrUn(env, 0x33000, path);
+        WriteSockaddrUn(env, 0x34000, path);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x33000, (uint)sockaddrLen));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x34000, (uint)sockaddrLen));
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        var payload = System.Text.Encoding.ASCII.GetBytes("unix");
+        env.WriteBytes(0x35000, payload);
+        Assert.Equal(payload.Length, await CallSysSend(env, (uint)clientFd, 0x35000, (uint)payload.Length, 0));
+
+        var recv = await CallSysRecvFrom(env, (uint)acceptedFd, 0x36000, 16, 0, 0, 0);
+        Assert.Equal(payload.Length, recv);
+        Assert.Equal("unix", System.Text.Encoding.ASCII.GetString(env.ReadBytes(0x36000, recv)));
+    }
+
+    [Fact]
+    public async Task Socket_UnixSocketPair_CopyToUserFault_RollsBackDescriptors()
+    {
+        using var env = new TestEnv();
+
+        var rc = await CallSysSocketPair(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0, 0xDEAD0000);
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+        Assert.Empty(env.SyscallManager.FDs);
+    }
+
+    [Fact]
+    public async Task Socket_UnixPath_UnlinkThenRebind_WhileOriginalOpen_Works()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x47000);
+        env.MapUserPage(0x48000);
+
+        var path = $"/sock_unix_rebind_test_{Guid.NewGuid():N}";
+        var sockaddrLen = WriteSockaddrUn(env, 0x47000, path);
+        env.WriteBytes(0x48000, System.Text.Encoding.UTF8.GetBytes(path + '\0'));
+
+        var firstFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(firstFd >= 0);
+        Assert.Equal(0, await CallSysBind(env, (uint)firstFd, 0x47000, (uint)sockaddrLen));
+        Assert.True(env.SyscallManager.PathWalk(path).IsValid);
+
+        Assert.Equal(0, await CallSysUnlink(env, 0x48000));
+        Assert.False(env.SyscallManager.PathWalk(path).IsValid);
+
+        var secondFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(secondFd >= 0);
+        Assert.Equal(0, await CallSysBind(env, (uint)secondFd, 0x47000, (uint)sockaddrLen));
+        Assert.True(env.SyscallManager.PathWalk(path).IsValid);
+    }
+
+    [Fact]
+    public async Task Socket_UnixPath_Rename_KeepsEndpointReachableViaNewPath()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x4D000);
+        env.MapUserPage(0x4E000);
+        env.MapUserPage(0x4F000);
+        env.MapUserPage(0x50000);
+
+        var oldPath = $"/sock_unix_rename_old_{Guid.NewGuid():N}";
+        var newPath = $"/sock_unix_rename_new_{Guid.NewGuid():N}";
+        var oldLen = WriteSockaddrUn(env, 0x4D000, oldPath);
+        var newLen = WriteSockaddrUn(env, 0x4E000, newPath);
+        WriteCString(env, 0x4F000, oldPath);
+        WriteCString(env, 0x50000, newPath);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x4D000, (uint)oldLen));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysRename(env, 0x4F000, 0x50000));
+        Assert.False(env.SyscallManager.PathWalk(oldPath).IsValid);
+        Assert.True(env.SyscallManager.PathWalk(newPath).IsValid);
+
+        WriteSockaddrUn(env, 0x4E000, newPath);
+        var raw = env.ReadBytes(0x4E000, newLen);
+        var nul = Array.IndexOf(raw, (byte)0, 2);
+        Assert.True(nul > 2);
+        Assert.Equal(newPath, System.Text.Encoding.UTF8.GetString(raw, 2, nul - 2));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x4E000, (uint)newLen));
+    }
+
+    [Fact]
+    public async Task Socket_UnixPath_LinkAlias_IsReachableViaAliasPath()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x51000);
+        env.MapUserPage(0x52000);
+        env.MapUserPage(0x53000);
+        env.MapUserPage(0x54000);
+
+        var basePath = $"/sock_unix_link_base_{Guid.NewGuid():N}";
+        var aliasPath = $"/sock_unix_link_alias_{Guid.NewGuid():N}";
+        var baseLen = WriteSockaddrUn(env, 0x51000, basePath);
+        var aliasLen = WriteSockaddrUn(env, 0x52000, aliasPath);
+        WriteCString(env, 0x53000, basePath);
+        WriteCString(env, 0x54000, aliasPath);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x51000, (uint)baseLen));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysLink(env, 0x53000, 0x54000));
+        Assert.True(env.SyscallManager.PathWalk(aliasPath).IsValid);
+
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x52000, (uint)aliasLen));
+    }
+
+    [Fact]
+    public async Task Socket_UnixPath_CloseBoundSocket_RemovesActiveEndpointButKeepsNode()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x55000);
+        env.MapUserPage(0x56000);
+        env.MapUserPage(0x57000);
+
+        var path = $"/sock_unix_close_bound_{Guid.NewGuid():N}";
+        var sockaddrLen = WriteSockaddrUn(env, 0x55000, path);
+        WriteCString(env, 0x56000, path);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x55000, (uint)sockaddrLen));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysClose(env, (uint)serverFd));
+        Assert.True(env.SyscallManager.PathWalk(path).IsValid);
+
+        var rc = await CallSysConnect(env, (uint)clientFd, 0x55000, (uint)sockaddrLen);
+        Assert.Equal(-(int)Errno.ECONNREFUSED, rc);
+    }
+
+    [Fact]
+    public async Task Socket_UnixRecvMsg_ScmRights_MsgCmsgCloexec_DeliversCloexecFd()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x37000);
+        env.MapUserPage(0x38000);
+        env.MapUserPage(0x39000);
+        env.MapUserPage(0x3A000);
+        env.MapUserPage(0x3B000);
+        env.MapUserPage(0x3C000);
+        env.MapUserPage(0x3D000);
+        env.MapUserPage(0x3E000);
+
+        var spRc = await CallSysSocketPair(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0, 0x37000);
+        Assert.Equal(0, spRc);
+        var sockA = env.ReadInt32(0x37000);
+        var sockB = env.ReadInt32(0x37004);
+        Assert.True(sockA >= 0 && sockB >= 0);
+
+        var passFd = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(passFd >= 0);
+
+        env.WriteBytes(0x39000, [0x2A]);
+        WriteIovec(env, 0x38000, 0x39000, 1);
+        var sendControlLen = WriteScmRightsCmsg(env, 0x3A000, [passFd]);
+        WriteMsgHdr(env, 0x3B000, 0x38000, 1, 0x3A000, sendControlLen, 0, 0);
+        Assert.Equal(1, await CallSysSendMsg(env, (uint)sockA, 0x3B000, 0));
+
+        WriteIovec(env, 0x3C000, 0x3D000, 8);
+        WriteMsgHdr(env, 0x3E000, 0x3C000, 1, 0x3A000, 64, 0, 0);
+        var recv = await CallSysRecvMsg(env, (uint)sockB, 0x3E000, LinuxConstants.MSG_CMSG_CLOEXEC);
+        Assert.Equal(1, recv);
+        Assert.Equal(16, env.ReadInt32(0x3E000 + 20));
+        Assert.Equal(0, env.ReadInt32(0x3E000 + 24));
+
+        var receivedFd = env.ReadInt32(0x3A000 + 12);
+        Assert.True(receivedFd >= 0);
+        Assert.True(env.SyscallManager.IsFdCloseOnExec(receivedFd));
+    }
+
+    [Fact]
+    public async Task Socket_UnixRecvMsg_ScmRights_ControlTooSmall_SetsCtrunc()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x3F000);
+        env.MapUserPage(0x40000);
+        env.MapUserPage(0x41000);
+        env.MapUserPage(0x42000);
+        env.MapUserPage(0x43000);
+        env.MapUserPage(0x44000);
+        env.MapUserPage(0x45000);
+        env.MapUserPage(0x46000);
+
+        var spRc = await CallSysSocketPair(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0, 0x3F000);
+        Assert.Equal(0, spRc);
+        var sockA = env.ReadInt32(0x3F000);
+        var sockB = env.ReadInt32(0x3F004);
+        Assert.True(sockA >= 0 && sockB >= 0);
+
+        var passFd1 = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0);
+        var passFd2 = await CallSysSocket(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(passFd1 >= 0 && passFd2 >= 0);
+
+        env.WriteBytes(0x41000, [0x55]);
+        WriteIovec(env, 0x40000, 0x41000, 1);
+        var sendControlLen = WriteScmRightsCmsg(env, 0x42000, [passFd1, passFd2]);
+        WriteMsgHdr(env, 0x43000, 0x40000, 1, 0x42000, sendControlLen, 0, 0);
+        Assert.Equal(1, await CallSysSendMsg(env, (uint)sockA, 0x43000, 0));
+
+        var fdCountBeforeRecv = env.SyscallManager.FDs.Count;
+        WriteIovec(env, 0x44000, 0x45000, 8);
+        WriteMsgHdr(env, 0x46000, 0x44000, 1, 0x42000, 16, 0, 0); // only room for 1 fd
+        var recv = await CallSysRecvMsg(env, (uint)sockB, 0x46000, 0);
+        Assert.Equal(1, recv);
+        Assert.Equal(16, env.ReadInt32(0x46000 + 20));
+        Assert.Equal(LinuxConstants.MSG_CTRUNC, env.ReadInt32(0x46000 + 24) & LinuxConstants.MSG_CTRUNC);
+        Assert.Equal(fdCountBeforeRecv + 1, env.SyscallManager.FDs.Count);
+        Assert.True(env.ReadInt32(0x42000 + 12) >= 0);
+    }
+
+    [Fact]
+    public async Task Socket_UnixRecvFrom_MsgDontwait_ReturnsEagainWhenNoData()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x49000);
+        env.MapUserPage(0x4A000);
+
+        var spRc = await CallSysSocketPair(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0, 0x49000);
+        Assert.Equal(0, spRc);
+        var receiverFd = env.ReadInt32(0x49004);
+        Assert.True(receiverFd >= 0);
+
+        var rc = await CallSysRecvFrom(env, (uint)receiverFd, 0x4A000, 8, (uint)LinuxConstants.MSG_DONTWAIT);
+        Assert.Equal(-(int)Errno.EAGAIN, rc);
+    }
+
+    [Fact]
+    public async Task Socket_UnixSend_MsgDontwait_ReturnsEagainWhenPeerBufferIsFull()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x4B000);
+        env.MapUserPage(0x4C000);
+        env.WriteBytes(0x4C000, new byte[4096]);
+
+        var spRc = await CallSysSocketPair(env, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0, 0x4B000);
+        Assert.Equal(0, spRc);
+        var senderFd = env.ReadInt32(0x4B000);
+        Assert.True(senderFd >= 0);
+
+        var sawEagain = false;
+        for (var i = 0; i < 256; i++)
+        {
+            var rc = await CallSysSend(env, (uint)senderFd, 0x4C000, 4096, (uint)LinuxConstants.MSG_DONTWAIT);
+            if (rc == -(int)Errno.EAGAIN)
+            {
+                sawEagain = true;
+                break;
+            }
+
+            Assert.Equal(4096, rc);
+        }
+
+        Assert.True(sawEagain);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -835,12 +1145,42 @@ public class SocketSyscallTests
         Assert.True(env.Engine.CopyToUser(addr, buf));
     }
 
+    private static int WriteSockaddrUn(TestEnv env, uint addr, string path)
+    {
+        var pathBytes = System.Text.Encoding.UTF8.GetBytes(path);
+        var len = 2 + pathBytes.Length + 1;
+        var buf = new byte[len];
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(0, 2), LinuxConstants.AF_UNIX);
+        pathBytes.CopyTo(buf.AsSpan(2, pathBytes.Length));
+        buf[^1] = 0;
+        Assert.True(env.Engine.CopyToUser(addr, buf));
+        return len;
+    }
+
+    private static void WriteCString(TestEnv env, uint addr, string value)
+    {
+        env.WriteBytes(addr, System.Text.Encoding.UTF8.GetBytes(value + '\0'));
+    }
+
     private static void WriteIovec(TestEnv env, uint addr, uint baseAddr, int len)
     {
         Span<byte> buf = stackalloc byte[8];
         BinaryPrimitives.WriteUInt32LittleEndian(buf[0..4], baseAddr);
         BinaryPrimitives.WriteInt32LittleEndian(buf[4..8], len);
         Assert.True(env.Engine.CopyToUser(addr, buf));
+    }
+
+    private static int WriteScmRightsCmsg(TestEnv env, uint controlPtr, IReadOnlyList<int> fds)
+    {
+        var cmsgLen = 12 + fds.Count * 4;
+        var buf = new byte[cmsgLen];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), cmsgLen);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), 1); // SOL_SOCKET
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), 1); // SCM_RIGHTS
+        for (var i = 0; i < fds.Count; i++)
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12 + i * 4, 4), fds[i]);
+        env.WriteBytes(controlPtr, buf);
+        return cmsgLen;
     }
 
     private static void WriteMsgHdr(TestEnv env, uint addr, uint iovPtr, int iovLen, uint controlPtr, int controlLen, uint namePtr, int nameLen)
