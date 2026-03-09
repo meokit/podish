@@ -506,7 +506,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.Dentry.Inode is not TimerFdInode timerFd)
+        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
@@ -529,7 +529,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
 
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.Dentry.Inode is not TimerFdInode timerFd)
+        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;

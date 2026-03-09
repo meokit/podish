@@ -234,7 +234,7 @@ public partial class SyscallManager
             foreach (var file in manager.FDs.Values)
                 try
                 {
-                    file?.Dentry.Inode?.Sync(file);
+                    file?.OpenedInode?.Sync(file);
                 }
                 catch (Exception ex)
                 {

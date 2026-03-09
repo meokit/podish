@@ -95,7 +95,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufLen);
-                var bytesRead = inFile.Dentry.Inode!.Read(inFile, buffer.AsSpan(0, toRead), readOffset);
+                var bytesRead = inFile.OpenedInode!.Read(inFile, buffer.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead <= 0)
                 {
@@ -119,7 +119,7 @@ public partial class SyscallManager
                 if (!offset.HasValue) inFile.Position += bytesRead;
 
                 // Write to out_fd
-                var bytesWritten = outFile.Dentry.Inode!.Write(outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
+                var bytesWritten = outFile.OpenedInode!.Write(outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
 
                 if (bytesWritten < 0)
                 {
@@ -595,7 +595,7 @@ public partial class SyscallManager
         const int O_ACCMODE = 3;
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
             return -(int)Errno.EBADF;
-        if (f.Dentry.Inode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
             return await DoReadVSocket(sm, f, iovs, iovCnt, flags);
@@ -615,7 +615,7 @@ public partial class SyscallManager
             {
                 while (true)
                 {
-                    var n = f.Dentry.Inode!.Read(f, buf.AsSpan(0, (int)iov.Len), currentOffset);
+                    var n = f.OpenedInode!.Read(f, buf.AsSpan(0, (int)iov.Len), currentOffset);
 
                     if (n == -(int)Errno.EAGAIN)
                     {
@@ -669,7 +669,7 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
-        if (f.Dentry.Inode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
             return await DoWriteVSocket(sm, f, iovs, iovCnt, flags);
@@ -682,7 +682,7 @@ public partial class SyscallManager
         var updatePosition = offset == -1;
         var append = (f.Flags & FileFlags.O_APPEND) != 0;
         var currentOffset = updatePosition
-            ? append ? (long)(f.Dentry.Inode?.Size ?? 0) : f.Position
+            ? append ? (long)(f.OpenedInode?.Size ?? 0) : f.Position
             : offset;
         var totalWritten = 0;
 
@@ -698,7 +698,7 @@ public partial class SyscallManager
 
                 while (true)
                 {
-                    var n = f.Dentry.Inode!.Write(f, data.AsSpan(0, (int)iov.Len), currentOffset);
+                    var n = f.OpenedInode!.Write(f, data.AsSpan(0, (int)iov.Len), currentOffset);
 
                     if (n == -(int)Errno.EPIPE)
                     {
@@ -761,7 +761,7 @@ public partial class SyscallManager
                     return -(int)Errno.EFAULT;
 
                 var payload = data.AsMemory(0, (int)iov.Len);
-                int n = file.Dentry.Inode switch
+                int n = file.OpenedInode switch
                 {
                     HostSocketInode host => await host.SendAsync(file, payload, flags),
                     NetstackSocketInode netstack => await netstack.SendAsync(file, payload, flags),
@@ -799,7 +799,7 @@ public partial class SyscallManager
             var buffer = ArrayPool<byte>.Shared.Rent((int)iov.Len);
             try
             {
-                int n = file.Dentry.Inode switch
+                int n = file.OpenedInode switch
                 {
                     HostSocketInode host => await host.RecvAsync(file, buffer, flags, (int)iov.Len),
                     NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags, (int)iov.Len),
@@ -1034,7 +1034,7 @@ public partial class SyscallManager
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
-        var inode = f.Dentry.Inode;
+        var inode = f.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
         if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
 
@@ -1062,7 +1062,7 @@ public partial class SyscallManager
 
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
-        var inode = f.Dentry.Inode;
+        var inode = f.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
         if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
 
@@ -1140,7 +1140,7 @@ public partial class SyscallManager
 
             var runOnce = new RunOnceAction(continuation, task);
 
-            var registered = file.Dentry.Inode!.RegisterWait(file, () =>
+            var registered = file.OpenedInode!.RegisterWait(file, () =>
             {
                 if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
                 Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);

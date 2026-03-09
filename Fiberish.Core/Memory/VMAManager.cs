@@ -104,13 +104,13 @@ public class VMAManager
         else if (isShared)
         {
             // MAP_SHARED file: share the inode's global page cache
-            memObj = MemoryObjects.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            memObj = MemoryObjects.GetOrCreateInodePageCache(file.OpenedInode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
         }
         else
         {
             // MAP_PRIVATE file (including ELF_LOAD): shared inode cache as read-only source + private COW object
-            memObj = MemoryObjects.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            memObj = MemoryObjects.GetOrCreateInodePageCache(file.OpenedInode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
             cowObj = MemoryObjects.CreateAnonymous(shared: false);
         }
@@ -590,7 +590,7 @@ public class VMAManager
                             {
                                 Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
                                 var req = new PageIoRequest(pageIndex, absoluteFileOffset, Math.Max(0, readLen));
-                                var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                                var rc = vma.File.OpenedInode!.ReadPage(vma.File, req, buf);
                                 if (rc < 0) return false;
                             }
 
@@ -698,7 +698,7 @@ public class VMAManager
                 {
                     Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
                     var req = new PageIoRequest(pageIndex, normalAbsoluteFileOffset, Math.Max(0, readLen));
-                    var rc = vma.File.Dentry.Inode!.ReadPage(vma.File, req, buf);
+                    var rc = vma.File.OpenedInode!.ReadPage(vma.File, req, buf);
                     if (rc < 0) return false;
                 }
 
@@ -745,7 +745,7 @@ public class VMAManager
     private static bool TryResolveMappedFilePage(VMA vma, uint pageIndex, long absoluteFileOffset, out IntPtr pagePtr)
     {
         pagePtr = IntPtr.Zero;
-        var inode = vma.File?.Dentry.Inode;
+        var inode = vma.File?.OpenedInode;
         if (inode == null) return false;
         if (!inode.TryAcquireMappedPageHandle(vma.File, pageIndex, absoluteFileOffset, out var pageHandle))
             return false;
@@ -815,13 +815,13 @@ public class VMAManager
 
     public void SyncMappedFile(LinuxFile file, Engine engine)
     {
-        if (file.Dentry.Inode == null) return;
-        var inode = file.Dentry.Inode;
+        if (file.OpenedInode == null) return;
+        var inode = file.OpenedInode;
         var snapshot = _vmas.ToArray();
         foreach (var vma in snapshot)
         {
             if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
-            if (!ReferenceEquals(vma.File.Dentry.Inode, inode)) continue;
+            if (!ReferenceEquals(vma.File.OpenedInode, inode)) continue;
             SyncVMA(vma, engine);
         }
     }
@@ -844,7 +844,7 @@ public class VMAManager
         var syncStart = Math.Max(vma.Start, rangeStart);
         var syncEnd = Math.Min(vma.End, rangeEnd);
         if (syncStart >= syncEnd) return;
-        var inode = vma.File.Dentry.Inode;
+        var inode = vma.File.OpenedInode;
         if (inode == null) return;
 
         var startPage = syncStart & LinuxConstants.PageMask;

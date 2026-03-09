@@ -353,7 +353,7 @@ public partial class SyscallManager
             if (checkWrite) pollEvents |= PollEvents.POLLOUT;
             if (checkEx) pollEvents |= PollEvents.POLLPRI;
 
-            var revents = file.Dentry.Inode!.Poll(file, pollEvents);
+            var revents = file.OpenedInode!.Poll(file, pollEvents);
 
             if ((revents & (PollEvents.POLLIN | PollEvents.POLLHUP | PollEvents.POLLERR)) != 0 && checkRead)
             {
@@ -401,9 +401,9 @@ public partial class SyscallManager
             {
                 if (sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
-                    var revents = file.Dentry.Inode!.Poll(file, pfd.Events);
+                    var revents = file.OpenedInode!.Poll(file, pfd.Events);
                     Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
-                        pfd.Events, revents, file.Dentry.Inode!.GetType().Name);
+                        pfd.Events, revents, file.OpenedInode!.GetType().Name);
 
                     if (revents != 0)
                     {
@@ -648,7 +648,7 @@ public partial class SyscallManager
 
                     if (events != 0)
                     {
-                        var registration = file.Dentry.Inode!.RegisterWaitHandle(file, ScheduleRePoll, events);
+                        var registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
                         if (registration != null) _waitRegistrations.Add(registration);
                     }
                 }
@@ -800,7 +800,7 @@ public partial class SyscallManager
                 var pfd = ReadStruct<Pollfd>(_sm.Engine, itemAddr);
                 if (pfd.Fd >= 0 && _sm.FDs.TryGetValue(pfd.Fd, out var file))
                 {
-                    var registration = file.Dentry.Inode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
+                    var registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
                     if (registration != null) _waitRegistrations.Add(registration);
                 }
             }

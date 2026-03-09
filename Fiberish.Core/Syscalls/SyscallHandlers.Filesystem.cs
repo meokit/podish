@@ -145,8 +145,8 @@ public partial class SyscallManager
 
         var fd = (int)a1;
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         sm.UpdateCurrentWorkingDirectory(new PathLocation(f.Dentry, f.Mount), "SysFchdir");
         return 0;
@@ -217,10 +217,10 @@ public partial class SyscallManager
         var length = (long)a2;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        if (f.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
 
-        return f.Dentry.Inode.Truncate(length);
+        return f.OpenedInode.Truncate(length);
     }
 
     private static async ValueTask<int> SysFtruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -232,10 +232,10 @@ public partial class SyscallManager
         var length = (long)(((ulong)a3 << 32) | a2);
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        if (f.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
 
-        return f.Dentry.Inode.Truncate(length);
+        return f.OpenedInode.Truncate(length);
     }
 
     private static async ValueTask<int> SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -391,11 +391,11 @@ public partial class SyscallManager
         if (a4 > int.MaxValue) return -(int)Errno.EINVAL;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         var readErr = ReadUserBuffer(sm, a3, (int)a4, out var valueBytes);
         if (readErr != 0) return readErr;
-        return f.Dentry.Inode.SetXAttr(name, valueBytes, (int)a5);
+        return f.OpenedInode.SetXAttr(name, valueBytes, (int)a5);
     }
 
     private static async ValueTask<int> SysGetXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -421,8 +421,8 @@ public partial class SyscallManager
         if (string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        return CopyXAttrToUser(sm, f.Dentry.Inode, name, valueAddr, size);
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        return CopyXAttrToUser(sm, f.OpenedInode, name, valueAddr, size);
     }
 
     private static async ValueTask<int> SysListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -446,8 +446,8 @@ public partial class SyscallManager
         var size = (int)a3;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        return CopyXAttrListToUser(sm, f.Dentry.Inode, listAddr, size);
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        return CopyXAttrListToUser(sm, f.OpenedInode, listAddr, size);
     }
 
     private static async ValueTask<int> SysRemoveXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -473,8 +473,8 @@ public partial class SyscallManager
         if (string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        return f.Dentry.Inode.RemoveXAttr(name);
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        return f.OpenedInode.RemoveXAttr(name);
     }
 
     private static ValueTask<int> SetXAttrPath(IntPtr state, uint pathPtr, uint namePtr, uint valuePtr, uint sizeRaw,
@@ -662,12 +662,12 @@ public partial class SyscallManager
         var count = (int)a3;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-        if (f.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+        if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         try
         {
-            var entries = f.Dentry.Inode.GetEntries();
+            var entries = f.OpenedInode.GetEntries();
             var startIdx = (int)f.Position;
             if (startIdx >= entries.Count) return 0;
 
@@ -1164,10 +1164,10 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var fd = (int)a1;
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
-        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
-        WriteStat(sm, a2, f.Dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, f.OpenedInode);
+        WriteStat(sm, a2, f.OpenedInode);
         return 0;
     }
 
@@ -1185,9 +1185,9 @@ public partial class SyscallManager
         if (path == "" && (flags & LinuxConstants.AT_EMPTY_PATH) != 0)
         {
             var f = sm.GetFD(dirfd);
-            if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
-            RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
-            WriteStatx(sm, statxAddr, f.Dentry.Inode, mask);
+            if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+            RefreshHostfsProjectionForCaller(sm, f.OpenedInode);
+            WriteStatx(sm, statxAddr, f.OpenedInode, mask);
             return 0;
         }
 
@@ -1238,15 +1238,15 @@ public partial class SyscallManager
         var mode = a2;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -9; // EBADF
+        if (f == null || f.OpenedInode == null) return -9; // EBADF
 
-        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, f.OpenedInode);
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChmod(t.Process, f.Dentry.Inode);
+        var allowed = DacPolicy.CanChmod(t.Process, f.OpenedInode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(f.Dentry.Inode, (int)mode, t.Process);
+        return ApplyModeChange(f.OpenedInode, (int)mode, t.Process);
     }
 
     private static async ValueTask<int> SysChown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1280,15 +1280,15 @@ public partial class SyscallManager
         var gid = (int)a3;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -9; // EBADF
+        if (f == null || f.OpenedInode == null) return -9; // EBADF
 
-        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, f.OpenedInode);
         var t = sm.Engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChown(t.Process, f.Dentry.Inode, uid, gid);
+        var allowed = DacPolicy.CanChown(t.Process, f.OpenedInode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(f.Dentry.Inode, uid, gid);
+        return ApplyOwnershipChange(f.OpenedInode, uid, gid);
     }
 
     private static async ValueTask<int> SysLchown(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1340,7 +1340,7 @@ public partial class SyscallManager
         if (sm == null) return -1;
         var file = sm.GetFD((int)a1);
         if (file == null) return -(int)Errno.EBADF;
-        var inode = file.Dentry.Inode;
+        var inode = file.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
 
         ProcessAddressSpaceSync.SyncMappedFile(sm.Mem, sm.Engine, file);
@@ -1413,11 +1413,11 @@ public partial class SyscallManager
         var count = (int)a3;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         try
         {
-            var entries = f.Dentry.Inode.GetEntries();
+            var entries = f.OpenedInode.GetEntries();
 
             // Simplified logic: uses f.Position as index in entries list
             var startIdx = (int)f.Position;
@@ -1700,7 +1700,7 @@ public partial class SyscallManager
 
         var fd = (int)a1;
         var file = sm.GetFD(fd);
-        if (file?.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
         if (!sm.Engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
         WriteStatfs32(sm, a2, file.Dentry);
@@ -1735,7 +1735,7 @@ public partial class SyscallManager
         if (size < 84) return -(int)Errno.EINVAL;
 
         var file = sm.GetFD(fd);
-        if (file?.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
         if (!sm.Engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
         WriteStatfs64(sm, a3, file.Dentry);
@@ -1778,10 +1778,10 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var fd = (int)a1;
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
-        RefreshHostfsProjectionForCaller(sm, f.Dentry.Inode);
-        WriteStat64(sm, a2, f.Dentry.Inode);
+        RefreshHostfsProjectionForCaller(sm, f.OpenedInode);
+        WriteStat64(sm, a2, f.OpenedInode);
         return 0;
     }
 
@@ -2070,9 +2070,9 @@ public partial class SyscallManager
         var op = (int)a2;
 
         var f = sm.GetFD(fd);
-        if (f == null || f.Dentry.Inode == null) return -(int)Errno.EBADF;
+        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
-        return f.Dentry.Inode.Flock(f, op);
+        return f.OpenedInode.Flock(f, op);
     }
 
     #region New Mount API (open_tree, move_mount, mount_setattr)

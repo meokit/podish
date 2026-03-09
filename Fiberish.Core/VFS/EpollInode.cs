@@ -85,7 +85,7 @@ public class EpollInode : TmpfsInode
         // EPOLLIN == POLLIN, EPOLLOUT == POLLOUT, etc.
         short watchEvents = (short)(item.Events & 0xFFFF);
 
-        short currentEvents = item.File.Dentry.Inode!.Poll(item.File, watchEvents);
+        short currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
 
         // Always include EPOLLERR and EPOLLHUP even if not explicitly requested
         short mask = (short)(watchEvents | Fiberish.Native.LinuxConstants.EPOLLERR |
@@ -114,7 +114,7 @@ public class EpollInode : TmpfsInode
                 CheckAndRegister(item);
         }
 
-        item.WaitRegistration = item.File.Dentry.Inode.RegisterWaitHandle(item.File, RePoll, watchEvents);
+        item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
     }
 
 
@@ -292,7 +292,7 @@ public class EpollInode : TmpfsInode
 
             // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
             short watchEvents = (short)(item.Events & 0xFFFF);
-            short currentEvents = item.File.Dentry.Inode!.Poll(item.File, watchEvents);
+            short currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
             short mask = (short)(watchEvents | Fiberish.Native.LinuxConstants.EPOLLERR |
                                  Fiberish.Native.LinuxConstants.EPOLLHUP);
 

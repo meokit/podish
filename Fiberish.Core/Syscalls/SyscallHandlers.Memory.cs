@@ -102,7 +102,7 @@ public partial class SyscallManager
         {
             f = sm.GetFD(fd);
             if (f == null) return -(int)Errno.EBADF;
-            var inode = f.Dentry.Inode;
+            var inode = f.OpenedInode;
             if (inode == null) return -(int)Errno.EBADF;
             if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
             if (isShared && (prot & (int)Protection.Write) != 0)
@@ -114,7 +114,7 @@ public partial class SyscallManager
 
         try
         {
-            long trueFileSz = (long)(f?.Dentry.Inode?.Size ?? 0);
+            long trueFileSz = (long)(f?.OpenedInode?.Size ?? 0);
             if (f != null)
                 mmapFile = new VFS.LinuxFile(f.Dentry, f.Flags, f.Mount, VFS.LinuxFile.ReferenceKind.MmapHold);
 

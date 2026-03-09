@@ -19,7 +19,7 @@ public partial class SyscallManager
         if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
 
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
-        var inode = file.Dentry.Inode;
+        var inode = file.OpenedInode;
         if (inode != null)
         {
             IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} arg=0x{Arg:X} inode={InodeType}",

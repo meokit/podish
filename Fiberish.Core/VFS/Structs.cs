@@ -1046,16 +1046,18 @@ public class LinuxFile
     public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal)
     {
         Dentry = dentry;
+        OpenedInode = dentry.Inode;
         Flags = flags;
         Mount = mount; // The mount this file was opened through
         Kind = referenceKind;
         var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
-        dentry.Inode?.AcquireRef(refKind, "LinuxFile.ctor");
-        dentry.Inode?.Open(this);
+        OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
+        OpenedInode?.Open(this);
         // Note: Mount reference is managed by caller if provided
     }
 
     public Dentry Dentry { get; set; }
+    public Inode? OpenedInode { get; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
     public Mount Mount { get; set; }
@@ -1105,9 +1107,9 @@ public class LinuxFile
             }
         }
 
-        Dentry.Inode?.Release(this);
+        OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
-        Dentry.Inode?.ReleaseRef(refKind, "LinuxFile.Close");
+        OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
     }

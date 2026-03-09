@@ -60,7 +60,7 @@ public partial class SyscallManager
         var epFile = sm.GetFD(epfd);
         if (epFile == null) return -(int)Errno.EBADF;
 
-        if (epFile.Dentry.Inode is not EpollInode epollInode) return -(int)Errno.EINVAL; // Not an epoll fd
+        if (epFile.OpenedInode is not EpollInode epollInode) return -(int)Errno.EINVAL; // Not an epoll fd
 
         var targetFile = sm.GetFD(fd);
         if (targetFile == null) return -(int)Errno.EBADF;
@@ -152,7 +152,7 @@ public partial class SyscallManager
 
         var epFile = sm.GetFD(epfd);
         if (epFile == null) return -(int)Errno.EBADF;
-        if (epFile.Dentry.Inode is not EpollInode epollInode) return -(int)Errno.EINVAL;
+        if (epFile.OpenedInode is not EpollInode epollInode) return -(int)Errno.EINVAL;
 
         // epoll_event is 12 bytes on i386.
         var buf = new byte[maxevents * 12];

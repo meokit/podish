@@ -38,7 +38,7 @@ public partial class SyscallManager
         if (optlen > 0 && !task.CPU.CopyFromUser(optval, buf.AsSpan(0, optlen)))
             return -(int)Errno.EFAULT;
 
-        if (file.Dentry.Inode is HostSocketInode hostSock)
+        if (file.OpenedInode is HostSocketInode hostSock)
         {
             var sock = hostSock.NativeSocket!;
             try
@@ -140,7 +140,7 @@ public partial class SyscallManager
             }
         }
 
-        if (file.Dentry.Inode is NetstackSocketInode netSock)
+        if (file.OpenedInode is NetstackSocketInode netSock)
         {
             return netSock.SetSocketOption(level, optname, buf.AsSpan(0, optlen));
         }
@@ -172,7 +172,7 @@ public partial class SyscallManager
         var outBuf = new byte[Math.Max(optlen, 8)];
         int written = 4; // default: return a single int
 
-        if (file.Dentry.Inode is HostSocketInode hostSock)
+        if (file.OpenedInode is HostSocketInode hostSock)
         {
             var sock = hostSock.NativeSocket!;
             try
@@ -256,7 +256,7 @@ public partial class SyscallManager
         }
         else
         {
-            if (file.Dentry.Inode is NetstackSocketInode netSock)
+            if (file.OpenedInode is NetstackSocketInode netSock)
             {
                 var rc = netSock.GetSocketOption(level, optname, outBuf, out written);
                 if (rc != 0) return rc;
@@ -406,8 +406,8 @@ public partial class SyscallManager
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
         // At least one FD must be a pipe (enforced by Linux; we relax here for compatibility)
-        bool inIsPipe  = fileIn.Dentry.Inode  is PipeInode;
-        bool outIsPipe = fileOut.Dentry.Inode is PipeInode;
+        bool inIsPipe  = fileIn.OpenedInode  is PipeInode;
+        bool outIsPipe = fileOut.OpenedInode is PipeInode;
         if (!inIsPipe && !outIsPipe) return -(int)Errno.EINVAL;
         if (inIsPipe && offIn != 0) return -(int)Errno.ESPIPE;
         if (outIsPipe && offOut != 0) return -(int)Errno.ESPIPE;
@@ -440,7 +440,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 int toRead = Math.Min(remaining, bufSize);
-                int bytesRead = fileIn.Dentry.Inode!.Read(fileIn, buf.AsSpan(0, toRead), readOffset);
+                int bytesRead = fileIn.OpenedInode!.Read(fileIn, buf.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead == 0) break; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
@@ -450,7 +450,7 @@ public partial class SyscallManager
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
                     // Otherwise wait for data (pipe read-ready)
-                    await fileIn.Dentry.Inode.WaitForRead(fileIn);
+                    await fileIn.OpenedInode.WaitForRead(fileIn);
                     continue;
                 }
                 if (bytesRead < 0) return bytesRead;
@@ -458,7 +458,7 @@ public partial class SyscallManager
                 int writeConsumed = 0;
                 while (writeConsumed < bytesRead)
                 {
-                    int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut,
+                    int bytesWritten = fileOut.OpenedInode!.Write(fileOut,
                         buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
 
                     if (bytesWritten == -(int)Errno.EPIPE)
@@ -473,7 +473,7 @@ public partial class SyscallManager
                         if (totalTransferred > 0) break;
                         if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                             return -(int)Errno.EAGAIN;
-                        await fileOut.Dentry.Inode.WaitForWrite(fileOut);
+                        await fileOut.OpenedInode.WaitForWrite(fileOut);
                         continue;
                     }
 
@@ -536,8 +536,8 @@ public partial class SyscallManager
         var fileOut = sm.GetFD(fdOut);
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
-        if (fileIn.Dentry.Inode  is not PipeInode pipeIn) return -(int)Errno.EINVAL;
-        if (fileOut.Dentry.Inode is not PipeInode) return -(int)Errno.EINVAL;
+        if (fileIn.OpenedInode  is not PipeInode pipeIn) return -(int)Errno.EINVAL;
+        if (fileOut.OpenedInode is not PipeInode) return -(int)Errno.EINVAL;
         if (fdIn == fdOut) return -(int)Errno.EINVAL;
 
         int bufSize = Math.Min(len, 65536);
@@ -555,17 +555,17 @@ public partial class SyscallManager
                 {
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    await fileIn.Dentry.Inode.WaitForRead(fileIn);
+                    await fileIn.OpenedInode.WaitForRead(fileIn);
                     continue; // retry after data arrives
                 }
                 if (bytesRead < 0) return bytesRead;
 
-                int bytesWritten = fileOut.Dentry.Inode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
+                int bytesWritten = fileOut.OpenedInode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
                 if (bytesWritten == -(int)Errno.EAGAIN)
                 {
                     if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    await fileOut.Dentry.Inode.WaitForWrite(fileOut);
+                    await fileOut.OpenedInode.WaitForWrite(fileOut);
                     continue;
                 }
 

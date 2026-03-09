@@ -22,7 +22,7 @@ public class VfsStream : Stream
     public override bool CanSeek => true;
     public override bool CanWrite => (_file.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) != 0;
 
-    public override long Length => (long)(_file.Dentry.Inode?.Size ?? 0);
+    public override long Length => (long)(_file.OpenedInode?.Size ?? 0);
 
     public override long Position
     {
@@ -32,14 +32,14 @@ public class VfsStream : Stream
 
     public override void Flush()
     {
-        _file.Dentry.Inode?.Sync(_file);
+        _file.OpenedInode?.Sync(_file);
     }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        if (_file.Dentry.Inode == null) return 0;
-        
-        var n = _file.Dentry.Inode.Read(_file, buffer.AsSpan(offset, count), _position);
+        if (_file.OpenedInode == null) return 0;
+
+        var n = _file.OpenedInode.Read(_file, buffer.AsSpan(offset, count), _position);
         if (n > 0) _position += n;
         return n;
     }
@@ -63,14 +63,14 @@ public class VfsStream : Stream
 
     public override void SetLength(long value)
     {
-        _file.Dentry.Inode?.Truncate(value);
+        _file.OpenedInode?.Truncate(value);
     }
 
     public override void Write(byte[] buffer, int offset, int count)
     {
-        if (_file.Dentry.Inode == null) return;
-        
-        var n = _file.Dentry.Inode.Write(_file, buffer.AsSpan(offset, count), _position);
+        if (_file.OpenedInode == null) return;
+
+        var n = _file.OpenedInode.Write(_file, buffer.AsSpan(offset, count), _position);
         if (n > 0) _position += n;
     }
 
