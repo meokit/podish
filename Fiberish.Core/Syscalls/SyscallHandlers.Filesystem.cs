@@ -968,7 +968,10 @@ public partial class SyscallManager
         var replacedTargetInode = targetExists ? targetLoc.Dentry!.Inode : null;
         if (targetExists && !ReferenceEquals(newParentLoc.Mount, targetLoc.Mount))
             return -(int)Errno.EBUSY;
-        if (targetExists && ReferenceEquals(oldLoc.Mount, targetLoc.Mount) && ReferenceEquals(oldLoc.Dentry, targetLoc.Dentry))
+        if (targetExists &&
+            ReferenceEquals(oldLoc.Mount, targetLoc.Mount) &&
+            (ReferenceEquals(oldLoc.Dentry, targetLoc.Dentry) ||
+             ReferenceEquals(oldLoc.Dentry!.Inode, targetLoc.Dentry!.Inode)))
             return 0;
 
         if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0)

@@ -297,6 +297,9 @@ public abstract class IndexedMemoryInode : Inode
 
             if (IndexedSb.Dentries.TryGetValue(newKey, out var existingDentry))
             {
+                if (ReferenceEquals(existingDentry.Inode, dentry.Inode))
+                    return;
+
                 if (existingDentry.Inode!.Type == InodeType.Directory)
                 {
                     if (existingDentry.Children.Count > 0)

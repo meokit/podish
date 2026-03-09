@@ -106,4 +106,30 @@ public class InodeRefLinkCountTests
         Assert.Equal(0, dstInode.LinkCount);
         Assert.True(dstInode.IsEvicted);
     }
+
+    [Fact]
+    public void Tmpfs_Rename_WhenOldAndNewAreSameInode_IsNoOp()
+    {
+        using var rig = FileSystemTestRigFactory.Create("tmpfs");
+        var root = rig.Root;
+        var rootInode = rig.RootInode;
+
+        var src = new Dentry("src.txt", null, root, rig.SuperBlock);
+        rootInode.Create(src, 0x1A4, 0, 0);
+        var inode = src.Inode!;
+
+        var alias = new Dentry("alias.txt", null, root, rig.SuperBlock);
+        rootInode.Link(alias, inode);
+        Assert.Equal(2, inode.LinkCount);
+
+        rootInode.Rename("src.txt", rootInode, "alias.txt");
+
+        var srcAfter = rootInode.Lookup("src.txt");
+        var aliasAfter = rootInode.Lookup("alias.txt");
+        Assert.NotNull(srcAfter);
+        Assert.NotNull(aliasAfter);
+        Assert.Same(inode, srcAfter!.Inode);
+        Assert.Same(inode, aliasAfter!.Inode);
+        Assert.Equal(2, inode.LinkCount);
+    }
 }

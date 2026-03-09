@@ -922,6 +922,9 @@ public partial class HostInode : Inode
         if (File.Exists(newFullPath) || Directory.Exists(newFullPath) || new FileInfo(newFullPath).LinkTarget != null)
         {
             var targetDentry = sb.GetDentry(newFullPath, newName, null);
+            if (targetDentry != null && ReferenceEquals(targetDentry.Inode, dentry.Inode))
+                return;
+
             var targetIsSymlink = new FileInfo(newFullPath).LinkTarget != null;
             var targetIsDirectory = !targetIsSymlink && Directory.Exists(newFullPath);
 
