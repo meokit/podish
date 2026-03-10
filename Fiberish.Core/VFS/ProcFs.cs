@@ -147,11 +147,11 @@ file sealed class ProcRootInode : Inode
         if (Dentries.Count == 0) return null;
         var root = Dentries[0];
 
-        if (root.Children.TryGetValue(name, out var cached))
+        if (root.TryGetCachedChild(name, out var cached))
         {
             if (int.TryParse(name, out var cachedPid) && ProcContext.ResolveProcessByPid(cachedPid, _sb) == null)
             {
-                root.Children.Remove(name);
+                _ = root.TryUncacheChild(name, "ProcRootInode.Lookup.stale-pid", out _);
             }
             else
             {
@@ -176,7 +176,7 @@ file sealed class ProcRootInode : Inode
 
         if (created != null)
         {
-            root.Children[name] = created;
+            root.CacheChild(created, "ProcRootInode.Lookup.static");
             return created;
         }
 
@@ -184,7 +184,7 @@ file sealed class ProcRootInode : Inode
         if (ProcContext.ResolveProcessByPid(pid, _sb) == null) return null;
 
         created = CreatePidDirectory(root, pid);
-        root.Children[name] = created;
+        root.CacheChild(created, "ProcRootInode.Lookup.pid");
         return created;
     }
 
@@ -279,7 +279,7 @@ file sealed class ProcPidDirectoryInode : Inode
         if (ProcContext.ResolveProcessByPid(_pid, _sb) == null) return null;
 
         var dir = Dentries[0];
-        if (dir.Children.TryGetValue(name, out var cached))
+        if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
         Dentry? created = name switch
@@ -317,7 +317,7 @@ file sealed class ProcPidDirectoryInode : Inode
         };
 
         if (created != null)
-            dir.Children[name] = created;
+            dir.CacheChild(created, "ProcPidDirectoryInode.Lookup");
 
         return created;
     }
@@ -439,12 +439,12 @@ file sealed class ProcPidFdDirectoryInode : Inode
             return null;
 
         var dir = Dentries[0];
-        if (dir.Children.TryGetValue(name, out var cached))
+        if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
         var inode = new ProcPidFdSymlinkInode(_sb, _pid, fd);
         var dentry = new Dentry(name, inode, dir, _sb);
-        dir.Children[name] = dentry;
+        dir.CacheChild(dentry, "ProcPidFdDirectoryInode.Lookup");
         return dentry;
     }
 
@@ -499,12 +499,12 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
         if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
 
         var dir = Dentries[0];
-        if (dir.Children.TryGetValue(name, out var cached))
+        if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
         var inode = new ProcPidFdInfoFileInode(_sb, _pid, fd);
         var dentry = new Dentry(name, inode, dir, _sb);
-        dir.Children[name] = dentry;
+        dir.CacheChild(dentry, "ProcPidFdInfoDirectoryInode.Lookup");
         return dentry;
     }
 
@@ -664,7 +664,7 @@ file sealed class ProcSysRootInode : Inode
         if (Dentries.Count == 0) return null;
         var dir = Dentries[0];
 
-        if (dir.Children.TryGetValue(name, out var cached))
+        if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
         Dentry? created = (_kind, name) switch
@@ -690,7 +690,7 @@ file sealed class ProcSysRootInode : Inode
         };
 
         if (created != null)
-            dir.Children[name] = created;
+            dir.CacheChild(created, "ProcSysRootInode.Lookup");
 
         return created;
     }

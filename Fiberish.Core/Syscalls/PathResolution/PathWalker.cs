@@ -241,12 +241,12 @@ public class PathWalker
 
         // Lookup or get from cache
         Dentry? next = null;
-        if (current.Children.TryGetValue(name, out var cached))
+        if (current.TryGetCachedChild(name, out var cached))
         {
             var valid = current.Inode.RevalidateCachedChild(current, name, cached);
             if (!valid)
             {
-                current.Children.Remove(name);
+                _ = current.TryUncacheChild(name, "PathWalker.WalkComponent.revalidate-fail", out _);
                 next = null;
             }
             else
@@ -271,7 +271,7 @@ public class PathWalker
                 return nd.SetError(-(int)Errno.ENOENT);
             }
 
-            current.Children[name] = next;
+            current.CacheChild(next, "PathWalker.WalkComponent.lookup-cache");
         }
 
         // Handle mount points

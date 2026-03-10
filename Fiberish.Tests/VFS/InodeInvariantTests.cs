@@ -173,6 +173,32 @@ public class InodeInvariantTests
         Assert.Equal(1, dirInode.LinkCount);
     }
 
+    [Fact]
+    public void DentryPut_Underflow_ThrowsInStrictMode()
+    {
+        var strictBefore = VfsDebugTrace.StrictInvariants;
+        var enabledBefore = VfsDebugTrace.Enabled;
+        try
+        {
+            VfsDebugTrace.StrictInvariants = true;
+            VfsDebugTrace.Enabled = false;
+
+            var sb = new TestSuperBlock();
+            var parent = new Dentry("/", null, null, sb);
+            parent.Parent = parent;
+            sb.Root = parent;
+            var dentry = new Dentry("leaf", null, parent, sb);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => dentry.Put("test"));
+            Assert.Contains("underflow", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            VfsDebugTrace.StrictInvariants = strictBefore;
+            VfsDebugTrace.Enabled = enabledBefore;
+        }
+    }
+
     private sealed class TestSuperBlock : SuperBlock
     {
         public TestSuperBlock()

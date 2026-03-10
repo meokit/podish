@@ -323,7 +323,7 @@ public partial class SyscallManager
                 try
                 {
                     parent.Dentry.Inode!.Unlink(name);
-                    parent.Dentry.Children.Remove(name);
+                    _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.mknod-null-inode", out _);
                 }
                 catch
                 {
@@ -337,7 +337,7 @@ public partial class SyscallManager
                 try
                 {
                     parent.Dentry.Inode!.Unlink(name);
-                    parent.Dentry.Children.Remove(name);
+                    _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.bind-failed", out _);
                 }
                 catch
                 {

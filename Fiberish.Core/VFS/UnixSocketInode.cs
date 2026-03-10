@@ -581,10 +581,10 @@ public class UnixSocketInode : Inode
         CloseLifecycleOnce();
     }
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
         CloseLifecycleOnce();
-        base.Release();
+        base.OnEvictCache();
     }
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)

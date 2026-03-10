@@ -221,7 +221,8 @@ public abstract class Inode : IPageCacheOps
     public bool HasActiveRuntimeRefs => FileOpenRefCount > 0 || FileMmapRefCount > 0 || PathPinRefCount > 0;
     public int LinkCount { get; private set; }
     public bool HasExplicitLinkCount { get; private set; }
-    public bool IsEvicted { get; private set; }
+    public bool IsCacheEvicted { get; private set; }
+    public bool IsFinalized { get; private set; }
 
     public void AcquireRef(InodeRefKind kind, string? reason = null)
     {
@@ -233,10 +234,17 @@ public abstract class Inode : IPageCacheOps
             return;
         }
 
-        if (IsEvicted)
+        if (IsFinalized)
         {
             VfsDebugTrace.FailInvariant(
-                $"Inode.AcquireRef on evicted inode ino={Ino} type={Type} kind={kind} reason={reason}");
+                $"Inode.AcquireRef on finalized inode ino={Ino} type={Type} kind={kind} reason={reason}");
+            return;
+        }
+
+        if (IsCacheEvicted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Inode.AcquireRef on cache-evicted inode ino={Ino} type={Type} kind={kind} reason={reason}");
             return;
         }
 
@@ -264,8 +272,8 @@ public abstract class Inode : IPageCacheOps
 
         RefCount = before - 1;
         VfsDebugTrace.RecordRefChange(this, $"Inode.ReleaseRef.{kind}", before, RefCount, reason);
-        if (RefCount == 0) Release();
-        TryFinalize($"ReleaseRef.{kind}", reason);
+        TryEvictCache($"ReleaseRef.{kind}", reason);
+        TryFinalizeDelete($"ReleaseRef.{kind}", reason);
     }
 
     public void SetInitialLinkCount(int linkCount, string? reason = null)
@@ -281,7 +289,7 @@ public abstract class Inode : IPageCacheOps
         LinkCount = linkCount;
         HasExplicitLinkCount = true;
         VfsDebugTrace.RecordLinkChange(this, "Inode.SetInitialLinkCount", before, LinkCount, reason);
-        TryFinalize("SetInitialLinkCount", reason);
+        TryFinalizeDelete("SetInitialLinkCount", reason);
     }
 
     public void IncLink(string? reason = null)
@@ -307,7 +315,7 @@ public abstract class Inode : IPageCacheOps
         LinkCount = before - 1;
         CTime = DateTime.Now;
         VfsDebugTrace.RecordLinkChange(this, "Inode.DecLink", before, LinkCount, reason);
-        TryFinalize("DecLink", reason);
+        TryFinalizeDelete("DecLink", reason);
     }
 
     public uint GetLinkCountForStat()
@@ -317,14 +325,24 @@ public abstract class Inode : IPageCacheOps
         return (uint)GetDefaultLinkCountForType();
     }
 
-    public bool TryFinalize(string operation, string? reason = null)
+    public bool TryEvictCache(string operation, string? reason = null)
     {
-        if (IsEvicted) return false;
+        if (IsCacheEvicted) return false;
+        if (RefCount != 0) return false;
+        IsCacheEvicted = true;
+        VfsDebugTrace.RecordCacheEvict(this, operation, reason);
+        OnEvictCache();
+        return true;
+    }
+
+    public bool TryFinalizeDelete(string operation, string? reason = null)
+    {
+        if (IsFinalized) return false;
         if (!HasExplicitLinkCount) return false;
         if (RefCount != 0 || LinkCount != 0) return false;
-        IsEvicted = true;
+        IsFinalized = true;
         VfsDebugTrace.RecordFinalize(this, operation, reason);
-        OnEvict();
+        OnFinalizeDelete();
         return true;
     }
 
@@ -431,15 +449,15 @@ public abstract class Inode : IPageCacheOps
         return nlink;
     }
 
-    protected virtual void Release()
+    protected virtual void OnEvictCache()
     {
-        // Subclasses can override to clean up resources
+        // Release page-cache resources and remove inode from in-core tracking.
         PageCacheManager?.ReleaseInodePageCache(this);
+        SuperBlock?.RemoveInodeFromTracking(this);
     }
 
-    protected virtual void OnEvict()
+    protected virtual void OnFinalizeDelete()
     {
-        SuperBlock?.RemoveInodeFromTracking(this);
     }
 
     // Operations
@@ -879,6 +897,7 @@ public class Dentry
         Name = name;
         Parent = parent;
         SuperBlock = sb;
+        IsOnLru = true;
         if (inode != null) BindInode(inode, "Dentry.ctor");
     }
 
@@ -889,6 +908,8 @@ public class Dentry
     public Dentry? Parent { get; set; }
     public SuperBlock SuperBlock { get; set; }
     public Dictionary<string, Dentry> Children { get; } = [];
+    public int DentryRefCount { get; private set; }
+    public bool IsOnLru { get; private set; }
 
     // Mount point support
     public bool IsMounted { get; set; }
@@ -896,21 +917,77 @@ public class Dentry
     /// <summary>
     ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
     /// </summary>
-    public void Get()
+    public void Get(string? reason = null)
     {
+        var before = DentryRefCount;
+        if (before < 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.Get invalid dentry={Name} dentryId={Id} ref={before} reason={reason}");
+            return;
+        }
+
+        DentryRefCount = before + 1;
+        IsOnLru = false;
+        VfsDebugTrace.RecordDentryRefChange(this, "Dentry.Get", before, DentryRefCount, reason);
     }
 
     /// <summary>
     ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
     /// </summary>
-    public void Put()
+    public void Put(string? reason = null)
     {
+        var before = DentryRefCount;
+        if (before <= 0)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.Put underflow dentry={Name} dentryId={Id} ref={before} reason={reason}");
+            return;
+        }
+
+        DentryRefCount = before - 1;
+        if (DentryRefCount == 0) IsOnLru = true;
+        VfsDebugTrace.RecordDentryRefChange(this, "Dentry.Put", before, DentryRefCount, reason);
     }
 
     public void Instantiate(Inode inode)
     {
         if (Inode != null) throw new InvalidOperationException("Dentry already instantiated");
         BindInode(inode, "Dentry.Instantiate");
+    }
+
+    public bool TryGetCachedChild(string name, out Dentry cached)
+    {
+        if (Children.TryGetValue(name, out var found))
+        {
+            cached = found;
+            return true;
+        }
+
+        cached = null!;
+        return false;
+    }
+
+    public void CacheChild(Dentry child, string reason)
+    {
+        child.Parent = this;
+        Children[child.Name] = child;
+        VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-add", reason);
+    }
+
+    public bool TryUncacheChild(string name, string reason, out Dentry? removed)
+    {
+        if (!Children.Remove(name, out removed))
+            return false;
+        VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
+        return true;
+    }
+
+    public void ClearCachedChildren(string reason)
+    {
+        foreach (var child in Children.Values)
+            VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-clear", reason);
+        Children.Clear();
     }
 
     public void BindInode(Inode inode, string reason)
@@ -1013,6 +1090,22 @@ public static class VfsDebugTrace
             operation, reason, inode.Ino, dentry.Name, dentry.Id, dentry.Parent?.Name ?? "<null>", inode.Dentries.Count);
     }
 
+    public static void RecordDentryRefChange(Dentry dentry, string operation, int before, int after, string? reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-DentryRef] op={Operation} dentry={Name} dentryId={DentryId} ref:{Before}->{After} lru={Lru} reason={Reason}",
+            operation, dentry.Name, dentry.Id, before, after, dentry.IsOnLru, reason ?? "");
+    }
+
+    public static void RecordDentryCacheUpdate(Dentry parent, Dentry child, string operation, string reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-Dcache] op={Operation} reason={Reason} parent={ParentName} parentId={ParentId} child={ChildName} childId={ChildId}",
+            operation, reason, parent.Name, parent.Id, child.Name, child.Id);
+    }
+
     public static void RecordStatNlink(Inode inode, string source, uint nlink)
     {
         if (!Enabled) return;
@@ -1027,6 +1120,14 @@ public static class VfsDebugTrace
         Logger.LogDebug(
             "[VFS-Link] op={Operation} ino={Ino} type={Type} nlink:{Before}->{After} ref={RefCount} dentries={DentryCount} reason={Reason}",
             operation, inode.Ino, inode.Type, before, after, inode.RefCount, inode.Dentries.Count, reason ?? "");
+    }
+
+    public static void RecordCacheEvict(Inode inode, string operation, string? reason)
+    {
+        if (!Enabled) return;
+        Logger.LogDebug(
+            "[VFS-CacheEvict] op={Operation} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} reason={Reason}",
+            operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount, reason ?? "");
     }
 
     public static void RecordFinalize(Inode inode, string operation, string? reason)
@@ -1071,6 +1172,7 @@ public class LinuxFile
         Flags = flags;
         Mount = mount; // The mount this file was opened through
         Kind = referenceKind;
+        Dentry.Get("LinuxFile.ctor");
         var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
         OpenedInode?.Open(this);
@@ -1131,6 +1233,7 @@ public class LinuxFile
         OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
+        Dentry.Put("LinuxFile.Close");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
     }

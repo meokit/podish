@@ -50,13 +50,14 @@ public static class VfsCacheReclaimer
             var current = stack.Pop();
             if (!visited.Add(current)) continue;
             if (current.IsMounted) continue;
+            if (current.DentryRefCount > 0) continue;
 
             foreach (var child in current.Children.Values.ToList())
                 stack.Push(child);
 
-            current.Children.Clear();
+            current.ClearCachedChildren("VfsCacheReclaimer.DetachCachedSubtree");
             if (current.Parent != null && !ReferenceEquals(current.Parent, current))
-                current.Parent.Children.Remove(current.Name);
+                current.Parent.TryUncacheChild(current.Name, "VfsCacheReclaimer.DetachCachedSubtree", out _);
 
             var inode = current.Inode;
             if (inode != null)

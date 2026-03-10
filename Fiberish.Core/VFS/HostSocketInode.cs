@@ -62,10 +62,10 @@ public sealed class HostSocketInode : Inode
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events) =>
         _readiness.RegisterWaitHandle(file, callback, events);
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
         _readiness.Dispose();
-        base.Release();
+        base.OnEvictCache();
     }
 
     private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events) =>

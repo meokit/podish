@@ -392,7 +392,7 @@ public sealed class NetstackSocketInode : Inode
         return registration;
     }
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
         _listener?.Dispose();
         _stream?.Dispose();
@@ -400,7 +400,7 @@ public sealed class NetstackSocketInode : Inode
         _listener = null;
         _stream = null;
         _udp = null;
-        base.Release();
+        base.OnEvictCache();
     }
 
     private void Drive()

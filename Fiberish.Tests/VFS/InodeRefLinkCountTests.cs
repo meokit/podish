@@ -35,8 +35,10 @@ public class InodeRefLinkCountTests
 
         var mount = new Mount(rig.SuperBlock, rig.Root);
         var refBeforeOpen = inode.RefCount;
+        Assert.Equal(0, linked.DentryRefCount);
         var file = new LinuxFile(linked, FileFlags.O_RDONLY, mount);
         Assert.Equal(refBeforeOpen + 1, inode.RefCount);
+        Assert.Equal(1, linked.DentryRefCount);
         Assert.Equal(1, inode.LinkCount);
         Assert.Equal(1, inode.FileOpenRefCount);
         Assert.True(inode.HasActiveRuntimeRefs);
@@ -44,6 +46,7 @@ public class InodeRefLinkCountTests
 
         file.Close();
         Assert.Equal(refBeforeOpen, inode.RefCount);
+        Assert.Equal(0, linked.DentryRefCount);
         Assert.Equal(1, inode.LinkCount);
         Assert.Equal(0, inode.FileOpenRefCount);
         Assert.False(inode.HasActiveRuntimeRefs);
@@ -52,7 +55,7 @@ public class InodeRefLinkCountTests
         rootInode.Unlink("linked.txt");
         Assert.Equal(0, inode.LinkCount);
         Assert.Equal(0, inode.RefCount);
-        Assert.True(inode.IsEvicted);
+        Assert.True(inode.IsFinalized);
     }
 
     [Fact]
@@ -104,7 +107,7 @@ public class InodeRefLinkCountTests
         Assert.Same(srcInode, renamed!.Inode);
         Assert.Equal(1, srcInode.LinkCount);
         Assert.Equal(0, dstInode.LinkCount);
-        Assert.True(dstInode.IsEvicted);
+        Assert.True(dstInode.IsFinalized);
     }
 
     [Fact]
@@ -159,12 +162,12 @@ public class InodeRefLinkCountTests
         dirInode.Rmdir("nested");
         Assert.Equal(2, dirInode.LinkCount);
         Assert.Equal(0, nestedInode.LinkCount);
-        Assert.True(nestedInode.IsEvicted);
+        Assert.True(nestedInode.IsFinalized);
 
         rootInode.Rmdir("dir");
         Assert.Equal(2, rootInode.LinkCount);
         Assert.Equal(0, dirInode.LinkCount);
-        Assert.True(dirInode.IsEvicted);
+        Assert.True(dirInode.IsFinalized);
     }
 
     [Fact]

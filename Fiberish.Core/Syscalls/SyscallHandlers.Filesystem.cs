@@ -260,7 +260,7 @@ public partial class SyscallManager
         try
         {
             parentLoc.Dentry!.Inode!.Rmdir(name);
-            parentLoc.Dentry.Children.Remove(name);
+            _ = parentLoc.Dentry.TryUncacheChild(name, "SysRmdir", out _);
             return 0;
         }
         catch (Exception ex)
@@ -630,7 +630,7 @@ public partial class SyscallManager
             try
             {
                 parentLoc.Dentry!.Inode!.Rmdir(name);
-                parentLoc.Dentry.Children.Remove(name);
+                _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Rmdir", out _);
                 return 0;
             }
             catch (Exception ex)
@@ -644,7 +644,7 @@ public partial class SyscallManager
         try
         {
             parentLoc.Dentry!.Inode!.Unlink(name);
-            parentLoc.Dentry.Children.Remove(name);
+            _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Unlink", out _);
             return 0;
         }
         catch (Exception ex)
@@ -1025,19 +1025,19 @@ public partial class SyscallManager
 
                 foreach (var pDentry in oldParentLoc.Dentry.Inode!.Dentries.ToList())
                 {
-                    pDentry.Children.Remove(oldName);
-                    pDentry.Children.Remove(tempName);
+                    _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-old", out _);
+                    _ = pDentry.TryUncacheChild(tempName, "SysRename.exchange.cleanup-temp", out _);
                 }
 
                 foreach (var pDentry in newParentLoc.Dentry!.Inode!.Dentries.ToList())
-                    pDentry.Children.Remove(newName);
+                    _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-new", out _);
 
                 if (!ReferenceEquals(oldParentLoc.Dentry.Inode, newParentLoc.Dentry.Inode))
                 {
                     foreach (var pDentry in oldParentLoc.Dentry.Inode.Dentries.ToList())
-                        pDentry.Children.Remove(newName);
+                        _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-old-new", out _);
                     foreach (var pDentry in newParentLoc.Dentry.Inode.Dentries.ToList())
-                        pDentry.Children.Remove(oldName);
+                        _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-new-old", out _);
                 }
 
                 return 0;
@@ -1081,7 +1081,7 @@ public partial class SyscallManager
             {
                 foreach (var pDentry in oldParentInode.Dentries.ToList())
                 {
-                    pDentry.Children.Remove(oldName);
+                    _ = pDentry.TryUncacheChild(oldName, "SysRename.cleanup-old", out _);
                 }
             }
 
@@ -1092,14 +1092,14 @@ public partial class SyscallManager
                     // Clean up only the pre-existing target dentry that got replaced.
                     // Do not tear down the freshly moved source dentry.
                     if (replacedTargetInode != null &&
-                        pDentry.Children.TryGetValue(newName, out var victimDentry) &&
+                        pDentry.TryGetCachedChild(newName, out var victimDentry) &&
                         ReferenceEquals(victimDentry.Inode, replacedTargetInode))
                     {
                         if (victimDentry.Inode != null)
                         {
                             victimDentry.UnbindInode("SysRename.cleanup-replaced-target");
                         }
-                        pDentry.Children.Remove(newName);
+                        _ = pDentry.TryUncacheChild(newName, "SysRename.cleanup-replaced-target", out _);
                     }
                 }
             }
@@ -1375,7 +1375,7 @@ public partial class SyscallManager
         try
         {
             parentLoc.Dentry!.Inode!.Unlink(name);
-            parentLoc.Dentry.Children.Remove(name);
+            _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlink", out _);
             return 0;
         }
         catch (Exception ex)

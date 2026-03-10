@@ -175,7 +175,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
             _dentryCache[hostPath] = dentry;
         }
 
-        if (dentry.Parent != null) dentry.Parent.Children[dentry.Name] = dentry;
+        dentry.Parent?.CacheChild(dentry, "HostSuperBlock.InstantiateDentry");
     }
 
     public long DropDentryAndInodeCaches()
@@ -884,7 +884,7 @@ public partial class HostInode : Inode
             NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
             dentry?.UnbindInode("HostInode.Unlink");
             if (Dentries.Count > 0)
-                Dentries[0].Children.Remove(name);
+                _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
             sb.RemoveDentry(subPath);
             return;
         }
@@ -910,7 +910,7 @@ public partial class HostInode : Inode
             dentry.UnbindInode("HostInode.Rmdir");
         }
         if (Dentries.Count > 0)
-            Dentries[0].Children.Remove(name);
+            _ = Dentries[0].TryUncacheChild(name, "HostInode.Rmdir", out _);
         sb.RemoveDentry(subPath);
     }
 
@@ -962,7 +962,7 @@ public partial class HostInode : Inode
             }
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
-                targetParent.Dentries[0].Children.Remove(newName);
+                _ = targetParent.Dentries[0].TryUncacheChild(newName, "HostInode.Rename.overwrite-target", out _);
             sb.RemoveDentry(newFullPath);
         }
 
@@ -977,12 +977,12 @@ public partial class HostInode : Inode
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
         ((HostInode)dentry.Inode).HostPath = newFullPath;
         if (Dentries.Count > 0)
-            Dentries[0].Children.Remove(oldName);
+            _ = Dentries[0].TryUncacheChild(oldName, "HostInode.Rename.old-parent", out _);
         dentry.Name = newName;
         if (targetParent.Dentries.Count > 0)
         {
             dentry.Parent = targetParent.Dentries[0];
-            dentry.Parent.Children[newName] = dentry;
+            dentry.Parent.CacheChild(dentry, "HostInode.Rename.new-parent");
         }
 
         if (movedAcrossParents)
@@ -1025,7 +1025,7 @@ public partial class HostInode : Inode
         NamespaceOps.OnLinkAdded(oldInode, "HostInode.Link");
         sb.AddDentry(newPath, dentry);
         if (Dentries.Count > 0)
-            Dentries[0].Children[dentry.Name] = dentry;
+            Dentries[0].CacheChild(dentry, "HostInode.Link");
 
         return dentry;
     }
@@ -1359,7 +1359,7 @@ public partial class HostInode : Inode
         }
     }
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
         lock (_mappedCacheLock)
         {
@@ -1367,7 +1367,7 @@ public partial class HostInode : Inode
             _mappedPageCache = null;
         }
 
-        base.Release();
+        base.OnEvictCache();
     }
 
     public override List<DirectoryEntry> GetEntries()

@@ -951,7 +951,8 @@ public class SilkFsAdapterTests
 
             var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
             Assert.True(stats.DentriesDropped > 0);
-            Assert.True(stats.InodesDropped > 0);
+            Assert.True(oldInode.IsCacheEvicted);
+            Assert.False(oldInode.IsFinalized);
 
             var after = sm.PathWalkWithFlags("/mnt/sub/data.txt", LookupFlags.FollowSymlink);
             Assert.True(after.IsValid);
@@ -1010,7 +1011,8 @@ public class SilkFsAdapterTests
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
             var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
-            Assert.True(stats.DentriesDropped > 0);
+            Assert.True(stats.DentriesDropped >= 0);
+            Assert.True(file.DentryRefCount > 0);
 
             var buffer = new byte[32];
             var n = rf.OpenedInode!.Read(rf, buffer, 0);

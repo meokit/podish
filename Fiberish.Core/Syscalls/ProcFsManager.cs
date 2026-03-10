@@ -26,7 +26,7 @@ public static class ProcFsManager
             if (!loc.IsValid) return;
 
             var pidStr = pid.ToString();
-            loc.Dentry!.Children.Remove(pidStr);
+            _ = loc.Dentry!.TryUncacheChild(pidStr, "ProcFsManager.OnProcessExit", out _);
         }
         catch
         {

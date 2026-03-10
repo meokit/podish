@@ -35,7 +35,7 @@ public class InodeOrphanLifecycleSyscallTests
         Assert.Equal(0, inode.LinkCount);
         Assert.Equal(1, inode.FileOpenRefCount);
         Assert.Equal(0, inode.FileMmapRefCount);
-        Assert.False(inode.IsEvicted);
+        Assert.False(inode.IsFinalized);
 
         Assert.Equal(-(int)Errno.ENOENT, await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY, 0));
         Assert.Equal(payload.Length, await env.Call("SysRead", (uint)fd, 0x12000, (uint)payload.Length));
@@ -44,7 +44,7 @@ public class InodeOrphanLifecycleSyscallTests
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
         Assert.Equal(0, inode.FileOpenRefCount);
         Assert.Equal(0, inode.RefCount);
-        Assert.True(inode.IsEvicted);
+        Assert.True(inode.IsFinalized);
     }
 
     [Fact]
@@ -71,13 +71,13 @@ public class InodeOrphanLifecycleSyscallTests
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
         Assert.Equal(0, inode.FileOpenRefCount);
         Assert.Equal(1, inode.FileMmapRefCount);
-        Assert.False(inode.IsEvicted);
+        Assert.False(inode.IsFinalized);
 
         Assert.Equal(payload, env.ReadMappedBytes((uint)mapped, payload.Length));
 
         Assert.Equal(0, await env.Call("SysMunmap", (uint)mapped, LinuxConstants.PageSize));
         Assert.Equal(0, inode.FileMmapRefCount);
-        Assert.False(inode.IsEvicted);
+        Assert.False(inode.IsFinalized);
     }
 
     [Fact]
@@ -105,19 +105,19 @@ public class InodeOrphanLifecycleSyscallTests
         Assert.Equal(0, inode.LinkCount);
         Assert.Equal(1, inode.FileOpenRefCount);
         Assert.Equal(1, inode.FileMmapRefCount);
-        Assert.False(inode.IsEvicted);
+        Assert.False(inode.IsFinalized);
 
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
         Assert.Equal(0, inode.FileOpenRefCount);
         Assert.Equal(1, inode.FileMmapRefCount);
-        Assert.False(inode.IsEvicted);
+        Assert.False(inode.IsFinalized);
 
         Assert.Equal(payload, env.ReadMappedBytes((uint)mapped, payload.Length));
 
         Assert.Equal(0, await env.Call("SysMunmap", (uint)mapped, LinuxConstants.PageSize));
         Assert.Equal(0, inode.FileMmapRefCount);
         Assert.Equal(0, inode.RefCount);
-        Assert.True(inode.IsEvicted);
+        Assert.True(inode.IsFinalized);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class InodeOrphanLifecycleSyscallTests
         Assert.Equal("ab"u8.ToArray(), env.ReadBytes(0x43000, 2));
 
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
-        Assert.True(inode.IsEvicted);
+        Assert.True(inode.IsFinalized);
     }
 
     private sealed class TestEnv : IDisposable

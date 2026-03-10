@@ -591,7 +591,7 @@ public partial class SyscallManager
     {
         var parentDentry = parent.Dentry!;
 
-        if (parentDentry.Children.TryGetValue(name, out var cached)) return new PathLocation(cached, parent.Mount);
+        if (parentDentry.TryGetCachedChild(name, out var cached)) return new PathLocation(cached, parent.Mount);
 
         var dentry = parentDentry.Inode!.Lookup(name);
         if (dentry == null)
@@ -612,7 +612,7 @@ public partial class SyscallManager
             throw new Exception($"Path /{name} exists but is not a directory");
         }
 
-        parentDentry.Children[name] = dentry;
+        parentDentry.CacheChild(dentry, "SyscallManager.EnsureDirectory");
         return new PathLocation(dentry, parent.Mount);
     }
 
@@ -620,7 +620,7 @@ public partial class SyscallManager
     {
         var parentDentry = parent.Dentry!;
 
-        if (parentDentry.Children.TryGetValue(name, out var cachedDentry))
+        if (parentDentry.TryGetCachedChild(name, out var cachedDentry))
         {
             if (cachedDentry.Inode?.Type != InodeType.File)
                 throw new Exception($"Path /{name} exists but is not a file");
@@ -646,7 +646,7 @@ public partial class SyscallManager
             throw new Exception($"Path /{name} exists but is not a file");
         }
 
-        parentDentry.Children[name] = dentry;
+        parentDentry.CacheChild(dentry, "SyscallManager.EnsureFileMountPoint");
         return dentry;
     }
 
@@ -700,7 +700,9 @@ public partial class SyscallManager
         var mountHandle = new MountFile(detachedMount);
         try
         {
-            var targetLoc = new PathLocation(current.Dentry!.Children[name], current.Mount);
+            if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
+                throw new IOException($"Mount point not found after ensure: {name}");
+            var targetLoc = new PathLocation(mountPoint, current.Mount);
             var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
             if (attachRc != 0)
                 throw new IOException($"Failed to attach detached hostfs mount: rc={attachRc}");
@@ -764,7 +766,9 @@ public partial class SyscallManager
         var mountHandle = new MountFile(detachedMount);
         try
         {
-            var targetLoc = new PathLocation(current.Dentry!.Children[name], current.Mount);
+            if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
+                throw new IOException($"Mount point not found after ensure: {name}");
+            var targetLoc = new PathLocation(mountPoint, current.Mount);
             var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
             if (attachRc != 0) throw new IOException($"Failed to attach detached tmpfs mount: rc={attachRc}");
             PinContainerMount(mountHandle.Mount);
@@ -1100,7 +1104,7 @@ public partial class SyscallManager
             if (devRootInode != null)
                 devRootInode.RegisterChild(devRoot, name, dentry);
             else
-                devRoot.Children[name] = dentry;
+                devRoot.CacheChild(dentry, "SyscallManager.InitStdio.RegisterDev");
         }
 
         // Create /dev/null

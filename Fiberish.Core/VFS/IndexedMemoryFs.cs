@@ -87,7 +87,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = childDentry;
             }
 
-            parentDentry.Children[name] = childDentry;
+            parentDentry.CacheChild(childDentry, "IndexedMemoryInode.RegisterChild");
             ChildNames.Add(name);
         }
     }
@@ -102,7 +102,7 @@ public abstract class IndexedMemoryInode : Inode
             var key = new DCacheKey(Ino, name);
             if (IndexedSb.Dentries.TryGetValue(key, out var dentry))
             {
-                primaryDentry.Children[name] = dentry;
+                primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Lookup");
                 return dentry;
             }
 
@@ -134,7 +134,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = dentry;
             }
 
-            primaryDentry.Children[dentry.Name] = dentry;
+            primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Create");
             ChildNames.Add(dentry.Name);
 
             return dentry;
@@ -165,7 +165,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = dentry;
             }
 
-            primaryDentry.Children[dentry.Name] = dentry;
+            primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Mkdir");
             ChildNames.Add(dentry.Name);
 
             return dentry;
@@ -190,7 +190,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries.Remove(key);
             }
 
-            primaryDentry.Children.Remove(name);
+            _ = primaryDentry.TryUncacheChild(name, "IndexedMemoryInode.Unlink", out _);
             var unlinkedInode = dentry.Inode;
             if (unlinkedInode != null)
             {
@@ -222,7 +222,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries.Remove(key);
             }
 
-            primaryDentry.Children.Remove(name);
+            _ = primaryDentry.TryUncacheChild(name, "IndexedMemoryInode.Rmdir", out _);
             var removedInode = dentry.Inode;
             if (removedInode != null)
             {
@@ -321,13 +321,13 @@ public abstract class IndexedMemoryInode : Inode
             IndexedSb.Dentries.Remove(oldKey);
             IndexedSb.Dentries[newKey] = dentry;
 
-            oldPrimary.Children.Remove(oldName);
+            _ = oldPrimary.TryUncacheChild(oldName, "IndexedMemoryInode.Rename.old-parent", out _);
             ChildNames.Remove(oldName);
 
             dentry.Parent = newPrimary;
             dentry.Name = newName;
 
-            newPrimary.Children[newName] = dentry;
+            newPrimary.CacheChild(dentry, "IndexedMemoryInode.Rename.new-parent");
             targetParent.ChildNames.Add(newName);
 
             if (movedAcrossParents)
@@ -353,7 +353,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = dentry;
             }
 
-            primaryDentry.Children[dentry.Name] = dentry;
+            primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Link");
             ChildNames.Add(dentry.Name);
             return dentry;
         }
@@ -385,7 +385,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = dentry;
             }
 
-            primaryDentry.Children[dentry.Name] = dentry;
+            primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Symlink");
             ChildNames.Add(dentry.Name);
 
             return dentry;
@@ -420,7 +420,7 @@ public abstract class IndexedMemoryInode : Inode
                 IndexedSb.Dentries[key] = dentry;
             }
 
-            primaryDentry.Children[dentry.Name] = dentry;
+            primaryDentry.CacheChild(dentry, "IndexedMemoryInode.Mknod");
             ChildNames.Add(dentry.Name);
             return dentry;
         }
@@ -702,26 +702,22 @@ public abstract class IndexedMemoryInode : Inode
         Interlocked.Increment(ref _openCount);
     }
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
-        if (_openCount == 0)
-        {
-            if (Type == InodeType.Symlink) SymlinkData = null;
-            ReleaseOwnedPageCache();
-            ChildNames.Clear();
-        }
+        if (_openCount != 0)
+            VfsDebugTrace.FailInvariant(
+                $"IndexedMemoryInode.OnEvictCache with open handles ino={Ino} openCount={_openCount}");
+
+        if (Type == InodeType.Symlink) SymlinkData = null;
+        ReleaseOwnedPageCache();
+        ChildNames.Clear();
+        base.OnEvictCache();
     }
 
     public override void Release(LinuxFile linuxFile)
     {
         Interlocked.Decrement(ref _openCount);
         Flock(linuxFile, LinuxConstants.LOCK_UN);
-
-        if (_openCount == 0 && Dentries.Count == 0)
-        {
-            if (Type == InodeType.Symlink) SymlinkData = null;
-            ReleaseOwnedPageCache();
-        }
 
         base.Release(linuxFile);
     }

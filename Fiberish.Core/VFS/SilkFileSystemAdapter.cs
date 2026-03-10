@@ -46,7 +46,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheD
     {
         lock (Lock)
         {
-            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsEvicted);
+            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsCacheEvicted);
             if (tracked != null) return tracked;
         }
 
@@ -72,7 +72,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheD
 
         lock (Lock)
         {
-            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsEvicted);
+            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsCacheEvicted);
             if (tracked != null) return tracked;
             TrackInode(loaded);
         }
@@ -130,7 +130,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheD
                 if (parent.Inode is IndexedMemoryInode dirInode)
                     dirInode.RegisterChild(parent, rec.Name, child);
                 else
-                    parent.Children[rec.Name] = child;
+                    parent.CacheChild(child, "SilkSuperBlock.LoadFromMetadata");
 
                 primaryDentryByInode.TryAdd(rec.Ino, child);
                 pending.RemoveAt(i);
@@ -382,12 +382,12 @@ public sealed class SilkInode : IndexedMemoryInode
                         IndexedSb.Dentries.Remove(key);
                     }
 
-                    primaryDentry.Children.Remove(name);
+                    _ = primaryDentry.TryUncacheChild(name, "SilkInode.Lookup.refresh-missing", out _);
                     ChildNames.Remove(name);
                     return null;
                 }
 
-                primaryDentry.Children[name] = cached;
+                primaryDentry.CacheChild(cached, "SilkInode.Lookup.refresh-hit");
                 ChildNames.Add(name);
                 return cached;
             }
@@ -404,7 +404,7 @@ public sealed class SilkInode : IndexedMemoryInode
                 IndexedSb.Dentries[key] = created;
             }
 
-            primaryDentry.Children[name] = created;
+            primaryDentry.CacheChild(created, "SilkInode.Lookup.refresh-create");
             ChildNames.Add(name);
             return created;
         }
@@ -493,7 +493,7 @@ public sealed class SilkInode : IndexedMemoryInode
 
     private static void UpsertInodeMetadataIfLive(SilkMetadataStore.SilkMetadataTransaction tx, Inode? inode)
     {
-        if (inode == null || inode.IsEvicted)
+        if (inode == null || inode.IsFinalized)
             return;
         UpsertInodeMetadata(tx, inode);
     }
@@ -617,7 +617,7 @@ public sealed class SilkInode : IndexedMemoryInode
         _metadata.ExecuteTransaction(tx =>
         {
             tx.RemoveDentry((long)Ino, oldName);
-            if (movedInode != null && !movedInode.IsEvicted)
+            if (movedInode != null && !movedInode.IsFinalized)
             {
                 UpsertInodeMetadata(tx, movedInode);
                 tx.UpsertDentry((long)newParent.Ino, newName, (long)movedInode.Ino);
@@ -764,7 +764,7 @@ public sealed class SilkInode : IndexedMemoryInode
         }
     }
 
-    protected override void Release()
+    protected override void OnEvictCache()
     {
         lock (_mappedCacheLock)
         {
@@ -772,10 +772,10 @@ public sealed class SilkInode : IndexedMemoryInode
             _mappedPageCache = null;
         }
 
-        base.Release();
+        base.OnEvictCache();
     }
 
-    protected override void OnEvict()
+    protected override void OnFinalizeDelete()
     {
         var ino = (long)Ino;
         if (ino != SilkMetadataStore.RootInode)
@@ -786,6 +786,6 @@ public sealed class SilkInode : IndexedMemoryInode
             _repository.DeleteLiveInodeData(ino);
         }
 
-        base.OnEvict();
+        base.OnFinalizeDelete();
     }
 }

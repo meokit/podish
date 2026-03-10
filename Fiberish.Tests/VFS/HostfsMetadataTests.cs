@@ -350,12 +350,12 @@ public class HostfsMetadataTests
             dirInode.Rmdir("nested");
             Assert.Equal(2u, dirInode.GetLinkCountForStat());
             Assert.Equal(0u, nestedInode.GetLinkCountForStat());
-            Assert.True(nestedInode.IsEvicted);
+            Assert.True(nestedInode.IsFinalized);
 
             rootInode.Rmdir("dir");
             Assert.Equal(2u, rootInode.GetLinkCountForStat());
             Assert.Equal(0u, dirInode.GetLinkCountForStat());
-            Assert.True(dirInode.IsEvicted);
+            Assert.True(dirInode.IsFinalized);
         }
         finally
         {
@@ -439,7 +439,7 @@ public class HostfsMetadataTests
             Assert.Equal(3u, rootInode.GetLinkCountForStat());
             Assert.Equal(2u, srcInode.GetLinkCountForStat());
             Assert.Equal(0u, dstInode.GetLinkCountForStat());
-            Assert.True(dstInode.IsEvicted);
+            Assert.True(dstInode.IsFinalized);
         }
         finally
         {
@@ -478,7 +478,7 @@ public class HostfsMetadataTests
             Assert.Same(sourceInode, renamed!.Inode);
             Assert.Equal(1u, sourceInode.GetLinkCountForStat());
             Assert.Equal(0u, victimInode.GetLinkCountForStat());
-            Assert.True(victimInode.IsEvicted);
+            Assert.True(victimInode.IsFinalized);
         }
         finally
         {

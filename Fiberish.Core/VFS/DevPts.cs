@@ -269,7 +269,7 @@ public class DevPtsSuperBlock : SuperBlock
         // Create a dentry for the slave device
         var slaveInode = new PtySlaveInode(this, pair, _logger);
         var dentry = new Dentry(index.ToString(), slaveInode, Root, this);
-        Root.Children[index.ToString()] = dentry;
+        Root.CacheChild(dentry, "DevPtsSuperBlock.OnPtyCreated");
         _slaveDentries[index] = dentry;
         _logger.LogInformation("[DevPts] Created slave dentry for PTY index={Index}", index);
     }
@@ -278,7 +278,7 @@ public class DevPtsSuperBlock : SuperBlock
     {
         if (_slaveDentries.Remove(index, out var dentry))
         {
-            Root.Children.Remove(index.ToString());
+            _ = Root.TryUncacheChild(index.ToString(), "DevPtsSuperBlock.OnPtyDestroyed", out _);
             _logger.LogInformation("[DevPts] Removed slave dentry for PTY index={Index}", index);
         }
     }

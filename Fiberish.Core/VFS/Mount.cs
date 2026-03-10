@@ -20,7 +20,7 @@ public class Mount
         MountPoint = mountPoint;
         Parent = parent;
         sb.Get();
-        root.Get();
+        root.Get("Mount.ctor");
     }
 
     /// <summary>
@@ -144,7 +144,7 @@ public class Mount
         // Release resources
         Detach();
         SB.Put();
-        Root.Put();
+        Root.Put("Mount.Put");
     }
 
     /// <summary>
