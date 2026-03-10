@@ -49,6 +49,58 @@ public sealed class SilkMetadataStore
         }.ToString();
     }
 
+    public sealed class SilkMetadataTransaction
+    {
+        private readonly SqliteConnection _conn;
+        private readonly SqliteTransaction _tx;
+
+        internal SilkMetadataTransaction(SqliteConnection conn, SqliteTransaction tx)
+        {
+            _conn = conn;
+            _tx = tx;
+        }
+
+        public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
+            long size = 0)
+        {
+            UpsertInodeCore(_conn, _tx, ino, kind, mode, uid, gid, nlink, rdev, size);
+        }
+
+        public void UpsertDentry(long parentIno, string name, long ino)
+        {
+            UpsertDentryCore(_conn, _tx, parentIno, name, ino);
+        }
+
+        public void RemoveDentry(long parentIno, string name)
+        {
+            RemoveDentryCore(_conn, _tx, parentIno, name);
+        }
+
+        public void MarkWhiteout(long parentIno, string name)
+        {
+            MarkWhiteoutCore(_conn, _tx, parentIno, name);
+        }
+
+        public void ClearWhiteout(long parentIno, string name)
+        {
+            ClearWhiteoutCore(_conn, _tx, parentIno, name);
+        }
+
+        public void MarkOpaque(long parentIno)
+        {
+            MarkOpaqueCore(_conn, _tx, parentIno);
+        }
+    }
+
+    public void ExecuteTransaction(Action<SilkMetadataTransaction> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        action(new SilkMetadataTransaction(conn, tx));
+        tx.Commit();
+    }
+
     public void Initialize()
     {
         using var conn = OpenConnection();
@@ -170,33 +222,7 @@ public sealed class SilkMetadataStore
     public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
         long size = 0)
     {
-        using var conn = OpenConnection();
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-                          INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
-                          VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @now, @now, @now)
-                          ON CONFLICT(ino) DO UPDATE SET
-                            kind = excluded.kind,
-                            mode = excluded.mode,
-                            uid = excluded.uid,
-                            gid = excluded.gid,
-                            nlink = excluded.nlink,
-                            rdev = excluded.rdev,
-                            size = excluded.size,
-                            mtime_ns = excluded.mtime_ns,
-                            ctime_ns = excluded.ctime_ns;
-                          """;
-        cmd.Parameters.AddWithValue("@ino", ino);
-        cmd.Parameters.AddWithValue("@kind", (int)kind);
-        cmd.Parameters.AddWithValue("@mode", mode);
-        cmd.Parameters.AddWithValue("@uid", uid);
-        cmd.Parameters.AddWithValue("@gid", gid);
-        cmd.Parameters.AddWithValue("@nlink", nlink);
-        cmd.Parameters.AddWithValue("@rdev", (long)rdev);
-        cmd.Parameters.AddWithValue("@size", size);
-        cmd.Parameters.AddWithValue("@now", now);
-        cmd.ExecuteNonQuery();
+        ExecuteTransaction(tx => tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size));
     }
 
     public bool InodeExists(long ino)
@@ -250,16 +276,22 @@ public sealed class SilkMetadataStore
         return result;
     }
 
-    public void UpsertDentry(long parentIno, string name, long ino)
+    public List<long> ListOrphanInodes()
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            "INSERT INTO dentries(parent_ino, name, ino) VALUES (@p, @n, @i) ON CONFLICT(parent_ino, name) DO UPDATE SET ino = excluded.ino;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", name);
-        cmd.Parameters.AddWithValue("@i", ino);
-        cmd.ExecuteNonQuery();
+        cmd.CommandText = "SELECT ino FROM inodes WHERE ino <> @root AND nlink <= 0 ORDER BY ino ASC;";
+        cmd.Parameters.AddWithValue("@root", RootInode);
+        using var reader = cmd.ExecuteReader();
+        var result = new List<long>();
+        while (reader.Read())
+            result.Add(reader.GetInt64(0));
+        return result;
+    }
+
+    public void UpsertDentry(long parentIno, string name, long ino)
+    {
+        ExecuteTransaction(tx => tx.UpsertDentry(parentIno, name, ino));
     }
 
     public long? LookupDentry(long parentIno, string name)
@@ -285,14 +317,22 @@ public sealed class SilkMetadataStore
         return result;
     }
 
-    public void RemoveDentry(long parentIno, string name)
+    public List<SilkDentryRecord> ListDentriesByParent(long parentIno)
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM dentries WHERE parent_ino = @p AND name = @n;";
+        cmd.CommandText = "SELECT parent_ino, name, ino FROM dentries WHERE parent_ino = @p ORDER BY name ASC;";
         cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", name);
-        cmd.ExecuteNonQuery();
+        using var reader = cmd.ExecuteReader();
+        var result = new List<SilkDentryRecord>();
+        while (reader.Read())
+            result.Add(new SilkDentryRecord(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2)));
+        return result;
+    }
+
+    public void RemoveDentry(long parentIno, string name)
+    {
+        ExecuteTransaction(tx => tx.RemoveDentry(parentIno, name));
     }
 
     public long CountDentryRefs(long ino)
@@ -473,14 +513,7 @@ public sealed class SilkMetadataStore
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Whiteout name cannot be empty.", nameof(name));
-
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 0) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 0;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", name);
-        cmd.ExecuteNonQuery();
+        ExecuteTransaction(tx => tx.MarkWhiteout(parentIno, name));
     }
 
     public bool HasWhiteout(long parentIno, string name)
@@ -495,23 +528,12 @@ public sealed class SilkMetadataStore
 
     public void ClearWhiteout(long parentIno, string name)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM whiteouts WHERE parent_ino = @p AND name = @n;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", name);
-        cmd.ExecuteNonQuery();
+        ExecuteTransaction(tx => tx.ClearWhiteout(parentIno, name));
     }
 
     public void MarkOpaque(long parentIno)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 1) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", OpaqueMarkerName);
-        cmd.ExecuteNonQuery();
+        ExecuteTransaction(tx => tx.MarkOpaque(parentIno));
     }
 
     public bool IsOpaque(long parentIno)
@@ -619,5 +641,91 @@ public sealed class SilkMetadataStore
         cmd.Parameters.AddWithValue("@ino", ino);
         var value = cmd.ExecuteScalar();
         return value == null || value is DBNull ? null : (string)value;
+    }
+
+    private static void UpsertInodeCore(SqliteConnection conn, SqliteTransaction tx, long ino, SilkInodeKind kind, int mode,
+        int uid, int gid, int nlink, uint rdev, long size)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+                          INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
+                          VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @now, @now, @now)
+                          ON CONFLICT(ino) DO UPDATE SET
+                            kind = excluded.kind,
+                            mode = excluded.mode,
+                            uid = excluded.uid,
+                            gid = excluded.gid,
+                            nlink = excluded.nlink,
+                            rdev = excluded.rdev,
+                            size = excluded.size,
+                            mtime_ns = excluded.mtime_ns,
+                            ctime_ns = excluded.ctime_ns;
+                          """;
+        cmd.Parameters.AddWithValue("@ino", ino);
+        cmd.Parameters.AddWithValue("@kind", (int)kind);
+        cmd.Parameters.AddWithValue("@mode", mode);
+        cmd.Parameters.AddWithValue("@uid", uid);
+        cmd.Parameters.AddWithValue("@gid", gid);
+        cmd.Parameters.AddWithValue("@nlink", nlink);
+        cmd.Parameters.AddWithValue("@rdev", (long)rdev);
+        cmd.Parameters.AddWithValue("@size", size);
+        cmd.Parameters.AddWithValue("@now", now);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void UpsertDentryCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name, long ino)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            "INSERT INTO dentries(parent_ino, name, ino) VALUES (@p, @n, @i) ON CONFLICT(parent_ino, name) DO UPDATE SET ino = excluded.ino;";
+        cmd.Parameters.AddWithValue("@p", parentIno);
+        cmd.Parameters.AddWithValue("@n", name);
+        cmd.Parameters.AddWithValue("@i", ino);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void RemoveDentryCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "DELETE FROM dentries WHERE parent_ino = @p AND name = @n;";
+        cmd.Parameters.AddWithValue("@p", parentIno);
+        cmd.Parameters.AddWithValue("@n", name);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void MarkWhiteoutCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 0) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 0;";
+        cmd.Parameters.AddWithValue("@p", parentIno);
+        cmd.Parameters.AddWithValue("@n", name);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void ClearWhiteoutCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "DELETE FROM whiteouts WHERE parent_ino = @p AND name = @n;";
+        cmd.Parameters.AddWithValue("@p", parentIno);
+        cmd.Parameters.AddWithValue("@n", name);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void MarkOpaqueCore(SqliteConnection conn, SqliteTransaction tx, long parentIno)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 1) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1;";
+        cmd.Parameters.AddWithValue("@p", parentIno);
+        cmd.Parameters.AddWithValue("@n", OpaqueMarkerName);
+        cmd.ExecuteNonQuery();
     }
 }

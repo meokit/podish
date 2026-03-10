@@ -28,7 +28,7 @@ public sealed class SilkFileSystem : FileSystem
     }
 }
 
-public sealed class SilkSuperBlock : IndexedMemorySuperBlock
+public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheDropper
 {
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type, devManager)
     {
@@ -42,34 +42,67 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
         return new SilkInode(ino, this, Repository);
     }
 
+    public SilkInode? GetOrLoadInode(long ino)
+    {
+        lock (Lock)
+        {
+            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsEvicted);
+            if (tracked != null) return tracked;
+        }
+
+        var rec = Repository.Metadata.GetInode(ino);
+        if (rec == null) return null;
+
+        var loaded = new SilkInode((ulong)rec.Value.Ino, this, Repository)
+        {
+            Type = SilkInode.MapInodeType(rec.Value.Kind),
+            Mode = rec.Value.Mode,
+            Uid = rec.Value.Uid,
+            Gid = rec.Value.Gid,
+            Rdev = (uint)rec.Value.Rdev,
+            Size = (ulong)Math.Max(0, rec.Value.Size)
+        };
+        var persistedNlink = (int)Math.Max(0, rec.Value.Nlink);
+        if (rec.Value.Ino == SilkMetadataStore.RootInode && loaded.Type == InodeType.Directory && persistedNlink < 2)
+            persistedNlink = 2;
+        loaded.SetInitialLinkCount(persistedNlink, "SilkSuperBlock.GetOrLoadInode");
+        loaded.LoadXAttrsFromMetadata();
+        if (loaded.Type == InodeType.Symlink)
+            loaded.LoadDataFromMetadata();
+
+        lock (Lock)
+        {
+            var tracked = Inodes.OfType<SilkInode>().FirstOrDefault(i => (long)i.Ino == ino && !i.IsEvicted);
+            if (tracked != null) return tracked;
+            TrackInode(loaded);
+        }
+
+        return loaded;
+    }
+
     public void LoadFromMetadata()
     {
+        var orphanInodes = Repository.Metadata.ListOrphanInodes();
+        foreach (var orphanIno in orphanInodes)
+        {
+            var unreferencedObject = Repository.Metadata.DeleteInodeWithObjectRefCount(orphanIno);
+            if (!string.IsNullOrEmpty(unreferencedObject))
+                Repository.DeleteObject(unreferencedObject!);
+            Repository.DeleteLiveInodeData(orphanIno);
+        }
+
         var inodeRecords = Repository.Metadata.ListInodes();
-        var inodeMap = new Dictionary<long, SilkInode>();
         long maxIno = 0;
 
-        // Rebuild inode table from persisted metadata.
+        SilkInode? rootInode = null;
         foreach (var rec in inodeRecords)
         {
-            var inode = new SilkInode((ulong)rec.Ino, this, Repository)
-            {
-                Type = SilkInode.MapInodeType(rec.Kind),
-                Mode = rec.Mode,
-                Uid = rec.Uid,
-                Gid = rec.Gid,
-                Rdev = (uint)rec.Rdev,
-                Size = (ulong)Math.Max(0, rec.Size)
-            };
-            var persistedNlink = (int)Math.Max(0, rec.Nlink);
-            if (rec.Ino == SilkMetadataStore.RootInode && inode.Type == InodeType.Directory && persistedNlink < 2)
-                persistedNlink = 2;
-            inode.SetInitialLinkCount(persistedNlink, "SilkSuperBlock.LoadFromMetadata");
-            TrackInode(inode);
-            inodeMap[rec.Ino] = inode;
+            if (rec.Ino == SilkMetadataStore.RootInode)
+                rootInode = GetOrLoadInode(rec.Ino);
             if (rec.Ino > maxIno) maxIno = rec.Ino;
         }
 
-        if (!inodeMap.TryGetValue(SilkMetadataStore.RootInode, out var rootInode))
+        if (rootInode == null)
         {
             rootInode = (SilkInode)AllocInode();
             rootInode.Type = InodeType.Directory;
@@ -77,7 +110,6 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
             rootInode.SetInitialLinkCount(2, "SilkSuperBlock.LoadFromMetadata.root-init");
             Repository.Metadata.UpsertInode((long)rootInode.Ino, SilkInodeKind.Directory, rootInode.Mode, 0, 0,
                 nlink: rootInode.LinkCount);
-            inodeMap[(long)rootInode.Ino] = rootInode;
             maxIno = Math.Max(maxIno, (long)rootInode.Ino);
         }
 
@@ -93,9 +125,8 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
             {
                 var rec = pending[i];
                 if (!primaryDentryByInode.TryGetValue(rec.ParentIno, out var parent)) continue;
-                if (!inodeMap.TryGetValue(rec.Ino, out var childInode)) continue;
 
-                var child = new Dentry(rec.Name, childInode, parent, this);
+                var child = new Dentry(rec.Name, null, parent, this);
                 if (parent.Inode is IndexedMemoryInode dirInode)
                     dirInode.RegisterChild(parent, rec.Name, child);
                 else
@@ -109,13 +140,22 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock
             if (!progressed) break;
         }
 
-        foreach (var inode in inodeMap.Values)
+        _nextIno = (ulong)Math.Max(maxIno + 1, 2);
+    }
+
+    public long DropDentryAndInodeCaches()
+    {
+        if (Root == null) return 0;
+
+        long dropped = 0;
+        var children = Root.Children.Values.ToList();
+        foreach (var child in children)
         {
-            inode.LoadXAttrsFromMetadata();
-            inode.LoadDataFromMetadata();
+            if (child.IsMounted) continue;
+            dropped += VfsCacheReclaimer.DetachCachedSubtree(child);
         }
 
-        _nextIno = (ulong)Math.Max(maxIno + 1, 2);
+        return dropped;
     }
 }
 
@@ -127,8 +167,7 @@ public sealed class SilkInode : IndexedMemoryInode
     private readonly object _persistLock = new();
     private readonly object _mappedCacheLock = new();
     private MappedFilePageCache? _mappedPageCache;
-    private int _openRefCount;
-    private int _mmapRefCount;
+    private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -166,6 +205,26 @@ public sealed class SilkInode : IndexedMemoryInode
             SilkInodeKind.Socket => InodeType.Socket,
             _ => InodeType.File
         };
+    }
+
+    private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
+
+    private static IDisposable SuppressNamespaceMetadataMutations()
+    {
+        return new NamespaceMutationScope();
+    }
+
+    private sealed class NamespaceMutationScope : IDisposable
+    {
+        public NamespaceMutationScope()
+        {
+            NamespaceMutationDepth.Value = NamespaceMutationDepth.Value + 1;
+        }
+
+        public void Dispose()
+        {
+            NamespaceMutationDepth.Value = Math.Max(0, NamespaceMutationDepth.Value - 1);
+        }
     }
 
     public void LoadXAttrsFromMetadata()
@@ -241,7 +300,10 @@ public sealed class SilkInode : IndexedMemoryInode
         {
             if (Type == InodeType.Directory) return 0;
             if (Type == InodeType.Symlink)
+            {
+                EnsureSymlinkDataLoadedLocked();
                 return base.BackendRead(linuxFile, buffer, offset);
+            }
             if (offset < 0) return -(int)Errno.EINVAL;
 
             var fileSize = (long)Size;
@@ -286,34 +348,165 @@ public sealed class SilkInode : IndexedMemoryInode
         }
     }
 
-    private void SyncDentry(Dentry dentry)
+    public override string Readlink()
     {
-        var ino = (long)dentry.Inode!.Ino;
-        _metadata.UpsertInode(
-            ino,
-            MapInodeKind(dentry.Inode.Type),
-            dentry.Inode.Mode,
-            dentry.Inode.Uid,
-            dentry.Inode.Gid,
-            nlink: dentry.Inode.LinkCount,
-            rdev: dentry.Inode.Rdev,
-            size: (long)dentry.Inode.Size);
-
-        var parentIno = (long)Ino;
-        _metadata.UpsertDentry(parentIno, dentry.Name, ino);
-        _metadata.ClearWhiteout(parentIno, dentry.Name);
+        lock (Lock)
+        {
+            EnsureSymlinkDataLoadedLocked();
+            return base.Readlink();
+        }
     }
 
-    private static void SyncSilkInodeMetadata(Inode? inode)
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
     {
-        if (inode is SilkInode silkInode)
-            silkInode.SyncSelf();
+        lock (Lock)
+        {
+            return TryHydrateChildDentry(parent, name, cached);
+        }
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return null;
+            if (Dentries.Count == 0) return null;
+            var primaryDentry = Dentries[0];
+            var key = new DCacheKey(Ino, name);
+            if (IndexedSb.Dentries.TryGetValue(key, out var cached))
+            {
+                if (!TryHydrateChildDentry(primaryDentry, name, cached))
+                {
+                    lock (IndexedSb.Lock)
+                    {
+                        IndexedSb.Dentries.Remove(key);
+                    }
+
+                    primaryDentry.Children.Remove(name);
+                    ChildNames.Remove(name);
+                    return null;
+                }
+
+                primaryDentry.Children[name] = cached;
+                ChildNames.Add(name);
+                return cached;
+            }
+
+            var childIno = _metadata.LookupDentry((long)Ino, name);
+            if (childIno == null) return null;
+
+            var childInode = ((SilkSuperBlock)IndexedSb).GetOrLoadInode(childIno.Value);
+            if (childInode == null) return null;
+
+            var created = new Dentry(name, childInode, primaryDentry, SuperBlock);
+            lock (IndexedSb.Lock)
+            {
+                IndexedSb.Dentries[key] = created;
+            }
+
+            primaryDentry.Children[name] = created;
+            ChildNames.Add(name);
+            return created;
+        }
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        if (Type != InodeType.Directory)
+            return base.GetEntries();
+
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        };
+
+        foreach (var rec in _metadata.ListDentriesByParent((long)Ino))
+        {
+            InodeType childType;
+            var key = new DCacheKey(Ino, rec.Name);
+            if (IndexedSb.Dentries.TryGetValue(key, out var cached) && cached.Inode != null)
+            {
+                childType = cached.Inode.Type;
+            }
+            else
+            {
+                var childRec = _metadata.GetInode(rec.Ino);
+                if (childRec == null) continue;
+                childType = MapInodeType(childRec.Value.Kind);
+            }
+
+            entries.Add(new DirectoryEntry
+            {
+                Name = rec.Name,
+                Ino = (ulong)rec.Ino,
+                Type = childType
+            });
+        }
+
+        return entries;
+    }
+
+    private bool TryHydrateChildDentry(Dentry parent, string name, Dentry childDentry)
+    {
+        if (childDentry.Inode != null)
+            return true;
+
+        var childIno = _metadata.LookupDentry((long)Ino, name);
+        if (childIno == null)
+            return false;
+
+        var childInode = ((SilkSuperBlock)IndexedSb).GetOrLoadInode(childIno.Value);
+        if (childInode == null)
+            return false;
+
+        if (childDentry.Inode == null)
+            childDentry.Instantiate(childInode);
+        childDentry.Parent ??= parent;
+        childDentry.Name = name;
+        ChildNames.Add(name);
+        return true;
+    }
+
+    private void EnsureSymlinkDataLoadedLocked()
+    {
+        if (Type != InodeType.Symlink) return;
+        if (SymlinkData != null) return;
+
+        var data = ReadPersistedSnapshot();
+        SymlinkData = data.Length == 0 ? Array.Empty<byte>() : data;
+        Size = (ulong)SymlinkData.Length;
+    }
+
+    private static void UpsertInodeMetadata(SilkMetadataStore.SilkMetadataTransaction tx, Inode inode)
+    {
+        tx.UpsertInode(
+            (long)inode.Ino,
+            MapInodeKind(inode.Type),
+            inode.Mode,
+            inode.Uid,
+            inode.Gid,
+            nlink: inode.LinkCount,
+            rdev: inode.Rdev,
+            size: (long)inode.Size);
+    }
+
+    private static void UpsertInodeMetadataIfLive(SilkMetadataStore.SilkMetadataTransaction tx, Inode? inode)
+    {
+        if (inode == null || inode.IsEvicted)
+            return;
+        UpsertInodeMetadata(tx, inode);
     }
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
         var created = base.Create(dentry, mode, uid, gid);
-        SyncDentry(created);
+        _metadata.ExecuteTransaction(tx =>
+        {
+            UpsertInodeMetadata(tx, created.Inode!);
+            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, created.Name);
+        });
         if (created.Inode is SilkInode child)
             child.PersistData();
         return created;
@@ -322,30 +515,45 @@ public sealed class SilkInode : IndexedMemoryInode
     public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         var created = base.Mkdir(dentry, mode, uid, gid);
-        SyncDentry(created);
-        SyncSelf();
+        _metadata.ExecuteTransaction(tx =>
+        {
+            UpsertInodeMetadata(tx, this);
+            UpsertInodeMetadata(tx, created.Inode!);
+            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, created.Name);
+        });
         return created;
     }
 
     public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
         var created = base.Mknod(dentry, mode, uid, gid, type, rdev);
-        SyncDentry(created);
-        if (type == InodeType.CharDev && rdev == 0)
+        _metadata.ExecuteTransaction(tx =>
         {
-            var parentIno = (long)Ino;
-            if (string.Equals(dentry.Name, SilkMetadataStore.OpaqueMarkerName, StringComparison.Ordinal))
-                _metadata.MarkOpaque(parentIno);
-            else if (dentry.Name.StartsWith(".wh.", StringComparison.Ordinal) && dentry.Name.Length > 4)
-                _metadata.MarkWhiteout(parentIno, dentry.Name[4..]);
-        }
+            UpsertInodeMetadata(tx, created.Inode!);
+            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, created.Name);
+            if (type == InodeType.CharDev && rdev == 0)
+            {
+                var parentIno = (long)Ino;
+                if (string.Equals(dentry.Name, SilkMetadataStore.OpaqueMarkerName, StringComparison.Ordinal))
+                    tx.MarkOpaque(parentIno);
+                else if (dentry.Name.StartsWith(".wh.", StringComparison.Ordinal) && dentry.Name.Length > 4)
+                    tx.MarkWhiteout(parentIno, dentry.Name[4..]);
+            }
+        });
         return created;
     }
 
     public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
     {
         var created = base.Symlink(dentry, target, uid, gid);
-        SyncDentry(created);
+        _metadata.ExecuteTransaction(tx =>
+        {
+            UpsertInodeMetadata(tx, created.Inode!);
+            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, created.Name);
+        });
         if (created.Inode is SilkInode child)
             child.PersistData();
         return created;
@@ -354,7 +562,12 @@ public sealed class SilkInode : IndexedMemoryInode
     public override Dentry Link(Dentry dentry, Inode oldInode)
     {
         var created = base.Link(dentry, oldInode);
-        SyncDentry(created);
+        _metadata.ExecuteTransaction(tx =>
+        {
+            UpsertInodeMetadata(tx, oldInode);
+            tx.UpsertDentry((long)Ino, created.Name, (long)oldInode.Ino);
+            tx.ClearWhiteout((long)Ino, created.Name);
+        });
         return created;
     }
 
@@ -362,79 +575,60 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var victim = Lookup(name)?.Inode;
         base.Unlink(name);
-        SyncSilkInodeMetadata(victim);
-        _metadata.RemoveDentry((long)Ino, name);
-        _metadata.ClearWhiteout((long)Ino, name);
-        TryCleanupOrphan(victim);
+        if (IsNamespaceMutationSuppressed)
+            return;
+
+        _metadata.ExecuteTransaction(tx =>
+        {
+            tx.RemoveDentry((long)Ino, name);
+            tx.ClearWhiteout((long)Ino, name);
+            UpsertInodeMetadataIfLive(tx, victim);
+        });
     }
 
     public override void Rmdir(string name)
     {
         var victim = Lookup(name)?.Inode;
         base.Rmdir(name);
-        SyncSelf();
-        SyncSilkInodeMetadata(victim);
-        _metadata.RemoveDentry((long)Ino, name);
-        _metadata.ClearWhiteout((long)Ino, name);
-        TryCleanupOrphan(victim);
+        if (IsNamespaceMutationSuppressed)
+            return;
+
+        _metadata.ExecuteTransaction(tx =>
+        {
+            UpsertInodeMetadataIfLive(tx, this);
+            tx.RemoveDentry((long)Ino, name);
+            tx.ClearWhiteout((long)Ino, name);
+            UpsertInodeMetadataIfLive(tx, victim);
+        });
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
     {
-        // Capture the existing destination inode BEFORE base.Rename overwrites/unlinks it,
-        // so we can clean it up from the metadata DB afterward.
+        if (Lookup(oldName)?.Inode == null)
+            throw new FileNotFoundException("Source does not exist", oldName);
+
         var overwrittenInode = newParent.Lookup(newName)?.Inode;
-
-        base.Rename(oldName, newParent, newName);
-        _metadata.RemoveDentry((long)Ino, oldName);
-
-        if (newParent.Lookup(newName) is { Inode: not null } moved)
+        using (SuppressNamespaceMetadataMutations())
         {
-            var parentIno = (long)newParent.Ino;
-            var ino = (long)moved.Inode.Ino;
-            _metadata.UpsertDentry(parentIno, newName, ino);
-            SyncSilkInodeMetadata(moved.Inode);
+            base.Rename(oldName, newParent, newName);
         }
 
-        SyncSelf();
-        SyncSilkInodeMetadata(newParent);
-        SyncSilkInodeMetadata(overwrittenInode);
-
-        // If the rename overwrote an existing file, purge its stale data from the DB.
-        // Without this, re-opening the file path after rename would reload old content.
-        if (overwrittenInode != null && overwrittenInode != newParent.Lookup(newName)?.Inode)
-            TryCleanupOrphan(overwrittenInode);
-    }
-
-    private (int OpenRefs, int MapRefs) GetRuntimeRefSnapshot()
-    {
-        return (Math.Max(0, Volatile.Read(ref _openRefCount)), Math.Max(0, Volatile.Read(ref _mmapRefCount)));
-    }
-
-    public override void Open(LinuxFile linuxFile)
-    {
-        base.Open(linuxFile);
-        if (linuxFile.Kind == LinuxFile.ReferenceKind.MmapHold)
-            Interlocked.Increment(ref _mmapRefCount);
-        else
-            Interlocked.Increment(ref _openRefCount);
-    }
-
-    public override void Release(LinuxFile linuxFile)
-    {
-        if (linuxFile.Kind == LinuxFile.ReferenceKind.MmapHold)
+        var movedInode = newParent.Lookup(newName)?.Inode;
+        _metadata.ExecuteTransaction(tx =>
         {
-            if (Interlocked.Decrement(ref _mmapRefCount) < 0)
-                Interlocked.Exchange(ref _mmapRefCount, 0);
-        }
-        else
-        {
-            if (Interlocked.Decrement(ref _openRefCount) < 0)
-                Interlocked.Exchange(ref _openRefCount, 0);
-        }
+            tx.RemoveDentry((long)Ino, oldName);
+            if (movedInode != null && !movedInode.IsEvicted)
+            {
+                UpsertInodeMetadata(tx, movedInode);
+                tx.UpsertDentry((long)newParent.Ino, newName, (long)movedInode.Ino);
+                tx.ClearWhiteout((long)newParent.Ino, newName);
+            }
 
-        base.Release(linuxFile);
-        TryCleanupOrphan(this);
+            UpsertInodeMetadataIfLive(tx, this);
+            UpsertInodeMetadataIfLive(tx, newParent);
+            if (!ReferenceEquals(overwrittenInode, movedInode))
+                UpsertInodeMetadataIfLive(tx, overwrittenInode);
+        });
     }
 
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
@@ -509,32 +703,6 @@ public sealed class SilkInode : IndexedMemoryInode
         return rc;
     }
 
-    private bool TryCleanupOrphan(Inode? inode)
-    {
-        if (inode == null) return false;
-        var ino = (long)inode.Ino;
-        if (ino == SilkMetadataStore.RootInode) return false;
-        var linkRefs = _metadata.CountDentryRefs(ino);
-        if (linkRefs != 0) return false;
-
-        if (inode is SilkInode silk)
-        {
-            var (openRefs, mapRefs) = silk.GetRuntimeRefSnapshot();
-            if (openRefs > 0 || mapRefs > 0) return false;
-        }
-        else
-        {
-            var transientRefs = Math.Max(0, inode.RefCount - inode.Dentries.Count);
-            if (transientRefs > 0) return false;
-        }
-
-        var unrefObject = _metadata.DeleteInodeWithObjectRefCount(ino);
-        if (!string.IsNullOrEmpty(unrefObject))
-            _repository.DeleteObject(unrefObject!);
-        _repository.DeleteLiveInodeData(ino);
-        return true;
-    }
-
     private byte[] ReadPersistedSnapshot()
     {
         if (Type != InodeType.File && Type != InodeType.Symlink) return Array.Empty<byte>();
@@ -604,7 +772,20 @@ public sealed class SilkInode : IndexedMemoryInode
             _mappedPageCache = null;
         }
 
-        TryCleanupOrphan(this);
         base.Release();
+    }
+
+    protected override void OnEvict()
+    {
+        var ino = (long)Ino;
+        if (ino != SilkMetadataStore.RootInode)
+        {
+            var unrefObject = _metadata.DeleteInodeWithObjectRefCount(ino);
+            if (!string.IsNullOrEmpty(unrefObject))
+                _repository.DeleteObject(unrefObject!);
+            _repository.DeleteLiveInodeData(ino);
+        }
+
+        base.OnEvict();
     }
 }

@@ -357,6 +357,118 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
+    public void Silkfs_UnlinkClosedFile_RemovesInodeMetadata()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-unlink-clean-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var vma = new VMAManager();
+            var sm = new SyscallManager(engine, vma, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var file = new Dentry("gone.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(4, file.Inode!.Write(wf, "data"u8.ToArray(), 0));
+            wf.Close();
+
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "gone.txt");
+            Assert.NotNull(ino);
+
+            loc.Dentry.Inode.Unlink("gone.txt");
+
+            Assert.Null(repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "gone.txt"));
+            Assert.Null(repo.Metadata.GetInode(ino!.Value));
+            Assert.Null(repo.Metadata.GetInodeObject(ino.Value));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_RenameOverwrite_RemovesOverwrittenInodeMetadata()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-rename-overwrite-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var vma = new VMAManager();
+            var sm = new SyscallManager(engine, vma, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+            var a = new Dentry("a.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var b = new Dentry("b.txt", null, loc.Dentry, loc.Dentry.SuperBlock);
+            loc.Dentry.Inode!.Create(a, 0x1A4, 0, 0);
+            loc.Dentry.Inode.Create(b, 0x1A4, 0, 0);
+
+            var wa = new LinuxFile(a, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(1, a.Inode!.Write(wa, "A"u8.ToArray(), 0));
+            wa.Close();
+            var wb = new LinuxFile(b, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(1, b.Inode!.Write(wb, "B"u8.ToArray(), 0));
+            wb.Close();
+
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+            var bIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            Assert.NotNull(bIno);
+
+            loc.Dentry.Inode.Rename("a.txt", loc.Dentry.Inode, "b.txt");
+
+            Assert.Null(repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "a.txt"));
+            var newBIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            Assert.NotNull(newBIno);
+            Assert.NotEqual(bIno, newBIno);
+            Assert.Null(repo.Metadata.GetInode(bIno!.Value));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public void Silkfs_UnlinkOpenFile_DefersObjectDeletionUntilClose()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-open-{Guid.NewGuid():N}");
@@ -791,6 +903,124 @@ public class SilkFsAdapterTests
             GlobalPageCacheManager.HighWatermarkBytes = originalHigh;
             GlobalPageCacheManager.LowWatermarkBytes = originalLow;
             GlobalPageCacheManager.WritebackInterval = originalInterval;
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_DropCaches_EvictsInodes_AndIgetReloadsFromMetadata()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-iget-evict-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var vma = new VMAManager();
+            var sm = new SyscallManager(engine, vma, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            var dir = new Dentry("sub", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Mkdir(dir, 0x1ED, 0, 0);
+            var file = new Dentry("data.txt", null, dir, dir.SuperBlock);
+            dir.Inode!.Create(file, 0x1A4, 0, 0);
+
+            var payload = "hello-iget";
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(payload.Length, file.Inode!.Write(wf, System.Text.Encoding.UTF8.GetBytes(payload), 0));
+            wf.Close();
+
+            var before = sm.PathWalkWithFlags("/mnt/sub/data.txt", LookupFlags.FollowSymlink);
+            Assert.True(before.IsValid);
+            var oldInode = before.Dentry!.Inode!;
+
+            var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
+            Assert.True(stats.DentriesDropped > 0);
+            Assert.True(stats.InodesDropped > 0);
+
+            var after = sm.PathWalkWithFlags("/mnt/sub/data.txt", LookupFlags.FollowSymlink);
+            Assert.True(after.IsValid);
+            Assert.NotNull(after.Dentry!.Inode);
+            Assert.NotSame(oldInode, after.Dentry.Inode);
+
+            var rf = new LinuxFile(after.Dentry, FileFlags.O_RDONLY, after.Mount!);
+            var buffer = new byte[32];
+            var n = after.Dentry.Inode!.Read(rf, buffer, 0);
+            rf.Close();
+
+            Assert.Equal(payload.Length, n);
+            Assert.Equal(payload, System.Text.Encoding.UTF8.GetString(buffer, 0, n));
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_DropCaches_DoesNotBreakOpenFileRefs()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-open-{Guid.NewGuid():N}");
+        try
+        {
+            using var engine = new Engine();
+            var vma = new VMAManager();
+            var sm = new SyscallManager(engine, vma, 0);
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            sm.InitializeRoot(rootSb.Root, rootMount);
+
+            var root = sm.Root.Dentry!;
+            if (root.Inode!.Lookup("mnt") == null)
+            {
+                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                root.Children["mnt"] = mntDentry;
+            }
+
+            var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+            Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+            var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            var file = new Dentry("held.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var payload = "keep-open";
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(payload.Length, file.Inode!.Write(wf, System.Text.Encoding.UTF8.GetBytes(payload), 0));
+            wf.Close();
+
+            var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
+            var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
+            Assert.True(stats.DentriesDropped > 0);
+
+            var buffer = new byte[32];
+            var n = rf.OpenedInode!.Read(rf, buffer, 0);
+            Assert.Equal(payload.Length, n);
+            Assert.Equal(payload, System.Text.Encoding.UTF8.GetString(buffer, 0, n));
+            rf.Close();
+            sm.Close();
+        }
+        finally
+        {
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
     }
