@@ -48,6 +48,7 @@ public static class VfsShrinker
         {
             foreach (var sb in superblocks)
             {
+                dentriesDropped += DropDentryCache(sb);
                 if (sb is IDentryCacheDropper dropper)
                     dentriesDropped += dropper.DropDentryCache();
             }
@@ -63,6 +64,23 @@ public static class VfsShrinker
         return new VfsShrinkStats(pageCacheBytesReclaimed, dentriesDropped, inodesEvicted, superblocks.Count);
     }
 
+    internal static long DropDentryCache(SuperBlock sb)
+    {
+        var candidates = sb.SnapshotDentryLru();
+        if (candidates.Count == 0) return 0;
+
+        long dropped = 0;
+        foreach (var candidate in candidates)
+        {
+            if (!candidate.IsTrackedBySuperBlock) continue;
+            if (ReferenceEquals(candidate, sb.Root)) continue;
+            if (candidate.DentryRefCount > 0) continue;
+            dropped += DetachCachedSubtree(candidate);
+        }
+
+        return dropped;
+    }
+
     public static long DetachCachedSubtree(Dentry root)
     {
         if (root.IsMounted) return 0;
@@ -76,6 +94,7 @@ public static class VfsShrinker
             var current = stack.Pop();
             if (!visited.Add(current)) continue;
             if (current.IsMounted) continue;
+            if (ReferenceEquals(current, current.SuperBlock.Root)) continue;
 
             foreach (var child in current.Children.Values.ToList())
                 stack.Push(child);
@@ -83,8 +102,19 @@ public static class VfsShrinker
             if (current.DentryRefCount > 0) continue;
 
             current.ClearCachedChildren("VfsShrinker.DetachCachedSubtree");
+            var detachedFromParent = true;
             if (current.Parent != null && !ReferenceEquals(current.Parent, current))
-                current.Parent.TryUncacheChild(current.Name, "VfsShrinker.DetachCachedSubtree", out _);
+            {
+                if (current.Parent.TryGetCachedChild(current.Name, out var cachedByParent) &&
+                    ReferenceEquals(cachedByParent, current))
+                {
+                    detachedFromParent = current.Parent.TryUncacheChild(
+                        current.Name,
+                        "VfsShrinker.DetachCachedSubtree",
+                        out _);
+                }
+            }
+            if (!detachedFromParent) continue;
 
             var inode = current.Inode;
             if (inode != null)
@@ -92,6 +122,7 @@ public static class VfsShrinker
                 current.UnbindInode("VfsShrinker.DetachCachedSubtree");
             }
 
+            current.UntrackFromSuperBlock("VfsShrinker.DetachCachedSubtree");
             dropped++;
         }
 

@@ -100,6 +100,9 @@ public abstract class SuperBlock
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
+    private readonly HashSet<Dentry> _trackedDentries = [];
+    private readonly LinkedList<Dentry> _dentryLru = new();
+    private readonly Dictionary<long, LinkedListNode<Dentry>> _dentryLruNodes = [];
     public object Lock { get; } = new();
 
     /// <summary>
@@ -133,6 +136,9 @@ public abstract class SuperBlock
         // Subclasses can override to clean up resources
         AllInodes.Clear();
         Inodes.Clear();
+        _trackedDentries.Clear();
+        _dentryLru.Clear();
+        _dentryLruNodes.Clear();
     }
 
     public virtual Inode AllocInode()
@@ -151,6 +157,83 @@ public abstract class SuperBlock
             if (!AllInodes.Add(inode)) return;
             Inodes.Add(inode);
         }
+    }
+
+    internal void EnsureInodeTracked(Inode inode)
+    {
+        TrackInode(inode);
+    }
+
+    internal void RegisterDentry(Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!_trackedDentries.Add(dentry)) return;
+            dentry.MarkTrackedBySuperBlock();
+            if (dentry.DentryRefCount == 0)
+                AddDentryToLruNoLock(dentry);
+        }
+    }
+
+    internal void UnregisterDentry(Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!_trackedDentries.Remove(dentry)) return;
+            RemoveDentryFromLruNoLock(dentry);
+            dentry.MarkUntrackedBySuperBlock();
+        }
+    }
+
+    internal void NotifyDentryRefAcquired(Dentry dentry)
+    {
+        lock (Lock)
+        {
+            RemoveDentryFromLruNoLock(dentry);
+        }
+    }
+
+    internal void NotifyDentryRefReleasedToZero(Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!_trackedDentries.Contains(dentry))
+                return;
+            AddDentryToLruNoLock(dentry);
+        }
+    }
+
+    internal List<Dentry> SnapshotDentryLru()
+    {
+        lock (Lock)
+        {
+            return _dentryLru.ToList();
+        }
+    }
+
+    private void AddDentryToLruNoLock(Dentry dentry)
+    {
+        if (_dentryLruNodes.ContainsKey(dentry.Id))
+        {
+            dentry.SetLruState(true);
+            return;
+        }
+
+        var node = _dentryLru.AddLast(dentry);
+        _dentryLruNodes[dentry.Id] = node;
+        dentry.SetLruState(true);
+    }
+
+    private void RemoveDentryFromLruNoLock(Dentry dentry)
+    {
+        if (!_dentryLruNodes.Remove(dentry.Id, out var node))
+        {
+            dentry.SetLruState(false);
+            return;
+        }
+
+        _dentryLru.Remove(node);
+        dentry.SetLruState(false);
     }
 
     internal void RemoveInodeFromTracking(Inode inode)
@@ -898,6 +981,7 @@ public class Dentry
         Parent = parent;
         SuperBlock = sb;
         IsOnLru = true;
+        EnsureTrackedBySuperBlock("Dentry.ctor");
         if (inode != null) BindInode(inode, "Dentry.ctor");
     }
 
@@ -910,15 +994,14 @@ public class Dentry
     public Dictionary<string, Dentry> Children { get; } = [];
     public int DentryRefCount { get; private set; }
     public bool IsOnLru { get; private set; }
+    public bool IsTrackedBySuperBlock { get; private set; }
 
     // Mount point support
     public bool IsMounted { get; set; }
 
-    /// <summary>
-    ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
-    /// </summary>
     public void Get(string? reason = null)
     {
+        EnsureTrackedBySuperBlock("Dentry.Get");
         var before = DentryRefCount;
         if (before < 0)
         {
@@ -928,15 +1011,14 @@ public class Dentry
         }
 
         DentryRefCount = before + 1;
-        IsOnLru = false;
+        if (before == 0)
+            SuperBlock.NotifyDentryRefAcquired(this);
         VfsDebugTrace.RecordDentryRefChange(this, "Dentry.Get", before, DentryRefCount, reason);
     }
 
-    /// <summary>
-    ///     Legacy no-op. Dentry lifetime is managed by parent-child topology and inode binding.
-    /// </summary>
     public void Put(string? reason = null)
     {
+        EnsureTrackedBySuperBlock("Dentry.Put");
         var before = DentryRefCount;
         if (before <= 0)
         {
@@ -946,7 +1028,8 @@ public class Dentry
         }
 
         DentryRefCount = before - 1;
-        if (DentryRefCount == 0) IsOnLru = true;
+        if (DentryRefCount == 0)
+            SuperBlock.NotifyDentryRefReleasedToZero(this);
         VfsDebugTrace.RecordDentryRefChange(this, "Dentry.Put", before, DentryRefCount, reason);
     }
 
@@ -970,6 +1053,7 @@ public class Dentry
 
     public void CacheChild(Dentry child, string reason)
     {
+        child.EnsureTrackedBySuperBlock($"{reason}.child-track");
         child.Parent = this;
         Children[child.Name] = child;
         VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-add", reason);
@@ -993,6 +1077,14 @@ public class Dentry
     public void BindInode(Inode inode, string reason)
     {
         if (Inode != null) throw new InvalidOperationException("Dentry already bound");
+        if (!ReferenceEquals(inode.SuperBlock, SuperBlock))
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.BindInode superblock mismatch dentry={Name} dentrySb={SuperBlock.Type?.Name} inodeSb={inode.SuperBlock?.Type?.Name} reason={reason}");
+            return;
+        }
+        EnsureTrackedBySuperBlock("Dentry.BindInode");
+        SuperBlock.EnsureInodeTracked(inode);
         Inode = inode;
         Inode.AttachAliasDentry(this, reason);
         Inode.AcquireRef(InodeRefKind.KernelInternal, reason);
@@ -1008,6 +1100,37 @@ public class Dentry
         if (detached)
             inode.ReleaseRef(InodeRefKind.KernelInternal, reason);
         return detached;
+    }
+
+    internal void EnsureTrackedBySuperBlock(string reason)
+    {
+        if (IsTrackedBySuperBlock) return;
+        SuperBlock.RegisterDentry(this);
+        if (!IsTrackedBySuperBlock)
+            VfsDebugTrace.FailInvariant($"Dentry track failed dentry={Name} dentryId={Id} reason={reason}");
+    }
+
+    internal void UntrackFromSuperBlock(string reason)
+    {
+        if (!IsTrackedBySuperBlock) return;
+        SuperBlock.UnregisterDentry(this);
+        if (IsTrackedBySuperBlock)
+            VfsDebugTrace.FailInvariant($"Dentry untrack failed dentry={Name} dentryId={Id} reason={reason}");
+    }
+
+    internal void SetLruState(bool onLru)
+    {
+        IsOnLru = onLru;
+    }
+
+    internal void MarkTrackedBySuperBlock()
+    {
+        IsTrackedBySuperBlock = true;
+    }
+
+    internal void MarkUntrackedBySuperBlock()
+    {
+        IsTrackedBySuperBlock = false;
     }
 }
 

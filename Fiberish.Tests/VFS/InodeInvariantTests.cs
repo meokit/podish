@@ -199,6 +199,54 @@ public class InodeInvariantTests
         }
     }
 
+    [Fact]
+    public void DentryGetPut_TransitionsSuperblockLruMembership()
+    {
+        var sb = new TestSuperBlock();
+        var root = new Dentry("/", null, null, sb);
+        root.Parent = root;
+        sb.Root = root;
+
+        var dentry = new Dentry("leaf", null, root, sb);
+        root.CacheChild(dentry, "test");
+
+        Assert.True(dentry.IsTrackedBySuperBlock);
+        Assert.True(dentry.IsOnLru);
+        Assert.Contains(dentry, sb.SnapshotDentryLru());
+
+        dentry.Get("test");
+        Assert.Equal(1, dentry.DentryRefCount);
+        Assert.False(dentry.IsOnLru);
+        Assert.DoesNotContain(dentry, sb.SnapshotDentryLru());
+
+        dentry.Put("test");
+        Assert.Equal(0, dentry.DentryRefCount);
+        Assert.True(dentry.IsOnLru);
+        Assert.Contains(dentry, sb.SnapshotDentryLru());
+    }
+
+    [Fact]
+    public void DropDentryCache_ReclaimsLeafAndUntracksDentry()
+    {
+        var sb = new TestSuperBlock();
+        var root = new Dentry("/", null, null, sb);
+        root.Parent = root;
+        sb.Root = root;
+        root.Get("test-root-pin");
+
+        var inode = new TestInode(107, sb);
+        var leaf = new Dentry("leaf", inode, root, sb);
+        root.CacheChild(leaf, "test");
+
+        var dropped = VfsShrinker.DropDentryCache(sb);
+
+        Assert.Equal(1, dropped);
+        Assert.False(root.TryGetCachedChild("leaf", out _));
+        Assert.Null(leaf.Inode);
+        Assert.False(leaf.IsTrackedBySuperBlock);
+        Assert.DoesNotContain(leaf, sb.SnapshotDentryLru());
+    }
+
     private sealed class TestSuperBlock : SuperBlock
     {
         public TestSuperBlock()

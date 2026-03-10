@@ -960,7 +960,7 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
         if (dir.UpperDentry == null) return false;
         if (dir.UpperInode.Lookup(name) != null) return false;
 
-        var dentry = new Dentry(name, null, dir.UpperDentry, dir.SuperBlock);
+        var dentry = new Dentry(name, null, dir.UpperDentry, dir.UpperDentry.SuperBlock);
         dir.UpperInode.Mknod(dentry, 0x1B6, 0, 0, InodeType.CharDev, 0); // char 0/0
 
         return true;
