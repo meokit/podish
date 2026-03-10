@@ -260,15 +260,16 @@ public class PathWalker
             next = current.Inode.Lookup(name);
             if (next == null)
             {
+                var lookupError = current.Inode.ConsumeLookupFailureError(name);
                 // For create operations, save the last component and return success
-                if (isLast && (nd.Flags & LookupFlags.Create) != 0)
+                if (isLast && (nd.Flags & LookupFlags.Create) != 0 && lookupError == -(int)Errno.ENOENT)
                 {
                     nd.LastName = name;
                     nd.LastType = LastType.Normal;
                     return true;
                 }
 
-                return nd.SetError(-(int)Errno.ENOENT);
+                return nd.SetError(lookupError);
             }
 
             current.CacheChild(next, "PathWalker.WalkComponent.lookup-cache");

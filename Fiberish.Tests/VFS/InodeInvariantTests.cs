@@ -174,6 +174,47 @@ public class InodeInvariantTests
     }
 
     [Fact]
+    public void ReleaseRef_ToZero_DoesNotEvictWithoutShrinker_WhenLinked()
+    {
+        var sb = new TestSuperBlock();
+        var inode = new TestInode(108, sb);
+        var root = new Dentry("/", null, null, sb);
+        root.Parent = root;
+        sb.Root = root;
+        var alias = new Dentry("leaf", inode, root, sb);
+        Assert.True(alias.UnbindInode("test-setup"));
+
+        inode.SetInitialLinkCount(1, "test");
+        inode.AcquireRef(InodeRefKind.FileOpen, "test");
+
+        inode.ReleaseRef(InodeRefKind.FileOpen, "test");
+
+        Assert.Equal(0, inode.RefCount);
+        Assert.False(inode.IsCacheEvicted);
+        Assert.False(inode.IsFinalized);
+
+        var evicted = VfsShrinker.EvictUnusedInodes(sb);
+        Assert.Equal(1, evicted);
+        Assert.True(inode.IsCacheEvicted);
+    }
+
+    [Fact]
+    public void FinalizeDelete_EvictsImmediately_WhenRefAndLinkDropToZero()
+    {
+        var sb = new TestSuperBlock();
+        var inode = new TestInode(109, sb);
+        inode.SetInitialLinkCount(1, "test");
+        inode.AcquireRef(InodeRefKind.FileOpen, "test");
+
+        inode.DecLink("test");
+        Assert.False(inode.IsFinalized);
+
+        inode.ReleaseRef(InodeRefKind.FileOpen, "test");
+        Assert.True(inode.IsFinalized);
+        Assert.True(inode.IsCacheEvicted);
+    }
+
+    [Fact]
     public void DentryPut_Underflow_ThrowsInStrictMode()
     {
         var strictBefore = VfsDebugTrace.StrictInvariants;

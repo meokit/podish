@@ -335,15 +335,6 @@ public sealed class SilkMetadataStore
         ExecuteTransaction(tx => tx.RemoveDentry(parentIno, name));
     }
 
-    public long CountDentryRefs(long ino)
-    {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(1) FROM dentries WHERE ino = @ino;";
-        cmd.Parameters.AddWithValue("@ino", ino);
-        return Convert.ToInt64(cmd.ExecuteScalar());
-    }
-
     public void DeleteInode(long ino)
     {
         if (ino == RootInode) return;

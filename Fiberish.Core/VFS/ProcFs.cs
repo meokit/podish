@@ -740,6 +740,8 @@ file sealed class ProcSysRootInode : Inode
 
     private static int HandleDropCachesWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset)
     {
+        const int CapSysAdmin = 21;
+
         if (offset != 0) return -(int)Errno.EINVAL;
         if (buffer.Length == 0) return -(int)Errno.EINVAL;
 
@@ -747,8 +749,9 @@ file sealed class ProcSysRootInode : Inode
         if (text.Length == 0) return -(int)Errno.EINVAL;
         if (!int.TryParse(text, out var mode) || mode < 0 || mode > 3) return -(int)Errno.EINVAL;
 
-        // Linux requires privilege (CAP_SYS_ADMIN). Approximate with euid==0.
-        if ((context.Process?.EUID ?? 0) != 0) return -(int)Errno.EPERM;
+        // Linux requires CAP_SYS_ADMIN; keep process-null fallback permissive for test harness callers.
+        if (!(context.Process?.HasEffectiveCapabilityOrRoot(CapSysAdmin) ?? true))
+            return -(int)Errno.EPERM;
 
         var shrinkMode = VfsShrinkMode.None;
         if ((mode & 0x1) != 0)

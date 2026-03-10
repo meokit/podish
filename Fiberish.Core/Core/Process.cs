@@ -86,6 +86,20 @@ public class Process
     public uint[] CapPermitted { get; } = [0U, 0U];
     public uint[] CapInheritable { get; } = [0U, 0U];
 
+    public bool HasEffectiveCapability(int capability)
+    {
+        if (capability < 0) return false;
+        var word = capability / 32;
+        if ((uint)word >= (uint)CapEffective.Length) return false;
+        var bit = capability % 32;
+        return (CapEffective[word] & (1u << bit)) != 0;
+    }
+
+    public bool HasEffectiveCapabilityOrRoot(int capability)
+    {
+        return EUID == 0 || HasEffectiveCapability(capability);
+    }
+
     // Namespaces
     public UTSNamespace UTS { get; set; }
 

@@ -67,24 +67,33 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
+        return TryGetDentry(hostPath, name, parent, out var dentry, out _) ? dentry : null;
+    }
+
+    internal bool TryGetDentry(string hostPath, string name, Dentry? parent, out Dentry? dentry, out int error)
+    {
         var normalizedPath = NormalizeHostPath(hostPath);
+        dentry = null;
+        error = -(int)Errno.ENOENT;
         lock (Lock)
         {
-            if (_dentryCache.TryGetValue(normalizedPath, out var dentry))
+            if (_dentryCache.TryGetValue(normalizedPath, out var cached))
             {
                 if (PathExistsOnHost(normalizedPath))
                 {
                     if (parent != null)
-                        dentry.Parent = parent;
-                    return dentry;
+                        cached.Parent = parent;
+                    dentry = cached;
+                    error = 0;
+                    return true;
                 }
 
                 RemoveDentryNoLock(normalizedPath, recursive: true);
             }
         }
 
-        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var nodeType))
-            return null;
+        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var nodeType, out error))
+            return false;
 
         var identity = nodeInfo.Identity;
         var effectiveNlink = nodeType == InodeType.Directory ? null : nodeInfo.HostLinkCount;
@@ -114,12 +123,13 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         if (effectiveNlink.HasValue)
             inode.UpdateLinkCountFromHost(effectiveNlink.Value, "HostSuperBlock.GetDentry");
 
-        var created = new Dentry(name, inode, parent, this);
+        dentry = new Dentry(name, inode, parent, this);
         lock (Lock)
         {
-            IndexPathNoLock(normalizedPath, created);
+            IndexPathNoLock(normalizedPath, dentry);
         }
-        return created;
+        error = 0;
+        return true;
     }
 
     public override void WriteInode(Inode inode)
@@ -211,20 +221,40 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     internal bool TryResolveVisibleNode(string hostPath, out HostNodeInfo node, out InodeType mappedType)
     {
+        return TryResolveVisibleNode(hostPath, out node, out mappedType, out _);
+    }
+
+    internal bool TryResolveVisibleNode(string hostPath, out HostNodeInfo node, out InodeType mappedType, out int error)
+    {
         mappedType = InodeType.Unknown;
+        error = -(int)Errno.ENOENT;
         var normalizedPath = NormalizeHostPath(hostPath);
         if (!TryResolveRawNode(normalizedPath, out node))
+        {
+            error = -(int)Errno.ENOENT;
             return false;
+        }
         if (!_mountBoundaryPolicy.Allows(HostRoot, normalizedPath, _rootMountDomainId, node.MountDomainId))
+        {
+            error = -(int)Errno.EXDEV;
             return false;
-        return _specialNodePolicy.TryMapType(node.RawType, out mappedType);
+        }
+
+        if (!_specialNodePolicy.TryMapType(node.RawType, out mappedType))
+        {
+            error = -(int)Errno.EOPNOTSUPP;
+            return false;
+        }
+
+        error = 0;
+        return true;
     }
 
     public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
         _ = isDir;
         var normalizedPath = NormalizeHostPath(hostPath);
-        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var type))
+        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var type, out _))
             throw new FileNotFoundException("Path not visible under current hostfs policy", normalizedPath);
 
         var identity = nodeInfo.Identity;
@@ -1438,7 +1468,14 @@ public partial class HostInode : Inode
         if (name == HostfsMetadataStore.MetaDirName) return null;
         var subPath = Path.Combine(ResolveHostPath(), name);
         if (Dentries.Count == 0) return null;
-        return ((HostSuperBlock)SuperBlock).GetDentry(subPath, name, Dentries[0]);
+        if (((HostSuperBlock)SuperBlock).TryGetDentry(subPath, name, Dentries[0], out var dentry, out var error))
+        {
+            SetLookupFailureError(-(int)Errno.ENOENT);
+            return dentry;
+        }
+
+        SetLookupFailureError(error);
+        return null;
     }
 
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)

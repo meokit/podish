@@ -84,7 +84,7 @@
 - `ReleaseRef(InodeRefKind kind, string? reason = null)`
 - `IncLink(string? reason = null)`
 - `DecLink(string? reason = null)`
-- `TryEvictCache()`：当 `RefCount == 0` 时可触发 cache evict
+- `TryEvictCache()`：当 `RefCount == 0` 且 shrinker/drop_caches 驱动时触发 cache evict
 - `TryFinalizeDelete()`：当 `RefCount == 0 && LinkCount == 0` 时触发最终删除
 - `protected virtual OnEvictCache()`：仅释放内存态资源（页缓存、内存索引）
 - `protected virtual OnFinalizeDelete()`：后端最终删除与超级块索引移除
@@ -109,9 +109,9 @@
 4. unlink/rmdir/rename-overwrite/link：按 namespace 语义更新 `LinkCount`
 5. close/munmap/path-unpin：`RefCount -= 1`
 6. 每次 `ReleaseRef/DecLink` 后执行两阶段判定：
-   - `RefCount == 0`：允许进入 inode cache reclaim（`TryEvictCache`）
+   - `RefCount == 0`：进入 unused inode 集合，等待 shrinker/drop_caches 执行 `TryEvictCache`
    - `LinkCount == 0 && RefCount > 0`：orphan（已摘链但仍被打开/映射）
-   - `LinkCount == 0 && RefCount == 0`：触发 `TryFinalizeDelete`（最终删除）
+   - `LinkCount == 0 && RefCount == 0`：触发 `TryFinalizeDelete`（最终删除，随后强制 evict）
 
 补充（dentry 生命周期）：
 
@@ -576,7 +576,6 @@ ReleaseRef(kind):
   assert RefCount > 0
   RefCount -= 1
   RefByKind[kind] -= 1   // 可选，仅debug
-  TryEvictCache()
   TryFinalizeDelete()
 
 IncLink():
@@ -599,6 +598,7 @@ TryFinalizeDelete():
   if LinkCount != 0: return
   IsFinalized = true
   OnFinalizeDelete()
+  TryEvictCache()         // finalized inode 不再保留 cache 形态
 ```
 
 ### Dentry 绑定

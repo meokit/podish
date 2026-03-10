@@ -306,6 +306,7 @@ public abstract class Inode : IPageCacheOps
     public bool HasExplicitLinkCount { get; private set; }
     public bool IsCacheEvicted { get; private set; }
     public bool IsFinalized { get; private set; }
+    private int _lookupFailureError = -(int)Errno.ENOENT;
 
     public void AcquireRef(InodeRefKind kind, string? reason = null)
     {
@@ -355,7 +356,6 @@ public abstract class Inode : IPageCacheOps
 
         RefCount = before - 1;
         VfsDebugTrace.RecordRefChange(this, $"Inode.ReleaseRef.{kind}", before, RefCount, reason);
-        TryEvictCache($"ReleaseRef.{kind}", reason);
         TryFinalizeDelete($"ReleaseRef.{kind}", reason);
     }
 
@@ -426,6 +426,8 @@ public abstract class Inode : IPageCacheOps
         IsFinalized = true;
         VfsDebugTrace.RecordFinalize(this, operation, reason);
         OnFinalizeDelete();
+        // Finalized (nlink=0 && ref=0) inodes are dead objects and should not linger in cache.
+        TryEvictCache($"Finalize.{operation}", reason);
         return true;
     }
 
@@ -529,6 +531,19 @@ public abstract class Inode : IPageCacheOps
 
     protected virtual void OnFinalizeDelete()
     {
+    }
+
+    protected void SetLookupFailureError(int errno)
+    {
+        _lookupFailureError = errno == 0 ? -(int)Errno.ENOENT : errno;
+    }
+
+    public virtual int ConsumeLookupFailureError(string name)
+    {
+        _ = name;
+        var error = _lookupFailureError;
+        _lookupFailureError = -(int)Errno.ENOENT;
+        return error == 0 ? -(int)Errno.ENOENT : error;
     }
 
     // Operations
@@ -983,6 +998,8 @@ public class Dentry
     public int DentryRefCount { get; private set; }
     public bool IsOnLru { get; private set; }
     public bool IsTrackedBySuperBlock { get; private set; }
+    public bool IsHashed { get; private set; }
+    public bool IsNegative => Inode == null;
 
     // Mount point support
     public bool IsMounted { get; set; }
@@ -1114,11 +1131,13 @@ public class Dentry
     internal void MarkTrackedBySuperBlock()
     {
         IsTrackedBySuperBlock = true;
+        IsHashed = true;
     }
 
     internal void MarkUntrackedBySuperBlock()
     {
         IsTrackedBySuperBlock = false;
+        IsHashed = false;
     }
 }
 
