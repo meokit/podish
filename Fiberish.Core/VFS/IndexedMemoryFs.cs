@@ -54,9 +54,6 @@ public abstract class IndexedMemoryInode : Inode
     protected byte[]? SymlinkData;
     protected bool OwnsPageCache;
 
-    // Track open file handles to prevent data loss on unlink-while-open
-    private int _openCount;
-
     // Flock state
     private int _lockType; // 0: None, 1: Shared, 2: Exclusive
     private readonly HashSet<LinuxFile> _sharedHolders = [];
@@ -717,17 +714,8 @@ public abstract class IndexedMemoryInode : Inode
         return list;
     }
 
-    public override void Open(LinuxFile linuxFile)
-    {
-        Interlocked.Increment(ref _openCount);
-    }
-
     protected override void OnEvictCache()
     {
-        if (_openCount != 0)
-            VfsDebugTrace.FailInvariant(
-                $"IndexedMemoryInode.OnEvictCache with open handles ino={Ino} openCount={_openCount}");
-
         if (Type == InodeType.Symlink) SymlinkData = null;
         ReleaseOwnedPageCache();
         ChildNames.Clear();
@@ -736,7 +724,6 @@ public abstract class IndexedMemoryInode : Inode
 
     public override void Release(LinuxFile linuxFile)
     {
-        Interlocked.Decrement(ref _openCount);
         Flock(linuxFile, LinuxConstants.LOCK_UN);
 
         base.Release(linuxFile);

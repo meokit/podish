@@ -12,7 +12,7 @@ public class SignalFdInode : TmpfsInode
     private readonly List<Action> _waiters = [];
     private ulong _sigMask;
     private FiberTask? _hookedTask;
-    private int _openCount;
+    private int _activeHandleCount;
 
     private readonly struct StateScope : IDisposable
     {
@@ -42,12 +42,12 @@ public class SignalFdInode : TmpfsInode
 
     public override void Open(Fiberish.VFS.LinuxFile file)
     {
-        Interlocked.Increment(ref _openCount);
+        Interlocked.Increment(ref _activeHandleCount);
     }
 
     public override void Release(Fiberish.VFS.LinuxFile file)
     {
-        if (Interlocked.Decrement(ref _openCount) == 0)
+        if (Interlocked.Decrement(ref _activeHandleCount) == 0)
         {
             using (EnterStateScope())
             {

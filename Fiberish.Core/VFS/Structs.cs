@@ -429,18 +429,6 @@ public abstract class Inode : IPageCacheOps
         return true;
     }
 
-    [Obsolete("Use AcquireRef(InodeRefKind.KernelInternal, reason) instead.")]
-    public void Get()
-    {
-        AcquireRef(InodeRefKind.KernelInternal, "Inode.Get");
-    }
-
-    [Obsolete("Use ReleaseRef(InodeRefKind.KernelInternal, reason) instead.")]
-    public void Put()
-    {
-        ReleaseRef(InodeRefKind.KernelInternal, "Inode.Put");
-    }
-
     private void EnsureLinkCountInitialized(string source)
     {
         if (HasExplicitLinkCount) return;

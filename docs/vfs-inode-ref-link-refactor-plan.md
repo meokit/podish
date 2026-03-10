@@ -3,7 +3,7 @@
 ## 文档状态
 - Owner: Fiberish Core Maintainers
 - Last Updated: 2026-03-10
-- Status: Draft v0.2
+- Status: Final v1.0
 - Scope: `Fiberish.Core/VFS` + `SyscallHandlers` + 各具体文件系统实现
 
 ## 1. 背景与目标
@@ -249,7 +249,7 @@
 #### 6.2.1 当前行为与 Linux 语义差距（现状分析）
 
 - `inodes.nlink` 当前未作为真相使用，`UpsertInode` 多处固定写 `nlink=1`，与 hardlink/rename-overwrite 语义不一致。
-- orphan 判定当前主要依赖 `CountDentryRefs + 运行时_open/mmap计数`，并未形成统一 `RefCount/LinkCount` 模型。
+- 历史上 orphan 判定曾依赖 `CountDentryRefs + 运行时_open/mmap计数`；该遗留路径已移除并统一到 `RefCount/LinkCount` 模型。
 - 崩溃恢复路径缺少“nlink=0 orphan inode 清理”流程，可能留下 SQLite 中可见但命名空间不可达的僵尸 inode。
 - 挂载时倾向于全量重建 inode 对象，尚未形成按 ino 的 `iget`/缓存淘汰模型。
 
@@ -307,7 +307,7 @@
 #### 6.2.7 实施要求
 
 - 去除 `_openRefCount/_mmapRefCount` 对“是否删除 SQLite inode”的主判据角色，收敛到基类 `RefCount/LinkCount`。
-- `CountDentryRefs` 仅用于校验与迁移期断言，不再作为生命周期真相。
+- `CountDentryRefs` 已从实现中移除；生命周期判据仅允许使用 `RefCount/LinkCount`。
 - `OnFinalizeDelete` 中统一执行 SQLite 最终清理与对象/live 文件回收。
 
 ### 6.3 HostFS（重点）
@@ -469,7 +469,7 @@
   - `IncLink()` / `DecLink()`
   - `TryEvictCache()` / `OnEvictCache()`
   - `TryFinalizeDelete()` / `OnFinalizeDelete()`
-- 兼容迁移期：`Get/Put` 保留但标记 obsolete，内部转发到 `AcquireRef/ReleaseRef(KernelInternal)`。
+- `Get/Put` 兼容壳已移除，调用方必须直接使用 `AcquireRef/ReleaseRef`。
 - 交付物：
   - `Inode` 新 API
   - `stat/statx` 统一读取 `LinkCount`
@@ -721,7 +721,7 @@ MountRecover():
 
 - HostFS 若继续 path-keyed inode，会持续偏离 Linux 语义；必须先完成 inode identity 改造。
 - OverlayFS 视图 inode 与底层 inode 关系复杂，建议先保证“计数不出错”，再做性能优化。
-- 迁移期间允许短期保留兼容层，但必须禁止新逻辑继续依赖旧判据。
+- 兼容层已移除；禁止引入任何旧判据回归。
 
 ## 11. 验收标准（Definition of Done）
 
@@ -736,7 +736,7 @@ MountRecover():
 2. 引用来源可追踪  
    - `AcquireRef/ReleaseRef` 必须带 `InodeRefKind`。  
    - `open/close`、`mmap/munmap`、`PathPin` 三类引用路径必须可在日志中区分。  
-   - 迁移完成后，`Get/Put` 不得再出现在业务路径（仅允许兼容壳或彻底移除）。
+   - `Get/Put` 不得出现在代码库（仅保留 `AcquireRef/ReleaseRef` 路径）。
 
 3. Dentry 绑定原子化  
    - `Dentry` 与 `Inode` 的绑定/解绑必须走统一 API（`BindInode/UnbindInode`）。  
