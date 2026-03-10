@@ -977,6 +977,7 @@ public interface IMagicSymlinkInode
 public class Dentry
 {
     private static long _nextId;
+    private bool _isNegative;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
@@ -984,7 +985,11 @@ public class Dentry
         Parent = parent;
         SuperBlock = sb;
         IsOnLru = true;
+        _isNegative = inode == null;
         EnsureTrackedBySuperBlock("Dentry.ctor");
+        // Root dentry is always considered hashed in this model.
+        if (parent == null)
+            SetHashedState(true);
         if (inode != null) BindInode(inode, "Dentry.ctor");
     }
 
@@ -999,7 +1004,7 @@ public class Dentry
     public bool IsOnLru { get; private set; }
     public bool IsTrackedBySuperBlock { get; private set; }
     public bool IsHashed { get; private set; }
-    public bool IsNegative => Inode == null;
+    public bool IsNegative => _isNegative;
 
     // Mount point support
     public bool IsMounted { get; set; }
@@ -1060,7 +1065,10 @@ public class Dentry
     {
         child.EnsureTrackedBySuperBlock($"{reason}.child-track");
         child.Parent = this;
+        if (Children.TryGetValue(child.Name, out var replaced) && !ReferenceEquals(replaced, child))
+            replaced.SetHashedState(false);
         Children[child.Name] = child;
+        child.SetHashedState(true);
         VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-add", reason);
     }
 
@@ -1068,14 +1076,19 @@ public class Dentry
     {
         if (!Children.Remove(name, out removed))
             return false;
-        VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
+        removed?.SetHashedState(false);
+        if (removed != null)
+            VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
         return true;
     }
 
     public void ClearCachedChildren(string reason)
     {
         foreach (var child in Children.Values)
+        {
+            child.SetHashedState(false);
             VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-clear", reason);
+        }
         Children.Clear();
     }
 
@@ -1091,6 +1104,7 @@ public class Dentry
         EnsureTrackedBySuperBlock("Dentry.BindInode");
         SuperBlock.EnsureInodeTracked(inode);
         Inode = inode;
+        _isNegative = false;
         Inode.AttachAliasDentry(this, reason);
         Inode.AcquireRef(InodeRefKind.KernelInternal, reason);
         VfsDebugTrace.AssertDentryMembership(this, reason);
@@ -1102,6 +1116,7 @@ public class Dentry
         if (inode == null) return false;
         var detached = inode.DetachAliasDentry(this, reason);
         Inode = null;
+        _isNegative = true;
         if (detached)
             inode.ReleaseRef(InodeRefKind.KernelInternal, reason);
         return detached;
@@ -1131,13 +1146,17 @@ public class Dentry
     internal void MarkTrackedBySuperBlock()
     {
         IsTrackedBySuperBlock = true;
-        IsHashed = true;
     }
 
     internal void MarkUntrackedBySuperBlock()
     {
         IsTrackedBySuperBlock = false;
-        IsHashed = false;
+        SetHashedState(false);
+    }
+
+    private void SetHashedState(bool hashed)
+    {
+        IsHashed = hashed;
     }
 }
 

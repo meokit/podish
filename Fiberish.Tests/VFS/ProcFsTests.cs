@@ -290,6 +290,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
             var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
             Assert.Equal("0\n", ReadAll(loc));
@@ -321,6 +322,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
             var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -372,6 +374,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
             var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -422,6 +425,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
             var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -449,6 +453,50 @@ public class ProcFsTests
             Assert.True(rel.IsValid);
             var readBack = ReadAll(rel);
             Assert.Equal("keep-tmpfs", readBack);
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_WriteWithoutCapSysAdmin_ReturnsEperm()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 1000, grantCapSysAdmin: false);
+
+            var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(loc.IsValid);
+            Assert.Equal(-(int)Errno.EPERM, WriteAll(loc, "1\n"));
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_WriteWithCapSysAdmin_AllowsNonRootCaller()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 1000, grantCapSysAdmin: true);
+
+            var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(loc.IsValid);
+            Assert.Equal(2, WriteAll(loc, "1\n"));
         }
         finally
         {
@@ -511,5 +559,29 @@ public class ProcFsTests
         {
             file.Close();
         }
+    }
+
+    private static FiberTask AttachTaskContext(KernelRuntime runtime, int uid, bool grantCapSysAdmin)
+    {
+        var scheduler = new KernelScheduler();
+        var pid = uid == 0 ? 1 : uid + 1000;
+        var process = new Process(pid, runtime.Memory, runtime.Syscalls)
+        {
+            UID = uid,
+            GID = uid,
+            EUID = uid,
+            EGID = uid,
+            SUID = uid,
+            SGID = uid,
+            FSUID = uid,
+            FSGID = uid,
+            PGID = pid,
+            SID = pid
+        };
+        process.SetCapability(Process.CapabilitySysAdmin, grantCapSysAdmin, grantCapSysAdmin, inheritable: false);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, runtime.Engine, scheduler);
+        runtime.Engine.Owner = task;
+        return task;
     }
 }

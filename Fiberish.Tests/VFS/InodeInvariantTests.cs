@@ -252,6 +252,8 @@ public class InodeInvariantTests
         root.CacheChild(dentry, "test");
 
         Assert.True(dentry.IsTrackedBySuperBlock);
+        Assert.True(dentry.IsHashed);
+        Assert.True(dentry.IsNegative);
         Assert.True(dentry.IsOnLru);
         Assert.Contains(dentry, sb.SnapshotDentryLru());
 
@@ -262,6 +264,7 @@ public class InodeInvariantTests
 
         dentry.Put("test");
         Assert.Equal(0, dentry.DentryRefCount);
+        Assert.True(dentry.IsHashed);
         Assert.True(dentry.IsOnLru);
         Assert.Contains(dentry, sb.SnapshotDentryLru());
     }
@@ -278,12 +281,16 @@ public class InodeInvariantTests
         var inode = new TestInode(107, sb);
         var leaf = new Dentry("leaf", inode, root, sb);
         root.CacheChild(leaf, "test");
+        Assert.True(leaf.IsHashed);
+        Assert.False(leaf.IsNegative);
 
         var dropped = VfsShrinker.DropDentryCache(sb);
 
         Assert.Equal(1, dropped);
         Assert.False(root.TryGetCachedChild("leaf", out _));
         Assert.Null(leaf.Inode);
+        Assert.False(leaf.IsHashed);
+        Assert.True(leaf.IsNegative);
         Assert.False(leaf.IsTrackedBySuperBlock);
         Assert.DoesNotContain(leaf, sb.SnapshotDentryLru());
     }

@@ -51,6 +51,7 @@ public struct SigAction
 public class Process
 {
     private static readonly byte[] EmptyCmdline = [];
+    public const int CapabilitySysAdmin = 21;
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
@@ -61,6 +62,8 @@ public class Process
 
         // Default to root
         UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
+        // Minimal capability model: root starts with CAP_SYS_ADMIN effective+permitted.
+        SetCapability(CapabilitySysAdmin, effective: true, permitted: true, inheritable: false);
     }
 
     public int TGID { get; set; }
@@ -86,6 +89,13 @@ public class Process
     public uint[] CapPermitted { get; } = [0U, 0U];
     public uint[] CapInheritable { get; } = [0U, 0U];
 
+    public void SetCapability(int capability, bool effective, bool permitted, bool inheritable)
+    {
+        SetCapabilityBit(CapEffective, capability, effective);
+        SetCapabilityBit(CapPermitted, capability, permitted);
+        SetCapabilityBit(CapInheritable, capability, inheritable);
+    }
+
     public bool HasEffectiveCapability(int capability)
     {
         if (capability < 0) return false;
@@ -98,6 +108,19 @@ public class Process
     public bool HasEffectiveCapabilityOrRoot(int capability)
     {
         return EUID == 0 || HasEffectiveCapability(capability);
+    }
+
+    private static void SetCapabilityBit(uint[] target, int capability, bool enabled)
+    {
+        if (capability < 0) return;
+        var word = capability / 32;
+        if ((uint)word >= (uint)target.Length) return;
+        var bit = capability % 32;
+        var mask = 1u << bit;
+        if (enabled)
+            target[word] |= mask;
+        else
+            target[word] &= ~mask;
     }
 
     // Namespaces

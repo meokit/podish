@@ -3,7 +3,7 @@
 ## 文档状态
 - Owner: Fiberish Core Maintainers
 - Last Updated: 2026-03-10
-- Status: Final v1.0
+- Status: Final v1.1
 - Scope: `Fiberish.Core/VFS` + `SyscallHandlers` + 各具体文件系统实现
 
 ## 1. 背景与目标
@@ -27,6 +27,20 @@
 - `LinkCount > 0`：对象在命名空间可达（即使未打开，也不删除后端对象）
 - `RefCount == 0`：inode 可进入“可回收 cache”状态（允许内存回收）
 - 仅当 `RefCount == 0 && LinkCount == 0`：允许最终删除后端对象
+
+## 1.1 当前实现状态（Final v1.1）
+
+- `inode cache evict` 触发机制：
+  - 常规路径：`RefCount==0` 后仅进入“可回收”集合，由 `VfsShrinker`/`drop_caches` 触发 `TryEvictCache`。
+  - 终态路径：`TryFinalizeDelete` 成功后立即执行 `TryEvictCache`，避免 finalized inode 残留在 cache。
+- `Dentry` 状态语义：
+  - `IsNegative` 由 `BindInode/UnbindInode` 显式维护。
+  - `IsHashed` 由 `CacheChild/TryUncacheChild/ClearCachedChildren` 显式维护。
+- `drop_caches` 权限语义：
+  - `/proc/sys/vm/drop_caches` 写入按 `CAP_SYS_ADMIN` 判定，不再使用纯 `euid==0` 近似。
+- HostFS 策略偏差（显式声明）：
+  - 默认 `SingleDomain` mount boundary 是**策略性偏离** Linux 默认行为（Linux 默认可跨挂载遍历，除非使用 `NO_XDEV` 等限制）。
+  - 该偏差用于保证跨平台行为稳定与安全边界清晰。
 
 ## 2. 设计原则
 
@@ -344,6 +358,7 @@
 - 必须识别并显式处理 mount 边界（Unix `st_dev` 变化，Windows `VolumeId` 变化）。
 - 对不可安全模拟或平台不支持对象，返回明确错误（`ENOTSUP/EPERM`），禁止静默降级为普通文件。
 - `LinkCount` 仅按“可见命名空间链接关系”变化，不受 cache/path 结构偶然性影响。
+- 默认 `SingleDomain` 模式下，跨 host mount domain 访问返回 `EXDEV`（策略性偏离 Linux 默认跨挂载行为）。
 
 #### 6.3.3 备选方案
 
@@ -448,122 +463,7 @@
 - `drop_caches(mode=2)` 后可通过路径访问触发 `iget`，并恢复被回收 inode 的可见语义
 - `clone(CLONE_FS)` 与非 `CLONE_FS` 两条路径下 `chdir/chroot` 可见性符合预期
 
-## 9. 分阶段实施
-
-### Phase A0: 基线冻结与可观测性（先做）
-
-- 在现有 `Get/Put`、`Dentries.Add/Remove`、`stat(nlink)` 输出点加 debug 计数日志（可编译开关）。
-- 建立最小不变量检查：
-  - `RefCount >= 0`
-  - `Dentry.Inode != null` 时该 inode 必须包含该 dentry
-- 交付物：
-  - 新增 `InodeRefTrace` 诊断结构（仅 debug）
-  - 新增 1 组“不变量单测”。
-- 退出条件：
-  - 当前主分支回归全绿，且日志能定位每次引用变化来源。
-
-### Phase A1: Inode 基类双计数 API 落地
-
-- 在 `Inode` 引入 `LinkCount`，并提供统一方法：
-  - `AcquireRef(kind)` / `ReleaseRef(kind)`
-  - `IncLink()` / `DecLink()`
-  - `TryEvictCache()` / `OnEvictCache()`
-  - `TryFinalizeDelete()` / `OnFinalizeDelete()`
-- `Get/Put` 兼容壳已移除，调用方必须直接使用 `AcquireRef/ReleaseRef`。
-- 交付物：
-  - `Inode` 新 API
-  - `stat/statx` 统一读取 `LinkCount`
-  - `RefCount/LinkCount` 负值保护与断言。
-- 退出条件：
-  - 基础单测可覆盖 `create/link/unlink/open/close` 四条计数路径。
-
-### Phase A2: Dentry 绑定原子化
-
-- 引入：
-  - `Dentry.BindInode(inode)` / `Dentry.UnbindInode()`
-  - `Inode.AttachAliasDentry(dentry)` / `Inode.DetachAliasDentry(dentry)`
-- 禁止外部直接操作 `inode.Dentries.Add/Remove`。
-- 引入真实 `DentryRefCount(d_count)` 语义与 LRU 入队/出队规则。
-- 交付物：
-  - 全局替换手工 `Dentries.Add/Remove`
-  - `PathWalker`、`VfsCacheReclaimer`、`rename/unlink` 路径对齐。
-  - dentry 正/负节点回收规则可观测（debug trace）。
-- 退出条件：
-  - dentry 绑定不变量在测试与 debug 模式下持续成立。
-
-### Phase B1: syscall/VFS 通路统一
-
-- `LinuxFile` 构造与 `Close` 改用统一 ref API：
-  - `ReferenceKind.Normal -> FileOpen`
-  - `ReferenceKind.MmapHold -> FileMmap`
-- `cwd/root/procRoot` pin 改为显式 `PathPin` 引用。
-- `PathPin` 扩展为 `mount + dentry + inode(PathPin)` 三元对称引用。
-- `clone(CLONE_FS)` 落地为共享 `fs_struct`；`clone(!CLONE_FS)` 复制 `fs_struct`。
-- `HasActiveInodes` 改为新判据，不再依赖 `Dentries.Count`。
-- 交付物：
-  - `LinuxFile` / `VMAManager` / `SyscallManager` 引用路径统一
-  - `umount` busy 判定语义更新。
-- 退出条件：
-  - `mmap + close(fd)`、`unlink + open fd`、`unlink + mmap` 回归稳定。
-  - `CLONE_FS` 下 `chdir/chroot` 对共享方可见；非 `CLONE_FS` 下隔离可见。
-
-### Phase B2: namespace 语义统一入口
-
-- 将 `link/unlink/rmdir/rename-overwrite` 的 link 计数变化收敛到统一 helper：
-  - `NamespaceOps.ApplyLinkDelta(...)`
-- 所有 FS 不再在散点位置直接“猜测” link 变化。
-- 交付物：
-  - 公共 helper + 各 FS 接入
-  - `rename exchange/overwrite` 计数回归。
-- 退出条件：
-  - `stat/statx` nlink 与预期一致，且跨 FS 一致。
-
-### Phase B3: Shrinker 与缓存回收路径统一
-
-- 引入统一 shrinker：
-  - dcache shrink（`DentryRefCount==0`）
-  - inode cache shrink（`RefCount==0`）
-- 将 `drop_caches` 路径收敛为“cache reclaim only”，禁止业务删除副作用。
-- 交付物：
-  - 统一 `VfsShrinker` 接口与回收统计
-  - `drop_caches` 覆盖 mode=1/2/3 语义回归
-- 退出条件：
-  - `RefCount==0 && LinkCount>0` 的 inode 可被回收并可 `iget` 重建
-  - shrinker 不改变任何可见 `nlink` 语义
-
-### Phase C: FS 逐个迁移（严格串行）
-
-- 顺序：`IndexedMemoryFs/Tmpfs -> SilkFS -> HostFS -> OverlayFS -> LayerFS/ProcFS`
-- 规则：
-  - 每迁移一个 FS，先补测试再改实现；
-  - 通过后再迁移下一个 FS。
-- SilkFS 子阶段固定顺序：
-  - `schema/事务改造 -> nlink语义对齐 -> orphan恢复 -> iget/evict缓存化`
-
-### Phase D: 清理遗留逻辑
-
-- 删除 FS 私有生命周期计数器（如 `_openCount/_openRefCount/_mmapRefCount` 的生死判据角色）。
-- 删除基于 `Dentries.Count` 的近似判据。
-- 收敛回收路径到：
-  - cache evict：`TryEvictCache -> OnEvictCache`
-  - final delete：`TryFinalizeDelete -> OnFinalizeDelete`
-- 交付物：
-  - 代码搜索中不再出现“私有计数决定 inode 生死”模式。
-
-## 9.1 PR 切分建议（可直接执行）
-
-1. PR-1: `Inode` 双计数字段 + cache/finalize 双阶段 API + `stat/statx` nlink 来源修正。  
-2. PR-2: `Dentry` 绑定原子化 API + `DentryRefCount(d_count)` 引入。  
-3. PR-3: `LinuxFile/mmap/path-pin` 引用来源统一。  
-4. PR-4: `NamespaceOps` link 变化统一入口。  
-5. PR-5: `VfsShrinker` + `drop_caches` mode=1/2/3 语义统一。  
-6. PR-6: `IndexedMemoryFs/Tmpfs` 迁移。  
-7. PR-7~9: `SilkFS`（事务、nlink、恢复/iget、evict）。  
-8. PR-10~11: `HostFS`（inode identity + mount boundary）。  
-9. PR-12: `OverlayFS/LayerFS/ProcFS` 收尾。  
-10. PR-13: 删除兼容层与遗留计数逻辑。  
-
-## 9.2 关键行为伪代码（统一语义）
+## 9. 关键行为伪代码（统一语义）
 
 ### Inode 引用与回收
 
