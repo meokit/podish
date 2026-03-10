@@ -68,8 +68,9 @@ public class VMA
             obj = MemoryObject.ForkCloneForPrivate();
         }
 
-        // COW object: private per-process — deep-copy existing COW pages on fork
-        MemoryObject? cowObj = CowObject?.ForkCloneForPrivate();
+        // COW object: private metadata per-process, but pages are initially shared
+        // and split lazily on write fault.
+        MemoryObject? cowObj = CowObject?.ForkCloneSharingPages();
         var clonedFileMapping = FileMapping?.AddRef();
 
         return new VMA

@@ -197,8 +197,13 @@ internal static class ProcessAddressSpaceSync
             if (ReferenceEquals(cpu, engine)) continue;
 
             if (syncShared) SyncSharedMappingsForEngine(vmaManager, cpu, addr, len);
-            cpu.InvalidateRange(addr, len);
-            cpu.MemUnmap(addr, len);
+            vmaManager.TearDownNativeMappings(
+                cpu,
+                addr,
+                len,
+                captureDirtySharedPages: false,
+                invalidateCodeRange: true,
+                releaseExternalPages: false);
         }
     }
 
@@ -222,7 +227,6 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
-        engine.InvalidateRange(addr, len);
         var rc = vmaManager.Mprotect(addr, len, prot, engine);
         if (rc == 0)
             UnmapPeerNativeMappings(vmaManager, engine, addr, len, process, syncShared: true);
@@ -275,7 +279,7 @@ internal static class ProcessAddressSpaceSync
             var engines = SnapshotAddressSpaceEngines(target, fallback);
             if (engines.Count == 0)
             {
-                target.SyncMappedFile(file, engine);
+                target.SyncMappedFile(file, Array.Empty<Engine>());
                 continue;
             }
 
@@ -291,11 +295,8 @@ internal static class ProcessAddressSpaceSync
         if (targets.Length == 0)
         {
             var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-            if (engines.Count == 0)
-                vmaManager.OnFileTruncate(inode, newSize, engine);
-            else
-                foreach (var cpu in engines)
-                    vmaManager.OnFileTruncate(inode, newSize, cpu);
+            if (engines.Count == 0) engines = [engine];
+            vmaManager.OnFileTruncate(inode, newSize, engines);
             return;
         }
 
@@ -303,14 +304,8 @@ internal static class ProcessAddressSpaceSync
         {
             var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
             var engines = SnapshotAddressSpaceEngines(target, fallback);
-            if (engines.Count == 0)
-            {
-                target.OnFileTruncate(inode, newSize, engine);
-                continue;
-            }
-
-            foreach (var cpu in engines)
-                target.OnFileTruncate(inode, newSize, cpu);
+            if (engines.Count == 0) engines = [];
+            target.OnFileTruncate(inode, newSize, engines);
         }
     }
 

@@ -213,6 +213,91 @@ public class MmapSupportTests
         Assert.True(vma.MemoryObject.IsDirty(secondPageIndex));
     }
 
+    [Fact]
+    public async Task Mprotect_PartialPrivateFileMapping_RefaultsAfterUnmapWithoutSegv()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x14000);
+        env.WriteCString(0x14000, "/cow-mprotect");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x14000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x14000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+
+        const uint baseAddr = 0x54000000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+        var mapped = await env.Call("SysMmap2", baseAddr, mapLen, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0);
+        Assert.Equal((int)baseAddr, mapped);
+
+        var middlePage = baseAddr + (uint)LinuxConstants.PageSize;
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, isWrite: true, env.Engine));
+
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr, (uint)(LinuxConstants.PageSize * 2),
+            (uint)Protection.Read));
+
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, isWrite: false, env.Engine));
+    }
+
+    [Fact]
+    public async Task Mprotect_PrivateFileSplit_ReusesSameCowObject()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x15000);
+        env.WriteCString(0x15000, "/cow-share-mprotect");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x15000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x15000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+
+        const uint baseAddr = 0x54100000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0));
+
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+            (uint)Protection.Read));
+
+        var splitVmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + mapLen)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(3, splitVmas.Length);
+        Assert.NotNull(splitVmas[0].CowObject);
+        Assert.Same(splitVmas[0].CowObject, splitVmas[1].CowObject);
+        Assert.Same(splitVmas[0].CowObject, splitVmas[2].CowObject);
+    }
+
+    [Fact]
+    public async Task Munmap_PrivateFileMiddleSplit_ReusesSameCowObject()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x16000);
+        env.WriteCString(0x16000, "/cow-share-munmap");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x16000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x16000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+
+        const uint baseAddr = 0x54200000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0));
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize));
+
+        var splitVmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + mapLen)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(2, splitVmas.Length);
+        Assert.NotNull(splitVmas[0].CowObject);
+        Assert.Same(splitVmas[0].CowObject, splitVmas[1].CowObject);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

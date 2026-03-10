@@ -23,6 +23,7 @@ public class VMAManager
     private readonly List<VMA> _vmas = [];
     private VMA? _lastFaultVma;
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
+    private readonly record struct NativeRange(uint Start, uint Length);
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
 
@@ -65,6 +66,13 @@ public class VMAManager
     private static Inode? ResolveMappedInode(VMA vma)
     {
         return vma.File?.OpenedInode;
+    }
+
+    private static MemoryObject? ShareCowObjectForSplit(VMA vma)
+    {
+        var cow = vma.CowObject;
+        cow?.AddRef();
+        return cow;
     }
 
     private void TrackMappedInodeOnVmaAdded(VMA vma)
@@ -178,10 +186,34 @@ public class VMAManager
         return result;
     }
 
-    public void OnFileTruncate(Inode inode, long newSize, Engine engine)
+    private static uint ComputeRangeEnd(uint addr, uint len)
+    {
+        var end = unchecked(addr + len);
+        return end < addr ? uint.MaxValue : end;
+    }
+
+    public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
+        bool invalidateCodeRange, bool releaseExternalPages)
+    {
+        if (len == 0) return;
+        if (captureDirtySharedPages)
+        {
+            var end = ComputeRangeEnd(addr, len);
+            CaptureDirtySharedPages(engine, addr, end);
+        }
+
+        if (invalidateCodeRange)
+            engine.InvalidateRange(addr, len);
+        engine.MemUnmap(addr, len);
+        if (releaseExternalPages)
+            ExternalPages.ReleaseRange(addr, len);
+    }
+
+    private List<NativeRange> ApplyFileTruncateMetadata(Inode inode, long newSize)
     {
         if (newSize < 0) newSize = 0;
 
+        var ranges = new List<NativeRange>();
         var touchedObjects = new HashSet<MemoryObject>();
         foreach (var vma in _vmas)
         {
@@ -198,11 +230,34 @@ public class VMAManager
                 : vma.Start + (uint)(((validBytes + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize) *
                                      LinuxConstants.PageSize);
             if (invalidateFrom < vma.End)
-                engine.InvalidateRange(invalidateFrom, vma.End - invalidateFrom);
+                ranges.Add(new NativeRange(invalidateFrom, vma.End - invalidateFrom));
         }
 
         foreach (var memoryObject in touchedObjects)
             memoryObject.TruncateToSize(newSize);
+
+        return ranges;
+    }
+
+    public void OnFileTruncate(Inode inode, long newSize, Engine engine)
+    {
+        OnFileTruncate(inode, newSize, [engine]);
+    }
+
+    public void OnFileTruncate(Inode inode, long newSize, IReadOnlyList<Engine> engines)
+    {
+        var ranges = ApplyFileTruncateMetadata(inode, newSize);
+        if (ranges.Count == 0 || engines.Count == 0) return;
+
+        foreach (var engine in engines)
+        foreach (var range in ranges)
+            TearDownNativeMappings(
+                engine,
+                range.Start,
+                range.Length,
+                captureDirtySharedPages: false,
+                invalidateCodeRange: true,
+                releaseExternalPages: true);
     }
 
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset, long filesz,
@@ -370,7 +425,7 @@ public class VMAManager
                     FileBackingLength = tailFileSz,
                     Name = vma.Name,
                     MemoryObject = vma.MemoryObject,
-                    CowObject = vma.CowObject?.ForkCloneForPrivate(),
+                    CowObject = ShareCowObjectForSplit(vma),
                     ViewPageOffset = vma.ViewPageOffset + ((tailStart - vma.Start) / LinuxConstants.PageSize)
                 };
                 vma.MemoryObject.AddRef();
@@ -423,9 +478,13 @@ public class VMAManager
             }
         }
 
-        engine.InvalidateRange(addr, length);
-        engine.MemUnmap(addr, length);
-        ExternalPages.ReleaseRange(addr, length);
+        TearDownNativeMappings(
+            engine,
+            addr,
+            length,
+            captureDirtySharedPages: false,
+            invalidateCodeRange: true,
+            releaseExternalPages: true);
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine)
@@ -491,7 +550,7 @@ public class VMAManager
                 FileBackingLength = 0,
                 Name = vma.Name,
                 MemoryObject = vma.MemoryObject,
-                CowObject = vma.CowObject?.ForkCloneForPrivate(),
+                CowObject = ShareCowObjectForSplit(vma),
                 ViewPageOffset = oldViewPageOffset + ((uint)midDiff / LinuxConstants.PageSize)
             };
             vma.MemoryObject.AddRef();
@@ -536,7 +595,7 @@ public class VMAManager
                     FileBackingLength = 0,
                     Name = vma.Name,
                     MemoryObject = vma.MemoryObject,
-                    CowObject = vma.CowObject?.ForkCloneForPrivate(),
+                    CowObject = ShareCowObjectForSplit(vma),
                     ViewPageOffset = oldViewPageOffset + ((uint)rightDiff / LinuxConstants.PageSize)
                 };
                 vma.MemoryObject.AddRef();
@@ -592,8 +651,13 @@ public class VMAManager
 
         // Capture shared dirty bits before dropping native mappings for this engine.
         // MemUnmap below forces refault with updated VMA perms without clobbering dirty state.
-        CaptureDirtySharedPages(engine, addr, end);
-        engine.MemUnmap(addr, len);
+        TearDownNativeMappings(
+            engine,
+            addr,
+            len,
+            captureDirtySharedPages: true,
+            invalidateCodeRange: true,
+            releaseExternalPages: true);
 
         return 0;
     }
@@ -603,8 +667,14 @@ public class VMAManager
         foreach (var vma in _vmas)
         {
             SyncVMA(vma, engine);
-            // Clear native memory pages and JIT cache (done in C++ side)
-            engine.MemUnmap(vma.Start, vma.End - vma.Start);
+            // Clear native mappings through unified teardown path.
+            TearDownNativeMappings(
+                engine,
+                vma.Start,
+                vma.End - vma.Start,
+                captureDirtySharedPages: false,
+                invalidateCodeRange: true,
+                releaseExternalPages: false);
             vma.MemoryObject.Release();
             vma.CowObject?.Release();
             vma.FileMapping?.Release();
@@ -834,7 +904,8 @@ public class VMAManager
                 if (cowPage != IntPtr.Zero)
                 {
                     if (!ExternalPages.AddMapping(pageStart, cowPage, out var addedRef)) return FaultResult.Segv;
-                    if (!engine.MapExternalPage(pageStart, cowPage, (byte)vma.Perms))
+                    var readPerms = (byte)(vma.Perms & ~Protection.Write);
+                    if (!engine.MapExternalPage(pageStart, cowPage, readPerms))
                     {
                         if (addedRef) ExternalPages.Release(pageStart);
                         return FaultResult.Segv;

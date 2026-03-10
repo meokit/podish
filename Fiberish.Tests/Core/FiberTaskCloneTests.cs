@@ -24,6 +24,27 @@ public class FiberTaskCloneTests
         Assert.Equal(child.TID, BinaryPrimitives.ReadInt32LittleEndian(tidBuf));
     }
 
+    [Fact]
+    public async Task Fork_ChildPrivateMapping_RefaultsIntoChildExternalPages()
+    {
+        using var env = new TestEnv();
+        const uint addr = 0x00410000;
+        env.MapUserPage(addr);
+        Assert.True(env.Engine.CopyToUser(addr, new byte[] { 0x5A }));
+
+        var pageAddr = addr & LinuxConstants.PageMask;
+        Assert.True(env.Vma.ExternalPages.TryGet(pageAddr, out _));
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
+        var childMm = child.Process.Mem;
+        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+
+        var childRead = new byte[1];
+        Assert.True(child.CPU.CopyFromUser(addr, childRead));
+        Assert.Equal((byte)0x5A, childRead[0]);
+        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

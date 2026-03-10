@@ -266,6 +266,29 @@ public sealed class MemoryObject
         return clone;
     }
 
+    /// <summary>
+    /// Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
+    /// Used for fork-time cloning of COW private-page containers so each process gets its own
+    /// metadata object while still deferring physical copy until the next write fault.
+    /// </summary>
+    public MemoryObject ForkCloneSharingPages()
+    {
+        var clone = new MemoryObject(Kind, File, FileBaseOffset, FileSize, false);
+        lock (_lock)
+        {
+            foreach (var (pageIndex, pagePtr) in _pages)
+            {
+                ExternalPageManager.AddRef(pagePtr);
+                clone._pages[pageIndex] = pagePtr;
+                clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+                if (_dirtyPages.Contains(pageIndex))
+                    clone._dirtyPages.Add(pageIndex);
+            }
+        }
+
+        return clone;
+    }
+
     public int PageCount
     {
         get

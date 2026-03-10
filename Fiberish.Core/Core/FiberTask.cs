@@ -1369,15 +1369,19 @@ public class FiberTask
 
             if (!cloneVm)
             {
-                // Unmap all Shared VMAs from the native emulator engine so that they
-                // will fault and be correctly linked back to their shared MemoryObjects.
-                // Otherwise they remain as deep-copied private pages in the new emulator.
+                // Drop all inherited native mappings in the child engine and force refault.
+                // This re-attaches pages through VMAManager/MemoryObject (including COW metadata)
+                // instead of keeping stale deep-copied MMU pages from Engine.Clone(false).
                 foreach (var vma in newMem.VMAs)
                 {
-                    if ((vma.Flags & Fiberish.Memory.MapFlags.Shared) != 0)
-                    {
-                        newCpu.MemUnmap(vma.Start, vma.Length);
-                    }
+                    if (vma.Length == 0) continue;
+                    newMem.TearDownNativeMappings(
+                        newCpu,
+                        vma.Start,
+                        vma.Length,
+                        captureDirtySharedPages: false,
+                        invalidateCodeRange: true,
+                        releaseExternalPages: false);
                 }
             }
 
