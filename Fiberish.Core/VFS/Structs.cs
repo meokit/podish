@@ -292,7 +292,7 @@ public abstract class Inode : IPageCacheOps
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
     private readonly List<Dentry> _dentries = [];
-    private readonly HashSet<VMAManager> _mappedAddressSpaces = [];
+    private VMAManager[] _mappedAddressSpaces = [];
     public IReadOnlyList<Dentry> Dentries => _dentries;
     public object Lock { get; } = new();
 
@@ -519,26 +519,44 @@ public abstract class Inode : IPageCacheOps
 
     internal void RegisterMappedAddressSpace(VMAManager addressSpace)
     {
-        lock (Lock)
-        {
-            _mappedAddressSpaces.Add(addressSpace);
-        }
+        KernelScheduler.Current?.AssertSchedulerThread();
+        foreach (var mapped in _mappedAddressSpaces)
+            if (ReferenceEquals(mapped, addressSpace))
+                return;
+        var next = new VMAManager[_mappedAddressSpaces.Length + 1];
+        Array.Copy(_mappedAddressSpaces, next, _mappedAddressSpaces.Length);
+        next[^1] = addressSpace;
+        _mappedAddressSpaces = next;
     }
 
     internal void UnregisterMappedAddressSpace(VMAManager addressSpace)
     {
-        lock (Lock)
+        KernelScheduler.Current?.AssertSchedulerThread();
+        var index = -1;
+        for (var i = 0; i < _mappedAddressSpaces.Length; i++)
+            if (ReferenceEquals(_mappedAddressSpaces[i], addressSpace))
+            {
+                index = i;
+                break;
+            }
+        if (index < 0) return;
+        if (_mappedAddressSpaces.Length == 1)
         {
-            _mappedAddressSpaces.Remove(addressSpace);
+            _mappedAddressSpaces = [];
+            return;
         }
+        var next = new VMAManager[_mappedAddressSpaces.Length - 1];
+        if (index > 0)
+            Array.Copy(_mappedAddressSpaces, 0, next, 0, index);
+        if (index < _mappedAddressSpaces.Length - 1)
+            Array.Copy(_mappedAddressSpaces, index + 1, next, index, _mappedAddressSpaces.Length - index - 1);
+        _mappedAddressSpaces = next;
     }
 
-    internal List<VMAManager> SnapshotMappedAddressSpaces()
+    internal VMAManager[] SnapshotMappedAddressSpaces()
     {
-        lock (Lock)
-        {
-            return [.. _mappedAddressSpaces];
-        }
+        KernelScheduler.Current?.AssertSchedulerThread();
+        return _mappedAddressSpaces;
     }
 
     public uint GetDebugNlinkForStat(string source, uint nlink)

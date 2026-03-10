@@ -262,13 +262,15 @@ internal static class ProcessAddressSpaceSync
         }
 
         var targets = inode.SnapshotMappedAddressSpaces();
-        if (targets.Count == 0)
-            targets.Add(vmaManager);
+        if (targets.Length == 0)
+        {
+            var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
+            vmaManager.SyncMappedFile(file, engines.Count == 0 ? [engine] : engines);
+            return;
+        }
 
-        var touched = new HashSet<VMAManager>();
         foreach (var target in targets)
         {
-            if (!touched.Add(target)) continue;
             var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
             var engines = SnapshotAddressSpaceEngines(target, fallback);
             if (engines.Count == 0)
@@ -286,13 +288,19 @@ internal static class ProcessAddressSpaceSync
     {
         using var scope = EnterAddressSpaceScope(engine, process);
         var targets = inode.SnapshotMappedAddressSpaces();
-        if (targets.Count == 0)
-            targets.Add(vmaManager);
+        if (targets.Length == 0)
+        {
+            var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
+            if (engines.Count == 0)
+                vmaManager.OnFileTruncate(inode, newSize, engine);
+            else
+                foreach (var cpu in engines)
+                    vmaManager.OnFileTruncate(inode, newSize, cpu);
+            return;
+        }
 
-        var touched = new HashSet<VMAManager>();
         foreach (var target in targets)
         {
-            if (!touched.Add(target)) continue;
             var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
             var engines = SnapshotAddressSpaceEngines(target, fallback);
             if (engines.Count == 0)
