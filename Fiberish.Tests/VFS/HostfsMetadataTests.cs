@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -348,6 +349,93 @@ public class HostfsMetadataTests
             Assert.NotNull(b);
             Assert.Same(a!.Inode, b!.Inode);
             Assert.Equal(2u, a.Inode!.GetLinkCountForStat());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_HardlinkAliases_XAttrPersists_AcrossUnlinkDropCacheAndRemount()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        File.WriteAllText(Path.Combine(tempRoot, "a.txt"), "x");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var source = rootInode.Lookup("a.txt");
+            Assert.NotNull(source);
+            var sourceInode = source!.Inode!;
+            Assert.Equal(0, sourceInode.SetXAttr("user.tag", Encoding.UTF8.GetBytes("alpha"), 0));
+
+            var alias = new Dentry("b.txt", null, sb.Root, sb);
+            rootInode.Link(alias, sourceInode);
+
+            _ = sb.DropDentryCache();
+            var b1 = rootInode.Lookup("b.txt");
+            Assert.NotNull(b1);
+            var buf = new byte[16];
+            var rc1 = b1!.Inode!.GetXAttr("user.tag", buf);
+            Assert.Equal(5, rc1);
+            Assert.Equal("alpha", Encoding.UTF8.GetString(buf, 0, rc1));
+
+            rootInode.Unlink("a.txt");
+            _ = sb.DropDentryCache();
+            var b2 = rootInode.Lookup("b.txt");
+            Assert.NotNull(b2);
+            var rc2 = b2!.Inode!.GetXAttr("user.tag", buf);
+            Assert.Equal(5, rc2);
+            Assert.Equal("alpha", Encoding.UTF8.GetString(buf, 0, rc2));
+
+            var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
+            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            var b3 = sb2.Root.Inode!.Lookup("b.txt");
+            Assert.NotNull(b3);
+            var rc3 = b3!.Inode!.GetXAttr("user.tag", buf);
+            Assert.Equal(5, rc3);
+            Assert.Equal("alpha", Encoding.UTF8.GetString(buf, 0, rc3));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_MetadataStore_ResetsLegacyLayoutToV2()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        File.WriteAllText(Path.Combine(tempRoot, "f"), "x");
+        var metaDir = Path.Combine(tempRoot, ".fiberish_meta");
+        Directory.CreateDirectory(metaDir);
+        File.WriteAllText(Path.Combine(metaDir, "legacy.json"), "{\"Path\":\"/old\"}");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var inode = sb.Root.Inode!.Lookup("f")!.Inode!;
+            Assert.Equal(0, inode.SetXAttr("user.reset", Encoding.UTF8.GetBytes("ok"), 0));
+
+            var manifestPath = Path.Combine(metaDir, "manifest.json");
+            Assert.True(File.Exists(manifestPath));
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            Assert.Equal(2, doc.RootElement.GetProperty("SchemaVersion").GetInt32());
+            Assert.True(Directory.Exists(Path.Combine(metaDir, "paths")));
+            Assert.True(Directory.Exists(Path.Combine(metaDir, "objects")));
+            Assert.True(Directory.Exists(Path.Combine(metaDir, "identities")));
+            Assert.False(File.Exists(Path.Combine(metaDir, "legacy.json")));
         }
         finally
         {

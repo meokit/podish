@@ -102,7 +102,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
 
         inode.ObservePath(normalizedPath);
-        MetadataStore.ApplyToInode(normalizedPath, inode);
+        MetadataStore.ApplyToInode(normalizedPath, identity, inode);
         if (effectiveNlink.HasValue)
             inode.UpdateLinkCountFromHost(effectiveNlink.Value, "HostSuperBlock.GetDentry");
 
@@ -213,7 +213,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
         if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
         inode.ObservePath(normalizedPath);
-        MetadataStore.ApplyToInode(normalizedPath, inode);
+        MetadataStore.ApplyToInode(normalizedPath, identity, inode);
         if (effectiveNlink.HasValue)
             inode.UpdateLinkCountFromHost(effectiveNlink.Value, "HostSuperBlock.InstantiateDentry");
 
@@ -624,194 +624,446 @@ public sealed class HostfsMountOptions
 
 internal sealed class HostfsMetadataStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
+    private const int CurrentSchemaVersion = 2;
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
     public const string MetaDirName = ".fiberish_meta";
-    private readonly string _hostRoot;
     private readonly bool _enabled;
     private readonly string _metaDir;
+    private readonly string _pathsDir;
+    private readonly string _objectsDir;
+    private readonly string _identitiesDir;
+    private readonly string _manifestPath;
+    private readonly object _lock = new();
 
     public HostfsMetadataStore(string hostRoot, bool enabled = true)
     {
         _enabled = enabled;
-        _hostRoot = Path.GetFullPath(hostRoot);
+        var normalizedRoot = Path.GetFullPath(hostRoot);
         // hostRoot can be either a directory mount or a single-file mount.
         // For file mounts, place sidecar metadata under the parent directory.
-        var metaBase = Directory.Exists(_hostRoot)
-            ? _hostRoot
-            : (Path.GetDirectoryName(_hostRoot) ?? _hostRoot);
+        var metaBase = Directory.Exists(normalizedRoot)
+            ? normalizedRoot
+            : (Path.GetDirectoryName(normalizedRoot) ?? normalizedRoot);
         _metaDir = Path.Combine(metaBase, MetaDirName);
-        if (_enabled) Directory.CreateDirectory(_metaDir);
+        _pathsDir = Path.Combine(_metaDir, "paths");
+        _objectsDir = Path.Combine(_metaDir, "objects");
+        _identitiesDir = Path.Combine(_metaDir, "identities");
+        _manifestPath = Path.Combine(_metaDir, "manifest.json");
+
+        if (_enabled)
+            InitializeV2Store();
     }
 
     public bool IsMetaDirPath(string path)
     {
         if (!_enabled) return false;
         var full = Path.GetFullPath(path);
-        return string.Equals(full, _metaDir, StringComparison.Ordinal);
+        return string.Equals(full, _metaDir, PathComparison);
     }
 
-    public bool TryLoad(string hostPath, out HostfsMetaRecord record)
+    public void ApplyToInode(string hostPath, HostInodeKey identity, HostInode inode)
     {
-        if (!_enabled)
-        {
-            record = default!;
-            return false;
-        }
+        if (!_enabled) return;
+        var normalizedPath = NormalizeHostPath(hostPath);
 
-        var metaPath = GetMetaPath(hostPath);
-        if (!File.Exists(metaPath))
+        lock (_lock)
         {
-            record = default!;
-            return false;
-        }
+            var objectId = ResolveObjectIdNoLock(normalizedPath, identity);
+            inode.MetadataObjectId = objectId;
+            if (!TryLoadObjectNoLock(objectId, out var meta))
+                return;
 
-        try
-        {
-            var json = File.ReadAllText(metaPath);
-            var parsed = JsonSerializer.Deserialize(json, HostfsJsonContext.Default.HostfsMetaRecord);
-            if (parsed == null)
+            if (meta.NodeType.HasValue)
             {
-                record = default!;
-                return false;
+                inode.Type = meta.NodeType.Value;
+                inode.Rdev = meta.Rdev ?? 0;
+            }
+        }
+    }
+
+    public Dictionary<string, byte[]> LoadXAttrs(HostInode inode, string hostPath)
+    {
+        if (!_enabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var normalizedPath = NormalizeHostPath(hostPath);
+        lock (_lock)
+        {
+            var objectId = EnsureObjectIdForInodeNoLock(inode, normalizedPath);
+            if (!TryLoadObjectNoLock(objectId, out var meta) || meta.XAttrs == null)
+                return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+
+            var dict = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            foreach (var kv in meta.XAttrs)
+            {
+                try
+                {
+                    dict[kv.Key] = Convert.FromBase64String(kv.Value);
+                }
+                catch
+                {
+                }
             }
 
+            return dict;
+        }
+    }
+
+    public void SaveXAttrs(HostInode inode, string hostPath, Dictionary<string, byte[]> xattrs)
+    {
+        if (!_enabled) return;
+        var normalizedPath = NormalizeHostPath(hostPath);
+        lock (_lock)
+        {
+            var objectId = EnsureObjectIdForInodeNoLock(inode, normalizedPath);
+            var encoded = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kv in xattrs)
+                encoded[kv.Key] = Convert.ToBase64String(kv.Value);
+            var baseRecord = TryLoadObjectNoLock(objectId, out var existing)
+                ? existing
+                : new HostfsObjectRecord(objectId);
+            SaveObjectNoLock(baseRecord with { XAttrs = encoded });
+        }
+    }
+
+    public void WriteMknod(string hostPath, InodeType type, uint rdev)
+    {
+        if (!_enabled) return;
+        var normalizedPath = NormalizeHostPath(hostPath);
+        lock (_lock)
+        {
+            var objectId = ResolveObjectIdNoLock(normalizedPath, null);
+            var baseRecord = TryLoadObjectNoLock(objectId, out var existing)
+                ? existing
+                : new HostfsObjectRecord(objectId);
+            SaveObjectNoLock(baseRecord with
+            {
+                NodeType = type,
+                Rdev = rdev
+            });
+        }
+    }
+
+    public void LinkPath(string sourcePath, string linkedPath, HostInode sourceInode)
+    {
+        if (!_enabled) return;
+        var normalizedSource = NormalizeHostPath(sourcePath);
+        var normalizedLinked = NormalizeHostPath(linkedPath);
+        lock (_lock)
+        {
+            var objectId = sourceInode.MetadataObjectId;
+            if (string.IsNullOrEmpty(objectId))
+            {
+                objectId = ResolveObjectIdNoLock(normalizedSource, null);
+                sourceInode.MetadataObjectId = objectId;
+            }
+
+            SavePathBindingNoLock(new HostfsPathBinding(normalizedLinked, objectId));
+        }
+    }
+
+    public void RemovePath(string hostPath)
+    {
+        if (!_enabled) return;
+        var normalizedPath = NormalizeHostPath(hostPath);
+        lock (_lock)
+        {
+            if (!TryLoadPathBindingNoLock(normalizedPath, out var binding))
+                return;
+
+            DeleteIfExists(GetPathBindingPath(normalizedPath));
+            CollectGarbageNoLock(binding.ObjectId);
+        }
+    }
+
+    public void RenamePath(string oldPath, string newPath)
+    {
+        if (!_enabled) return;
+        var oldFull = NormalizeHostPath(oldPath);
+        var newFull = NormalizeHostPath(newPath);
+        lock (_lock)
+        {
+            if (TryLoadPathBindingNoLock(oldFull, out var direct))
+            {
+                DeleteIfExists(GetPathBindingPath(oldFull));
+                SavePathBindingNoLock(direct with { Path = newFull });
+            }
+
+            var descendants = ReadAllPathBindingsNoLock()
+                .Where(r => r.Path.StartsWith(oldFull + Path.DirectorySeparatorChar, PathComparison))
+                .ToList();
+            foreach (var entry in descendants)
+            {
+                var suffix = entry.Path[oldFull.Length..];
+                var movedPath = newFull + suffix;
+                DeleteIfExists(GetPathBindingPath(entry.Path));
+                SavePathBindingNoLock(entry with { Path = movedPath });
+            }
+        }
+    }
+
+    private void InitializeV2Store()
+    {
+        Directory.CreateDirectory(_metaDir);
+        if (!TryReadManifest(out var manifest) || manifest.SchemaVersion != CurrentSchemaVersion)
+            ResetStoreToSchemaV2();
+        EnsureLayout();
+    }
+
+    private void EnsureLayout()
+    {
+        Directory.CreateDirectory(_pathsDir);
+        Directory.CreateDirectory(_objectsDir);
+        Directory.CreateDirectory(_identitiesDir);
+    }
+
+    private void ResetStoreToSchemaV2()
+    {
+        if (Directory.Exists(_metaDir))
+        {
+            foreach (var file in Directory.GetFiles(_metaDir))
+                File.Delete(file);
+            foreach (var dir in Directory.GetDirectories(_metaDir))
+                Directory.Delete(dir, recursive: true);
+        }
+        else
+        {
+            Directory.CreateDirectory(_metaDir);
+        }
+
+        EnsureLayout();
+        WriteJsonAtomic(_manifestPath, new HostfsMetaManifest(CurrentSchemaVersion),
+            HostfsJsonContext.Default.HostfsMetaManifest);
+    }
+
+    private bool TryReadManifest(out HostfsMetaManifest manifest)
+    {
+        manifest = default!;
+        if (!File.Exists(_manifestPath)) return false;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize(File.ReadAllText(_manifestPath), HostfsJsonContext.Default.HostfsMetaManifest);
+            if (parsed == null) return false;
+            manifest = parsed;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private string EnsureObjectIdForInodeNoLock(HostInode inode, string normalizedPath)
+    {
+        if (!string.IsNullOrEmpty(inode.MetadataObjectId))
+            return inode.MetadataObjectId!;
+
+        var objectId = ResolveObjectIdNoLock(normalizedPath, null);
+        inode.MetadataObjectId = objectId;
+        return objectId;
+    }
+
+    private string ResolveObjectIdNoLock(string normalizedPath, HostInodeKey? identity)
+    {
+        if (TryLoadPathBindingNoLock(normalizedPath, out var binding))
+        {
+            if (identity.HasValue)
+                SaveIdentityBindingNoLock(new HostfsIdentityBinding(identity.Value, binding.ObjectId));
+            return binding.ObjectId;
+        }
+
+        if (identity.HasValue && TryLoadIdentityBindingNoLock(identity.Value, out var identityBinding))
+        {
+            SavePathBindingNoLock(new HostfsPathBinding(normalizedPath, identityBinding.ObjectId));
+            return identityBinding.ObjectId;
+        }
+
+        var objectId = Guid.NewGuid().ToString("N");
+        SaveObjectNoLock(new HostfsObjectRecord(objectId));
+        SavePathBindingNoLock(new HostfsPathBinding(normalizedPath, objectId));
+        if (identity.HasValue)
+            SaveIdentityBindingNoLock(new HostfsIdentityBinding(identity.Value, objectId));
+        return objectId;
+    }
+
+    private bool TryLoadPathBindingNoLock(string normalizedPath, out HostfsPathBinding binding)
+    {
+        var path = GetPathBindingPath(normalizedPath);
+        binding = default!;
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsPathBinding);
+            if (parsed == null) return false;
+            binding = parsed;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryLoadIdentityBindingNoLock(HostInodeKey identity, out HostfsIdentityBinding binding)
+    {
+        var path = GetIdentityBindingPath(identity);
+        binding = default!;
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsIdentityBinding);
+            if (parsed == null) return false;
+            binding = parsed;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryLoadObjectNoLock(string objectId, out HostfsObjectRecord record)
+    {
+        var path = GetObjectPath(objectId);
+        record = default!;
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsObjectRecord);
+            if (parsed == null) return false;
             record = parsed;
             return true;
         }
         catch
         {
-            record = default!;
             return false;
         }
     }
 
-    public void Save(string hostPath, HostfsMetaRecord record)
+    private List<HostfsPathBinding> ReadAllPathBindingsNoLock()
     {
-        if (!_enabled) return;
-        var normalizedPath = Path.GetFullPath(hostPath);
-        var metaPath = GetMetaPath(normalizedPath);
-        var toSave = record with { Path = normalizedPath };
-        File.WriteAllText(metaPath, JsonSerializer.Serialize(toSave, HostfsJsonContext.Default.HostfsMetaRecord));
-    }
-
-    public void Remove(string hostPath)
-    {
-        if (!_enabled) return;
-        var metaPath = GetMetaPath(hostPath);
-        if (File.Exists(metaPath)) File.Delete(metaPath);
-    }
-
-    public void RenameMetadata(string oldPath, string newPath)
-    {
-        if (!_enabled) return;
-        var oldFull = Path.GetFullPath(oldPath);
-        var newFull = Path.GetFullPath(newPath);
-
-        if (File.Exists(oldFull) || Directory.Exists(oldFull))
-        {
-            // The host path moved already. We only need metadata remap.
-        }
-
-        if (TryLoad(oldFull, out var direct))
-        {
-            Remove(oldFull);
-            Save(newFull, direct with { Path = newFull });
-        }
-
-        // Directory rename: remap all descendants.
-        var records = ReadAllRecords().ToList();
-        foreach (var r in records)
-        {
-            if (!r.Path.StartsWith(oldFull + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
-            var suffix = r.Path[oldFull.Length..];
-            var movedPath = newFull + suffix;
-            Remove(r.Path);
-            Save(movedPath, r with { Path = movedPath });
-        }
-    }
-
-    public void ApplyToInode(string hostPath, HostInode inode)
-    {
-        if (!_enabled) return;
-        if (!TryLoad(hostPath, out var meta)) return;
-        if (meta.NodeType.HasValue)
-        {
-            inode.Type = meta.NodeType.Value;
-            inode.Rdev = meta.Rdev ?? 0;
-        }
-    }
-
-    public Dictionary<string, byte[]> LoadXAttrs(string hostPath)
-    {
-        if (!_enabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        if (!TryLoad(hostPath, out var meta) || meta.XAttrs == null)
-            return new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        var dict = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (var kv in meta.XAttrs)
+        var result = new List<HostfsPathBinding>();
+        if (!Directory.Exists(_pathsDir)) return result;
+        foreach (var file in Directory.GetFiles(_pathsDir, "*.json"))
         {
             try
             {
-                dict[kv.Key] = Convert.FromBase64String(kv.Value);
+                var parsed = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsPathBinding);
+                if (parsed != null) result.Add(parsed);
             }
             catch
             {
             }
         }
 
-        return dict;
+        return result;
     }
 
-    public void SaveXAttrs(string hostPath, Dictionary<string, byte[]> xattrs)
+    private IEnumerable<string> EnumerateIdentityFilesByObjectIdNoLock(string objectId)
     {
-        if (!_enabled) return;
-        var hasExisting = TryLoad(hostPath, out var existing);
-        var encoded = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var kv in xattrs)
-            encoded[kv.Key] = Convert.ToBase64String(kv.Value);
-        var baseRecord = hasExisting ? existing : new HostfsMetaRecord(Path.GetFullPath(hostPath));
-        Save(hostPath, baseRecord with { XAttrs = encoded });
-    }
-
-    public void SaveMknod(string hostPath, InodeType type, uint rdev)
-    {
-        if (!_enabled) return;
-        var hasExisting = TryLoad(hostPath, out var existing);
-        var baseRecord = hasExisting ? existing : new HostfsMetaRecord(Path.GetFullPath(hostPath));
-        Save(hostPath, baseRecord with
+        if (!Directory.Exists(_identitiesDir)) yield break;
+        foreach (var file in Directory.GetFiles(_identitiesDir, "*.json"))
         {
-            NodeType = type,
-            Rdev = rdev
-        });
-    }
-
-    private IEnumerable<HostfsMetaRecord> ReadAllRecords()
-    {
-        if (!Directory.Exists(_metaDir)) yield break;
-        foreach (var file in Directory.GetFiles(_metaDir, "*.json"))
-        {
-            HostfsMetaRecord? record = null;
+            HostfsIdentityBinding? parsed = null;
             try
             {
-                record = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsMetaRecord);
+                parsed = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsIdentityBinding);
             }
             catch
             {
             }
 
-            if (record != null) yield return record;
+            if (parsed != null && string.Equals(parsed.ObjectId, objectId, StringComparison.Ordinal))
+                yield return file;
         }
     }
 
-    private string GetMetaPath(string hostPath)
+    private void SavePathBindingNoLock(HostfsPathBinding binding)
     {
-        var full = Path.GetFullPath(hostPath);
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(full))).ToLowerInvariant();
-        return Path.Combine(_metaDir, $"{key}.json");
+        WriteJsonAtomic(GetPathBindingPath(binding.Path), binding, HostfsJsonContext.Default.HostfsPathBinding);
+    }
+
+    private void SaveIdentityBindingNoLock(HostfsIdentityBinding binding)
+    {
+        WriteJsonAtomic(GetIdentityBindingPath(binding.Identity), binding, HostfsJsonContext.Default.HostfsIdentityBinding);
+    }
+
+    private void SaveObjectNoLock(HostfsObjectRecord record)
+    {
+        WriteJsonAtomic(GetObjectPath(record.ObjectId), record, HostfsJsonContext.Default.HostfsObjectRecord);
+    }
+
+    private void CollectGarbageNoLock(string objectId)
+    {
+        var stillReferenced = ReadAllPathBindingsNoLock()
+            .Any(b => string.Equals(b.ObjectId, objectId, StringComparison.Ordinal));
+        if (stillReferenced) return;
+
+        DeleteIfExists(GetObjectPath(objectId));
+        foreach (var identityFile in EnumerateIdentityFilesByObjectIdNoLock(objectId))
+            DeleteIfExists(identityFile);
+    }
+
+    private static string NormalizeHostPath(string hostPath)
+    {
+        return Path.GetFullPath(hostPath);
+    }
+
+    private static string CanonicalizePathKey(string hostPath)
+    {
+        var full = NormalizeHostPath(hostPath);
+        return OperatingSystem.IsWindows() ? full.ToUpperInvariant() : full;
+    }
+
+    private static string ComputeHashKey(string raw)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
+    }
+
+    private string GetPathBindingPath(string hostPath)
+    {
+        return Path.Combine(_pathsDir, $"{ComputeHashKey(CanonicalizePathKey(hostPath))}.json");
+    }
+
+    private string GetObjectPath(string objectId)
+    {
+        return Path.Combine(_objectsDir, $"{objectId}.json");
+    }
+
+    private string GetIdentityBindingPath(HostInodeKey identity)
+    {
+        var fallback = string.IsNullOrEmpty(identity.FallbackPath) ? string.Empty : CanonicalizePathKey(identity.FallbackPath);
+        var key = $"{identity.Scheme}|{identity.Value0}|{identity.Value1}|{fallback}";
+        return Path.Combine(_identitiesDir, $"{ComputeHashKey(key)}.json");
+    }
+
+    private static void WriteJsonAtomic<T>(string path, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> jsonType)
+    {
+        var tempPath = $"{path}.tmp-{Guid.NewGuid():N}";
+        var payload = JsonSerializer.Serialize(value, jsonType);
+        File.WriteAllText(tempPath, payload);
+        File.Move(tempPath, path, overwrite: true);
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
     }
 }
 
-internal sealed record HostfsMetaRecord(
+internal sealed record HostfsMetaManifest(int SchemaVersion);
+
+internal sealed record HostfsPathBinding(
     string Path,
+    string ObjectId);
+
+internal sealed record HostfsIdentityBinding(
+    HostInodeKey Identity,
+    string ObjectId);
+
+internal sealed record HostfsObjectRecord(
+    string ObjectId,
     InodeType? NodeType = null,
     uint? Rdev = null,
     Dictionary<string, string>? XAttrs = null);
@@ -988,6 +1240,7 @@ public partial class HostInode : Inode
     private readonly object _mappedCacheLock = new();
     private MappedFilePageCache? _mappedPageCache;
     private string _hostPath;
+    private string? _metadataObjectId;
     private readonly HashSet<string> _aliasPaths = new(OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal);
@@ -1038,6 +1291,12 @@ public partial class HostInode : Inode
         }
     }
     public override bool SupportsMmap => Type == InodeType.File;
+
+    internal string? MetadataObjectId
+    {
+        get => _metadataObjectId;
+        set => _metadataObjectId = value;
+    }
 
     public override ulong Size
     {
@@ -1141,7 +1400,7 @@ public partial class HostInode : Inode
         } // Create empty file
 
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.Remove(subPath);
+        sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         return dentry;
     }
@@ -1155,7 +1414,7 @@ public partial class HostInode : Inode
         Directory.CreateDirectory(subPath);
 
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.Remove(subPath);
+        sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, true, mode);
         if (dentry.Inode != null)
             NamespaceOps.OnDirectoryCreated(this, dentry.Inode, "HostInode.Mkdir");
@@ -1174,7 +1433,7 @@ public partial class HostInode : Inode
         }
 
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.SaveMknod(subPath, type, rdev);
+        sb.MetadataStore.WriteMknod(subPath, type, rdev);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         if (dentry.Inode != null)
         {
@@ -1199,7 +1458,7 @@ public partial class HostInode : Inode
         {
             var dentry = sb.GetDentry(subPath, name, null);
             File.Delete(subPath);
-            sb.MetadataStore.Remove(subPath);
+            sb.MetadataStore.RemovePath(subPath);
             NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
             dentry?.UnbindInode("HostInode.Unlink");
             if (Dentries.Count > 0)
@@ -1222,7 +1481,7 @@ public partial class HostInode : Inode
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(subPath, name, null);
         Directory.Delete(subPath, false);
-        sb.MetadataStore.Remove(subPath);
+        sb.MetadataStore.RemovePath(subPath);
         if (dentry?.Inode != null)
         {
             NamespaceOps.OnDirectoryRemoved(this, dentry.Inode, "HostInode.Rmdir");
@@ -1282,6 +1541,7 @@ public partial class HostInode : Inode
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 _ = targetParent.Dentries[0].TryUncacheChild(newName, "HostInode.Rename.overwrite-target", out _);
+            sb.MetadataStore.RemovePath(newFullPath);
             sb.RemoveDentry(newFullPath);
         }
 
@@ -1290,7 +1550,7 @@ public partial class HostInode : Inode
         else
             File.Move(oldFullPath, newFullPath);
 
-        sb.MetadataStore.RenameMetadata(oldFullPath, newFullPath);
+        sb.MetadataStore.RenamePath(oldFullPath, newFullPath);
 
         // Update cache and internal path
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
@@ -1340,11 +1600,13 @@ public partial class HostInode : Inode
         if (oldInode is not HostInode hi) throw new InvalidOperationException("Not a host inode");
 
         var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
-        if (link(hi.ResolveHostPath(), newPath) != 0)
+        var sourcePath = hi.ResolveHostPath();
+        if (link(sourcePath, newPath) != 0)
             throw new IOException($"link failed with error {Marshal.GetLastPInvokeError()}");
 
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
+        sb.MetadataStore.LinkPath(sourcePath, newPath, hi);
         NamespaceOps.OnLinkAdded(oldInode, "HostInode.Link");
         sb.AddDentry(newPath, dentry);
         if (Dentries.Count > 0)
@@ -1362,7 +1624,7 @@ public partial class HostInode : Inode
 
         File.CreateSymbolicLink(newPath, target);
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.Remove(newPath);
+        sb.MetadataStore.RemovePath(newPath);
         sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
         return dentry;
     }
@@ -1790,7 +2052,7 @@ public partial class HostInode : Inode
     {
         if (_xattrs != null) return;
         var sb = (HostSuperBlock)SuperBlock;
-        _xattrs = sb.MetadataStore.LoadXAttrs(ResolveHostPath());
+        _xattrs = sb.MetadataStore.LoadXAttrs(this, ResolveHostPath());
     }
 
     private int ComputeInitialLinkCount()
@@ -1824,7 +2086,7 @@ public partial class HostInode : Inode
     private void PersistXAttrs()
     {
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.SaveXAttrs(ResolveHostPath(), _xattrs!);
+        sb.MetadataStore.SaveXAttrs(this, ResolveHostPath(), _xattrs!);
     }
 
     internal void ObservePath(string hostPath)
