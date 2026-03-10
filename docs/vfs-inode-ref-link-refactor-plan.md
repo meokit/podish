@@ -1,24 +1,32 @@
-# VFS Inode 统一引用模型改造方案（RefCount + LinkCount）
+# VFS Inode/Dentry 统一引用模型改造方案（RefCount + LinkCount + DentryRefCount）
 
 ## 文档状态
 - Owner: Fiberish Core Maintainers
-- Last Updated: 2026-03-09
-- Status: Draft v0.1
+- Last Updated: 2026-03-10
+- Status: Draft v0.2
 - Scope: `Fiberish.Core/VFS` + `SyscallHandlers` + 各具体文件系统实现
 
 ## 1. 背景与目标
 
 当前实现里，`Inode` 基类已有 `RefCount`，但多处生命周期语义仍然分散在各文件系统中（例如 HostFS/SilkFS 的额外计数与清理逻辑）。  
-目标是对齐 Linux 的核心模型，并统一收敛到 `Inode`：
+目标是对齐 Linux 的核心模型，并统一收敛 inode/dentry 生命周期语义：
 
 - `RefCount` 对齐 Linux `i_count`（内核对象被引用次数）
 - `LinkCount` 对齐 Linux `i_nlink`（命名空间中硬链接数量）
+- `DentryRefCount` 对齐 Linux `d_count`（dcache 对象内存引用次数）
+
+同时引入 Linux 风格的 cache 分层语义：
+
+- `inode cache` / `dcache` 可在 `RefCount==0` / `DentryRefCount==0` 时被 shrinker 回收
+- cache 回收不等于后端删除
+- 仅在 `RefCount==0 && LinkCount==0` 时允许最终删除后端对象
 
 最终判定规则：
 
 - `RefCount > 0`：inode 必须存活（不可销毁）
 - `LinkCount > 0`：对象在命名空间可达（即使未打开，也不删除后端对象）
-- 仅当 `RefCount == 0 && LinkCount == 0`：允许最终回收/删除后端对象
+- `RefCount == 0`：inode 可进入“可回收 cache”状态（允许内存回收）
+- 仅当 `RefCount == 0 && LinkCount == 0`：允许最终删除后端对象
 
 ## 2. 设计原则
 
@@ -35,10 +43,19 @@
    FS 只在 `create/link/unlink/rename/...` 等 namespace 事件中改动 `LinkCount`，不直接决定 inode 最终生死。
 
 5. 回收路径统一  
-   回收条件与回调统一由基类触发（`TryFinalize`/`OnEvict`），FS 只实现后端清理细节。
+   回收语义统一由基类驱动，区分：
+   - cache evict（仅内存对象回收）
+   - final delete（后端对象最终删除）
+   FS 只实现后端清理细节。
 
 6. 不依赖“缓存结构偶然性”  
    dentry cache、children 字典、path cache 都不能作为生命周期判据。
+
+7. dentry/inode 双对象模型  
+   `DentryRefCount` 与 `Inode.RefCount/LinkCount` 分工明确，禁止混用。
+
+8. Shrinker 驱动回收  
+   dcache/inode cache 的回收必须由统一 shrinker 路径驱动，并且不改变命名空间 link 语义。
 
 ## 3. 核心数据模型（拟）
 
@@ -46,7 +63,20 @@
 
 - `int RefCount`：运行时引用计数
 - `int LinkCount`：硬链接计数
-- `bool IsEvicted`：防重复回收保护
+- `bool IsCacheEvicted`：inode 内存对象是否已从 cache 回收
+- `bool IsFinalized`：后端对象是否已最终删除（防重复）
+
+在 `Dentry`（或等价 lockref 结构）新增/收敛：
+
+- `int DentryRefCount`：dentry 内存引用计数（对齐 `d_count`）
+- `bool IsHashed`：是否在 dcache 哈希中
+- `bool IsNegative`：负 dentry（lookup miss 缓存）
+
+在 `SuperBlock` 新增/收敛：
+
+- `active inode set`：有活动引用或近期活跃对象
+- `unused inode LRU`：`RefCount==0` 的 cache inode 候选队列
+- `dcache LRU`：`DentryRefCount==0` 的 dentry 候选队列
 
 建议 API：
 
@@ -54,8 +84,10 @@
 - `ReleaseRef(InodeRefKind kind, string? reason = null)`
 - `IncLink(string? reason = null)`
 - `DecLink(string? reason = null)`
-- `TryFinalize()`：当 `RefCount == 0 && LinkCount == 0` 时触发
-- `protected virtual OnEvict()`：FS 后端资源释放与 inode 从 superblock 索引移除
+- `TryEvictCache()`：当 `RefCount == 0` 时可触发 cache evict
+- `TryFinalizeDelete()`：当 `RefCount == 0 && LinkCount == 0` 时触发最终删除
+- `protected virtual OnEvictCache()`：仅释放内存态资源（页缓存、内存索引）
+- `protected virtual OnFinalizeDelete()`：后端最终删除与超级块索引移除
 
 `InodeRefKind`（建议）：
 
@@ -65,7 +97,9 @@
 - `KernelInternal`
 
 说明：  
-是否保留“按 kind 分桶计数”作为调试项可选；生命周期判据仍只使用总 `RefCount`。
+- `RefByKind` 分桶计数可选（调试用途）。  
+- 生命周期判据禁止使用 `Dentries.Count` 近似推导。  
+- dentry 与 inode 的关系是“dentry 引用 inode”，不是“dentry 数量决定 link 数”。
 
 ## 4. 生命周期状态机（统一）
 
@@ -74,10 +108,16 @@
 3. open/mmap/path-pin：`RefCount += 1`
 4. unlink/rmdir/rename-overwrite/link：按 namespace 语义更新 `LinkCount`
 5. close/munmap/path-unpin：`RefCount -= 1`
-6. 每次 `ReleaseRef/DecLink` 后调用 `TryFinalize`：
-   - `LinkCount > 0`：保留
+6. 每次 `ReleaseRef/DecLink` 后执行两阶段判定：
+   - `RefCount == 0`：允许进入 inode cache reclaim（`TryEvictCache`）
    - `LinkCount == 0 && RefCount > 0`：orphan（已摘链但仍被打开/映射）
-   - `LinkCount == 0 && RefCount == 0`：触发 `OnEvict`（最终删除）
+   - `LinkCount == 0 && RefCount == 0`：触发 `TryFinalizeDelete`（最终删除）
+
+补充（dentry 生命周期）：
+
+1. dentry 创建并入 hash：`DentryRefCount` 初始化并受 path/file 持有影响
+2. `DentryRefCount == 0`：进入 dcache LRU，可被 shrinker 回收
+3. 回收 dentry 时，若为正 dentry，需要对其关联 inode 做对称 `iput/ReleaseRef(KernelInternal)`
 
 ## 5. VFS 公共层改造
 
@@ -86,6 +126,7 @@
 - `Dentry` 构造/`Instantiate` 不再隐式代表 link 变化。
 - `Dentries` 列表仅作为“指向该 inode 的缓存 dentry 反向索引”，不是链接数。
 - 所有从目录树剥离 dentry 的路径必须对称地 `inode.Dentries.Remove(dentry)`，但不自动改 `LinkCount`。
+- 引入真实 `DentryRefCount`（`d_count` 语义），不再以 no-op 表达 dentry 生命周期。
 
 ### 5.2 LinuxFile / mmap
 
@@ -102,6 +143,7 @@
 
 - 所有 FS 创建 inode 必须注册到 `SuperBlock` 的统一 inode 集合（用于回收扫描与 debug）。
 - `HasActiveInodes()` 改为基于统一引用模型，不再依赖 `RefCount > Dentries.Count` 这类近似逻辑。
+- 增加 `unused inode LRU` 与 `dcache LRU` 管理结构，为 shrinker 提供统一候选集。
 
 ### 5.5 通用 Inode/Dentry 当前缺口与语义澄清
 
@@ -117,7 +159,7 @@
    - 既有 `Release(LinuxFile)`（文件关闭回调）又有 `protected Release()`（引用归零回调），易误用。
 
 4. `Dentry` 引用计数语义不完整  
-   - `Dentry._refCount` 只有加减，没有归零行为定义（detach/free），当前基本不可作为生命周期机制。
+   - 缺少 Linux 对齐的 `d_count` 语义（当前为 no-op 或伪计数），无法正确表达 dcache LRU 回收。
 
 5. `Dentry <-> Inode` 绑定关系缺少原子 API  
    - 现在大量手工操作 `inode.Dentries.Add/Remove + inode.Get/Put + parent.Children`，容易不对称。
@@ -131,14 +173,20 @@
 8. dcache 语义未明确定义  
    - 负 dentry、失效策略、缓存 dentry 与命名空间 dentry 的边界不清晰。
 
+9. shrinker 语义缺口  
+   - 尚未严格区分“cache evict”与“final delete”，导致 `RefCount==0` 的 inode cache 回收与后端删除边界模糊。
+
 #### 5.5.2 建议的通用不变量（实现必须满足）
 
 - `LinkCount >= 0`，`RefCount >= 0`，禁止出现负计数。
+- `DentryRefCount >= 0`，禁止出现 dentry 引用下溢。
 - 仅 `LinkCount` 表示命名空间可达性；`Dentries.Count` 仅是缓存/别名索引。
 - 所有 inode 绑定/解绑必须走统一入口，禁止散落手工改 `Dentries`。
 - 所有 `RefCount` 增减必须可归因到 `InodeRefKind`。
 - `stat/statx` 的 `nlink` 统一来自 `LinkCount`。
-- 回收唯一入口：`RefCount==0 && LinkCount==0` -> `OnEvict`。
+- cache 回收入口：`RefCount==0` -> `TryEvictCache`（不改 link，不删后端）。
+- 最终删除入口：`RefCount==0 && LinkCount==0` -> `TryFinalizeDelete`。
+- dentry shrink 回收必须对称释放 inode 绑定引用（正 dentry）。
 
 #### 5.5.3 建议新增/重命名的基础 API
 
@@ -147,7 +195,7 @@
   - `IncLink()` / `DecLink()`
   - `AttachAliasDentry(dentry)` / `DetachAliasDentry(dentry)`
   - `OnFileOpen(file)` / `OnFileClose(file)`（替代易混淆 `Open/Release(LinuxFile)` 命名）
-  - `OnEvict()`（替代 `protected Release()` 命名）
+  - `OnEvictCache()` / `OnFinalizeDelete()`（替代单一 `OnEvict` 语义）
 
 - Dentry：
   - `BindInode(inode)` / `UnbindInode()`
@@ -159,6 +207,22 @@
 - `unlink/rmdir`：先 namespace 解绑，再 `DecLink`，不直接影响现存 open/mmap 引用。
 - `rename`：非覆盖不改 link；覆盖目标只对被覆盖 inode `DecLink`。
 - `drop_caches`：只能清理 dcache/无引用 inode cache，不得改变 `LinkCount`。
+
+### 5.6 Shrinker 与 Cache 回收语义（新增）
+
+- 统一引入 `VfsShrinker`（或等价模块）：
+  - shrink dcache：仅处理 `DentryRefCount==0` 的候选 dentry。
+  - shrink inode cache：仅处理 `RefCount==0` 的候选 inode。
+- inode shrink 规则：
+  - `RefCount==0 && LinkCount>0`：允许回收内存对象（后续可 `iget` 重建），禁止删除后端对象。
+  - `RefCount==0 && LinkCount==0`：允许触发最终删除。
+- dentry shrink 规则：
+  - 正 dentry 回收时必须执行 `UnbindInode` 对称路径。
+  - 负 dentry 可回收但不得影响任何 `LinkCount`/后端状态。
+- `drop_caches` 语义对齐 Linux：
+  - mode=1：page cache
+  - mode=2：dentry+inode cache（仅回收可回收 cache，不做业务删除）
+  - mode=3：两者都做
 
 ## 6. 各文件系统处理方案
 
@@ -239,7 +303,7 @@
 
 - 去除 `_openRefCount/_mmapRefCount` 对“是否删除 SQLite inode”的主判据角色，收敛到基类 `RefCount/LinkCount`。
 - `CountDentryRefs` 仅用于校验与迁移期断言，不再作为生命周期真相。
-- `OnEvict` 中统一执行 SQLite 最终清理与对象/live 文件回收。
+- `OnFinalizeDelete` 中统一执行 SQLite 最终清理与对象/live 文件回收。
 
 ### 6.3 HostFS（重点）
 
@@ -249,7 +313,7 @@
   - `unlink` 减少 `LinkCount`
   - `rename` 不改变 source inode 的 `LinkCount`
 - `HostPath` 仅作为“某个可用路径提示”，不能作为 inode 身份真相。
-- 在 `OnEvict` 执行：
+- 在 `OnEvictCache/OnFinalizeDelete` 执行：
   - 释放 mapped page backend
   - 清理 hostfs inode cache 索引
   - 若 `LinkCount==0` 且需要删除后端文件，则执行真实 host 删除（按实际语义触发）
@@ -346,9 +410,10 @@
 ### 8.1 通用不变量测试
 
 - 任何时刻不允许出现负计数（`RefCount<0` 或 `LinkCount<0`）
+- 任何时刻不允许出现负 dentry 引用计数（`DentryRefCount<0`）
 - `unlink + open fd`：`LinkCount==0 && RefCount>0`，文件可读写
 - `unlink + mmap`：关闭 fd 后仍可访问映射
-- 最后一个 `close/munmap` 后触发 `OnEvict`
+- 最后一个 `close/munmap` 后触发 `OnFinalizeDelete`
 
 ### 8.2 FS 维度测试
 
@@ -373,6 +438,7 @@
 
 - `umount` busy 判定由统一模型驱动
 - `drop_caches` 只能回收“无活动引用”的缓存对象，不能破坏已引用 inode
+- `drop_caches(mode=2)` 后可通过路径访问触发 `iget`，并恢复被回收 inode 的可见语义
 
 ## 9. 分阶段实施
 
@@ -393,7 +459,8 @@
 - 在 `Inode` 引入 `LinkCount`，并提供统一方法：
   - `AcquireRef(kind)` / `ReleaseRef(kind)`
   - `IncLink()` / `DecLink()`
-  - `TryFinalize()` / `OnEvict()`
+  - `TryEvictCache()` / `OnEvictCache()`
+  - `TryFinalizeDelete()` / `OnFinalizeDelete()`
 - 兼容迁移期：`Get/Put` 保留但标记 obsolete，内部转发到 `AcquireRef/ReleaseRef(KernelInternal)`。
 - 交付物：
   - `Inode` 新 API
@@ -408,12 +475,11 @@
   - `Dentry.BindInode(inode)` / `Dentry.UnbindInode()`
   - `Inode.AttachAliasDentry(dentry)` / `Inode.DetachAliasDentry(dentry)`
 - 禁止外部直接操作 `inode.Dentries.Add/Remove`。
-- 明确 `Dentry._refCount` 语义：
-  - 要么升级为真实 path-pin 机制；
-  - 要么彻底移除，避免伪计数。
+- 引入真实 `DentryRefCount(d_count)` 语义与 LRU 入队/出队规则。
 - 交付物：
   - 全局替换手工 `Dentries.Add/Remove`
   - `PathWalker`、`VfsCacheReclaimer`、`rename/unlink` 路径对齐。
+  - dentry 正/负节点回收规则可观测（debug trace）。
 - 退出条件：
   - dentry 绑定不变量在测试与 debug 模式下持续成立。
 
@@ -441,6 +507,19 @@
 - 退出条件：
   - `stat/statx` nlink 与预期一致，且跨 FS 一致。
 
+### Phase B3: Shrinker 与缓存回收路径统一
+
+- 引入统一 shrinker：
+  - dcache shrink（`DentryRefCount==0`）
+  - inode cache shrink（`RefCount==0`）
+- 将 `drop_caches` 路径收敛为“cache reclaim only”，禁止业务删除副作用。
+- 交付物：
+  - 统一 `VfsShrinker` 接口与回收统计
+  - `drop_caches` 覆盖 mode=1/2/3 语义回归
+- 退出条件：
+  - `RefCount==0 && LinkCount>0` 的 inode 可被回收并可 `iget` 重建
+  - shrinker 不改变任何可见 `nlink` 语义
+
 ### Phase C: FS 逐个迁移（严格串行）
 
 - 顺序：`IndexedMemoryFs/Tmpfs -> SilkFS -> HostFS -> OverlayFS -> LayerFS/ProcFS`
@@ -454,21 +533,24 @@
 
 - 删除 FS 私有生命周期计数器（如 `_openCount/_openRefCount/_mmapRefCount` 的生死判据角色）。
 - 删除基于 `Dentries.Count` 的近似判据。
-- 收敛 orphan/evict 到 `TryFinalize -> OnEvict` 唯一路径。
+- 收敛回收路径到：
+  - cache evict：`TryEvictCache -> OnEvictCache`
+  - final delete：`TryFinalizeDelete -> OnFinalizeDelete`
 - 交付物：
   - 代码搜索中不再出现“私有计数决定 inode 生死”模式。
 
 ## 9.1 PR 切分建议（可直接执行）
 
-1. PR-1: `Inode` 双计数字段 + 统一 API + `stat/statx` nlink 来源修正。  
-2. PR-2: `Dentry` 绑定原子化 API + 全局调用点替换。  
+1. PR-1: `Inode` 双计数字段 + cache/finalize 双阶段 API + `stat/statx` nlink 来源修正。  
+2. PR-2: `Dentry` 绑定原子化 API + `DentryRefCount(d_count)` 引入。  
 3. PR-3: `LinuxFile/mmap/path-pin` 引用来源统一。  
 4. PR-4: `NamespaceOps` link 变化统一入口。  
-5. PR-5: `IndexedMemoryFs/Tmpfs` 迁移。  
-6. PR-6~8: `SilkFS`（事务、nlink、恢复/iget）。  
-7. PR-9~10: `HostFS`（inode identity + mount boundary）。  
-8. PR-11: `OverlayFS/LayerFS/ProcFS` 收尾。  
-9. PR-12: 删除兼容层与遗留计数逻辑。  
+5. PR-5: `VfsShrinker` + `drop_caches` mode=1/2/3 语义统一。  
+6. PR-6: `IndexedMemoryFs/Tmpfs` 迁移。  
+7. PR-7~9: `SilkFS`（事务、nlink、恢复/iget、evict）。  
+8. PR-10~11: `HostFS`（inode identity + mount boundary）。  
+9. PR-12: `OverlayFS/LayerFS/ProcFS` 收尾。  
+10. PR-13: 删除兼容层与遗留计数逻辑。  
 
 ## 9.2 关键行为伪代码（统一语义）
 
@@ -483,7 +565,8 @@ ReleaseRef(kind):
   assert RefCount > 0
   RefCount -= 1
   RefByKind[kind] -= 1   // 可选，仅debug
-  TryFinalize()
+  TryEvictCache()
+  TryFinalizeDelete()
 
 IncLink():
   LinkCount += 1
@@ -491,29 +574,47 @@ IncLink():
 DecLink():
   assert LinkCount > 0
   LinkCount -= 1
-  TryFinalize()
+  TryFinalizeDelete()
 
-TryFinalize():
-  if IsEvicted: return
+TryEvictCache():
+  if IsCacheEvicted: return
+  if RefCount != 0: return
+  IsCacheEvicted = true
+  OnEvictCache()
+
+TryFinalizeDelete():
+  if IsFinalized: return
   if RefCount != 0: return
   if LinkCount != 0: return
-  IsEvicted = true
-  OnEvict()
+  IsFinalized = true
+  OnFinalizeDelete()
 ```
 
 ### Dentry 绑定
 
 ```text
+Dentry.Get():
+  DentryRefCount += 1
+
+Dentry.Put():
+  assert DentryRefCount > 0
+  DentryRefCount -= 1
+  if DentryRefCount == 0:
+    dcache_lru_add(this)
+
 Dentry.BindInode(inode):
   assert this.Inode == null
   this.Inode = inode
+  this.IsNegative = false
   inode.AttachAliasDentry(this)
+  inode.AcquireRef(KernelInternal)
 
 Dentry.UnbindInode():
   if this.Inode == null: return
   old = this.Inode
   this.Inode = null
   old.DetachAliasDentry(this)
+  old.ReleaseRef(KernelInternal)
 ```
 
 ### open/mmap/close/munmap
@@ -550,11 +651,13 @@ Rename(oldParent, oldName, newParent, newName):
 ### drop_caches（VFS层）
 
 ```text
-DropCaches():
-  drop_dentry_cache_only()
-  for inode in superblock.inode_cache:
-    if inode.RefCount == 0 and inode.LinkCount == 0:
-      inode.TryFinalize()
+DropCaches(mode):
+  if mode has PAGECACHE:
+    drop_pagecache()
+  if mode has DCACHE_INODE:
+    shrink_dcache()          // only DentryRefCount==0
+    shrink_inode_cache()     // only RefCount==0
+  // 注意: cache shrink 不改变 LinkCount
 ```
 
 ## 9.3 SilkFS 事务伪代码（SQLite 真相）
@@ -577,7 +680,12 @@ COMMIT
 ### evict / orphan 最终删除
 
 ```text
-OnEvict(ino):
+OnEvictCache(ino):
+  // 前提: RefCount=0
+  release_pagecache_and_incore_state()
+  keep_sqlite_inode_row_if_nlink_gt_0()
+
+OnFinalizeDelete(ino):
   // 前提: RefCount=0 && LinkCount=0
   TX:
     oldObj = SELECT object_id FROM inode_objects WHERE ino=@ino
@@ -608,10 +716,11 @@ MountRecover():
 
 ### 11.1 通用对象结构验收（Inode/Dentry/SuperBlock/LinuxFile）
 
-1. Inode 双计数为唯一生命周期真相  
+1. Inode 双计数 + Dentry 引用计数为生命周期真相  
    - 每个 `Inode` 必须有 `RefCount` 与 `LinkCount`。  
+   - 每个 `Dentry` 必须有 `DentryRefCount`（或等价 lockref 计数字段）。  
    - 生命周期判据仅允许使用 `RefCount/LinkCount`，禁止再用 `Dentries.Count` 近似推导。  
-   - `RefCount < 0` 或 `LinkCount < 0` 在 debug/test 中必须直接失败（断言或异常）。
+   - `RefCount < 0`、`LinkCount < 0` 或 `DentryRefCount < 0` 在 debug/test 中必须直接失败（断言或异常）。
 
 2. 引用来源可追踪  
    - `AcquireRef/ReleaseRef` 必须带 `InodeRefKind`。  
@@ -622,6 +731,7 @@ MountRecover():
    - `Dentry` 与 `Inode` 的绑定/解绑必须走统一 API（`BindInode/UnbindInode`）。  
    - 代码中不再允许散落 `inode.Dentries.Add/Remove`。  
    - 任意时刻保持不变量：`dentry.Inode == inode` 等价于 `inode.Dentries.Contains(dentry)`。
+   - `BindInode/UnbindInode` 必须对称维护 inode 内部引用（`KernelInternal`）。
 
 4. SuperBlock 跟踪一致  
    - 每个 FS 新建 inode 必须注册到统一 inode 跟踪集合。  
@@ -632,8 +742,9 @@ MountRecover():
    - 不允许出现某路径固定写 1、另一路径按缓存推导的分裂行为。
 
 6. 回收路径唯一  
-   - inode 最终回收入口仅允许 `TryFinalize -> OnEvict`。  
-   - `drop_caches` 只允许触发“无活动引用且不可达 inode”的回收，不得改变 link 语义。
+   - cache 回收入口仅允许 `TryEvictCache -> OnEvictCache`。  
+   - 最终删除入口仅允许 `TryFinalizeDelete -> OnFinalizeDelete`。  
+   - `drop_caches` 只允许触发 cache reclaim，不得改变 link 语义与 namespace 可见性。
 
 ### 11.2 通用 syscall 语义验收
 
@@ -642,6 +753,7 @@ MountRecover():
 3. `link/unlink` 只影响 `LinkCount`。  
 4. `rename` 非覆盖不改 source link；覆盖目标仅对 victim `LinkCount--`。  
 5. `unlink + open`、`unlink + mmap` 场景必须满足 Linux orphan 语义：`LinkCount=0` 但数据仍可访问直到最后引用释放。
+6. `drop_caches` mode=2 下允许回收 `RefCount==0 && LinkCount>0` 的 inode cache，并可在后续路径访问中 `iget` 重建。
 
 ### 11.3 各文件系统实现约束验收
 
@@ -680,11 +792,13 @@ MountRecover():
 
 1. 回归覆盖  
    - 必须包含：`mmap + close(fd)`、`unlink + open`、`unlink + mmap`、`rename overwrite`、`drop_caches`、`umount busy`。  
+   - 必须包含：`drop_caches(mode=2)` 后 `iget` 重建、以及“持有打开 fd 时 drop_caches 不破坏 I/O”。  
    - 各 FS 专项回归必须覆盖其对应约束（见 11.3）。
 
 2. 代码约束扫描  
    - 代码库中不再存在“FS 私有计数器决定 inode 生死”的分支。  
    - 代码库中不再存在业务路径对 `inode.Dentries` 的直接 `Add/Remove`。
+   - 代码库中必须存在统一 shrinker 入口，且不允许在 shrink 路径直接改 `LinkCount`。
 
 3. 观测性  
    - 在 debug 构建下，可导出单个 inode 的 ref/link 变化时间序列（至少含 kind、调用点、前后值）。  
