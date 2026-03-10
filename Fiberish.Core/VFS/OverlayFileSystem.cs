@@ -242,7 +242,7 @@ public class OverlayInode : Inode
         SuperBlock = sb;
         LowerDentries = lowers?.Where(d => d != null).ToList() ?? [];
         UpperDentry = upper;
-        RefreshLinkCountFromSource("OverlayInode.ctor");
+        InitializeOverlayLinkCount("OverlayInode.ctor");
     }
 
     private Inode? SourceInode => UpperInode ?? LowerInode;
@@ -423,7 +423,6 @@ public class OverlayInode : Inode
         // Now update the overlay dentry's inode
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry); // Created only in upper
         dentry.Instantiate(newOverlayInode);
-        RefreshLinkCountFromSource("OverlayInode.Create");
 
         return dentry;
     }
@@ -441,7 +440,7 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
-        RefreshLinkCountFromSource("OverlayInode.Mkdir");
+        NamespaceOps.OnDirectoryCreated(this, newOverlayInode, "OverlayInode.Mkdir");
 
         return dentry;
     }
@@ -517,6 +516,8 @@ public class OverlayInode : Inode
             osb.AddWhiteout(GetDirectoryKey(), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
+
+        NamespaceOps.OnEntryRemoved(overlayEntry.Inode, "OverlayInode.Unlink");
     }
 
     public override void Rmdir(string name)
@@ -539,7 +540,7 @@ public class OverlayInode : Inode
             osb.AddWhiteout(GetDirectoryKey(), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
-        RefreshLinkCountFromSource("OverlayInode.Rmdir");
+        NamespaceOps.OnDirectoryRemoved(this, overlayEntry.Inode!, "OverlayInode.Rmdir");
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -547,20 +548,50 @@ public class OverlayInode : Inode
         if (newParent is not OverlayInode targetParent)
             throw new InvalidOperationException("Target parent is not overlay inode");
 
+        var sourceEntry = Lookup(oldName) ?? throw new FileNotFoundException("Source not found", oldName);
+        if (sourceEntry.Inode is not OverlayInode sourceOverlay)
+            throw new InvalidOperationException("Source is not overlay inode");
+
+        var targetEntry = targetParent.Lookup(newName);
+        if (targetEntry != null && ReferenceEquals(targetEntry.Inode, sourceEntry.Inode))
+            return;
+
+        var sourceLowerOnly = sourceOverlay.UpperInode == null && sourceOverlay.LowerInode != null;
+
         // Rename mutates directory entries, so parents must exist in upper.
         if (UpperDentry == null)
             CopyUpDirectory();
         if (targetParent.UpperDentry == null)
             targetParent.CopyUpDirectory();
 
+        if (sourceLowerOnly)
+        {
+            var copyRc = sourceOverlay.CopyUp(null);
+            if (copyRc < 0)
+                throw new IOException($"CopyUp failed during Rename with error {copyRc}");
+        }
+
         if (UpperInode == null || targetParent.UpperInode == null)
             throw new InvalidOperationException("Upper directory is unavailable for rename");
 
-        // Common apk path: source is newly created temp file in upper already.
-        // For lower-only source entries, full copy-up rename semantics can be added later.
+        var osb = (OverlaySuperBlock)SuperBlock;
+        // Destination whiteout must be cleared before rename places a new visible entry at newName.
+        osb.WhiteoutCodec.ClearEncodedWhiteout(targetParent, newName);
+        osb.RemoveWhiteout(targetParent.GetDirectoryKey(), newName);
+
         UpperInode.Rename(oldName, targetParent.UpperInode, newName);
-        RefreshLinkCountFromSource("OverlayInode.Rename.source-parent");
-        targetParent.RefreshLinkCountFromSource("OverlayInode.Rename.target-parent");
+
+        // Lower-only source still exists in lower layer after copy-up rename; hide old lower name.
+        if (sourceLowerOnly)
+        {
+            osb.AddWhiteout(GetDirectoryKey(), oldName);
+            osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, oldName);
+        }
+
+        if (targetEntry?.Inode != null)
+            NamespaceOps.OnRenameOverwrite(sourceEntry.Inode, targetEntry.Inode, "OverlayInode.Rename.overwrite-target");
+        if (sourceOverlay.Type == InodeType.Directory && !ReferenceEquals(this, targetParent))
+            NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "OverlayInode.Rename");
     }
 
     public override Dentry Link(Dentry dentry, Inode oldInode)
@@ -591,9 +622,10 @@ public class OverlayInode : Inode
         osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
         osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
 
-        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
+        var newOverlayInode = oldOverlay;
+        newOverlayInode.InitializeOverlayLinkCount("OverlayInode.Link.copyup-source");
         dentry.Instantiate(newOverlayInode);
-        RefreshLinkCountFromSource("OverlayInode.Link");
+        NamespaceOps.OnLinkAdded(oldOverlay, "OverlayInode.Link");
 
         return dentry;
     }
@@ -618,7 +650,6 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
-        RefreshLinkCountFromSource("OverlayInode.Symlink");
         return dentry;
     }
 
@@ -640,17 +671,35 @@ public class OverlayInode : Inode
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
-        RefreshLinkCountFromSource("OverlayInode.Mknod");
         return dentry;
     }
 
-    private void RefreshLinkCountFromSource(string reason)
+    internal void InitializeOverlayLinkCount(string reason)
     {
+        if (Type == InodeType.Directory)
+        {
+            SetInitialLinkCount(ComputeMergedDirectoryLinkCount(), reason);
+            return;
+        }
+
         var source = SourceInode;
         var nlink = source != null
             ? checked((int)Math.Min(int.MaxValue, source.GetLinkCountForStat()))
-            : Type == InodeType.Directory ? 2 : 1;
+            : 1;
         SetInitialLinkCount(Math.Max(0, nlink), reason);
+    }
+
+    private int ComputeMergedDirectoryLinkCount()
+    {
+        var entries = GetEntries();
+        var subdirCount = 0;
+        foreach (var entry in entries)
+        {
+            if (entry.Name is "." or "..") continue;
+            if (entry.Type == InodeType.Directory) subdirCount++;
+        }
+
+        return 2 + subdirCount;
     }
 
     public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)

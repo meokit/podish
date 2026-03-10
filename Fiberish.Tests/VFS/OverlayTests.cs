@@ -537,4 +537,146 @@ public class OverlayTests
             if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
         }
     }
+
+    [Fact]
+    public void OverlayRmdir_LowerOnlyDirectory_UpdatesParentNlinkAndWhiteouts()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempLower, "ghost"));
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            var before = rootInode.GetLinkCountForStat();
+            Assert.NotNull(rootInode.Lookup("ghost"));
+
+            rootInode.Rmdir("ghost");
+
+            Assert.Null(rootInode.Lookup("ghost"));
+            Assert.Equal(before - 1, rootInode.GetLinkCountForStat());
+            Assert.Contains("ghost", overlaySb.GetWhiteouts("/"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayRename_LowerOnlySourceOverLowerOnlyTarget_HidesOldNameAndOverwrites()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempLower, "src.txt"), "src");
+            File.WriteAllText(Path.Combine(tempLower, "dst.txt"), "dst");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            rootInode.Rename("src.txt", rootInode, "dst.txt");
+
+            Assert.Null(rootInode.Lookup("src.txt"));
+            Assert.Contains("src.txt", overlaySb.GetWhiteouts("/"));
+
+            var dst = rootInode.Lookup("dst.txt");
+            Assert.NotNull(dst);
+            var file = new LinuxFile(dst!, FileFlags.O_RDONLY, null!);
+            var buf = new byte[8];
+            var n = dst!.Inode!.Read(file, buf, 0);
+            Assert.Equal("src", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            file.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    [Fact]
+    public void OverlayCopyUp_LowerOnlyDirectoryMutation_DoesNotChangeAncestorNlink()
+    {
+        var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempLower);
+        Directory.CreateDirectory(tempUpper);
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempLower, "usr/lib"));
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
+            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
+            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+            var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+            var usr = rootInode.Lookup("usr");
+            Assert.NotNull(usr);
+            var usrInode = Assert.IsType<OverlayInode>(usr!.Inode);
+            var lib = usrInode.Lookup("lib");
+            Assert.NotNull(lib);
+            var libInode = Assert.IsType<OverlayInode>(lib!.Inode);
+
+            var rootBefore = rootInode.GetLinkCountForStat();
+            var usrBefore = usrInode.GetLinkCountForStat();
+
+            var link = new Dentry("libfoo.so.1", null, lib, overlaySb);
+            libInode.Symlink(link, "libfoo.so.1.0.0", 0, 0);
+
+            Assert.Equal(rootBefore, rootInode.GetLinkCountForStat());
+            Assert.Equal(usrBefore, usrInode.GetLinkCountForStat());
+            Assert.NotNull(libInode.Lookup("libfoo.so.1"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
+            if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
 }
