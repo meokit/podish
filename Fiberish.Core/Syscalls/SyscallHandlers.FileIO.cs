@@ -468,6 +468,7 @@ public partial class SyscallManager
             var openFlags = createdHere
                 ? flags & ~(uint)(FileFlags.O_CREAT | FileFlags.O_EXCL | FileFlags.O_TRUNC)
                 : flags;
+            if (dentry == null) return -(int)Errno.ENOENT;
             var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
             return sm.AllocFD(f);
         }
