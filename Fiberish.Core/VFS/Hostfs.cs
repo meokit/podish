@@ -1609,12 +1609,9 @@ public partial class HostInode : Inode
 
             var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
             var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
-            var hasTrunc = (linuxFile.Flags & FileFlags.O_TRUNC) != 0;
 
             if (hasCreate && hasExcl) mode = FileMode.CreateNew;
-            else if (hasCreate && hasTrunc) mode = FileMode.Create;
             else if (hasCreate) mode = FileMode.OpenOrCreate;
-            else if (hasTrunc) mode = FileMode.Truncate;
 
             // Use SafeFileHandle with RandomAccess for thread-safe I/O without locks
             var openPath = ResolveHostPath(linuxFile);

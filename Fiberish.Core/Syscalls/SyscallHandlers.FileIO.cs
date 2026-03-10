@@ -447,6 +447,22 @@ public partial class SyscallManager
 
         try
         {
+            if (!createdHere &&
+                (flags & (uint)FileFlags.O_TRUNC) != 0 &&
+                dentry?.Inode?.Type == InodeType.File)
+            {
+                try
+                {
+                    var truncateRc = dentry.Inode.Truncate(0);
+                    if (truncateRc < 0) return truncateRc;
+                    flags &= ~(uint)FileFlags.O_TRUNC;
+                }
+                catch (Exception ex)
+                {
+                    return MapFsExceptionToErrno(ex, Errno.EACCES);
+                }
+            }
+
             // If we already created the inode above, opening with O_CREAT|O_EXCL can
             // retrigger create semantics in backend Open() and fail spuriously.
             var openFlags = createdHere
