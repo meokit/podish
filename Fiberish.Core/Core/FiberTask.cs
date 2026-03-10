@@ -1325,6 +1325,7 @@ public class FiberTask
     public async ValueTask<FiberTask> Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
     {
         const int CLONE_VM = 0x00000100;
+        const int CLONE_FS = (int)LinuxConstants.CLONE_FS;
         const int CLONE_FILES = 0x00000400;
         const int CLONE_VFORK = 0x00004000;
         const int CLONE_THREAD = 0x00010000;
@@ -1334,6 +1335,7 @@ public class FiberTask
         const int CLONE_CHILD_SETTID = 0x01000000;
 
         var cloneVm = (flags & CLONE_VM) != 0;
+        var cloneFs = (flags & CLONE_FS) != 0;
         var cloneFiles = (flags & CLONE_FILES) != 0;
         var cloneVfork = (flags & CLONE_VFORK) != 0;
         var cloneThread = (flags & CLONE_THREAD) != 0;
@@ -1373,7 +1375,7 @@ public class FiberTask
                 }
             }
 
-            var newSys = Process.Syscalls.Clone(newMem, cloneFiles);
+            var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
             // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
             newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
             {

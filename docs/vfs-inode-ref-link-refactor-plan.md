@@ -136,8 +136,13 @@
 
 ### 5.3 Path pin
 
-- `SyscallManager.Root/CurrentWorkingDirectory/ProcessRoot` 持有 `PathPin` 引用。
+- `SyscallManager.Root/CurrentWorkingDirectory/ProcessRoot` 持有完整 path pin：
+  - `mount.Get/Put`（`vfsmount` 生命周期）
+  - `dentry.Get/Put`（`dentry` 生命周期）
+  - `inode AcquireRef/ReleaseRef(PathPin)`（路径引用来源审计）
 - `chdir/chroot/clone/exit` 保证 pin 的增减严格对称。
+- `clone(CLONE_FS)` 共享同一 `fs_struct`（`root/cwd/procroot` 共享可见）。
+- `clone(!CLONE_FS)` 复制独立 `fs_struct`（后续 `chdir/chroot` 互不影响）。
 
 ### 5.4 SuperBlock inode 跟踪
 
@@ -403,7 +408,9 @@
 - `rename`：
   - 移动不覆盖：link 不变
   - 覆盖目标：目标 `LinkCount--`
-- `chdir/chroot/exit/clone`：只影响 `PathPin` 引用
+- `chdir/chroot/exit`：只影响 `PathPin` 引用
+- `clone(CLONE_FS)`：共享同一组 `root/cwd/procroot`
+- `clone(!CLONE_FS)`：复制一组独立 `root/cwd/procroot`
 
 ## 8. 测试计划（必须先补齐）
 
@@ -439,6 +446,7 @@
 - `umount` busy 判定由统一模型驱动
 - `drop_caches` 只能回收“无活动引用”的缓存对象，不能破坏已引用 inode
 - `drop_caches(mode=2)` 后可通过路径访问触发 `iget`，并恢复被回收 inode 的可见语义
+- `clone(CLONE_FS)` 与非 `CLONE_FS` 两条路径下 `chdir/chroot` 可见性符合预期
 
 ## 9. 分阶段实施
 
@@ -489,12 +497,15 @@
   - `ReferenceKind.Normal -> FileOpen`
   - `ReferenceKind.MmapHold -> FileMmap`
 - `cwd/root/procRoot` pin 改为显式 `PathPin` 引用。
+- `PathPin` 扩展为 `mount + dentry + inode(PathPin)` 三元对称引用。
+- `clone(CLONE_FS)` 落地为共享 `fs_struct`；`clone(!CLONE_FS)` 复制 `fs_struct`。
 - `HasActiveInodes` 改为新判据，不再依赖 `Dentries.Count`。
 - 交付物：
   - `LinuxFile` / `VMAManager` / `SyscallManager` 引用路径统一
   - `umount` busy 判定语义更新。
 - 退出条件：
   - `mmap + close(fd)`、`unlink + open fd`、`unlink + mmap` 回归稳定。
+  - `CLONE_FS` 下 `chdir/chroot` 对共享方可见；非 `CLONE_FS` 下隔离可见。
 
 ### Phase B2: namespace 语义统一入口
 
@@ -793,6 +804,7 @@ MountRecover():
 1. 回归覆盖  
    - 必须包含：`mmap + close(fd)`、`unlink + open`、`unlink + mmap`、`rename overwrite`、`drop_caches`、`umount busy`。  
    - 必须包含：`drop_caches(mode=2)` 后 `iget` 重建、以及“持有打开 fd 时 drop_caches 不破坏 I/O”。  
+   - 必须包含：`clone(CLONE_FS)` 共享 cwd/root 可见性、`clone(!CLONE_FS)` 隔离可见性。  
    - 各 FS 专项回归必须覆盖其对应约束（见 11.3）。
 
 2. 代码约束扫描  

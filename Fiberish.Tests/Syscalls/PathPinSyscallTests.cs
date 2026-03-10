@@ -23,17 +23,23 @@ public class PathPinSyscallTests
 
         var rootBefore = rootInode.RefCount;
         var workBefore = workInode.RefCount;
+        var rootDentryBefore = root.DentryRefCount;
+        var workDentryBefore = work.DentryRefCount;
 
         env.MapUserPage(0x10000);
         env.WriteCString(0x10000, "/work");
         Assert.Equal(0, await env.Call("SysChdir", 0x10000));
         Assert.Equal(rootBefore - 1, rootInode.RefCount);
         Assert.Equal(workBefore + 1, workInode.RefCount);
+        Assert.Equal(rootDentryBefore - 1, root.DentryRefCount);
+        Assert.Equal(workDentryBefore + 1, work.DentryRefCount);
 
         env.WriteCString(0x10000, "/");
         Assert.Equal(0, await env.Call("SysChdir", 0x10000));
         Assert.Equal(rootBefore, rootInode.RefCount);
         Assert.Equal(workBefore, workInode.RefCount);
+        Assert.Equal(rootDentryBefore, root.DentryRefCount);
+        Assert.Equal(workDentryBefore, work.DentryRefCount);
     }
 
     [Fact]
@@ -85,6 +91,45 @@ public class PathPinSyscallTests
         Assert.Equal(rootBefore - 1, rootInode.RefCount);
         Assert.Equal(jailBefore + 1, jailInode.RefCount);
         Assert.Same(jail, env.SyscallManager.ProcessRoot.Dentry);
+    }
+
+    [Fact]
+    public void Clone_WithoutCloneFs_KeepsCwdIsolated()
+    {
+        using var env = new TestEnv();
+        var root = env.SyscallManager.Root.Dentry!;
+        var rootInode = root.Inode!;
+        var dir = new Dentry("isolated", null, root, root.SuperBlock);
+        rootInode.Mkdir(dir, 0x1ED, 0, 0);
+
+        var child = env.SyscallManager.Clone(new VMAManager(), shareFiles: false, shareFs: false);
+        try
+        {
+            child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneNoFs");
+            Assert.Same(dir, child.CurrentWorkingDirectory.Dentry);
+            Assert.Same(root, env.SyscallManager.CurrentWorkingDirectory.Dentry);
+        }
+        finally
+        {
+            child.Close();
+        }
+    }
+
+    [Fact]
+    public void Clone_WithCloneFs_SharesCwdAcrossManagers()
+    {
+        using var env = new TestEnv();
+        var root = env.SyscallManager.Root.Dentry!;
+        var rootInode = root.Inode!;
+        var dir = new Dentry("shared", null, root, root.SuperBlock);
+        rootInode.Mkdir(dir, 0x1ED, 0, 0);
+
+        var child = env.SyscallManager.Clone(new VMAManager(), shareFiles: false, shareFs: true);
+        child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneFs");
+        Assert.Same(dir, child.CurrentWorkingDirectory.Dentry);
+        Assert.Same(dir, env.SyscallManager.CurrentWorkingDirectory.Dentry);
+        child.Close();
+        Assert.Same(dir, env.SyscallManager.CurrentWorkingDirectory.Dentry);
     }
 
     private sealed class TestEnv : IDisposable

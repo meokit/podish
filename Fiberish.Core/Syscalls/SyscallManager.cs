@@ -161,11 +161,82 @@ public partial class SyscallManager
         }
     }
 
+    private sealed class SharedFsState
+    {
+        private int _refCount = 1;
+
+        public PathLocation Root { get; private set; } = PathLocation.None;
+        public PathLocation CurrentWorkingDirectory { get; private set; } = PathLocation.None;
+        public PathLocation ProcessRoot { get; private set; } = PathLocation.None;
+
+        public SharedFsState AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public void Release(string reason)
+        {
+            if (Interlocked.Decrement(ref _refCount) > 0)
+                return;
+
+            UnpinPathLocation(Root, $"root:{reason}");
+            UnpinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
+            UnpinPathLocation(ProcessRoot, $"procroot:{reason}");
+            Root = PathLocation.None;
+            CurrentWorkingDirectory = PathLocation.None;
+            ProcessRoot = PathLocation.None;
+        }
+
+        public SharedFsState CloneIsolated(string reason)
+        {
+            var clone = new SharedFsState();
+            clone.ReplaceAll(Root, CurrentWorkingDirectory, ProcessRoot, reason);
+            return clone;
+        }
+
+        public void ReplaceAll(PathLocation root, PathLocation cwd, PathLocation procRoot, string reason)
+        {
+            var oldRoot = Root;
+            var oldCwd = CurrentWorkingDirectory;
+            var oldProcRoot = ProcessRoot;
+
+            Root = root;
+            CurrentWorkingDirectory = cwd;
+            ProcessRoot = procRoot;
+
+            PinPathLocation(Root, $"root:{reason}");
+            PinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
+            PinPathLocation(ProcessRoot, $"procroot:{reason}");
+
+            UnpinPathLocation(oldRoot, $"root:{reason}-old");
+            UnpinPathLocation(oldCwd, $"cwd:{reason}-old");
+            UnpinPathLocation(oldProcRoot, $"procroot:{reason}-old");
+        }
+
+        public void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
+        {
+            var old = CurrentWorkingDirectory;
+            CurrentWorkingDirectory = next;
+            PinPathLocation(next, $"cwd:{reason}");
+            UnpinPathLocation(old, $"cwd:{reason}");
+        }
+
+        public void UpdateProcessRoot(PathLocation next, string reason)
+        {
+            var old = ProcessRoot;
+            ProcessRoot = next;
+            PinPathLocation(next, $"procroot:{reason}");
+            UnpinPathLocation(old, $"procroot:{reason}");
+        }
+    }
+
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
         _mountNamespace = new MountNamespace();
         _sharedFdTable = new SharedFdTable();
         _sharedUnixSocketNamespace = new SharedUnixSocketNamespace();
+        _sharedFsState = new SharedFsState();
         Engine = engine;
         Mem = mem;
         BrkAddr = brk;
@@ -213,11 +284,11 @@ public partial class SyscallManager
 
     private SyscallManager(VMAManager mem, SharedFdTable sharedFdTable,
         SharedUnixSocketNamespace sharedUnixSocketNamespace,
+        SharedFsState sharedFsState,
         FutexManager futex,
         SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
         uint brkBase,
-        bool strace,
-        PathLocation root, PathLocation cwd, PathLocation procRoot, Dentry devShmRoot, SuperBlock memfdSuperBlock,
+        bool strace, Dentry devShmRoot, SuperBlock memfdSuperBlock,
         Mount anonMount,
         TtyDiscipline? tty,
         PtyManager ptyManager,
@@ -233,9 +304,7 @@ public partial class SyscallManager
         BrkAddr = brk;
         BrkBase = brkBase;
         Strace = strace;
-        Root = root;
-        CurrentWorkingDirectory = cwd;
-        ProcessRoot = procRoot;
+        _sharedFsState = sharedFsState;
         DevShmRoot = devShmRoot;
         MemfdSuperBlock = memfdSuperBlock;
         AnonMount = anonMount;
@@ -245,10 +314,6 @@ public partial class SyscallManager
         // Share mount namespace
         _mountNamespace = mountNamespace;
         _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl(this));
-
-        PinPathLocation(Root, "root:ctor");
-        PinPathLocation(CurrentWorkingDirectory, "cwd:ctor");
-        PinPathLocation(ProcessRoot, "procroot:ctor");
 
         RegisterHandlers();
 
@@ -267,11 +332,11 @@ public partial class SyscallManager
 
     public PosixTimerManager PosixTimers { get; } = new();
 
-    public PathLocation Root { get; set; } = PathLocation.None;
-    public PathLocation CurrentWorkingDirectory { get; set; } = PathLocation.None;
+    public PathLocation Root => _sharedFsState.Root;
+    public PathLocation CurrentWorkingDirectory => _sharedFsState.CurrentWorkingDirectory;
 
-    // For chroot tracking, we keep a PathLocation to the process root
-    public PathLocation ProcessRoot { get; set; } = PathLocation.None;
+    // For chroot tracking, we keep a PathLocation to the process root.
+    public PathLocation ProcessRoot => _sharedFsState.ProcessRoot;
     public Dentry DevShmRoot { get; set; } = null!;
     public SuperBlock MemfdSuperBlock { get; set; } = null!;
 
@@ -315,33 +380,32 @@ public partial class SyscallManager
     ///     Mount namespace containing all mounts and lookup hash.
     /// </summary>
     private readonly MountNamespace _mountNamespace;
+    private readonly SharedFsState _sharedFsState;
 
     private int _closed;
 
     private static void PinPathLocation(PathLocation loc, string reason)
     {
+        loc.Mount?.Get();
+        loc.Dentry?.Get(reason);
         loc.Dentry?.Inode?.AcquireRef(InodeRefKind.PathPin, reason);
     }
 
     private static void UnpinPathLocation(PathLocation loc, string reason)
     {
         loc.Dentry?.Inode?.ReleaseRef(InodeRefKind.PathPin, reason);
+        loc.Dentry?.Put(reason);
+        loc.Mount?.Put();
     }
 
     internal void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
     {
-        var old = CurrentWorkingDirectory;
-        CurrentWorkingDirectory = next;
-        PinPathLocation(next, $"cwd:{reason}");
-        UnpinPathLocation(old, $"cwd:{reason}");
+        _sharedFsState.UpdateCurrentWorkingDirectory(next, reason);
     }
 
     internal void UpdateProcessRoot(PathLocation next, string reason)
     {
-        var old = ProcessRoot;
-        ProcessRoot = next;
-        PinPathLocation(next, $"procroot:{reason}");
-        UnpinPathLocation(old, $"procroot:{reason}");
+        _sharedFsState.UpdateProcessRoot(next, reason);
     }
 
     /// <summary>
@@ -372,22 +436,9 @@ public partial class SyscallManager
 
     public void InitializeRoot(Dentry root, Mount rootMount)
     {
-        var oldRoot = Root;
-        var oldProcRoot = ProcessRoot;
-        var oldCwd = CurrentWorkingDirectory;
-
-        Root = new PathLocation(root, rootMount);
+        var newRoot = new PathLocation(root, rootMount);
+        _sharedFsState.ReplaceAll(newRoot, newRoot, newRoot, "initialize");
         RootMount = rootMount;
-        ProcessRoot = Root;
-        CurrentWorkingDirectory = Root;
-
-        PinPathLocation(Root, "root:initialize");
-        PinPathLocation(ProcessRoot, "procroot:initialize");
-        PinPathLocation(CurrentWorkingDirectory, "cwd:initialize");
-
-        UnpinPathLocation(oldRoot, "root:initialize-old");
-        UnpinPathLocation(oldProcRoot, "procroot:initialize-old");
-        UnpinPathLocation(oldCwd, "cwd:initialize-old");
 
         RegisterMount(RootMount, null, root);
     }
@@ -1146,7 +1197,7 @@ public partial class SyscallManager
         _registry.TryRemove(engine.State, out _);
     }
 
-    public SyscallManager Clone(VMAManager newMem, bool shareFiles)
+    public SyscallManager Clone(VMAManager newMem, bool shareFiles, bool shareFs)
     {
         SharedFdTable newSharedFdTable;
         if (shareFiles)
@@ -1170,11 +1221,10 @@ public partial class SyscallManager
 
         // Share the mount namespace (mounts are shared across fork/clone by default)
         var sharedNamespace = _mountNamespace.Share();
+        var sharedFsState = shareFs ? _sharedFsState.AddRef() : _sharedFsState.CloneIsolated("clone");
 
-        var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
-            Strace, Root,
-            CurrentWorkingDirectory,
-            ProcessRoot, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
+        var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), sharedFsState, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
+            Strace, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
             sharedNamespace, _privateNetNamespace?.AddRef())
         {
             NetworkMode = NetworkMode,
@@ -1404,9 +1454,7 @@ public partial class SyscallManager
         // Mount detach/unmount is controlled by umount(2), not by process exit.
         _mountNamespace.Put();
 
-        UnpinPathLocation(Root, "root:close");
-        UnpinPathLocation(CurrentWorkingDirectory, "cwd:close");
-        UnpinPathLocation(ProcessRoot, "procroot:close");
+        _sharedFsState.Release("close");
 
         if (_sharedFdTable.ReleaseRef())
         {
