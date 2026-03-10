@@ -949,7 +949,7 @@ public class SilkFsAdapterTests
             Assert.True(before.IsValid);
             var oldInode = before.Dentry!.Inode!;
 
-            var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
+            var stats = VfsShrinker.Shrink(sm, VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
             Assert.True(stats.DentriesDropped > 0);
             Assert.True(oldInode.IsCacheEvicted);
             Assert.False(oldInode.IsFinalized);
@@ -1010,7 +1010,7 @@ public class SilkFsAdapterTests
             wf.Close();
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
-            var stats = VfsCacheReclaimer.DropDentryAndInodeCaches(sm);
+            var stats = VfsShrinker.Shrink(sm, VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
             Assert.True(stats.DentriesDropped >= 0);
             Assert.True(file.DentryRefCount > 0);
 

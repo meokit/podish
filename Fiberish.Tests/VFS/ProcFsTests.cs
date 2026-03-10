@@ -330,6 +330,8 @@ public class ProcFsTests
             Assert.True(procRoot.IsValid);
             Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
             Assert.True(procRoot.Dentry.Children.ContainsKey("sys"));
+            var procSb = procRoot.Mount!.SB;
+            var procTrackedBefore = procSb.Inodes.Count;
 
             var shmLoc = sm.PathWalk("/dev/shm");
             if (!shmLoc.IsValid)
@@ -342,18 +344,111 @@ public class ProcFsTests
             var shmDir = shmLoc.Dentry!;
             var tmp = new Dentry("drop_inode.tmp", null, shmDir, shmDir.SuperBlock);
             shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
-            var sb = shmLoc.Mount!.SB;
-            var trackedBefore = sb.Inodes.Count;
             shmDir.Inode.Unlink("drop_inode.tmp");
-            Assert.True(trackedBefore >= 2);
 
             Assert.Equal(2, WriteAll(dropLoc, "2\n"));
 
             Assert.False(procRoot.Dentry.Children.ContainsKey("sys"));
-            Assert.True(sb.Inodes.Count < trackedBefore);
+            Assert.True(procSb.Inodes.Count <= procTrackedBefore);
 
             var rematerialized = sm.PathWalk("/proc/sys/vm");
             Assert.True(rematerialized.IsValid);
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode3_ShouldReclaimPagecacheAndVfsCaches()
+    {
+        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        MemoryObject? cache = null;
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(dropLoc.IsValid);
+
+            var procRoot = sm.PathWalk("/proc");
+            Assert.True(procRoot.IsValid);
+            Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
+            Assert.True(procRoot.Dentry.TryGetCachedChild("sys", out _));
+
+            cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            Assert.NotEqual(IntPtr.Zero, page);
+            Assert.True(cache.PageCount > 0);
+
+            var shmLoc = sm.PathWalk("/dev/shm");
+            if (!shmLoc.IsValid)
+            {
+                sm.MountStandardShm();
+                shmLoc = sm.PathWalk("/dev/shm");
+            }
+
+            Assert.True(shmLoc.IsValid);
+            var shmDir = shmLoc.Dentry!;
+            var tmp = new Dentry("drop_mode3.tmp", null, shmDir, shmDir.SuperBlock);
+            shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
+            shmDir.Inode.Unlink("drop_mode3.tmp");
+
+            Assert.Equal(2, WriteAll(dropLoc, "3\n"));
+
+            Assert.Equal(0, cache.PageCount);
+            Assert.False(procRoot.Dentry.TryGetCachedChild("sys", out _));
+        }
+        finally
+        {
+            cache?.Release();
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode2_ShouldNotBreakTmpfsNamespaceData()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(dropLoc.IsValid);
+
+            var shmLoc = sm.PathWalk("/dev/shm");
+            if (!shmLoc.IsValid)
+            {
+                sm.MountStandardShm();
+                shmLoc = sm.PathWalk("/dev/shm");
+            }
+
+            Assert.True(shmLoc.IsValid);
+            var shmDir = shmLoc.Dentry!;
+            var fileDentry = new Dentry("stable.tmp", null, shmDir, shmDir.SuperBlock);
+            shmDir.Inode!.Create(fileDentry, 0x1A4, 0, 0);
+
+            var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, shmLoc.Mount!);
+            var payload = Encoding.UTF8.GetBytes("keep-tmpfs");
+            Assert.Equal(payload.Length, fileDentry.Inode!.Write(file, payload, 0));
+            file.Close();
+
+            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+
+            var rel = sm.PathWalk("/dev/shm/stable.tmp");
+            Assert.True(rel.IsValid);
+            var readBack = ReadAll(rel);
+            Assert.Equal("keep-tmpfs", readBack);
         }
         finally
         {

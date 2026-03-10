@@ -20,7 +20,7 @@ public class ProcFileSystem : FileSystem
     }
 }
 
-public class ProcSuperBlock : SuperBlock, IDentryInodeCacheDropper
+public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
 {
     private ulong _nextIno = 1;
     public SyscallManager? FallbackSyscallManager { get; }
@@ -48,7 +48,7 @@ public class ProcSuperBlock : SuperBlock, IDentryInodeCacheDropper
         }
     }
 
-    public long DropDentryAndInodeCaches()
+    public long DropDentryCache()
     {
         if (Root == null) return 0;
 
@@ -57,7 +57,7 @@ public class ProcSuperBlock : SuperBlock, IDentryInodeCacheDropper
         foreach (var child in children)
         {
             if (child.IsMounted) continue;
-            dropped += VfsCacheReclaimer.DetachCachedSubtree(child);
+            dropped += VfsShrinker.DetachCachedSubtree(child);
         }
 
         return dropped;
@@ -750,11 +750,13 @@ file sealed class ProcSysRootInode : Inode
         // Linux requires privilege (CAP_SYS_ADMIN). Approximate with euid==0.
         if ((context.Process?.EUID ?? 0) != 0) return -(int)Errno.EPERM;
 
+        var shrinkMode = VfsShrinkMode.None;
         if ((mode & 0x1) != 0)
-            _ = GlobalPageCacheManager.TryReclaimBytes(long.MaxValue);
-
+            shrinkMode |= VfsShrinkMode.PageCache;
         if ((mode & 0x2) != 0)
-            _ = VfsCacheReclaimer.DropDentryAndInodeCaches(context.SyscallManager);
+            shrinkMode |= VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache;
+
+        _ = VfsShrinker.Shrink(context.SyscallManager, shrinkMode);
 
         return buffer.Length;
     }

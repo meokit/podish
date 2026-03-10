@@ -39,4 +39,6 @@ public class TmpfsInode : IndexedMemoryInode
     public TmpfsInode(ulong ino, SuperBlock sb) : base(ino, (IndexedMemorySuperBlock)sb)
     {
     }
+
+    protected override bool PinNamespaceDentries => true;
 }

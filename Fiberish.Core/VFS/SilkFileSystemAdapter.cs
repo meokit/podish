@@ -28,7 +28,7 @@ public sealed class SilkFileSystem : FileSystem
     }
 }
 
-public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheDropper
+public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDropper
 {
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type, devManager)
     {
@@ -143,7 +143,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheD
         _nextIno = (ulong)Math.Max(maxIno + 1, 2);
     }
 
-    public long DropDentryAndInodeCaches()
+    public long DropDentryCache()
     {
         if (Root == null) return 0;
 
@@ -152,7 +152,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryInodeCacheD
         foreach (var child in children)
         {
             if (child.IsMounted) continue;
-            dropped += VfsCacheReclaimer.DetachCachedSubtree(child);
+            dropped += VfsShrinker.DetachCachedSubtree(child);
         }
 
         return dropped;

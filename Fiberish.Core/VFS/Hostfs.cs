@@ -29,7 +29,7 @@ public class Hostfs : FileSystem
     }
 }
 
-public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
+public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 {
     private readonly Dictionary<string, Dentry> _dentryCache = [];
     private ulong _nextIno = 1;
@@ -178,7 +178,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
         dentry.Parent?.CacheChild(dentry, "HostSuperBlock.InstantiateDentry");
     }
 
-    public long DropDentryAndInodeCaches()
+    public long DropDentryCache()
     {
         List<Dentry> candidates;
         lock (Lock)
@@ -199,7 +199,7 @@ public class HostSuperBlock : SuperBlock, IDentryInodeCacheDropper
 
         long dropped = 0;
         foreach (var root in roots)
-            dropped += VfsCacheReclaimer.DetachCachedSubtree(root);
+            dropped += VfsShrinker.DetachCachedSubtree(root);
 
         lock (Lock)
         {

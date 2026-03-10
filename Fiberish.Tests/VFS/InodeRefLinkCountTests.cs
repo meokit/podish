@@ -35,10 +35,10 @@ public class InodeRefLinkCountTests
 
         var mount = new Mount(rig.SuperBlock, rig.Root);
         var refBeforeOpen = inode.RefCount;
-        Assert.Equal(0, linked.DentryRefCount);
+        Assert.Equal(1, linked.DentryRefCount); // tmpfs namespace pin
         var file = new LinuxFile(linked, FileFlags.O_RDONLY, mount);
         Assert.Equal(refBeforeOpen + 1, inode.RefCount);
-        Assert.Equal(1, linked.DentryRefCount);
+        Assert.Equal(2, linked.DentryRefCount);
         Assert.Equal(1, inode.LinkCount);
         Assert.Equal(1, inode.FileOpenRefCount);
         Assert.True(inode.HasActiveRuntimeRefs);
@@ -46,7 +46,7 @@ public class InodeRefLinkCountTests
 
         file.Close();
         Assert.Equal(refBeforeOpen, inode.RefCount);
-        Assert.Equal(0, linked.DentryRefCount);
+        Assert.Equal(1, linked.DentryRefCount);
         Assert.Equal(1, inode.LinkCount);
         Assert.Equal(0, inode.FileOpenRefCount);
         Assert.False(inode.HasActiveRuntimeRefs);
