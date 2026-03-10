@@ -31,7 +31,18 @@ public class Hostfs : FileSystem
 
 public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 {
-    private readonly Dictionary<string, Dentry> _dentryCache = [];
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+    private readonly Dictionary<string, Dentry> _dentryCache = new(PathComparer);
+    private readonly Dictionary<long, string> _dentryPathById = [];
+    private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
+    private readonly Dictionary<HostInode, HostInodeKey> _identityByInode = [];
     private ulong _nextIno = 1;
 
     public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options, DeviceNumberManager? devManager = null) : base(devManager)
@@ -48,59 +59,59 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
+        var normalizedPath = NormalizeHostPath(hostPath);
         lock (Lock)
         {
-            if (_dentryCache.TryGetValue(hostPath, out var dentry))
+            if (_dentryCache.TryGetValue(normalizedPath, out var dentry))
             {
-                if (PathExistsOnHost(hostPath))
+                if (PathExistsOnHost(normalizedPath))
+                {
+                    if (parent != null)
+                        dentry.Parent = parent;
                     return dentry;
+                }
 
-                RemoveDentry(hostPath);
+                RemoveDentryNoLock(normalizedPath, recursive: true);
             }
         }
 
-        // Check for symlink first (so we don't follow)
-        // FileInfo.LinkTarget returns non-null for symlinks (including broken ones)
-        if (new FileInfo(hostPath).LinkTarget != null)
+        if (!TryClassifyPath(normalizedPath, out var nodeType))
+            return null;
+
+        var identity = HostInodeIdentityResolver.Resolve(normalizedPath, out var hostNlink);
+        var effectiveNlink = nodeType == InodeType.Directory ? null : hostNlink;
+        HostInode inode;
+        lock (Lock)
         {
-            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Symlink);
-            TrackInode(newInode);
-            MetadataStore.ApplyToInode(hostPath, newInode);
-            var newDentry = new Dentry(name, newInode, parent, this);
-            lock (Lock)
+            if (_inodeByIdentity.TryGetValue(identity, out var existing))
             {
-                _dentryCache[hostPath] = newDentry;
+                if (existing.IsCacheEvicted || existing.IsFinalized)
+                {
+                    UnregisterInodeIdentityNoLock(existing);
+                    inode = CreateHostInodeLocked(normalizedPath, nodeType, identity, effectiveNlink);
+                }
+                else
+                {
+                    inode = existing;
+                }
             }
-            return newDentry;
+            else
+            {
+                inode = CreateHostInodeLocked(normalizedPath, nodeType, identity, effectiveNlink);
+            }
         }
 
-        if (Directory.Exists(hostPath))
+        inode.ObservePath(normalizedPath);
+        MetadataStore.ApplyToInode(normalizedPath, inode);
+        if (effectiveNlink.HasValue)
+            inode.UpdateLinkCountFromHost(effectiveNlink.Value, "HostSuperBlock.GetDentry");
+
+        var created = new Dentry(name, inode, parent, this);
+        lock (Lock)
         {
-            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.Directory);
-            TrackInode(newInode);
-            MetadataStore.ApplyToInode(hostPath, newInode);
-            var newDentry = new Dentry(name, newInode, parent, this);
-            lock (Lock)
-            {
-                _dentryCache[hostPath] = newDentry;
-            }
-            return newDentry;
+            IndexPathNoLock(normalizedPath, created);
         }
-
-        if (File.Exists(hostPath))
-        {
-            var newInode = new HostInode(_nextIno++, this, hostPath, InodeType.File);
-            TrackInode(newInode);
-            MetadataStore.ApplyToInode(hostPath, newInode);
-            var newDentry = new Dentry(name, newInode, parent, this);
-            lock (Lock)
-            {
-                _dentryCache[hostPath] = newDentry;
-            }
-            return newDentry;
-        }
-
-        return null;
+        return created;
     }
 
     public override void WriteInode(Inode inode)
@@ -109,47 +120,66 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     public void MoveDentry(string oldPath, string newPath, Dentry dentry)
     {
+        var normalizedOld = NormalizeHostPath(oldPath);
+        var normalizedNew = NormalizeHostPath(newPath);
         lock (Lock)
         {
             var hits = _dentryCache
-                .Where(kv => string.Equals(kv.Key, oldPath, StringComparison.Ordinal) ||
-                             kv.Key.StartsWith(oldPath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                .Where(kv => string.Equals(kv.Key, normalizedOld, PathComparison) ||
+                             kv.Key.StartsWith(normalizedOld + Path.DirectorySeparatorChar, PathComparison))
                 .ToList();
 
             foreach (var hit in hits)
             {
-                _dentryCache.Remove(hit.Key);
-                var movedPath = string.Equals(hit.Key, oldPath, StringComparison.Ordinal)
-                    ? newPath
-                    : newPath + hit.Key[oldPath.Length..];
-                _dentryCache[movedPath] = hit.Value;
-                if (hit.Value.Inode is HostInode hostInode)
-                    hostInode.HostPath = movedPath;
+                var movedPath = string.Equals(hit.Key, normalizedOld, PathComparison)
+                    ? normalizedNew
+                    : normalizedNew + hit.Key[normalizedOld.Length..];
+                RemovePathNoLock(hit.Key, recursive: false);
+                IndexPathNoLock(movedPath, hit.Value);
             }
 
-            if (!_dentryCache.ContainsKey(newPath))
-                _dentryCache[newPath] = dentry;
+            if (!_dentryCache.ContainsKey(normalizedNew))
+                IndexPathNoLock(normalizedNew, dentry);
         }
     }
 
     public void AddDentry(string hostPath, Dentry dentry)
     {
+        var normalizedPath = NormalizeHostPath(hostPath);
         lock (Lock)
         {
-            _dentryCache[hostPath] = dentry;
+            IndexPathNoLock(normalizedPath, dentry);
         }
     }
 
     public void RemoveDentry(string hostPath)
     {
+        var normalizedPath = NormalizeHostPath(hostPath);
         lock (Lock)
         {
-            var stale = _dentryCache.Keys
-                .Where(path => string.Equals(path, hostPath, StringComparison.Ordinal) ||
-                               path.StartsWith(hostPath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                .ToList();
-            foreach (var path in stale)
-                _dentryCache.Remove(path);
+            RemoveDentryNoLock(normalizedPath, recursive: true);
+        }
+    }
+
+    internal bool TryGetPathForDentry(Dentry? dentry, out string path)
+    {
+        path = string.Empty;
+        if (dentry == null) return false;
+
+        lock (Lock)
+        {
+            if (!_dentryPathById.TryGetValue(dentry.Id, out var mapped) || string.IsNullOrEmpty(mapped))
+                return false;
+            path = mapped;
+            return true;
+        }
+    }
+
+    internal void UnregisterInodeIdentity(HostInode inode)
+    {
+        lock (Lock)
+        {
+            UnregisterInodeIdentityNoLock(inode);
         }
     }
 
@@ -161,18 +191,36 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
+        var normalizedPath = NormalizeHostPath(hostPath);
         var type = isDir ? InodeType.Directory : InodeType.File;
-        // Check for symlink
-        if (new FileInfo(hostPath).LinkTarget != null) type = InodeType.Symlink;
+        if (new FileInfo(normalizedPath).LinkTarget != null)
+            type = InodeType.Symlink;
 
-        var inode = new HostInode(_nextIno++, this, hostPath, type);
-        TrackInode(inode);
+        var identity = HostInodeIdentityResolver.Resolve(normalizedPath, out var hostNlink);
+        var effectiveNlink = type == InodeType.Directory ? null : hostNlink;
+        HostInode inode;
+        lock (Lock)
+        {
+            if (_inodeByIdentity.TryGetValue(identity, out var existing) && !existing.IsCacheEvicted && !existing.IsFinalized)
+            {
+                inode = existing;
+            }
+            else
+            {
+                inode = CreateHostInodeLocked(normalizedPath, type, identity, effectiveNlink);
+            }
+        }
+
         if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
-        MetadataStore.ApplyToInode(hostPath, inode);
+        inode.ObservePath(normalizedPath);
+        MetadataStore.ApplyToInode(normalizedPath, inode);
+        if (effectiveNlink.HasValue)
+            inode.UpdateLinkCountFromHost(effectiveNlink.Value, "HostSuperBlock.InstantiateDentry");
+
         dentry.Instantiate(inode);
         lock (Lock)
         {
-            _dentryCache[hostPath] = dentry;
+            IndexPathNoLock(normalizedPath, dentry);
         }
 
         dentry.Parent?.CacheChild(dentry, "HostSuperBlock.InstantiateDentry");
@@ -208,10 +256,257 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
                 .Select(kv => kv.Key)
                 .ToList();
             foreach (var key in staleKeys)
-                _dentryCache.Remove(key);
+                RemovePathNoLock(key, recursive: false);
         }
 
         return dropped;
+    }
+
+    protected override void Shutdown()
+    {
+        base.Shutdown();
+        lock (Lock)
+        {
+            _dentryCache.Clear();
+            _dentryPathById.Clear();
+            _inodeByIdentity.Clear();
+            _identityByInode.Clear();
+        }
+    }
+
+    private static string NormalizeHostPath(string hostPath)
+    {
+        return Path.GetFullPath(hostPath);
+    }
+
+    private static bool TryClassifyPath(string hostPath, out InodeType type)
+    {
+        if (new FileInfo(hostPath).LinkTarget != null)
+        {
+            type = InodeType.Symlink;
+            return true;
+        }
+
+        if (Directory.Exists(hostPath))
+        {
+            type = InodeType.Directory;
+            return true;
+        }
+
+        if (File.Exists(hostPath))
+        {
+            type = InodeType.File;
+            return true;
+        }
+
+        type = InodeType.Unknown;
+        return false;
+    }
+
+    private HostInode CreateHostInodeLocked(string normalizedPath, InodeType type, HostInodeKey identity, int? hostNlink)
+    {
+        var inode = new HostInode(_nextIno++, this, normalizedPath, type, hostNlink);
+        TrackInode(inode);
+        _inodeByIdentity[identity] = inode;
+        _identityByInode[inode] = identity;
+        return inode;
+    }
+
+    private void UnregisterInodeIdentityNoLock(HostInode inode)
+    {
+        if (!_identityByInode.Remove(inode, out var key))
+            return;
+        if (_inodeByIdentity.TryGetValue(key, out var mapped) && ReferenceEquals(mapped, inode))
+            _inodeByIdentity.Remove(key);
+    }
+
+    private void IndexPathNoLock(string path, Dentry dentry)
+    {
+        if (_dentryCache.TryGetValue(path, out var existing) && !ReferenceEquals(existing, dentry))
+            RemovePathNoLock(path, recursive: false);
+
+        _dentryCache[path] = dentry;
+        _dentryPathById[dentry.Id] = path;
+        if (dentry.Inode is HostInode hostInode)
+            hostInode.ObservePath(path);
+    }
+
+    private void RemoveDentryNoLock(string hostPath, bool recursive)
+    {
+        var stale = recursive
+            ? _dentryCache.Keys
+                .Where(path => string.Equals(path, hostPath, PathComparison) ||
+                               path.StartsWith(hostPath + Path.DirectorySeparatorChar, PathComparison))
+                .ToList()
+            : _dentryCache.Keys
+                .Where(path => string.Equals(path, hostPath, PathComparison))
+                .ToList();
+
+        foreach (var path in stale)
+            RemovePathNoLock(path, recursive: false);
+    }
+
+    private void RemovePathNoLock(string hostPath, bool recursive)
+    {
+        if (recursive)
+        {
+            RemoveDentryNoLock(hostPath, recursive: true);
+            return;
+        }
+
+        if (!_dentryCache.Remove(hostPath, out var dentry))
+            return;
+
+        if (_dentryPathById.TryGetValue(dentry.Id, out var mappedPath) &&
+            string.Equals(mappedPath, hostPath, PathComparison))
+            _dentryPathById.Remove(dentry.Id);
+
+        if (dentry.Inode is HostInode hostInode)
+            hostInode.ForgetPath(hostPath);
+    }
+}
+
+internal readonly record struct HostInodeKey(string Scheme, ulong Value0, ulong Value1, string? FallbackPath)
+{
+    public static HostInodeKey Unix(ulong dev, ulong ino) => new("unix", dev, ino, null);
+    public static HostInodeKey Windows(ulong volumeSerial, ulong fileId) => new("windows", volumeSerial, fileId, null);
+    public static HostInodeKey Fallback(string path)
+    {
+        var normalized = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows())
+            normalized = normalized.ToUpperInvariant();
+        return new HostInodeKey("path", 0, 0, normalized);
+    }
+}
+
+internal static partial class HostInodeIdentityResolver
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME
+    {
+        public uint DwLowDateTime;
+        public uint DwHighDateTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BY_HANDLE_FILE_INFORMATION
+    {
+        public uint DwFileAttributes;
+        public FILETIME FtCreationTime;
+        public FILETIME FtLastAccessTime;
+        public FILETIME FtLastWriteTime;
+        public uint DwVolumeSerialNumber;
+        public uint NFileSizeHigh;
+        public uint NFileSizeLow;
+        public uint NNumberOfLinks;
+        public uint NFileIndexHigh;
+        public uint NFileIndexLow;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandle(
+        SafeFileHandle hFile,
+        out BY_HANDLE_FILE_INFORMATION lpFileInformation);
+
+    public static HostInodeKey Resolve(string hostPath, out int? hostLinkCount)
+    {
+        var normalizedPath = Path.GetFullPath(hostPath);
+        if (TryResolveUnix(normalizedPath, out var unixKey, out var unixNlink))
+        {
+            hostLinkCount = unixNlink;
+            return unixKey;
+        }
+
+        if (TryResolveWindows(normalizedPath, out var windowsKey, out var windowsNlink))
+        {
+            hostLinkCount = windowsNlink;
+            return windowsKey;
+        }
+
+        hostLinkCount = null;
+        return HostInodeKey.Fallback(normalizedPath);
+    }
+
+    private static bool TryResolveUnix(string hostPath, out HostInodeKey key, out int hostLinkCount)
+    {
+        key = default;
+        hostLinkCount = 0;
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return false;
+
+        var statPath = OperatingSystem.IsMacOS() ? "/usr/bin/stat" : "stat";
+        var psi = new ProcessStartInfo
+        {
+            FileName = statPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        if (OperatingSystem.IsMacOS())
+        {
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add("%d %i %l");
+        }
+        else
+        {
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("%d %i %h");
+        }
+
+        psi.ArgumentList.Add(hostPath);
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc == null) return false;
+            var output = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit();
+            if (proc.ExitCode != 0 || string.IsNullOrEmpty(output)) return false;
+
+            var parts = output.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return false;
+            if (!ulong.TryParse(parts[0], out var dev)) return false;
+            if (!ulong.TryParse(parts[1], out var ino)) return false;
+            if (!int.TryParse(parts[2], out hostLinkCount)) return false;
+            if (hostLinkCount < 0) hostLinkCount = 0;
+
+            key = HostInodeKey.Unix(dev, ino);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryResolveWindows(string hostPath, out HostInodeKey key, out int hostLinkCount)
+    {
+        key = default;
+        hostLinkCount = 0;
+        if (!OperatingSystem.IsWindows()) return false;
+
+        try
+        {
+            using var handle = File.OpenHandle(
+                hostPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                FileOptions.None);
+
+            if (!GetFileInformationByHandle(handle, out var fileInfo))
+                return false;
+
+            var fileId = ((ulong)fileInfo.NFileIndexHigh << 32) | fileInfo.NFileIndexLow;
+            key = HostInodeKey.Windows(fileInfo.DwVolumeSerialNumber, fileId);
+            hostLinkCount = checked((int)fileInfo.NNumberOfLinks);
+            if (hostLinkCount < 0) hostLinkCount = 0;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
@@ -693,28 +988,52 @@ public partial class HostInode : Inode
     private readonly object _mappedCacheLock = new();
     private MappedFilePageCache? _mappedPageCache;
     private string _hostPath;
+    private readonly HashSet<string> _aliasPaths = new(OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal);
     private Dictionary<string, byte[]>? _xattrs;
 
-    public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type)
+    public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, int? initialLinkCount = null)
     {
         Ino = ino;
         SuperBlock = sb;
-        _hostPath = hostPath;
+        _hostPath = Path.GetFullPath(hostPath);
+        _aliasPaths.Add(_hostPath);
         Type = type;
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
-        SetInitialLinkCount(ComputeInitialLinkCount(), "HostInode.ctor");
+        SetInitialLinkCount(Math.Max(0, initialLinkCount ?? ComputeInitialLinkCount()), "HostInode.ctor");
     }
 
     public string HostPath
     {
-        get => _hostPath;
+        get
+        {
+            lock (Lock)
+            {
+                if (PathExists(_hostPath)) return _hostPath;
+                foreach (var path in _aliasPaths)
+                {
+                    if (!PathExists(path)) continue;
+                    _hostPath = path;
+                    return _hostPath;
+                }
+
+                return _hostPath;
+            }
+        }
         set
         {
-            _hostPath = value;
+            var normalized = Path.GetFullPath(value);
+            lock (Lock)
+            {
+                _hostPath = normalized;
+                _aliasPaths.Add(normalized);
+            }
+
             lock (_mappedCacheLock)
             {
-                _mappedPageCache?.UpdatePath(value);
+                _mappedPageCache?.UpdatePath(normalized);
             }
         }
     }
@@ -806,7 +1125,7 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) return null;
         if (name == HostfsMetadataStore.MetaDirName) return null;
-        var subPath = Path.Combine(HostPath, name);
+        var subPath = Path.Combine(ResolveHostPath(), name);
         if (Dentries.Count == 0) return null;
         return ((HostSuperBlock)SuperBlock).GetDentry(subPath, name, Dentries[0]);
     }
@@ -814,7 +1133,7 @@ public partial class HostInode : Inode
     public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        var subPath = Path.Combine(HostPath, dentry.Name);
+        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
 
         using (File.Create(subPath))
@@ -830,7 +1149,7 @@ public partial class HostInode : Inode
     public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        var subPath = Path.Combine(HostPath, dentry.Name);
+        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
 
         Directory.CreateDirectory(subPath);
@@ -846,7 +1165,7 @@ public partial class HostInode : Inode
     public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        var subPath = Path.Combine(HostPath, dentry.Name);
+        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
 
         // Hostfs fallback: materialize a placeholder and persist node semantics in sidecar metadata.
@@ -871,7 +1190,7 @@ public partial class HostInode : Inode
 
     public override void Unlink(string name)
     {
-        var subPath = Path.Combine(HostPath, name);
+        var subPath = Path.Combine(ResolveHostPath(), name);
         var info = new FileInfo(subPath);
         var sb = (HostSuperBlock)SuperBlock;
 
@@ -895,7 +1214,7 @@ public partial class HostInode : Inode
 
     public override void Rmdir(string name)
     {
-        var subPath = Path.Combine(HostPath, name);
+        var subPath = Path.Combine(ResolveHostPath(), name);
         var info = new FileInfo(subPath);
         if (info.LinkTarget != null) throw new InvalidOperationException("Not a directory");
         if (!Directory.Exists(subPath)) throw new DirectoryNotFoundException(subPath);
@@ -920,8 +1239,8 @@ public partial class HostInode : Inode
             throw new InvalidOperationException("Not a directory");
 
         var targetParent = (HostInode)newParent;
-        var oldFullPath = Path.Combine(HostPath, oldName);
-        var newFullPath = Path.Combine(targetParent.HostPath, newName);
+        var oldFullPath = Path.Combine(ResolveHostPath(), oldName);
+        var newFullPath = Path.Combine(targetParent.ResolveHostPath(), newName);
 
         var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(oldFullPath, oldName, null) ??
@@ -975,7 +1294,11 @@ public partial class HostInode : Inode
 
         // Update cache and internal path
         sb.MoveDentry(oldFullPath, newFullPath, dentry);
-        ((HostInode)dentry.Inode).HostPath = newFullPath;
+        if (dentry.Inode is HostInode movedInode)
+        {
+            movedInode.ForgetPath(oldFullPath);
+            movedInode.ObservePath(newFullPath);
+        }
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(oldName, "HostInode.Rename.old-parent", out _);
         dentry.Name = newName;
@@ -1016,8 +1339,8 @@ public partial class HostInode : Inode
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         if (oldInode is not HostInode hi) throw new InvalidOperationException("Not a host inode");
 
-        var newPath = Path.Combine(HostPath, dentry.Name);
-        if (link(hi.HostPath, newPath) != 0)
+        var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        if (link(hi.ResolveHostPath(), newPath) != 0)
             throw new IOException($"link failed with error {Marshal.GetLastPInvokeError()}");
 
         var sb = (HostSuperBlock)SuperBlock;
@@ -1033,7 +1356,7 @@ public partial class HostInode : Inode
     public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        var newPath = Path.Combine(HostPath, dentry.Name);
+        var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
         if (File.Exists(newPath) || Directory.Exists(newPath) || new FileInfo(newPath).LinkTarget != null)
             throw new InvalidOperationException("Exists");
 
@@ -1046,7 +1369,7 @@ public partial class HostInode : Inode
 
     public override string Readlink()
     {
-        var info = new FileInfo(HostPath);
+        var info = new FileInfo(ResolveHostPath());
         return info.LinkTarget ?? throw new IOException("Not a link or target missing");
     }
 
@@ -1073,9 +1396,10 @@ public partial class HostInode : Inode
             else if (hasTrunc) mode = FileMode.Truncate;
 
             // Use SafeFileHandle with RandomAccess for thread-safe I/O without locks
+            var openPath = ResolveHostPath(linuxFile);
             try
             {
-                var handle = File.OpenHandle(HostPath, mode, access, share);
+                var handle = File.OpenHandle(openPath, mode, access, share);
                 linuxFile.PrivateData = handle;
             }
             catch (UnauthorizedAccessException) when (access == FileAccess.ReadWrite &&
@@ -1083,14 +1407,14 @@ public partial class HostInode : Inode
                                                       (linuxFile.Flags & FileFlags.O_RDWR) == 0)
             {
                 // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
-                var handle = File.OpenHandle(HostPath, mode, FileAccess.Read, share);
+                var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
                 linuxFile.PrivateData = handle;
             }
             catch (IOException) when (access == FileAccess.ReadWrite && (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
                                       (linuxFile.Flags & FileFlags.O_RDWR) == 0)
             {
                 // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
-                var handle = File.OpenHandle(HostPath, mode, FileAccess.Read, share);
+                var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
                 linuxFile.PrivateData = handle;
             }
         }
@@ -1124,7 +1448,7 @@ public partial class HostInode : Inode
         }
 
         // Fallback for unopened files
-        using var tempHandle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
@@ -1159,7 +1483,7 @@ public partial class HostInode : Inode
         }
 
         // Fallback for unopened files
-        using var tempHandle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         if (append)
         {
             lock
@@ -1320,7 +1644,7 @@ public partial class HostInode : Inode
     public override int Truncate(long size)
     {
         if (size < 0) return -(int)Errno.EINVAL;
-        using var handle = File.OpenHandle(HostPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        using var handle = File.OpenHandle(ResolveHostPath(), FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         RandomAccess.SetLength(handle, size);
         lock (_mappedCacheLock)
         {
@@ -1351,7 +1675,7 @@ public partial class HostInode : Inode
 
         lock (_mappedCacheLock)
         {
-            _mappedPageCache ??= new MappedFilePageCache(HostPath, writable: true);
+            _mappedPageCache ??= new MappedFilePageCache(ResolveHostPath(linuxFile), writable: true);
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
                 (long)Size,
@@ -1361,6 +1685,7 @@ public partial class HostInode : Inode
 
     protected override void OnEvictCache()
     {
+        ((HostSuperBlock)SuperBlock).UnregisterInodeIdentity(this);
         lock (_mappedCacheLock)
         {
             _mappedPageCache?.Dispose();
@@ -1368,6 +1693,12 @@ public partial class HostInode : Inode
         }
 
         base.OnEvictCache();
+    }
+
+    protected override void OnFinalizeDelete()
+    {
+        ((HostSuperBlock)SuperBlock).UnregisterInodeIdentity(this);
+        base.OnFinalizeDelete();
     }
 
     public override List<DirectoryEntry> GetEntries()
@@ -1378,7 +1709,7 @@ public partial class HostInode : Inode
         list.Add(new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory });
         list.Add(new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory });
 
-        var entries = Directory.GetFileSystemEntries(HostPath);
+        var entries = Directory.GetFileSystemEntries(ResolveHostPath());
         var sb = (HostSuperBlock)SuperBlock;
         foreach (var entryPath in entries)
         {
@@ -1459,7 +1790,7 @@ public partial class HostInode : Inode
     {
         if (_xattrs != null) return;
         var sb = (HostSuperBlock)SuperBlock;
-        _xattrs = sb.MetadataStore.LoadXAttrs(HostPath);
+        _xattrs = sb.MetadataStore.LoadXAttrs(ResolveHostPath());
     }
 
     private int ComputeInitialLinkCount()
@@ -1469,7 +1800,7 @@ public partial class HostInode : Inode
         var nlink = 2; // '.' and '..'
         try
         {
-            foreach (var entryPath in Directory.EnumerateFileSystemEntries(HostPath))
+            foreach (var entryPath in Directory.EnumerateFileSystemEntries(ResolveHostPath()))
             {
                 var name = Path.GetFileName(entryPath);
                 if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
@@ -1493,6 +1824,49 @@ public partial class HostInode : Inode
     private void PersistXAttrs()
     {
         var sb = (HostSuperBlock)SuperBlock;
-        sb.MetadataStore.SaveXAttrs(HostPath, _xattrs!);
+        sb.MetadataStore.SaveXAttrs(ResolveHostPath(), _xattrs!);
+    }
+
+    internal void ObservePath(string hostPath)
+    {
+        HostPath = hostPath;
+    }
+
+    internal void ForgetPath(string hostPath)
+    {
+        var normalized = Path.GetFullPath(hostPath);
+        lock (Lock)
+        {
+            _aliasPaths.Remove(normalized);
+            if (!string.Equals(_hostPath, normalized, OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+                return;
+
+            foreach (var path in _aliasPaths)
+            {
+                _hostPath = path;
+                return;
+            }
+        }
+    }
+
+    internal void UpdateLinkCountFromHost(int hostNlink, string reason)
+    {
+        SetInitialLinkCount(Math.Max(0, hostNlink), reason);
+    }
+
+    private string ResolveHostPath(LinuxFile? linuxFile = null)
+    {
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.TryGetPathForDentry(linuxFile?.Dentry, out var dentryPath))
+            return dentryPath;
+        return HostPath;
+    }
+
+    private static bool PathExists(string path)
+    {
+        var info = new FileInfo(path);
+        return info.LinkTarget != null || Directory.Exists(path) || File.Exists(path);
     }
 }

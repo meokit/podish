@@ -318,6 +318,44 @@ public class HostfsMetadataTests
     }
 
     [Fact]
+    public void Hostfs_HardlinkAliases_ShareInodeIdentity_AfterDcacheDrop()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        File.WriteAllText(Path.Combine(tempRoot, "a.txt"), "x");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var source = rootInode.Lookup("a.txt");
+            Assert.NotNull(source);
+            var sourceInode = source!.Inode!;
+
+            var alias = new Dentry("b.txt", null, sb.Root, sb);
+            rootInode.Link(alias, sourceInode);
+            Assert.Equal(2u, sourceInode.GetLinkCountForStat());
+
+            _ = sb.DropDentryCache();
+
+            var a = rootInode.Lookup("a.txt");
+            var b = rootInode.Lookup("b.txt");
+            Assert.NotNull(a);
+            Assert.NotNull(b);
+            Assert.Same(a!.Inode, b!.Inode);
+            Assert.Equal(2u, a.Inode!.GetLinkCountForStat());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
     public void Hostfs_MkdirAndRmdir_TrackDirectoryLinkCount()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
