@@ -184,15 +184,16 @@ public partial class SyscallManager
         try
         {
             var pipe = new PipeInode();
+            pipe.SuperBlock = sm.MemfdSuperBlock;
 
             // Reader
-            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root.Dentry, sm.Root.Dentry!.SuperBlock);
+            var rDentry = new Dentry("pipe:[read]", pipe, null, sm.MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, sm.AnonMount);
             rFd = sm.AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
-            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root.Dentry, sm.Root.Dentry.SuperBlock);
+            var wDentry = new Dentry("pipe:[write]", pipe, null, sm.MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, sm.AnonMount);
             wFd = sm.AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
@@ -242,6 +243,7 @@ public partial class SyscallManager
         try
         {
             var pipe = new PipeInode();
+            pipe.SuperBlock = sm.MemfdSuperBlock;
 
             // Build file flags for reader and writer
             // O_NONBLOCK is stored in LinuxFile.Flags and checked by read/write syscalls
@@ -249,13 +251,13 @@ public partial class SyscallManager
 
             // Reader
             var rFlags = FileFlags.O_RDONLY | baseFlags;
-            var rDentry = new Dentry("pipe:[read]", pipe, sm.Root.Dentry, sm.Root.Dentry!.SuperBlock);
+            var rDentry = new Dentry("pipe:[read]", pipe, null, sm.MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, rFlags, sm.AnonMount);
             rFd = sm.AllocFD(rFile);
 
             // Writer
             var wFlags = FileFlags.O_WRONLY | baseFlags;
-            var wDentry = new Dentry("pipe:[write]", pipe, sm.Root.Dentry, sm.Root.Dentry.SuperBlock);
+            var wDentry = new Dentry("pipe:[write]", pipe, null, sm.MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, wFlags, sm.AnonMount);
             wFd = sm.AllocFD(wFile);
 
