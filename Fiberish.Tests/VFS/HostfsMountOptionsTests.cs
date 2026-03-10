@@ -14,6 +14,8 @@ public class HostfsMountOptionsTests
         Assert.Equal(-1, opts.Umask);
         Assert.Equal(-1, opts.Fmask);
         Assert.Equal(-1, opts.Dmask);
+        Assert.Equal(HostfsMountBoundaryMode.SingleDomain, opts.MountBoundaryMode);
+        Assert.Equal(HostfsSpecialNodeMode.Strict, opts.SpecialNodeMode);
     }
 
     [Fact]
@@ -47,5 +49,13 @@ public class HostfsMountOptionsTests
         
         // File: 0777 -> 0666 (fmask 111 removes exec bits)
         Assert.Equal(0x1B6, opts.ApplyModeMask(false, 0x1FF));
+    }
+
+    [Fact]
+    public void Parse_PolicyModes()
+    {
+        var opts = HostfsMountOptions.Parse("mount_boundary=passthrough,special_node=passthrough");
+        Assert.Equal(HostfsMountBoundaryMode.Passthrough, opts.MountBoundaryMode);
+        Assert.Equal(HostfsSpecialNodeMode.Passthrough, opts.SpecialNodeMode);
     }
 }

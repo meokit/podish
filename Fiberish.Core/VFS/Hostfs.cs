@@ -43,13 +43,21 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private readonly Dictionary<long, string> _dentryPathById = [];
     private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
     private readonly Dictionary<HostInode, HostInodeKey> _identityByInode = [];
+    private readonly IMountBoundaryPolicy _mountBoundaryPolicy;
+    private readonly ISpecialNodePolicy _specialNodePolicy;
+    private readonly ulong? _rootMountDomainId;
     private ulong _nextIno = 1;
 
     public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options, DeviceNumberManager? devManager = null) : base(devManager)
     {
         Type = type;
-        HostRoot = hostRoot;
+        HostRoot = NormalizeHostPath(hostRoot);
         Options = options;
+        _mountBoundaryPolicy = options.ResolveMountBoundaryPolicy();
+        _specialNodePolicy = options.ResolveSpecialNodePolicy();
+        _rootMountDomainId = HostInodeIdentityResolver.TryProbe(HostRoot, out var rootNode)
+            ? rootNode.MountDomainId
+            : null;
         MetadataStore = new HostfsMetadataStore(HostRoot, !options.MetadataLess);
     }
 
@@ -75,11 +83,11 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             }
         }
 
-        if (!TryClassifyPath(normalizedPath, out var nodeType))
+        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var nodeType))
             return null;
 
-        var identity = HostInodeIdentityResolver.Resolve(normalizedPath, out var hostNlink);
-        var effectiveNlink = nodeType == InodeType.Directory ? null : hostNlink;
+        var identity = nodeInfo.Identity;
+        var effectiveNlink = nodeType == InodeType.Directory ? null : nodeInfo.HostLinkCount;
         HostInode inode;
         lock (Lock)
         {
@@ -183,21 +191,44 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
     }
 
-    private static bool PathExistsOnHost(string hostPath)
+    private bool PathExistsOnHost(string hostPath) => TryResolveVisibleNode(hostPath, out _, out _);
+
+    internal bool PathExistsOnHostRaw(string hostPath) => TryResolveRawNode(hostPath, out _);
+
+    internal bool TryGetRawNodeType(string hostPath, out InodeType rawType)
     {
-        var info = new FileInfo(hostPath);
-        return info.LinkTarget != null || Directory.Exists(hostPath) || File.Exists(hostPath);
+        rawType = InodeType.Unknown;
+        if (!TryResolveRawNode(hostPath, out var node)) return false;
+        rawType = node.RawType;
+        return true;
+    }
+
+    private bool TryResolveRawNode(string hostPath, out HostNodeInfo node)
+    {
+        var normalizedPath = NormalizeHostPath(hostPath);
+        return HostInodeIdentityResolver.TryProbe(normalizedPath, out node);
+    }
+
+    internal bool TryResolveVisibleNode(string hostPath, out HostNodeInfo node, out InodeType mappedType)
+    {
+        mappedType = InodeType.Unknown;
+        var normalizedPath = NormalizeHostPath(hostPath);
+        if (!TryResolveRawNode(normalizedPath, out node))
+            return false;
+        if (!_mountBoundaryPolicy.Allows(HostRoot, normalizedPath, _rootMountDomainId, node.MountDomainId))
+            return false;
+        return _specialNodePolicy.TryMapType(node.RawType, out mappedType);
     }
 
     public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
+        _ = isDir;
         var normalizedPath = NormalizeHostPath(hostPath);
-        var type = isDir ? InodeType.Directory : InodeType.File;
-        if (new FileInfo(normalizedPath).LinkTarget != null)
-            type = InodeType.Symlink;
+        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var type))
+            throw new FileNotFoundException("Path not visible under current hostfs policy", normalizedPath);
 
-        var identity = HostInodeIdentityResolver.Resolve(normalizedPath, out var hostNlink);
-        var effectiveNlink = type == InodeType.Directory ? null : hostNlink;
+        var identity = nodeInfo.Identity;
+        var effectiveNlink = type == InodeType.Directory ? null : nodeInfo.HostLinkCount;
         HostInode inode;
         lock (Lock)
         {
@@ -277,30 +308,6 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private static string NormalizeHostPath(string hostPath)
     {
         return Path.GetFullPath(hostPath);
-    }
-
-    private static bool TryClassifyPath(string hostPath, out InodeType type)
-    {
-        if (new FileInfo(hostPath).LinkTarget != null)
-        {
-            type = InodeType.Symlink;
-            return true;
-        }
-
-        if (Directory.Exists(hostPath))
-        {
-            type = InodeType.Directory;
-            return true;
-        }
-
-        if (File.Exists(hostPath))
-        {
-            type = InodeType.File;
-            return true;
-        }
-
-        type = InodeType.Unknown;
-        return false;
     }
 
     private HostInode CreateHostInodeLocked(string normalizedPath, InodeType type, HostInodeKey identity, int? hostNlink)
@@ -412,16 +419,10 @@ internal static partial class HostInodeIdentityResolver
     public static HostInodeKey Resolve(string hostPath, out int? hostLinkCount)
     {
         var normalizedPath = Path.GetFullPath(hostPath);
-        if (TryResolveUnix(normalizedPath, out var unixKey, out var unixNlink))
+        if (TryProbe(normalizedPath, out var node))
         {
-            hostLinkCount = unixNlink;
-            return unixKey;
-        }
-
-        if (TryResolveWindows(normalizedPath, out var windowsKey, out var windowsNlink))
-        {
-            hostLinkCount = windowsNlink;
-            return windowsKey;
+            hostLinkCount = node.HostLinkCount;
+            return node.Identity;
         }
 
         hostLinkCount = null;
@@ -512,12 +513,39 @@ internal static partial class HostInodeIdentityResolver
 
 public sealed class HostfsMountOptions
 {
+    private static readonly IMountBoundaryPolicy DefaultBoundaryPolicy = new SingleDomainMountBoundaryPolicy();
+    private static readonly IMountBoundaryPolicy PassthroughBoundaryPolicy = new PassthroughMountBoundaryPolicy();
+    private static readonly ISpecialNodePolicy DefaultSpecialNodePolicy = new StrictSpecialNodePolicy();
+    private static readonly ISpecialNodePolicy PassthroughSpecialPolicy = new PassthroughSpecialNodePolicy();
+
     public int? MountUid { get; init; }
     public int? MountGid { get; init; }
     public int Umask { get; init; } = -1;
     public int Fmask { get; init; } = -1;
     public int Dmask { get; init; } = -1;
     public bool MetadataLess { get; init; }
+    public HostfsMountBoundaryMode MountBoundaryMode { get; init; } = HostfsMountBoundaryMode.SingleDomain;
+    public HostfsSpecialNodeMode SpecialNodeMode { get; init; } = HostfsSpecialNodeMode.Strict;
+    public IMountBoundaryPolicy? MountBoundaryPolicy { get; init; }
+    public ISpecialNodePolicy? SpecialNodePolicy { get; init; }
+
+    internal IMountBoundaryPolicy ResolveMountBoundaryPolicy()
+    {
+        if (MountBoundaryPolicy != null)
+            return MountBoundaryPolicy;
+        return MountBoundaryMode == HostfsMountBoundaryMode.Passthrough
+            ? PassthroughBoundaryPolicy
+            : DefaultBoundaryPolicy;
+    }
+
+    internal ISpecialNodePolicy ResolveSpecialNodePolicy()
+    {
+        if (SpecialNodePolicy != null)
+            return SpecialNodePolicy;
+        return SpecialNodeMode == HostfsSpecialNodeMode.Passthrough
+            ? PassthroughSpecialPolicy
+            : DefaultSpecialNodePolicy;
+    }
 
     public int GetFileMask()
     {
@@ -551,6 +579,8 @@ public sealed class HostfsMountOptions
         var fmask = -1;
         var dmask = -1;
         var metadataLess = false;
+        var mountBoundaryMode = HostfsMountBoundaryMode.SingleDomain;
+        var specialNodeMode = HostfsSpecialNodeMode.Strict;
 
         var tokens = optionString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         foreach (var token in tokens)
@@ -584,6 +614,26 @@ public sealed class HostfsMountOptions
                 case "dmask":
                     if (TryParseMask(value, out var parsedDmask)) dmask = parsedDmask;
                     break;
+                case "mount_boundary":
+                case "mountboundary":
+                case "cross_mount":
+                    if (value.Equals("passthrough", StringComparison.OrdinalIgnoreCase) ||
+                        value.Equals("allow", StringComparison.OrdinalIgnoreCase))
+                        mountBoundaryMode = HostfsMountBoundaryMode.Passthrough;
+                    else if (value.Equals("single", StringComparison.OrdinalIgnoreCase) ||
+                             value.Equals("strict", StringComparison.OrdinalIgnoreCase))
+                        mountBoundaryMode = HostfsMountBoundaryMode.SingleDomain;
+                    break;
+                case "special_node":
+                case "specialnode":
+                case "special":
+                    if (value.Equals("passthrough", StringComparison.OrdinalIgnoreCase) ||
+                        value.Equals("allow", StringComparison.OrdinalIgnoreCase))
+                        specialNodeMode = HostfsSpecialNodeMode.Passthrough;
+                    else if (value.Equals("strict", StringComparison.OrdinalIgnoreCase) ||
+                             value.Equals("deny", StringComparison.OrdinalIgnoreCase))
+                        specialNodeMode = HostfsSpecialNodeMode.Strict;
+                    break;
             }
         }
 
@@ -594,7 +644,9 @@ public sealed class HostfsMountOptions
             Umask = umask,
             Fmask = fmask,
             Dmask = dmask,
-            MetadataLess = metadataLess
+            MetadataLess = metadataLess,
+            MountBoundaryMode = mountBoundaryMode,
+            SpecialNodeMode = specialNodeMode
         };
     }
 
@@ -1393,13 +1445,13 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
-        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
         using (File.Create(subPath))
         {
         } // Create empty file
 
-        var sb = (HostSuperBlock)SuperBlock;
         sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         return dentry;
@@ -1409,11 +1461,11 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
-        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
         Directory.CreateDirectory(subPath);
 
-        var sb = (HostSuperBlock)SuperBlock;
         sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, true, mode);
         if (dentry.Inode != null)
@@ -1425,14 +1477,14 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
-        if (File.Exists(subPath) || Directory.Exists(subPath)) throw new InvalidOperationException("Exists");
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
         // Hostfs fallback: materialize a placeholder and persist node semantics in sidecar metadata.
         using (File.Create(subPath))
         {
         }
 
-        var sb = (HostSuperBlock)SuperBlock;
         sb.MetadataStore.WriteMknod(subPath, type, rdev);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         if (dentry.Inode != null)
@@ -1450,35 +1502,32 @@ public partial class HostInode : Inode
     public override void Unlink(string name)
     {
         var subPath = Path.Combine(ResolveHostPath(), name);
-        var info = new FileInfo(subPath);
         var sb = (HostSuperBlock)SuperBlock;
+        if (!sb.TryGetRawNodeType(subPath, out var targetType))
+            throw new FileNotFoundException("Entry not found", subPath);
+        if (targetType == InodeType.Directory)
+            throw new InvalidOperationException("Is a directory");
 
         // unlink(2) deletes the directory entry itself and must not follow symlinks.
-        if (info.LinkTarget != null || File.Exists(subPath))
-        {
-            var dentry = sb.GetDentry(subPath, name, null);
-            File.Delete(subPath);
-            sb.MetadataStore.RemovePath(subPath);
-            NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
-            dentry?.UnbindInode("HostInode.Unlink");
-            if (Dentries.Count > 0)
-                _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
-            sb.RemoveDentry(subPath);
-            return;
-        }
-
-        if (Directory.Exists(subPath)) throw new InvalidOperationException("Is a directory");
-        throw new FileNotFoundException("Entry not found", subPath);
+        var dentry = sb.GetDentry(subPath, name, null);
+        File.Delete(subPath);
+        sb.MetadataStore.RemovePath(subPath);
+        NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
+        dentry?.UnbindInode("HostInode.Unlink");
+        if (Dentries.Count > 0)
+            _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
+        sb.RemoveDentry(subPath);
     }
 
     public override void Rmdir(string name)
     {
         var subPath = Path.Combine(ResolveHostPath(), name);
-        var info = new FileInfo(subPath);
-        if (info.LinkTarget != null) throw new InvalidOperationException("Not a directory");
-        if (!Directory.Exists(subPath)) throw new DirectoryNotFoundException(subPath);
-
         var sb = (HostSuperBlock)SuperBlock;
+        if (!sb.TryGetRawNodeType(subPath, out var targetType))
+            throw new DirectoryNotFoundException(subPath);
+        if (targetType != InodeType.Directory)
+            throw new InvalidOperationException("Not a directory");
+
         var dentry = sb.GetDentry(subPath, name, null);
         Directory.Delete(subPath, false);
         sb.MetadataStore.RemovePath(subPath);
@@ -1508,14 +1557,13 @@ public partial class HostInode : Inode
         var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
 
         // Handle overwrite
-        if (File.Exists(newFullPath) || Directory.Exists(newFullPath) || new FileInfo(newFullPath).LinkTarget != null)
+        if (sb.TryGetRawNodeType(newFullPath, out var targetType))
         {
             var targetDentry = sb.GetDentry(newFullPath, newName, null);
             if (targetDentry != null && ReferenceEquals(targetDentry.Inode, dentry.Inode))
                 return;
 
-            var targetIsSymlink = new FileInfo(newFullPath).LinkTarget != null;
-            var targetIsDirectory = !targetIsSymlink && Directory.Exists(newFullPath);
+            var targetIsDirectory = targetType == InodeType.Directory;
 
             if (targetIsDirectory)
             {
@@ -1619,11 +1667,11 @@ public partial class HostInode : Inode
     {
         if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
         var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
-        if (File.Exists(newPath) || Directory.Exists(newPath) || new FileInfo(newPath).LinkTarget != null)
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.PathExistsOnHostRaw(newPath))
             throw new InvalidOperationException("Exists");
 
         File.CreateSymbolicLink(newPath, target);
-        var sb = (HostSuperBlock)SuperBlock;
         sb.MetadataStore.RemovePath(newPath);
         sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
         return dentry;
@@ -2062,16 +2110,14 @@ public partial class HostInode : Inode
         var nlink = 2; // '.' and '..'
         try
         {
+            var sb = (HostSuperBlock)SuperBlock;
             foreach (var entryPath in Directory.EnumerateFileSystemEntries(ResolveHostPath()))
             {
                 var name = Path.GetFileName(entryPath);
                 if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
                     continue;
 
-                var info = new FileInfo(entryPath);
-                if (info.LinkTarget != null)
-                    continue; // symlink entries do not contribute to parent nlink
-                if (Directory.Exists(entryPath))
+                if (sb.TryResolveVisibleNode(entryPath, out _, out var entryType) && entryType == InodeType.Directory)
                     nlink++;
             }
         }
@@ -2128,7 +2174,6 @@ public partial class HostInode : Inode
 
     private static bool PathExists(string path)
     {
-        var info = new FileInfo(path);
-        return info.LinkTarget != null || Directory.Exists(path) || File.Exists(path);
+        return HostInodeIdentityResolver.TryProbe(path, out _);
     }
 }
