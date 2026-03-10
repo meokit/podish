@@ -203,43 +203,54 @@ public partial class SyscallManager
     {
         var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
         var managers = new HashSet<SyscallManager>();
-        var managerToProcess = new Dictionary<SyscallManager, Process>();
+        var mmTargets = new Dictionary<VMAManager, (Engine Engine, Process? Process)>();
         if (scheduler != null)
             foreach (var process in scheduler.GetProcessesSnapshot())
                 if (process.Syscalls != null)
                 {
-                    managers.Add(process.Syscalls);
-                    managerToProcess[process.Syscalls] = process;
+                    var manager = process.Syscalls;
+                    managers.Add(manager);
+                    var syncEngine = process.Threads
+                        .Select(static t => t.CPU)
+                        .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? manager.Engine;
+                    if (!mmTargets.ContainsKey(manager.Mem))
+                        mmTargets[manager.Mem] = (syncEngine, process);
                 }
 
         if (managers.Count == 0)
         {
             managers.Add(this);
-            if (Engine.Owner is FiberTask fallbackTask)
-                managerToProcess[this] = fallbackTask.Process;
+            var fallbackProcess = (Engine.Owner as FiberTask)?.Process;
+            var fallbackEngine = fallbackProcess?.Threads
+                .Select(static t => t.CPU)
+                .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? Engine;
+            mmTargets[this.Mem] = (fallbackEngine, fallbackProcess);
         }
 
-        foreach (var manager in managers)
+        foreach (var (mm, target) in mmTargets)
             try
             {
-                managerToProcess.TryGetValue(manager, out var process);
-                ProcessAddressSpaceSync.SyncAllMappedSharedFiles(manager.Mem, manager.Engine, process);
+                ProcessAddressSpaceSync.SyncAllMappedSharedFiles(mm, target.Engine, target.Process);
             }
             catch (Exception ex)
             {
                 Logger.LogDebug(ex, "SyncAllMappedSharedFiles failed for one process");
             }
 
+        var syncedFiles = new HashSet<LinuxFile>();
         foreach (var manager in managers)
             foreach (var file in manager.FDs.Values)
+            {
+                if (file == null || !syncedFiles.Add(file)) continue;
                 try
                 {
-                    file?.OpenedInode?.Sync(file);
+                    file.OpenedInode?.Sync(file);
                 }
                 catch (Exception ex)
                 {
                     Logger.LogDebug(ex, "Inode.Sync failed for one open file");
                 }
+            }
 
         var superblocks = new HashSet<SuperBlock>();
         foreach (var manager in managers)

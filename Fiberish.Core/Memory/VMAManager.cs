@@ -7,6 +7,13 @@ using System.Threading;
 
 namespace Fiberish.Memory;
 
+public enum FaultResult
+{
+    Handled = 0,
+    Segv = 1,
+    BusError = 2
+}
+
 public class VMAManager
 {
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
@@ -14,6 +21,7 @@ public class VMAManager
     private static long _cowAllocReplaceCount;
     private int _sharedRefCount = 1;
     private readonly List<VMA> _vmas = [];
+    private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
 
@@ -53,6 +61,57 @@ public class VMAManager
 
     public IReadOnlyList<VMA> VMAs => _vmas;
 
+    private static Inode? ResolveMappedInode(VMA vma)
+    {
+        return vma.File?.OpenedInode;
+    }
+
+    private void TrackMappedInodeOnVmaAdded(VMA vma)
+    {
+        var inode = ResolveMappedInode(vma);
+        if (inode == null) return;
+        if (_mappedInodeRefCounts.TryGetValue(inode, out var existing))
+        {
+            _mappedInodeRefCounts[inode] = existing + 1;
+            return;
+        }
+
+        _mappedInodeRefCounts[inode] = 1;
+        inode.RegisterMappedAddressSpace(this);
+    }
+
+    private void TrackMappedInodeOnVmaRemoved(VMA vma)
+    {
+        var inode = ResolveMappedInode(vma);
+        if (inode == null) return;
+        if (!_mappedInodeRefCounts.TryGetValue(inode, out var existing))
+            return;
+
+        if (existing <= 1)
+        {
+            _mappedInodeRefCounts.Remove(inode);
+            inode.UnregisterMappedAddressSpace(this);
+            return;
+        }
+
+        _mappedInodeRefCounts[inode] = existing - 1;
+    }
+
+    private void InsertVmaSorted(VMA vma)
+    {
+        var inserted = false;
+        for (var i = 0; i < _vmas.Count; i++)
+            if (vma.End <= _vmas[i].Start)
+            {
+                _vmas.Insert(i, vma);
+                inserted = true;
+                break;
+            }
+
+        if (!inserted) _vmas.Add(vma);
+        TrackMappedInodeOnVmaAdded(vma);
+    }
+
     public VMA? FindVMA(uint addr)
     {
         foreach (var vma in _vmas)
@@ -68,6 +127,33 @@ public class VMAManager
             if (vma.Start < end && vma.End > start)
                 result.Add(vma);
         return result;
+    }
+
+    public void OnFileTruncate(Inode inode, long newSize, Engine engine)
+    {
+        if (newSize < 0) newSize = 0;
+
+        var touchedObjects = new HashSet<MemoryObject>();
+        foreach (var vma in _vmas)
+        {
+            if (!ReferenceEquals(vma.File?.OpenedInode, inode)) continue;
+
+            var validBytes = newSize > vma.Offset ? newSize - vma.Offset : 0;
+            vma.FileBackingLength = validBytes;
+            touchedObjects.Add(vma.MemoryObject);
+
+            if (validBytes >= vma.Length) continue;
+
+            var invalidateFrom = validBytes <= 0
+                ? vma.Start
+                : vma.Start + (uint)(((validBytes + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize) *
+                                     LinuxConstants.PageSize);
+            if (invalidateFrom < vma.End)
+                engine.InvalidateRange(invalidateFrom, vma.End - invalidateFrom);
+        }
+
+        foreach (var memoryObject in touchedObjects)
+            memoryObject.TruncateToSize(newSize);
     }
 
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset, long filesz,
@@ -134,17 +220,7 @@ public class VMAManager
             ViewPageOffset = viewPageOff
         };
 
-        // Insert sorted
-        var inserted = false;
-        for (var i = 0; i < _vmas.Count; i++)
-            if (vma.End <= _vmas[i].Start)
-            {
-                _vmas.Insert(i, vma);
-                inserted = true;
-                break;
-            }
-
-        if (!inserted) _vmas.Add(vma);
+        InsertVmaSorted(vma);
 
         return addr;
     }
@@ -152,7 +228,12 @@ public class VMAManager
     public VMAManager Clone()
     {
         var newMM = new VMAManager(MemoryObjects);
-        foreach (var vma in _vmas) newMM._vmas.Add(vma.Clone());
+        foreach (var vma in _vmas)
+        {
+            var cloned = vma.Clone();
+            newMM._vmas.Add(cloned);
+            newMM.TrackMappedInodeOnVmaAdded(cloned);
+        }
         return newMM;
     }
 
@@ -161,17 +242,7 @@ public class VMAManager
     /// </summary>
     internal void AddVmaInternal(VMA vma)
     {
-        // Insert sorted by start address
-        var inserted = false;
-        for (var i = 0; i < _vmas.Count; i++)
-            if (vma.End <= _vmas[i].Start)
-            {
-                _vmas.Insert(i, vma);
-                inserted = true;
-                break;
-            }
-
-        if (!inserted) _vmas.Add(vma);
+        InsertVmaSorted(vma);
     }
 
     public void Munmap(uint addr, uint length, Engine engine)
@@ -193,6 +264,7 @@ public class VMAManager
                 vma.MemoryObject.Release();
                 vma.CowObject?.Release();
                 vma.FileMapping?.Release();
+                TrackMappedInodeOnVmaRemoved(vma);
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -231,6 +303,7 @@ public class VMAManager
                 vma.MemoryObject.AddRef();
 
                 _vmas.Insert(i + 1, tailVMA);
+                TrackMappedInodeOnVmaAdded(tailVMA);
 
                 // Truncate current (head)
                 vma.End = addr;
@@ -417,6 +490,7 @@ public class VMAManager
                 if (right != null)
                 {
                     _vmas.Insert(i + 1, right);
+                    TrackMappedInodeOnVmaAdded(right);
                     i++;
                 }
             }
@@ -424,8 +498,12 @@ public class VMAManager
             {
                 // Keep left in current slot; insert middle and optional right.
                 _vmas.Insert(i + 1, mid);
+                TrackMappedInodeOnVmaAdded(mid);
                 if (right != null)
+                {
                     _vmas.Insert(i + 2, right);
+                    TrackMappedInodeOnVmaAdded(right);
+                }
                 i += right != null ? 2 : 1;
             }
         }
@@ -453,6 +531,10 @@ public class VMAManager
             vma.FileMapping?.Release();
         }
 
+        foreach (var vma in _vmas)
+            TrackMappedInodeOnVmaRemoved(vma);
+
+        _mappedInodeRefCounts.Clear();
         ExternalPages.Clear();
         _vmas.Clear();
     }
@@ -486,13 +568,13 @@ public class VMAManager
         }
     }
 
-    public bool HandleFault(uint addr, bool isWrite, Engine engine)
+    public FaultResult HandleFaultDetailed(uint addr, bool isWrite, Engine engine)
     {
         var vma = FindVMA(addr);
         if (vma == null)
         {
             Logger.LogWarning("No VMA found for address 0x{Addr:x}", addr);
-            return false;
+            return FaultResult.Segv;
         }
 
         var pageStart = addr & LinuxConstants.PageMask;
@@ -520,14 +602,14 @@ public class VMAManager
                     {
                         // We are the exclusive owner. No need to copy, just upgrade to Writable.
                         engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
-                        return true;
+                        return FaultResult.Handled;
                     }
                     else
                     {
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
                         if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow,
                                 AllocationSource.CowReplacePrivate))
-                            return false;
+                            return FaultResult.Segv;
                         Interlocked.Increment(ref _cowAllocReplaceCount);
                         var owner = engine.Owner as FiberTask;
                         Logger.LogTrace(
@@ -549,9 +631,9 @@ public class VMAManager
                         // Remap in Engine
                         ExternalPages.Release(pageStart); // drops old mapping: existingCow loses 1 ref
                         if (!ExternalPages.AddMapping(pageStart, newPage, out _))
-                            return false; // newPage gains 1 ref -> Total 2
-                        if (!engine.MapExternalPage(pageStart, newPage, (byte)vma.Perms)) return false;
-                        return true;
+                            return FaultResult.Segv; // newPage gains 1 ref -> Total 2
+                        if (!engine.MapExternalPage(pageStart, newPage, (byte)vma.Perms)) return FaultResult.Segv;
+                        return FaultResult.Handled;
                     }
                 }
                 else
@@ -561,6 +643,8 @@ public class VMAManager
                     long vmaRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
                     // 2. Absolute coordinate (Absolute within the File)
                     var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
+                    if (vma.File != null && vmaRelativeOffset >= vma.FileBackingLength)
+                        return FaultResult.BusError;
 
                     IntPtr srcPage;
                     if (!TryResolveMappedFilePage(vma, pageIndex, absoluteFileOffset, out srcPage))
@@ -600,12 +684,12 @@ public class VMAManager
                         }, out _);
                     }
 
-                    if (srcPage == IntPtr.Zero) return false;
+                    if (srcPage == IntPtr.Zero) return FaultResult.Segv;
 
                     // Allocate private copy from inode cache
                     if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow,
                             AllocationSource.CowFirstPrivate))
-                        return false;
+                        return FaultResult.Segv;
                     Interlocked.Increment(ref _cowAllocFirstCount);
                     var owner2 = engine.Owner as FiberTask;
                     Logger.LogTrace(
@@ -626,9 +710,9 @@ public class VMAManager
                     ExternalPages.Release(pageStart); // drop old inode cache ref from VMA
 
                     // Add mapping gives existingCow a +1 ref (Total 2)
-                    if (!ExternalPages.AddMapping(pageStart, existingCow, out _)) return false;
-                    if (!engine.MapExternalPage(pageStart, existingCow, (byte)vma.Perms)) return false; // full perms
-                    return true;
+                    if (!ExternalPages.AddMapping(pageStart, existingCow, out _)) return FaultResult.Segv;
+                    if (!engine.MapExternalPage(pageStart, existingCow, (byte)vma.Perms)) return FaultResult.Segv; // full perms
+                    return FaultResult.Handled;
                 }
             }
             else
@@ -637,14 +721,14 @@ public class VMAManager
                 var cowPage = vma.CowObject.GetPage(pageIndex);
                 if (cowPage != IntPtr.Zero)
                 {
-                    if (!ExternalPages.AddMapping(pageStart, cowPage, out var addedRef)) return false;
+                    if (!ExternalPages.AddMapping(pageStart, cowPage, out var addedRef)) return FaultResult.Segv;
                     if (!engine.MapExternalPage(pageStart, cowPage, (byte)vma.Perms))
                     {
                         if (addedRef) ExternalPages.Release(pageStart);
-                        return false;
+                        return FaultResult.Segv;
                     }
 
-                    return true;
+                    return FaultResult.Handled;
                 }
                 // Fall through to normal read path, but map READ-ONLY
                 // (so a subsequent write will fault back here for COW)
@@ -655,7 +739,7 @@ public class VMAManager
         if (isWrite && (vma.Perms & Protection.Write) == 0 && vma.CowObject == null)
         {
             Logger.LogTrace("Write fault on read-only VMA: {VmaName} at 0x{Addr:x}", vma.Name, addr);
-            return false;
+            return FaultResult.Segv;
         }
 
         var mapPerms = (vma.CowObject != null)
@@ -668,6 +752,8 @@ public class VMAManager
         // This makes mmap-shared dirty pages survive process termination through host kernel page cache.
         long normalRelativeOffset = (long)(pageIndex - vma.ViewPageOffset) * LinuxConstants.PageSize;
         var normalAbsoluteFileOffset = vma.Offset + normalRelativeOffset;
+        if (vma.File != null && normalRelativeOffset >= vma.FileBackingLength)
+            return FaultResult.BusError;
         var strictQuota = vma.File == null;
         var allocationClass = strictQuota ? AllocationClass.Anonymous : AllocationClass.PageCache;
 
@@ -722,26 +808,31 @@ public class VMAManager
                 pageStart, addr, isWrite, vma.Name, vma.Perms, pageIndex, strictQuota, allocationClass,
                 quotaBytes, allocatedBytes,
                 strictSuccess, strictReclaimSuccess, strictFail, legacyOverQuota);
-            return false;
+            return FaultResult.Segv;
         }
 
         if (!ExternalPages.AddMapping(pageStart, hostPtr, out var added))
         {
             Logger.LogError("HandleFault: page mapping mismatch for 0x{PageStart:x}", pageStart);
-            return false;
+            return FaultResult.Segv;
         }
 
         if (!engine.MapExternalPage(pageStart, hostPtr, (byte)tempPerms))
         {
             if (added) ExternalPages.Release(pageStart);
             Logger.LogError("HandleFault: MapExternalPage failed for 0x{PageStart:x}", pageStart);
-            return false;
+            return FaultResult.Segv;
         }
 
         // Set final permissions
         if (tempPerms != mapPerms) engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)mapPerms);
 
-        return true;
+        return FaultResult.Handled;
+    }
+
+    public bool HandleFault(uint addr, bool isWrite, Engine engine)
+    {
+        return HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
     }
 
     private static bool TryResolveMappedFilePage(VMA vma, uint pageIndex, long absoluteFileOffset, out IntPtr pagePtr)
@@ -815,33 +906,79 @@ public class VMAManager
         SyncVMA(vma, engine, vma.Start, vma.End);
     }
 
+    public static void SyncVMA(VMA vma, IReadOnlyList<Engine> engines)
+    {
+        SyncVMA(vma, engines, vma.Start, vma.End);
+    }
+
     public void SyncMappedFile(LinuxFile file, Engine engine)
+    {
+        SyncMappedFile(file, [engine]);
+    }
+
+    public void SyncMappedFile(LinuxFile file, IReadOnlyList<Engine> engines)
     {
         if (file.OpenedInode == null) return;
         var inode = file.OpenedInode;
+        if (engines.Count == 0) return;
         var snapshot = _vmas.ToArray();
         foreach (var vma in snapshot)
         {
             if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
             if (!ReferenceEquals(vma.File.OpenedInode, inode)) continue;
-            SyncVMA(vma, engine);
+            SyncVMA(vma, engines);
         }
     }
 
     public void SyncAllMappedSharedFiles(Engine engine)
     {
+        SyncAllMappedSharedFiles([engine]);
+    }
+
+    public void SyncAllMappedSharedFiles(IReadOnlyList<Engine> engines)
+    {
+        if (engines.Count == 0) return;
         var snapshot = _vmas.ToArray();
         foreach (var vma in snapshot)
         {
             if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
-            SyncVMA(vma, engine);
+            SyncVMA(vma, engines);
+        }
+    }
+
+    public void CaptureDirtySharedPages(Engine engine)
+    {
+        var snapshot = _vmas.ToArray();
+        foreach (var vma in snapshot)
+        {
+            if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
+            var inode = vma.File.OpenedInode;
+            if (inode == null) continue;
+
+            var startPage = vma.Start & LinuxConstants.PageMask;
+            var endPage = (vma.End + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+            if (endPage < startPage) continue;
+
+            for (var page = startPage; page < endPage; page += LinuxConstants.PageSize)
+            {
+                if (!engine.IsDirty(page)) continue;
+                var pageIndex = vma.ViewPageOffset + ((page - vma.Start) / LinuxConstants.PageSize);
+                vma.MemoryObject.MarkDirty(pageIndex);
+                inode.SetPageDirty(pageIndex);
+            }
         }
     }
 
     public static void SyncVMA(VMA vma, Engine engine, uint rangeStart, uint rangeEnd)
     {
+        SyncVMA(vma, [engine], rangeStart, rangeEnd);
+    }
+
+    public static void SyncVMA(VMA vma, IReadOnlyList<Engine> engines, uint rangeStart, uint rangeEnd)
+    {
         if (vma.File == null || (vma.Flags & MapFlags.Shared) == 0)
             return;
+        if (engines.Count == 0) return;
 
         var syncStart = Math.Max(vma.Start, rangeStart);
         var syncEnd = Math.Min(vma.End, rangeEnd);
@@ -860,7 +997,16 @@ public class VMAManager
         for (var page = startPage; page < endPage; page += LinuxConstants.PageSize)
         {
             var pageIndex = vma.ViewPageOffset + ((page - vma.Start) / LinuxConstants.PageSize);
-            if (engine.IsDirty(page))
+
+            var isDirty = false;
+            foreach (var engine in engines)
+            {
+                if (!engine.IsDirty(page)) continue;
+                isDirty = true;
+                break;
+            }
+
+            if (isDirty)
             {
                 vma.MemoryObject.MarkDirty(pageIndex);
                 inode.SetPageDirty(pageIndex);
@@ -887,7 +1033,6 @@ public class VMAManager
 
             if (writeLen <= 0)
             {
-                vma.MemoryObject.ClearDirty(pageIndex);
                 continue;
             }
 

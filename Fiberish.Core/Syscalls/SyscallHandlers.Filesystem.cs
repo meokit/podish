@@ -206,7 +206,11 @@ public partial class SyscallManager
 
         // TODO: Permission Check
 
-        return new ValueTask<int>(loc.Dentry.Inode.Truncate(length));
+        var inode = loc.Dentry.Inode;
+        var rc = inode.Truncate(length);
+        if (rc == 0)
+            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, inode, length);
+        return new ValueTask<int>(rc);
     }
 
     private static async ValueTask<int> SysFtruncate(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -220,7 +224,10 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
 
-        return f.OpenedInode.Truncate(length);
+        var rc = f.OpenedInode.Truncate(length);
+        if (rc == 0)
+            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, f.OpenedInode, length);
+        return rc;
     }
 
     private static async ValueTask<int> SysFtruncate64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -235,7 +242,10 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
 
-        return f.OpenedInode.Truncate(length);
+        var rc = f.OpenedInode.Truncate(length);
+        if (rc == 0)
+            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, f.OpenedInode, length);
+        return rc;
     }
 
     private static async ValueTask<int> SysRmdir(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

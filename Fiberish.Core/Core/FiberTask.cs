@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
@@ -325,12 +326,13 @@ public class FiberTask
                 return true;
             }
 
-            if (Process.Mem.HandleFault(addr, isWrite, CPU))
+            var faultResult = Process.Mem.HandleFaultDetailed(addr, isWrite, CPU);
+            if (faultResult == FaultResult.Handled)
                 return true;
 
-            // Not handled by VMAManager (no VMA or permission error)
-            Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting SIGSEGV.",
-                addr, isWrite ? "Write" : "Read");
+            var fatalSignal = faultResult == FaultResult.BusError ? Signal.SIGBUS : Signal.SIGSEGV;
+            Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting {Signal}.",
+                addr, isWrite ? "Write" : "Read", fatalSignal);
             Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
                 CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
 
@@ -360,8 +362,12 @@ public class FiberTask
 
             Process.Mem.LogVMAs();
 
-            // Deliver SIGSEGV and yield
-            PostSignal((int)Signal.SIGSEGV);
+            // Deliver fatal signal and yield
+            PostSignalInfo(new SigInfo
+            {
+                Signo = (int)fatalSignal,
+                Code = faultResult == FaultResult.BusError ? 2 : 1
+            });
             _pendingFaultFromInterrupt = true;
             CPU.Yield();
             return true; // Return true to C++ so it stops with Yield status instead of Fault status

@@ -212,6 +212,7 @@ public class Process
         var freshMem = new VMAManager(Mem.MemoryObjects);
         Mem = freshMem;
         Syscalls.Mem = freshMem;
+        ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, freshMem, oldEngine);
         MemoryReleased = false;
         oldMem.ReleaseSharedRef(oldEngine);
 

@@ -75,6 +75,49 @@ public class OpenTruncateSyscallTests
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
     }
 
+    [Fact]
+    public async Task PWrite_GrowsFile_MustRefreshMappedFileBackingLength()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x30000); // path
+        env.MapUserPage(0x31000); // first-page payload
+        env.MapUserPage(0x32000); // growth payload
+        env.WriteCString(0x30000, "/grow-write");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x30000, 0x8000 | 0x1A4, 0));
+
+        var fd = await env.Call("SysOpen", 0x30000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+
+        var firstPage = new byte[LinuxConstants.PageSize];
+        firstPage.AsSpan().Fill((byte)'A');
+        env.WriteBytes(0x31000, firstPage);
+        Assert.Equal(LinuxConstants.PageSize, await env.Call("SysWrite", (uint)fd, 0x31000, LinuxConstants.PageSize));
+
+        const uint mapAddr = 0x50000000;
+        var mmapRc = await env.Call(
+            "SysMmap2",
+            mapAddr,
+            LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Shared | MapFlags.Fixed),
+            (uint)fd,
+            0);
+        Assert.Equal((int)mapAddr, mmapRc);
+
+        Assert.Equal(FaultResult.BusError,
+            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, isWrite: true, env.Engine));
+
+        env.WriteBytes(0x32000, "Z"u8.ToArray());
+        Assert.Equal(1,
+            await env.Call("SysPWrite", (uint)fd, 0x32000, 1, LinuxConstants.PageSize, 0));
+
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, isWrite: true, env.Engine));
+
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

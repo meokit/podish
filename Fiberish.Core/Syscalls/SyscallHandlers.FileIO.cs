@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Auth.Permission;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -455,6 +456,7 @@ public partial class SyscallManager
                 {
                     var truncateRc = dentry.Inode.Truncate(0);
                     if (truncateRc < 0) return truncateRc;
+                    ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, dentry.Inode, 0);
                     flags &= ~(uint)FileFlags.O_TRUNC;
                 }
                 catch (Exception ex)
@@ -703,7 +705,21 @@ public partial class SyscallManager
         var currentOffset = updatePosition
             ? append ? (long)(f.OpenedInode?.Size ?? 0) : f.Position
             : offset;
+        var inode = f.OpenedInode;
+        var sizeBeforeWrite = (long)(inode?.Size ?? 0);
         var totalWritten = 0;
+
+        int FinalizeWriteResult(int rc)
+        {
+            if (rc > 0 && inode != null)
+            {
+                var sizeAfterWrite = (long)inode.Size;
+                if (sizeAfterWrite > sizeBeforeWrite)
+                    ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, inode, sizeAfterWrite);
+            }
+
+            return rc;
+        }
 
         for (var i = 0; i < iovCnt; i++)
         {
@@ -722,19 +738,19 @@ public partial class SyscallManager
                     if (n == -(int)Errno.EPIPE)
                     {
                         if (sm.Engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
-                        return n;
+                        return FinalizeWriteResult(n);
                     }
 
                     if (n == -(int)Errno.EAGAIN)
                     {
                         if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
-                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
 
                         if (sm.Engine.Owner is not FiberTask fiberTask)
-                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
 
                         if (await new IOAwaitable(f, false, fiberTask) == AwaitResult.Interrupted)
-                            return totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS;
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
                         continue;
                     }
 
@@ -745,13 +761,13 @@ public partial class SyscallManager
                         if (n < iov.Len)
                         {
                             if (updatePosition) f.Position = currentOffset;
-                            return totalWritten;
+                            return FinalizeWriteResult(totalWritten);
                         }
 
                         break;
                     }
 
-                    return totalWritten > 0 ? totalWritten : n;
+                    return FinalizeWriteResult(totalWritten > 0 ? totalWritten : n);
                 }
             }
             finally
@@ -762,7 +778,7 @@ public partial class SyscallManager
 
         if (updatePosition) f.Position = currentOffset;
 
-        return totalWritten;
+        return FinalizeWriteResult(totalWritten);
     }
 
     private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt, int flags)

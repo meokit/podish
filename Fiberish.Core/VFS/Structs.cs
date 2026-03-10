@@ -292,6 +292,7 @@ public abstract class Inode : IPageCacheOps
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
     private readonly List<Dentry> _dentries = [];
+    private readonly HashSet<VMAManager> _mappedAddressSpaces = [];
     public IReadOnlyList<Dentry> Dentries => _dentries;
     public object Lock { get; } = new();
 
@@ -514,6 +515,30 @@ public abstract class Inode : IPageCacheOps
             VfsDebugTrace.FailInvariant(
                 $"DetachAliasDentry inode mismatch ino={Ino} dentry={dentry.Name} dentryInode={dentry.Inode?.Ino}");
         return true;
+    }
+
+    internal void RegisterMappedAddressSpace(VMAManager addressSpace)
+    {
+        lock (Lock)
+        {
+            _mappedAddressSpaces.Add(addressSpace);
+        }
+    }
+
+    internal void UnregisterMappedAddressSpace(VMAManager addressSpace)
+    {
+        lock (Lock)
+        {
+            _mappedAddressSpaces.Remove(addressSpace);
+        }
+    }
+
+    internal List<VMAManager> SnapshotMappedAddressSpaces()
+    {
+        lock (Lock)
+        {
+            return [.. _mappedAddressSpaces];
+        }
     }
 
     public uint GetDebugNlinkForStat(string source, uint nlink)

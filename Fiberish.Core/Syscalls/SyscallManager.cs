@@ -1190,11 +1190,13 @@ public partial class SyscallManager
     public void RegisterEngine(Engine engine)
     {
         _registry[engine.State] = this;
+        ProcessAddressSpaceSync.RegisterEngineAddressSpace(Mem, engine);
     }
 
     public void UnregisterEngine(Engine engine)
     {
         _registry.TryRemove(engine.State, out _);
+        ProcessAddressSpaceSync.UnregisterEngineAddressSpace(Mem, engine);
     }
 
     public SyscallManager Clone(VMAManager newMem, bool shareFiles, bool shareFs)
@@ -1443,6 +1445,7 @@ public partial class SyscallManager
         foreach (var state in staleStates)
         {
             _registry.TryRemove(state, out _);
+            ProcessAddressSpaceSync.UnregisterEngineState(state, Mem, Engine);
         }
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).

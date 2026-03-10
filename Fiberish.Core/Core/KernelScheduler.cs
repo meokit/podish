@@ -183,6 +183,7 @@ public class KernelScheduler
 
         foreach (var task in tasksToRemove)
         {
+            task.Process.Syscalls.UnregisterEngine(task.CPU);
             task.Status = FiberTaskStatus.Terminated;
             task.ExecutionMode = TaskExecutionMode.Terminated;
             task.Process.Threads.Remove(task);
@@ -194,6 +195,7 @@ public class KernelScheduler
         AssertSchedulerThread();
         _tasks.Remove(task.TID);
 
+        task.Process.Syscalls.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;
 
