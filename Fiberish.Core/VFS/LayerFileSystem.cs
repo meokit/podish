@@ -193,7 +193,7 @@ public sealed record LayerIndexEntry(
 
 public class LayerSuperBlock : SuperBlock
 {
-    private ulong _nextIno = 1;
+    private readonly Dictionary<string, ulong> _inoByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LayerInode> _inodeByPath = new(StringComparer.Ordinal);
 
     public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider, DeviceNumberManager? devManager = null) : base(devManager)
@@ -201,6 +201,8 @@ public class LayerSuperBlock : SuperBlock
         Type = fsType;
         Index = index;
         ContentProvider = contentProvider;
+        foreach (var path in Index.Entries.Keys.OrderBy(static p => p, StringComparer.Ordinal))
+            _inoByPath[path] = (ulong)(_inoByPath.Count + 1);
     }
 
     public LayerIndex Index { get; }
@@ -209,13 +211,36 @@ public class LayerSuperBlock : SuperBlock
     public LayerInode GetOrCreateInode(string path)
     {
         var normalized = path.StartsWith('/') ? path : "/" + path;
-        if (_inodeByPath.TryGetValue(normalized, out var inode)) return inode;
+        if (_inodeByPath.TryGetValue(normalized, out var inode))
+        {
+            if (!inode.IsCacheEvicted && !inode.IsFinalized)
+                return inode;
+            _inodeByPath.Remove(normalized);
+        }
+
         if (!Index.TryGetEntry(normalized, out var entry))
             throw new InvalidOperationException($"Layer index entry not found: {normalized}");
+        if (!_inoByPath.TryGetValue(normalized, out var ino))
+            throw new InvalidOperationException($"Layer inode number missing: {normalized}");
 
-        inode = new LayerInode(this, normalized, entry, _nextIno++);
+        inode = new LayerInode(this, normalized, entry, ino);
         _inodeByPath[normalized] = inode;
         return inode;
+    }
+
+    public ulong GetStableIno(string path)
+    {
+        var normalized = path.StartsWith('/') ? path : "/" + path;
+        if (!_inoByPath.TryGetValue(normalized, out var ino))
+            throw new InvalidOperationException($"Layer inode number missing: {normalized}");
+        return ino;
+    }
+
+    internal void UnregisterInode(string path, LayerInode inode)
+    {
+        var normalized = path.StartsWith('/') ? path : "/" + path;
+        if (_inodeByPath.TryGetValue(normalized, out var existing) && ReferenceEquals(existing, inode))
+            _inodeByPath.Remove(normalized);
     }
 }
 
@@ -411,16 +436,27 @@ public class LayerInode : Inode
         {
             if (!sb.Index.TryGetChildPath(_path, name, out var childPath)) continue;
             if (!sb.Index.TryGetEntry(childPath, out var childEntry)) continue;
-            var inode = sb.GetOrCreateInode(childPath);
             entries.Add(new DirectoryEntry
             {
                 Name = name,
-                Ino = inode.Ino,
+                Ino = sb.GetStableIno(childPath),
                 Type = childEntry.Type
             });
         }
 
         return entries;
+    }
+
+    protected override void OnEvictCache()
+    {
+        ((LayerSuperBlock)SuperBlock).UnregisterInode(_path, this);
+        base.OnEvictCache();
+    }
+
+    protected override void OnFinalizeDelete()
+    {
+        ((LayerSuperBlock)SuperBlock).UnregisterInode(_path, this);
+        base.OnFinalizeDelete();
     }
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
