@@ -294,7 +294,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         {
             candidates = _dentryCache.Values
                 .Distinct()
-                .Where(dentry => !ReferenceEquals(dentry, Root) && !dentry.IsMounted)
+                .Where(IsPathMappingReclaimableNoLock)
                 .ToList();
         }
 
@@ -313,7 +313,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         lock (Lock)
         {
             var staleKeys = _dentryCache
-                .Where(kv => !ReferenceEquals(kv.Value, Root) && !kv.Value.IsMounted)
+                .Where(kv => IsPathMappingReclaimableNoLock(kv.Value))
                 .Select(kv => kv.Key)
                 .ToList();
             foreach (var key in staleKeys)
@@ -394,12 +394,20 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         if (!_dentryCache.Remove(hostPath, out var dentry))
             return;
 
-        if (_dentryPathById.TryGetValue(dentry.Id, out var mappedPath) &&
+        if (IsPathMappingReclaimableNoLock(dentry) &&
+            _dentryPathById.TryGetValue(dentry.Id, out var mappedPath) &&
             string.Equals(mappedPath, hostPath, PathComparison))
             _dentryPathById.Remove(dentry.Id);
 
-        if (dentry.Inode is HostInode hostInode)
+        if (IsPathMappingReclaimableNoLock(dentry) && dentry.Inode is HostInode hostInode)
             hostInode.ForgetPath(hostPath);
+    }
+
+    private bool IsPathMappingReclaimableNoLock(Dentry dentry)
+    {
+        return !ReferenceEquals(dentry, Root) &&
+               !dentry.IsMounted &&
+               dentry.DentryRefCount == 0;
     }
 }
 

@@ -1,13 +1,69 @@
 using Fiberish.VFS;
 using Fiberish.Memory;
+using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 using System.Runtime.InteropServices;
+using System.Text;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
 
 public class OverlayTests
 {
+    [Fact]
+    public void OverlayRoot_ShrinkMode2_DoesNotFallbackToOverlayMountPointAfterDrop()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var mountSource = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        Directory.CreateDirectory(mountSource);
+        File.WriteAllText(Path.Combine(mountSource, "hello.txt"), "hello");
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: true);
+            var sm = runtime.Syscalls;
+
+            var root = sm.Root.Dentry!;
+            var hold = root.Inode!.Lookup("hold");
+            if (hold == null)
+            {
+                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                root.CacheChild(holdDentry, "OverlayTests.setup-hold");
+                hold = holdDentry;
+            }
+
+            var mnt = hold.Inode!.Lookup("mnt");
+            if (mnt == null)
+            {
+                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                hold.CacheChild(mntDentry, "OverlayTests.setup-mnt");
+            }
+
+            sm.MountHostfs(mountSource, "/hold/mnt");
+
+            var before = sm.PathWalk("/hold/mnt/hello.txt");
+            Assert.True(before.IsValid);
+            Assert.Equal("hostfs", before.Mount!.FsType);
+            Assert.Equal("hello", ReadAll(before));
+
+            _ = VfsShrinker.Shrink(sm, VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
+
+            var after = sm.PathWalk("/hold/mnt/hello.txt");
+            Assert.True(after.IsValid);
+            Assert.Equal("hostfs", after.Mount!.FsType);
+            Assert.Equal("hello", ReadAll(after));
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            if (Directory.Exists(mountSource)) Directory.Delete(mountSource, true);
+        }
+    }
+
     [Fact]
     public void OverlayFlock_LowerOnlyLayerFile_ShouldNotReturnEnosys()
     {
@@ -352,6 +408,7 @@ public class OverlayTests
             var n = d!.Inode!.Read(f, buf, 0);
             Assert.True(n > 0);
             Assert.Equal("top", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            f.Close();
         }
         finally
         {
@@ -677,6 +734,32 @@ public class OverlayTests
         {
             if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
+        }
+    }
+
+    private static string ReadAll(PathLocation loc)
+    {
+        Assert.True(loc.IsValid);
+        var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+        try
+        {
+            var sb = new StringBuilder();
+            var buffer = new byte[256];
+            long offset = 0;
+            while (true)
+            {
+                var n = loc.Dentry!.Inode!.Read(file, buffer, offset);
+                Assert.True(n >= 0);
+                if (n == 0) break;
+                sb.Append(Encoding.UTF8.GetString(buffer, 0, n));
+                offset += n;
+            }
+
+            return sb.ToString();
+        }
+        finally
+        {
+            file.Close();
         }
     }
 }

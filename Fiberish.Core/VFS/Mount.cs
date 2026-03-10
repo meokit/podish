@@ -11,6 +11,7 @@ public class Mount
 {
     private static long _nextId;
     private int _refCount;
+    private bool _mountPointPinned;
 
     public Mount(SuperBlock sb, Dentry root, Dentry? mountPoint = null, Mount? parent = null)
     {
@@ -21,6 +22,12 @@ public class Mount
         Parent = parent;
         sb.Get();
         root.Get("Mount.ctor");
+        if (mountPoint != null)
+        {
+            mountPoint.Get("Mount.ctor.mount-pin");
+            _mountPointPinned = true;
+            mountPoint.IsMounted = true;
+        }
     }
 
     /// <summary>
@@ -101,6 +108,11 @@ public class Mount
         if (IsAttached)
             throw new InvalidOperationException("Mount is already attached");
 
+        if (mountPoint.Parent != null && !ReferenceEquals(mountPoint.Parent, mountPoint))
+            mountPoint.Parent.CacheChild(mountPoint, "Mount.Attach.ensure-hashed");
+
+        mountPoint.Get("Mount.Attach.mount-pin");
+        _mountPointPinned = true;
         MountPoint = mountPoint;
         Parent = parent;
 
@@ -119,6 +131,11 @@ public class Mount
         if (MountPoint != null)
         {
             MountPoint.IsMounted = false;
+            if (_mountPointPinned)
+            {
+                MountPoint.Put("Mount.Detach.mount-unpin");
+                _mountPointPinned = false;
+            }
         }
 
         MountPoint = null;

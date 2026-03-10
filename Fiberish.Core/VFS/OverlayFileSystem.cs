@@ -839,6 +839,12 @@ public class OverlayInode : Inode
         if (UpperInode != null)
             foreach (var e in UpperInode.GetEntries())
             {
+                if (e.Name is "." or "..")
+                {
+                    entries[e.Name] = e;
+                    continue;
+                }
+
                 var child = UpperInode.Lookup(e.Name);
                 if (osb.WhiteoutCodec.IsEncodedOpaqueEntry(e))
                 {

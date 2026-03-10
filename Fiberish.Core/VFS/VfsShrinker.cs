@@ -85,9 +85,11 @@ public static class VfsShrinker
     {
         if (root.IsMounted) return 0;
 
-        long dropped = 0;
+        // Walk first, then reclaim in reverse (children before parents).
+        // Reclaim only dentry objects that are fully reclaimable.
         var visited = new HashSet<Dentry>();
         var stack = new Stack<Dentry>();
+        var traversal = new List<Dentry>();
         stack.Push(root);
         while (stack.Count > 0)
         {
@@ -95,13 +97,40 @@ public static class VfsShrinker
             if (!visited.Add(current)) continue;
             if (current.IsMounted) continue;
             if (ReferenceEquals(current, current.SuperBlock.Root)) continue;
+            traversal.Add(current);
 
             foreach (var child in current.Children.Values.ToList())
                 stack.Push(child);
+        }
+
+        var mountProtected = new HashSet<Dentry>();
+        long dropped = 0;
+        for (var i = traversal.Count - 1; i >= 0; i--)
+        {
+            var current = traversal[i];
+            if (!current.IsTrackedBySuperBlock) continue;
+            _ = current.PruneCachedChildren(
+                child => !child.IsMounted && child.DentryRefCount == 0 && child.Children.Count == 0,
+                "VfsShrinker.DetachCachedSubtree.prune-children");
+
+            var protectsMountPath = false;
+            foreach (var child in current.Children.Values)
+            {
+                if (child.IsMounted || mountProtected.Contains(child))
+                {
+                    protectsMountPath = true;
+                    break;
+                }
+            }
+
+            if (protectsMountPath)
+            {
+                mountProtected.Add(current);
+                continue;
+            }
 
             if (current.DentryRefCount > 0) continue;
 
-            current.ClearCachedChildren("VfsShrinker.DetachCachedSubtree");
             var detachedFromParent = true;
             if (current.Parent != null && !ReferenceEquals(current.Parent, current))
             {

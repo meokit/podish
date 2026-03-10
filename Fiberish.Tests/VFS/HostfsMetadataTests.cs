@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -410,6 +411,53 @@ public class HostfsMetadataTests
     }
 
     [Fact]
+    public void Hostfs_DropDcache_PreservesPathBinding_ForOpenDentry()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        var hostPath = Path.Combine(tempRoot, "active.txt");
+        File.WriteAllText(hostPath, "active");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
+            var dentry = rootInode.Lookup("active.txt");
+            Assert.NotNull(dentry);
+
+            var file = new LinuxFile(dentry!, FileFlags.O_RDONLY, null!);
+            try
+            {
+                Assert.True(TryGetPathForDentry(sb, dentry!, out var beforePath));
+                Assert.Equal(Path.GetFullPath(hostPath), beforePath);
+
+                _ = sb.DropDentryCache();
+
+                Assert.True(TryGetPathForDentry(sb, dentry!, out var afterPath));
+                Assert.Equal(Path.GetFullPath(hostPath), afterPath);
+
+                var buffer = new byte[16];
+                var read = dentry!.Inode!.Read(file, buffer, 0);
+                Assert.Equal("active", Encoding.UTF8.GetString(buffer, 0, read));
+            }
+            finally
+            {
+                file.Close();
+            }
+
+            _ = sb.DropDentryCache();
+            Assert.False(TryGetPathForDentry(sb, dentry!, out _));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
     public void Hostfs_MetadataStore_ResetsLegacyLayoutToV2()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -648,5 +696,18 @@ public class HostfsMetadataTests
         {
             if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
         }
+    }
+
+    private static bool TryGetPathForDentry(HostSuperBlock sb, Dentry dentry, out string path)
+    {
+        var method = typeof(HostSuperBlock).GetMethod(
+            "TryGetPathForDentry",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        object?[] args = [dentry, null];
+        var ok = (bool)method!.Invoke(sb, args)!;
+        path = args[1] as string ?? string.Empty;
+        return ok;
     }
 }

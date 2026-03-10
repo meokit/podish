@@ -978,6 +978,7 @@ public class Dentry
 {
     private static long _nextId;
     private bool _isNegative;
+    private bool _isMounted;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
     {
@@ -1007,7 +1008,17 @@ public class Dentry
     public bool IsNegative => _isNegative;
 
     // Mount point support
-    public bool IsMounted { get; set; }
+    public bool IsMounted
+    {
+        get => _isMounted;
+        set
+        {
+            if (_isMounted == value) return;
+            _isMounted = value;
+            if (_isMounted)
+                AssertMountedCacheInvariant("Dentry.IsMounted.set-true");
+        }
+    }
 
     public void Get(string? reason = null)
     {
@@ -1066,30 +1077,79 @@ public class Dentry
         child.EnsureTrackedBySuperBlock($"{reason}.child-track");
         child.Parent = this;
         if (Children.TryGetValue(child.Name, out var replaced) && !ReferenceEquals(replaced, child))
+        {
+            if (replaced.IsMounted)
+            {
+                VfsDebugTrace.FailInvariant(
+                    $"Dentry.CacheChild replacing mounted child parent={Name} child={child.Name} reason={reason}");
+                return;
+            }
             replaced.SetHashedState(false);
+        }
         Children[child.Name] = child;
         child.SetHashedState(true);
+        child.AssertMountedCacheInvariant($"{reason}.cache-child");
         VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-add", reason);
     }
 
     public bool TryUncacheChild(string name, string reason, out Dentry? removed)
     {
+        if (!Children.TryGetValue(name, out var target))
+        {
+            removed = null;
+            return false;
+        }
+
+        if (target.IsMounted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.TryUncacheChild mounted child parent={Name} child={name} reason={reason}");
+            removed = null;
+            return false;
+        }
+
         if (!Children.Remove(name, out removed))
             return false;
-        removed?.SetHashedState(false);
-        if (removed != null)
-            VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
+
+        removed.SetHashedState(false);
+        VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
         return true;
     }
 
     public void ClearCachedChildren(string reason)
     {
-        foreach (var child in Children.Values)
+        _ = PruneCachedChildren(_ => true, reason);
+    }
+
+    public int PruneCachedChildren(Predicate<Dentry> shouldRemove, string reason)
+    {
+        var keys = Children
+            .Where(kv => shouldRemove(kv.Value))
+            .Select(kv => kv.Key)
+            .ToList();
+
+        var removedCount = 0;
+        foreach (var key in keys)
         {
+            if (!Children.TryGetValue(key, out var child))
+                continue;
+
+            if (child.IsMounted)
+            {
+                VfsDebugTrace.FailInvariant(
+                    $"Dentry.PruneCachedChildren mounted child parent={Name} child={child.Name} reason={reason}");
+                continue;
+            }
+
+            if (!Children.Remove(key))
+                continue;
+
             child.SetHashedState(false);
             VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-clear", reason);
+            removedCount++;
         }
-        Children.Clear();
+
+        return removedCount;
     }
 
     public void BindInode(Inode inode, string reason)
@@ -1133,6 +1193,12 @@ public class Dentry
     internal void UntrackFromSuperBlock(string reason)
     {
         if (!IsTrackedBySuperBlock) return;
+        if (IsMounted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.UntrackFromSuperBlock mounted dentry={Name} dentryId={Id} reason={reason}");
+            return;
+        }
         SuperBlock.UnregisterDentry(this);
         if (IsTrackedBySuperBlock)
             VfsDebugTrace.FailInvariant($"Dentry untrack failed dentry={Name} dentryId={Id} reason={reason}");
@@ -1150,13 +1216,55 @@ public class Dentry
 
     internal void MarkUntrackedBySuperBlock()
     {
+        if (IsMounted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.MarkUntrackedBySuperBlock mounted dentry={Name} dentryId={Id}");
+            return;
+        }
         IsTrackedBySuperBlock = false;
         SetHashedState(false);
     }
 
     private void SetHashedState(bool hashed)
     {
+        if (!hashed && IsMounted)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry.SetHashedState unhash mounted dentry={Name} dentryId={Id}");
+            return;
+        }
+
         IsHashed = hashed;
+        if (hashed)
+            AssertMountedCacheInvariant("Dentry.SetHashedState");
+    }
+
+    private void AssertMountedCacheInvariant(string source)
+    {
+        if (!IsMounted) return;
+        if (!IsHashed)
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry mount invariant unhashed source={source} dentry={Name} dentryId={Id}");
+            return;
+        }
+
+        var parent = Parent;
+        if (parent == null || ReferenceEquals(parent, this))
+        {
+            if (Name == "/")
+                return;
+            VfsDebugTrace.FailInvariant(
+                $"Dentry mount invariant missing-parent source={source} dentry={Name} dentryId={Id}");
+            return;
+        }
+
+        if (!parent.TryGetCachedChild(Name, out var cached) || !ReferenceEquals(cached, this))
+        {
+            VfsDebugTrace.FailInvariant(
+                $"Dentry mount invariant parent-cache-miss source={source} parent={parent.Name} child={Name} dentryId={Id}");
+        }
     }
 }
 

@@ -461,6 +461,114 @@ public class ProcFsTests
     }
 
     [Fact]
+    public void ProcSysVmDropCaches_Mode2_ShouldPreserveNestedMountCrossing()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var mountSource = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        Directory.CreateDirectory(mountSource);
+        File.WriteAllText(Path.Combine(mountSource, "hello.txt"), "hello");
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+
+            var root = sm.Root.Dentry!;
+            var hold = root.Inode!.Lookup("hold");
+            if (hold == null)
+            {
+                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                root.Children["hold"] = holdDentry;
+                hold = holdDentry;
+            }
+
+            var mnt = hold.Inode!.Lookup("mnt");
+            if (mnt == null)
+            {
+                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                hold.Children["mnt"] = mntDentry;
+            }
+
+            sm.MountHostfs(mountSource, "/hold/mnt");
+
+            var before = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
+            Assert.True(before.IsValid);
+            Assert.Equal("hello", ReadAll(before));
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(dropLoc.IsValid);
+            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+
+            var after = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
+            Assert.True(after.IsValid);
+            Assert.Equal("hello", ReadAll(after));
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            if (Directory.Exists(mountSource)) Directory.Delete(mountSource, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode2_ShouldPreserveNestedMountCrossing_OnOverlayRoot()
+    {
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var mountSource = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        Directory.CreateDirectory(mountSource);
+        File.WriteAllText(Path.Combine(mountSource, "hello.txt"), "hello");
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: true);
+            var sm = runtime.Syscalls;
+            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+
+            var root = sm.Root.Dentry!;
+            var hold = root.Inode!.Lookup("hold");
+            if (hold == null)
+            {
+                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                root.Children["hold"] = holdDentry;
+                hold = holdDentry;
+            }
+
+            var mnt = hold.Inode!.Lookup("mnt");
+            if (mnt == null)
+            {
+                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                hold.Children["mnt"] = mntDentry;
+            }
+
+            sm.MountHostfs(mountSource, "/hold/mnt");
+
+            var before = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
+            Assert.True(before.IsValid);
+            Assert.Equal("hello", ReadAll(before));
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(dropLoc.IsValid);
+            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+
+            var after = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
+            Assert.True(after.IsValid);
+            Assert.Equal("hello", ReadAll(after));
+        }
+        finally
+        {
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            if (Directory.Exists(mountSource)) Directory.Delete(mountSource, true);
+        }
+    }
+
+    [Fact]
     public void ProcSysVmDropCaches_WriteWithoutCapSysAdmin_ReturnsEperm()
     {
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

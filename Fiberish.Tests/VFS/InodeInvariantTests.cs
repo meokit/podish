@@ -295,6 +295,38 @@ public class InodeInvariantTests
         Assert.DoesNotContain(leaf, sb.SnapshotDentryLru());
     }
 
+    [Fact]
+    public void TryUncacheChild_MountedChild_ThrowsInStrictMode()
+    {
+        var strictBefore = VfsDebugTrace.StrictInvariants;
+        var enabledBefore = VfsDebugTrace.Enabled;
+        try
+        {
+            VfsDebugTrace.StrictInvariants = true;
+            VfsDebugTrace.Enabled = false;
+
+            var sb = new TestSuperBlock();
+            var root = new Dentry("/", null, null, sb);
+            root.Parent = root;
+            sb.Root = root;
+
+            var leaf = new Dentry("leaf", null, root, sb);
+            root.CacheChild(leaf, "test");
+            leaf.IsMounted = true;
+
+            Assert.Throws<InvalidOperationException>(() =>
+                root.TryUncacheChild("leaf", "test", out _));
+            Assert.True(root.TryGetCachedChild("leaf", out var cached));
+            Assert.Same(leaf, cached);
+            Assert.True(leaf.IsHashed);
+        }
+        finally
+        {
+            VfsDebugTrace.StrictInvariants = strictBefore;
+            VfsDebugTrace.Enabled = enabledBefore;
+        }
+    }
+
     private sealed class TestSuperBlock : SuperBlock
     {
         public TestSuperBlock()
