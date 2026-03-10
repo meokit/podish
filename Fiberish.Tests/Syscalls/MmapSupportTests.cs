@@ -52,6 +52,167 @@ public class MmapSupportTests
         Assert.Equal(-(int)Errno.ENODEV, rc);
     }
 
+    [Fact]
+    public async Task Mprotect_ReadOnly_RevokesWriteOnCleanMappedPage()
+    {
+        using var env = new TestEnv();
+        var mapped = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous), 0, 0);
+        Assert.True(mapped > 0);
+        var addr = (uint)mapped;
+
+        // Fault in as readable (clean page, not dirty).
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, isWrite: false, env.Engine));
+
+        var oneByte = new byte[1];
+
+        Assert.Equal(0, await env.Call("SysMprotect", addr, LinuxConstants.PageSize, (uint)Protection.Read));
+
+        oneByte[0] = 0x7F;
+        Assert.False(env.Engine.CopyToUser(addr, oneByte));
+    }
+
+    [Fact]
+    public async Task Mmap_FixedHighAddress_FitWithinTaskSize_Succeeds()
+    {
+        using var env = new TestEnv();
+        var addr = LinuxConstants.TaskSize32 - (uint)(LinuxConstants.PageSize * 2);
+        var rc = await env.Call("SysMmap2", addr, LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+        Assert.Equal((int)addr, rc);
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, isWrite: true, env.Engine));
+    }
+
+    [Fact]
+    public async Task Mmap_FixedHighAddress_OverrunTaskSize_ReturnsEnomem()
+    {
+        using var env = new TestEnv();
+        var addr = LinuxConstants.TaskSize32 - (uint)LinuxConstants.PageSize;
+        var rc = await env.Call("SysMmap2", addr, (uint)(LinuxConstants.PageSize * 2), (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+        Assert.Equal(-(int)Errno.ENOMEM, rc);
+    }
+
+    [Fact]
+    public async Task Mmap_FixedNoReplace_OverlappingRange_ReturnsEexist()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x50000000;
+
+        var first = await env.Call("SysMmap2", baseAddr, (uint)(LinuxConstants.PageSize * 2),
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+        Assert.Equal((int)baseAddr, first);
+
+        var overlap = await env.Call("SysMmap2", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+            (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.FixedNoReplace), 0, 0);
+        Assert.Equal(-(int)Errno.EEXIST, overlap);
+    }
+
+    [Fact]
+    public async Task Munmap_MiddleRange_UnmapsOnlyRequestedSlice()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x51000000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+
+        var mapped = await env.Call("SysMmap2", baseAddr, mapLen, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+        Assert.Equal((int)baseAddr, mapped);
+
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + (uint)(LinuxConstants.PageSize * 2), isWrite: false, env.Engine));
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize));
+
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Segv,
+            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + (uint)(LinuxConstants.PageSize * 2), isWrite: false, env.Engine));
+    }
+
+    [Fact]
+    public async Task Mprotect_RangeCrossingHole_ReturnsEnomem()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x52000000;
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed),
+            0, 0));
+        Assert.Equal((int)(baseAddr + (uint)(LinuxConstants.PageSize * 2)),
+            await env.Call("SysMmap2", baseAddr + (uint)(LinuxConstants.PageSize * 2), LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed),
+                0, 0));
+
+        var rc = await env.Call("SysMprotect", baseAddr, (uint)(LinuxConstants.PageSize * 3), (uint)Protection.Read);
+        Assert.Equal(-(int)Errno.ENOMEM, rc);
+    }
+
+    [Fact]
+    public async Task Mprotect_PartialRange_SplitsVmaAndAppliesPermissions()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x53000000;
+        var len = (uint)(LinuxConstants.PageSize * 2);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0));
+
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+            (uint)Protection.Read));
+
+        var oneByte = new byte[1] { 0x11 };
+        Assert.True(env.Engine.CopyToUser(baseAddr, oneByte));
+        Assert.False(env.Engine.CopyToUser(baseAddr + (uint)LinuxConstants.PageSize, oneByte));
+    }
+
+    [Fact]
+    public async Task Mprotect_CapturesDirtyOnlyWithinRequestedRange()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x12000);
+        env.WriteCString(0x12000, "/shared");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x12000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x12000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 2)));
+
+        var mapped = await env.Call("SysMmap2", 0, (uint)(LinuxConstants.PageSize * 2),
+            (uint)(Protection.Read | Protection.Write), (uint)MapFlags.Shared, (uint)fd, 0);
+        Assert.True(mapped > 0);
+        var baseAddr = (uint)mapped;
+        var secondPage = baseAddr + (uint)LinuxConstants.PageSize;
+
+        var payload = new byte[1] { 0x42 };
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(secondPage, isWrite: true, env.Engine));
+#pragma warning disable CS0618
+        env.Engine.MemWrite(secondPage, payload);
+#pragma warning restore CS0618
+        Assert.True(env.Engine.IsDirty(secondPage));
+
+        var vma = env.Vma.FindVMA(baseAddr);
+        Assert.NotNull(vma);
+        var secondPageIndex = vma!.ViewPageOffset + 1;
+        Assert.False(vma.MemoryObject.IsDirty(secondPageIndex));
+
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize, (uint)Protection.Read));
+        Assert.False(vma.MemoryObject.IsDirty(secondPageIndex));
+
+        Assert.Equal(0, await env.Call("SysMprotect", secondPage, LinuxConstants.PageSize, (uint)Protection.Read));
+        Assert.True(vma.MemoryObject.IsDirty(secondPageIndex));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

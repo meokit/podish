@@ -21,6 +21,7 @@ public class VMAManager
     private static long _cowAllocReplaceCount;
     private int _sharedRefCount = 1;
     private readonly List<VMA> _vmas = [];
+    private VMA? _lastFaultVma;
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
@@ -99,33 +100,81 @@ public class VMAManager
 
     private void InsertVmaSorted(VMA vma)
     {
-        var inserted = false;
-        for (var i = 0; i < _vmas.Count; i++)
-            if (vma.End <= _vmas[i].Start)
-            {
-                _vmas.Insert(i, vma);
-                inserted = true;
-                break;
-            }
+        int left = 0;
+        int right = _vmas.Count - 1;
+        int insertIndex = _vmas.Count;
 
-        if (!inserted) _vmas.Add(vma);
+        while (left <= right)
+        {
+            int mid = left + (right - left) / 2;
+            if (_vmas[mid].Start >= vma.End)
+            {
+                insertIndex = mid;
+                right = mid - 1;
+            }
+            else
+            {
+                left = mid + 1;
+            }
+        }
+
+        _vmas.Insert(insertIndex, vma);
         TrackMappedInodeOnVmaAdded(vma);
     }
 
     public VMA? FindVMA(uint addr)
     {
-        foreach (var vma in _vmas)
+        var cached = _lastFaultVma;
+        if (cached != null && addr >= cached.Start && addr < cached.End)
+            return cached;
+
+        int left = 0;
+        int right = _vmas.Count - 1;
+        while (left <= right)
+        {
+            int mid = left + (right - left) / 2;
+            var vma = _vmas[mid];
             if (addr >= vma.Start && addr < vma.End)
+            {
+                _lastFaultVma = vma;
                 return vma;
+            }
+
+            if (addr < vma.Start)
+                right = mid - 1;
+            else
+                left = mid + 1;
+        }
+
         return null;
     }
 
     public List<VMA> FindVMAsInRange(uint start, uint end)
     {
         var result = new List<VMA>();
-        foreach (var vma in _vmas)
-            if (vma.Start < end && vma.End > start)
-                result.Add(vma);
+        if (start >= end) return result;
+
+        int left = 0;
+        int right = _vmas.Count - 1;
+        int firstMatch = _vmas.Count;
+
+        while (left <= right)
+        {
+            int mid = left + (right - left) / 2;
+            if (_vmas[mid].End > start)
+            {
+                firstMatch = mid;
+                right = mid - 1;
+            }
+            else
+            {
+                left = mid + 1;
+            }
+        }
+
+        for (int i = firstMatch; i < _vmas.Count && _vmas[i].Start < end; i++)
+            result.Add(_vmas[i]);
+
         return result;
     }
 
@@ -165,6 +214,8 @@ public class VMAManager
 
         // Round up len to 4k
         len = (len + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        if (len == 0)
+            throw new ArgumentException("Mapping length must be non-zero", nameof(len));
 
         if (addr == 0)
         {
@@ -173,7 +224,19 @@ public class VMAManager
                 throw new OutOfMemoryException("Execution out of memory");
         }
 
-        var end = addr + len;
+        uint end;
+        try
+        {
+            end = checked(addr + len);
+        }
+        catch (OverflowException)
+        {
+            throw new OutOfMemoryException("Mapping range overflow");
+        }
+
+        if (end > LinuxConstants.TaskSize32)
+            throw new OutOfMemoryException("Mapping exceeds user task address space");
+
         if (CheckOverlap(addr, end))
             throw new InvalidOperationException("Overlap detected");
 
@@ -248,7 +311,16 @@ public class VMAManager
     public void Munmap(uint addr, uint length, Engine engine)
     {
         if (length == 0) return;
-        var end = addr + length;
+        uint end;
+        try
+        {
+            end = checked(addr + length);
+        }
+        catch (OverflowException)
+        {
+            return;
+        }
+        
         for (var i = 0; i < _vmas.Count; i++)
         {
             var vma = _vmas[i];
@@ -261,6 +333,7 @@ public class VMAManager
             if (addr <= vma.Start && end >= vma.End)
             {
                 SyncVMA(vma, engine, vma.Start, vma.End);
+                if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
                 vma.MemoryObject.Release();
                 vma.CowObject?.Release();
                 vma.FileMapping?.Release();
@@ -359,7 +432,16 @@ public class VMAManager
     {
         if (len == 0) return 0;
 
-        var end = addr + len;
+        uint end;
+        try
+        {
+            end = checked(addr + len);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+
         var vmas = FindVMAsInRange(addr, end);
         if (vmas.Count == 0) return -(int)Errno.ENOMEM;
 
@@ -508,13 +590,10 @@ public class VMAManager
             }
         }
 
-        // Apply native permission changes page-wise for the requested interval.
-        for (var p = addr; p < end; p += LinuxConstants.PageSize)
-            if (engine.IsDirty(p))
-            {
-                var v = FindVMA(p);
-                if (v != null) engine.MemMap(p, LinuxConstants.PageSize, (byte)v.Perms);
-            }
+        // Capture shared dirty bits before dropping native mappings for this engine.
+        // MemUnmap below forces refault with updated VMA perms without clobbering dirty state.
+        CaptureDirtySharedPages(engine, addr, end);
+        engine.MemUnmap(addr, len);
 
         return 0;
     }
@@ -531,6 +610,7 @@ public class VMAManager
             vma.FileMapping?.Release();
         }
 
+        _lastFaultVma = null;
         foreach (var vma in _vmas)
             TrackMappedInodeOnVmaRemoved(vma);
 
@@ -557,15 +637,47 @@ public class VMAManager
     internal uint FindFreeRegion(uint size)
     {
         var baseAddr = LinuxConstants.MinMmapAddr;
-        while (true)
+        
+        // Optimize: Because _vmas is sorted by Start, we can just walk _vmas 
+        // and jump baseAddr to vma.End whenever there's a collision.
+        foreach (var vma in _vmas)
         {
-            var end = baseAddr + size;
-            if (!CheckOverlap(baseAddr, end))
-                return baseAddr;
-            baseAddr += LinuxConstants.PageSize;
-            if (baseAddr >= LinuxConstants.TaskSize32)
+            uint endAddr;
+            try
+            {
+                endAddr = checked(baseAddr + size);
+            }
+            catch (OverflowException)
+            {
+                return 0; // Out of memory space
+            }
+
+            if (endAddr > LinuxConstants.TaskSize32)
                 return 0;
+
+            if (baseAddr < vma.End && endAddr > vma.Start)
+            {
+                // Collision! We can't put it here.
+                // The next possible spot is right after this colliding VMA.
+                baseAddr = (vma.End + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask; // Ensure page alignment
+            }
         }
+        
+        // Final check against absolute top limit after loop
+        uint finalEnd;
+        try
+        {
+            finalEnd = checked(baseAddr + size);
+        }
+        catch (OverflowException)
+        {
+            return 0;
+        }
+
+        if (finalEnd > LinuxConstants.TaskSize32)
+            return 0;
+
+        return baseAddr;
     }
 
     public FaultResult HandleFaultDetailed(uint addr, bool isWrite, Engine engine)
@@ -948,21 +1060,34 @@ public class VMAManager
 
     public void CaptureDirtySharedPages(Engine engine)
     {
-        var snapshot = _vmas.ToArray();
-        foreach (var vma in snapshot)
+        CaptureDirtySharedPages(engine, 0, uint.MaxValue);
+    }
+
+    public void CaptureDirtySharedPages(Engine engine, uint rangeStart, uint rangeEnd)
+    {
+        if (rangeStart >= rangeEnd) return;
+
+        var vmas = FindVMAsInRange(rangeStart, rangeEnd);
+        foreach (var vma in vmas)
         {
             if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
             var inode = vma.File.OpenedInode;
             if (inode == null) continue;
 
-            var startPage = vma.Start & LinuxConstants.PageMask;
-            var endPage = (vma.End + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-            if (endPage < startPage) continue;
+            var captureStart = Math.Max(vma.Start, rangeStart);
+            var captureEnd = Math.Min(vma.End, rangeEnd);
+            if (captureStart >= captureEnd) continue;
 
-            for (var page = startPage; page < endPage; page += LinuxConstants.PageSize)
+            ulong startPage = (ulong)(captureStart & LinuxConstants.PageMask);
+            ulong endPageExclusive = ((ulong)captureEnd + LinuxConstants.PageOffsetMask) &
+                                     (ulong)LinuxConstants.PageMask;
+
+            for (ulong page = startPage; page < endPageExclusive; page += (ulong)LinuxConstants.PageSize)
             {
-                if (!engine.IsDirty(page)) continue;
-                var pageIndex = vma.ViewPageOffset + ((page - vma.Start) / LinuxConstants.PageSize);
+                var pageAddr = (uint)page;
+                var vmaRelativeOffset = pageAddr - vma.Start;
+                if (!engine.IsDirty(pageAddr)) continue;
+                var pageIndex = vma.ViewPageOffset + (vmaRelativeOffset / LinuxConstants.PageSize);
                 vma.MemoryObject.MarkDirty(pageIndex);
                 inode.SetPageDirty(pageIndex);
             }
