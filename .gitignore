@@ -1,5 +1,6 @@
 build/
 .build/
+.fiberish_meta/
 *.o
 *.dylib
 linux/x86loader

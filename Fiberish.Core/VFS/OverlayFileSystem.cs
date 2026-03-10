@@ -232,6 +232,8 @@ public class OverlaySuperBlock : SuperBlock
 
 public class OverlayInode : Inode
 {
+    private readonly Dictionary<LinuxFile, Inode> _openBackingByFile = [];
+
     public OverlayInode(SuperBlock sb, Dentry? lower, Dentry? upper)
         : this(sb, lower != null ? [lower] : null, upper)
     {
@@ -245,7 +247,7 @@ public class OverlayInode : Inode
         InitializeOverlayLinkCount("OverlayInode.ctor");
     }
 
-    private Inode? SourceInode => UpperInode ?? LowerInode;
+    private Inode? SourceInode => UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
     public override bool SupportsMmap => Type == InodeType.File && (SourceInode?.SupportsMmap ?? false);
 
     public override ulong Ino { get => SourceInode?.Ino ?? 0; set { if (SourceInode != null) SourceInode.Ino = value; } }
@@ -279,9 +281,63 @@ public class OverlayInode : Inode
     public Inode? LowerInode => LowerDentry?.Inode;
     public Inode? UpperInode => UpperDentry?.Inode;
 
+    private static InodeRefKind GetBackingRefKind(LinuxFile linuxFile)
+    {
+        return linuxFile.Kind == LinuxFile.ReferenceKind.MmapHold
+            ? InodeRefKind.FileMmap
+            : InodeRefKind.FileOpen;
+    }
+
+    private Inode? GetAnyOpenBackingInode()
+    {
+        return _openBackingByFile.Count == 0 ? null : _openBackingByFile.Values.FirstOrDefault();
+    }
+
+    private Inode? ResolveSourceForFile(LinuxFile? linuxFile)
+    {
+        if (linuxFile != null && _openBackingByFile.TryGetValue(linuxFile, out var bound))
+            return bound;
+        return UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
+    }
+
+    private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
+    {
+        if (_openBackingByFile.TryGetValue(linuxFile, out var existing))
+        {
+            if (ReferenceEquals(existing, backing))
+                return;
+            UnbindFileBacking(linuxFile, $"{reason}.replace");
+            linuxFile.PrivateData = null;
+        }
+
+        var refKind = GetBackingRefKind(linuxFile);
+        backing.AcquireRef(refKind, reason);
+        backing.Open(linuxFile);
+        _openBackingByFile[linuxFile] = backing;
+    }
+
+    private void UnbindFileBacking(LinuxFile linuxFile, string reason)
+    {
+        if (!_openBackingByFile.Remove(linuxFile, out var backing))
+            return;
+
+        backing.Release(linuxFile);
+        backing.ReleaseRef(GetBackingRefKind(linuxFile), reason);
+    }
+
+    private void RebindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
+    {
+        if (_openBackingByFile.TryGetValue(linuxFile, out var existing) && ReferenceEquals(existing, backing))
+            return;
+
+        UnbindFileBacking(linuxFile, $"{reason}.old");
+        linuxFile.PrivateData = null;
+        BindFileBacking(linuxFile, backing, $"{reason}.new");
+    }
+
     public int CopyUp(LinuxFile? linuxFile)
     {
-        if (UpperDentry != null) return 0;
+        if (UpperInode != null) return 0;
         if (LowerDentry == null) throw new InvalidOperationException("No lower dentry to copy up");
 
         // 1. Ensure parent directories exist in upper FS
@@ -310,7 +366,8 @@ public class OverlayInode : Inode
             upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
 
             // 3. Copy data
-            if (LowerInode != null)
+            var lowerInode = LowerInode;
+            if (lowerInode != null)
             {
                 try
                 {
@@ -319,7 +376,7 @@ public class OverlayInode : Inode
                     while (true)
                     {
                         // Use null to trigger host-internal read without dependency on user's open mode
-                        var n = LowerInode.Read(null!, buf, pos);
+                        var n = lowerInode.Read(null!, buf, pos);
                         if (n <= 0) break;
                         upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
                         pos += n;
@@ -336,11 +393,9 @@ public class OverlayInode : Inode
             UpperDentry = upperDentry;
 
             // 4. Redirect handle if provided
-            if (linuxFile != null)
+            if (linuxFile != null && UpperInode != null)
             {
-                LowerInode!.Release(linuxFile);
-                linuxFile.PrivateData = null; // Ensure clean state
-                UpperInode!.Open(linuxFile);
+                RebindFileBacking(linuxFile, UpperInode, "OverlayInode.CopyUp");
             }
 
             return 0;
@@ -760,7 +815,7 @@ public class OverlayInode : Inode
 
     public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
-        var source = UpperInode ?? LowerInode;
+        var source = ResolveSourceForFile(linuxFile);
         if (source == null) return 0;
         return source.Readahead(linuxFile, request);
     }
@@ -772,47 +827,52 @@ public class OverlayInode : Inode
         if (request.Length == 0) return 0;
         if (linuxFile == null) return -(int)Errno.EBADF;
 
-        if (UpperInode == null)
+        if (UpperInode == null && LowerInode != null)
         {
             var res = CopyUp(linuxFile);
             if (res < 0) return res;
         }
 
-        return UpperInode!.WritePage(linuxFile, request, pageBuffer, sync);
+        var source = ResolveSourceForFile(linuxFile);
+        if (source == null) return -(int)Errno.EROFS;
+        return source.WritePage(linuxFile, request, pageBuffer, sync);
     }
 
     public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
-        if (UpperInode != null) return UpperInode.WritePages(linuxFile, request);
-        if (LowerInode != null) return LowerInode.WritePages(linuxFile, request);
+        var source = ResolveSourceForFile(linuxFile);
+        if (source != null) return source.WritePages(linuxFile, request);
         return 0;
     }
 
     public override int SetPageDirty(long pageIndex)
     {
-        if (UpperInode != null) return UpperInode.SetPageDirty(pageIndex);
-        if (LowerInode != null) return LowerInode.SetPageDirty(pageIndex);
+        var source = UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
+        if (source != null) return source.SetPageDirty(pageIndex);
         return 0;
     }
 
     public override void Open(LinuxFile linuxFile)
     {
-        if (UpperInode != null) UpperInode.Open(linuxFile);
-        else LowerInode?.Open(linuxFile);
+        var source = UpperInode ?? LowerInode;
+        if (source == null) return;
+        BindFileBacking(linuxFile, source, "OverlayInode.Open");
     }
 
     public override void Release(LinuxFile linuxFile)
     {
         _ = Flock(linuxFile, LinuxConstants.LOCK_UN);
-
-        if (UpperInode != null) UpperInode.Release(linuxFile);
-        else LowerInode?.Release(linuxFile);
+        UnbindFileBacking(linuxFile, "OverlayInode.Release");
     }
 
     public override int Truncate(long size)
     {
         if (UpperInode != null) return UpperInode.Truncate(size);
-        if (LowerInode == null) return -(int)Errno.EROFS;
+        if (LowerInode == null)
+        {
+            var detachedBacking = GetAnyOpenBackingInode();
+            return detachedBacking?.Truncate(size) ?? -(int)Errno.EROFS;
+        }
 
         var res = CopyUp(null);
         if (res < 0) return res;
@@ -881,21 +941,23 @@ public class OverlayInode : Inode
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
-        if (UpperInode != null) return UpperInode.Read(linuxFile!, buffer, offset);
-        if (LowerInode != null) return LowerInode.Read(linuxFile!, buffer, offset);
+        var source = ResolveSourceForFile(linuxFile);
+        if (source != null) return source.Read(linuxFile!, buffer, offset);
         return 0;
     }
 
     private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (linuxFile == null) return -(int)Errno.EBADF;
-        if (UpperInode == null)
+        if (UpperInode == null && LowerInode != null)
         {
             var res = CopyUp(linuxFile);
             if (res < 0) return res;
         }
 
-        return UpperInode!.Write(linuxFile, buffer, offset);
+        var source = ResolveSourceForFile(linuxFile);
+        if (source == null) return -(int)Errno.EROFS;
+        return source.Write(linuxFile, buffer, offset);
     }
 
     private string GetDirectoryKey()

@@ -737,6 +737,47 @@ public class OverlayTests
         }
     }
 
+    [Fact]
+    public void OverlayUpperOnly_UnlinkedOpenFile_TruncateStillWorks()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "ovl-lower", null);
+        var upperSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        var fileDentry = new Dentry("open-unlink-truncate", null, overlaySb.Root, overlaySb);
+        root.Create(fileDentry, 0x1A4, 0, 0);
+        overlaySb.Root.CacheChild(fileDentry, "OverlayTests.open-unlink-truncate");
+
+        var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        try
+        {
+            root.Unlink(fileDentry.Name);
+
+            var truncateRc = file.OpenedInode!.Truncate(4096);
+            Assert.Equal(0, truncateRc);
+
+            var writeRc = file.OpenedInode.Write(file, "Z"u8.ToArray(), 0);
+            Assert.Equal(1, writeRc);
+
+            var readBuf = new byte[1];
+            var readRc = file.OpenedInode.Read(file, readBuf, 0);
+            Assert.Equal(1, readRc);
+            Assert.Equal((byte)'Z', readBuf[0]);
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
     private static string ReadAll(PathLocation loc)
     {
         Assert.True(loc.IsValid);
