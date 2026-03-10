@@ -1,5 +1,4 @@
-using System.Diagnostics;
-using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.VFS;
 
@@ -92,6 +91,115 @@ internal static partial class HostInodeIdentityResolver
     private const uint UnixModeRegular = 0x8000;
     private const uint UnixModeSymlink = 0xA000;
     private const uint UnixModeSocket = 0xC000;
+#if !HOSTFS_DARWIN && !HOSTFS_LINUX && !HOSTFS_WINDOWS
+    private static readonly bool IsDarwinPlatform = OperatingSystem.IsMacOS() ||
+                                                    OperatingSystem.IsIOS() ||
+                                                    OperatingSystem.IsTvOS() ||
+                                                    OperatingSystem.IsWatchOS() ||
+                                                    OperatingSystem.IsMacCatalyst();
+#endif
+
+    internal readonly record struct HostUnixStatData(
+        ulong Device,
+        ulong Inode,
+        ulong LinkCount,
+        uint Mode,
+        uint Uid,
+        uint Gid);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxTimespec
+    {
+        public long TvSec;
+        public long TvNsec;
+    }
+
+    // glibc struct stat layout on Linux x86_64.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStatX64
+    {
+        public ulong StDev;
+        public ulong StIno;
+        public ulong StNlink;
+        public uint StMode;
+        public uint StUid;
+        public uint StGid;
+        public int Padding0;
+        public ulong StRdev;
+        public long StSize;
+        public long StBlksize;
+        public long StBlocks;
+        public LinuxTimespec StAtim;
+        public LinuxTimespec StMtim;
+        public LinuxTimespec StCtim;
+        public long Reserved0;
+        public long Reserved1;
+        public long Reserved2;
+    }
+
+    // glibc struct stat layout on Linux arm64.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStatArm64
+    {
+        public ulong StDev;
+        public ulong StIno;
+        public uint StMode;
+        public uint StNlink;
+        public uint StUid;
+        public uint StGid;
+        public ulong StRdev;
+        public ulong Padding1;
+        public long StSize;
+        public int StBlksize;
+        public int Padding2;
+        public long StBlocks;
+        public LinuxTimespec StAtim;
+        public LinuxTimespec StMtim;
+        public LinuxTimespec StCtim;
+        public uint Reserved0;
+        public uint Reserved1;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DarwinTimespec
+    {
+        public long TvSec;
+        public long TvNsec;
+    }
+
+    // Darwin (macOS/iOS/tvOS/watchOS/MacCatalyst) struct stat layout.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DarwinStat
+    {
+        public int StDev;
+        public ushort StMode;
+        public ushort StNlink;
+        public ulong StIno;
+        public uint StUid;
+        public uint StGid;
+        public int StRdev;
+        public DarwinTimespec StAtimespec;
+        public DarwinTimespec StMtimespec;
+        public DarwinTimespec StCtimespec;
+        public DarwinTimespec StBirthtimespec;
+        public long StSize;
+        public long StBlocks;
+        public int StBlksize;
+        public uint StFlags;
+        public uint StGen;
+        public int StLspare;
+        public long StQspare0;
+        public long StQspare1;
+    }
+
+    [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int lstat_linux_x64(string path, out LinuxStatX64 stat);
+
+    [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int lstat_linux_arm64(string path, out LinuxStatArm64 stat);
+
+    [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int lstat_darwin(string path, out DarwinStat stat);
 
     public static bool TryProbe(string hostPath, out HostNodeInfo node)
     {
@@ -110,38 +218,10 @@ internal static partial class HostInodeIdentityResolver
     private static bool TryProbeUnixNode(string hostPath, out HostNodeInfo node)
     {
         node = default;
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return false;
-        if (!TryRunUnixStat(hostPath, out var statParts)) return false;
-        if (statParts.Length < 4) return false;
-
-        if (!ulong.TryParse(statParts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dev))
-            return false;
-        if (!ulong.TryParse(statParts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var ino))
-            return false;
-        if (!int.TryParse(statParts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var nlink))
-            return false;
-        if (nlink < 0) nlink = 0;
-
-        uint rawMode;
-        if (OperatingSystem.IsMacOS())
-        {
-            try
-            {
-                rawMode = Convert.ToUInt32(statParts[3], 8);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-        else
-        {
-            if (!uint.TryParse(statParts[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out rawMode))
-                return false;
-        }
-
-        var rawType = DecodeUnixRawType(rawMode);
-        node = new HostNodeInfo(HostInodeKey.Unix(dev, ino), rawType, nlink, dev);
+        if (!TryReadUnixStat(hostPath, out var statData)) return false;
+        var nlink = statData.LinkCount > int.MaxValue ? int.MaxValue : (int)statData.LinkCount;
+        var rawType = DecodeUnixRawType(statData.Mode);
+        node = new HostNodeInfo(HostInodeKey.Unix(statData.Device, statData.Inode), rawType, nlink, statData.Device);
         return rawType != InodeType.Unknown;
     }
 
@@ -219,47 +299,86 @@ internal static partial class HostInodeIdentityResolver
         }
     }
 
-    private static bool TryRunUnixStat(string hostPath, out string[] parts)
+    internal static bool TryReadUnixStat(string hostPath, out HostUnixStatData statData)
     {
-        parts = [];
-        var statPath = OperatingSystem.IsMacOS() ? "/usr/bin/stat" : "stat";
-        var psi = new ProcessStartInfo
+        statData = default;
+#if HOSTFS_LINUX
+#if HOSTFS_ARCH_X64
+        if (lstat_linux_x64(hostPath, out var linuxX64Stat) != 0) return false;
+        statData = new HostUnixStatData(
+            linuxX64Stat.StDev, linuxX64Stat.StIno, linuxX64Stat.StNlink, linuxX64Stat.StMode, linuxX64Stat.StUid, linuxX64Stat.StGid);
+        return true;
+#elif HOSTFS_ARCH_ARM64
+        if (lstat_linux_arm64(hostPath, out var linuxArm64Stat) != 0) return false;
+        statData = new HostUnixStatData(
+            linuxArm64Stat.StDev, linuxArm64Stat.StIno, linuxArm64Stat.StNlink, linuxArm64Stat.StMode, linuxArm64Stat.StUid, linuxArm64Stat.StGid);
+        return true;
+#else
+        if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
         {
-            FileName = statPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-        if (OperatingSystem.IsMacOS())
-        {
-            // dev|ino|nlink|mode(octal)
-            psi.ArgumentList.Add("-f");
-            psi.ArgumentList.Add("%d|%i|%l|%p");
-        }
-        else
-        {
-            // dev|ino|nlink|mode(hex)
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("%d|%i|%h|%f");
+            if (lstat_linux_x64(hostPath, out var st) != 0) return false;
+            statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+            return true;
         }
 
-        psi.ArgumentList.Add(hostPath);
-
-        try
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
         {
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit();
-            if (proc.ExitCode != 0 || string.IsNullOrEmpty(output))
-                return false;
-            parts = output.Split('|', StringSplitOptions.TrimEntries);
-            return parts.Length >= 4;
+            if (lstat_linux_arm64(hostPath, out var st) != 0) return false;
+            statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+            return true;
         }
-        catch
+
+        return false;
+#endif
+#elif HOSTFS_DARWIN
+        if (lstat_darwin(hostPath, out var darwinStat) != 0)
+            return false;
+
+        statData = new HostUnixStatData(
+            unchecked((ulong)(uint)darwinStat.StDev),
+            darwinStat.StIno,
+            darwinStat.StNlink,
+            darwinStat.StMode,
+            darwinStat.StUid,
+            darwinStat.StGid);
+        return true;
+#elif HOSTFS_WINDOWS
+        return false;
+#else
+        if (OperatingSystem.IsLinux())
         {
+            if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+            {
+                if (lstat_linux_x64(hostPath, out var st) != 0) return false;
+                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+                return true;
+            }
+
+            if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            {
+                if (lstat_linux_arm64(hostPath, out var st) != 0) return false;
+                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+                return true;
+            }
+
             return false;
         }
+
+        if (!IsDarwinPlatform)
+            return false;
+
+        if (lstat_darwin(hostPath, out var fallbackDarwinStat) != 0)
+            return false;
+
+        statData = new HostUnixStatData(
+            unchecked((ulong)(uint)fallbackDarwinStat.StDev),
+            fallbackDarwinStat.StIno,
+            fallbackDarwinStat.StNlink,
+            fallbackDarwinStat.StMode,
+            fallbackDarwinStat.StUid,
+            fallbackDarwinStat.StGid);
+        return true;
+#endif
     }
 
     private static InodeType DecodeUnixRawType(uint rawMode)

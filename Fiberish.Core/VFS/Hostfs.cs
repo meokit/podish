@@ -1,6 +1,5 @@
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -465,87 +464,6 @@ internal static partial class HostInodeIdentityResolver
 
         hostLinkCount = null;
         return HostInodeKey.Fallback(normalizedPath);
-    }
-
-    private static bool TryResolveUnix(string hostPath, out HostInodeKey key, out int hostLinkCount)
-    {
-        key = default;
-        hostLinkCount = 0;
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return false;
-
-        var statPath = OperatingSystem.IsMacOS() ? "/usr/bin/stat" : "stat";
-        var psi = new ProcessStartInfo
-        {
-            FileName = statPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-        if (OperatingSystem.IsMacOS())
-        {
-            psi.ArgumentList.Add("-f");
-            psi.ArgumentList.Add("%d %i %l");
-        }
-        else
-        {
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("%d %i %h");
-        }
-
-        psi.ArgumentList.Add(hostPath);
-
-        try
-        {
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit();
-            if (proc.ExitCode != 0 || string.IsNullOrEmpty(output)) return false;
-
-            var parts = output.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 3) return false;
-            if (!ulong.TryParse(parts[0], out var dev)) return false;
-            if (!ulong.TryParse(parts[1], out var ino)) return false;
-            if (!int.TryParse(parts[2], out hostLinkCount)) return false;
-            if (hostLinkCount < 0) hostLinkCount = 0;
-
-            key = HostInodeKey.Unix(dev, ino);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool TryResolveWindows(string hostPath, out HostInodeKey key, out int hostLinkCount)
-    {
-        key = default;
-        hostLinkCount = 0;
-        if (!OperatingSystem.IsWindows()) return false;
-
-        try
-        {
-            using var handle = File.OpenHandle(
-                hostPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                FileOptions.None);
-
-            if (!GetFileInformationByHandle(handle, out var fileInfo))
-                return false;
-
-            var fileId = ((ulong)fileInfo.NFileIndexHigh << 32) | fileInfo.NFileIndexLow;
-            key = HostInodeKey.Windows(fileInfo.DwVolumeSerialNumber, fileId);
-            hostLinkCount = checked((int)fileInfo.NNumberOfLinks);
-            if (hostLinkCount < 0) hostLinkCount = 0;
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 }
 
@@ -1160,7 +1078,18 @@ internal sealed record HostfsObjectRecord(
 
 internal static partial class HostfsOwnershipMapper
 {
-    private static readonly bool IsUnixLike = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
+#if HOSTFS_WINDOWS
+    private static readonly bool IsUnixLike = false;
+#elif HOSTFS_DARWIN || HOSTFS_LINUX
+    private static readonly bool IsUnixLike = true;
+#else
+    private static readonly bool IsUnixLike = OperatingSystem.IsLinux() ||
+                                             OperatingSystem.IsMacOS() ||
+                                             OperatingSystem.IsIOS() ||
+                                             OperatingSystem.IsTvOS() ||
+                                             OperatingSystem.IsWatchOS() ||
+                                             OperatingSystem.IsMacCatalyst();
+#endif
     private static readonly int CurrentHostUid = IsUnixLike ? geteuid() : 0;
     private static readonly int CurrentHostGid = IsUnixLike ? getegid() : 0;
 
@@ -1249,76 +1178,13 @@ internal static partial class HostfsOwnershipMapper
         uid = 0;
         gid = 0;
         modeBits = 0;
-
-        var statPath = OperatingSystem.IsMacOS() ? "/usr/bin/stat" : "stat";
-        var psi = new ProcessStartInfo
-        {
-            FileName = statPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-
-        if (OperatingSystem.IsMacOS())
-        {
-            // %p includes file type + permissions in octal on macOS.
-            psi.ArgumentList.Add("-f");
-            psi.ArgumentList.Add("%u %g %p");
-        }
-        else
-        {
-            // %f is raw mode in hex on GNU stat.
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("%u %g %f");
-        }
-
-        psi.ArgumentList.Add(path);
-
-        try
-        {
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit();
-            if (proc.ExitCode != 0 || string.IsNullOrEmpty(output)) return false;
-
-            var parts = output.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 3) return false;
-
-            if (!int.TryParse(parts[0], out uid)) return false;
-            if (!int.TryParse(parts[1], out gid)) return false;
-
-            if (OperatingSystem.IsMacOS())
-            {
-                if (!TryParseInt(parts[2], 8, out var rawMode)) return false;
-                modeBits = rawMode & 0xFFF;
-            }
-            else
-            {
-                if (!TryParseInt(parts[2], 16, out var rawMode)) return false;
-                modeBits = rawMode & 0xFFF;
-            }
-
-            return true;
-        }
-        catch
-        {
+        if (!HostInodeIdentityResolver.TryReadUnixStat(path, out var statData))
             return false;
-        }
-    }
 
-    private static bool TryParseInt(string s, int fromBase, out int value)
-    {
-        try
-        {
-            value = Convert.ToInt32(s, fromBase);
-            return true;
-        }
-        catch
-        {
-            value = 0;
-            return false;
-        }
+        uid = unchecked((int)statData.Uid);
+        gid = unchecked((int)statData.Gid);
+        modeBits = (int)(statData.Mode & 0x0FFF);
+        return true;
     }
 }
 
