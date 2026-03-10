@@ -121,6 +121,159 @@ public class InodeOrphanLifecycleSyscallTests
     }
 
     [Fact]
+    public async Task Mremap_Move_FileBackedMapping_PreservesMmapRefAndContent()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x50000);
+        env.MapUserPage(0x51000);
+        env.MapUserPage(0x52000);
+        env.WriteCString(0x50000, "/mremap-file");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x50000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x50000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+
+        var inode = env.LookupInode("/mremap-file");
+        var payload = Encoding.ASCII.GetBytes("mremap-keep-data");
+        env.WriteBytes(0x51000, payload);
+        Assert.Equal(payload.Length, await env.Call("SysWrite", (uint)fd, 0x51000, (uint)payload.Length));
+
+        const uint oldMapAddr = 0x50000000;
+        var mapped = await env.Call("SysMmap2", oldMapAddr, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Fixed),
+            (uint)fd, 0);
+        Assert.Equal((int)oldMapAddr, mapped);
+
+        // Block in-place growth so mremap must move.
+        Assert.Equal((int)(oldMapAddr + LinuxConstants.PageSize),
+            await env.Call("SysMmap2", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write),
+                (uint)(MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous),
+                0, 0));
+
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+        Assert.Equal(1, inode.FileMmapRefCount);
+
+        const uint MREMAP_MAYMOVE = 1;
+        var newMap = await env.Call("SysMremap", oldMapAddr, LinuxConstants.PageSize, LinuxConstants.PageSize * 2,
+            MREMAP_MAYMOVE, 0);
+        Assert.True(newMap > 0, $"newMap={newMap}");
+        Assert.NotEqual((int)oldMapAddr, newMap);
+        Assert.Equal(1, inode.FileMmapRefCount);
+
+        Assert.Equal(payload, env.ReadMappedBytes((uint)newMap, payload.Length));
+
+        Assert.Equal(0, await env.Call("SysMunmap", (uint)newMap, LinuxConstants.PageSize * 2));
+        Assert.Equal(0, inode.FileMmapRefCount);
+
+        // Cleanup guard mapping.
+        Assert.Equal(0, await env.Call("SysMunmap", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
+    }
+
+    [Fact]
+    public async Task Mremap_Move_FilePrivateCow_PreservesPrivateDirtyData()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x54000);
+        env.MapUserPage(0x55000);
+        env.MapUserPage(0x56000);
+        env.WriteCString(0x54000, "/mremap-file-cow");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x54000, 0x8000 | 0x1A4, 0));
+        var fd = await env.Call("SysOpen", 0x54000, (uint)FileFlags.O_RDWR, 0);
+        Assert.True(fd >= 0);
+
+        var inode = env.LookupInode("/mremap-file-cow");
+        var filePayload = Encoding.ASCII.GetBytes("file-base-content");
+        var privatePayload = Encoding.ASCII.GetBytes("private-cow-data!");
+        Assert.Equal(filePayload.Length, privatePayload.Length);
+        env.WriteBytes(0x55000, filePayload);
+        Assert.Equal(filePayload.Length, await env.Call("SysWrite", (uint)fd, 0x55000, (uint)filePayload.Length));
+
+        const uint oldMapAddr = 0x54000000;
+        var mapped = await env.Call("SysMmap2", oldMapAddr, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Fixed),
+            (uint)fd, 0);
+        Assert.Equal((int)oldMapAddr, mapped);
+
+        // Write through MAP_PRIVATE mapping to create COW-private dirty page.
+        Assert.True(env.Vma.HandleFault(oldMapAddr, true, env.Engine));
+        env.WriteBytes(oldMapAddr, privatePayload);
+        Assert.Equal(privatePayload, env.ReadMappedBytes(oldMapAddr, privatePayload.Length));
+
+        // Backing file must remain unchanged.
+        Assert.Equal(0, await env.Call("SysLseek", (uint)fd, 0, 0));
+        Assert.Equal(filePayload.Length, await env.Call("SysRead", (uint)fd, 0x56000, (uint)filePayload.Length));
+        Assert.Equal(filePayload, env.ReadBytes(0x56000, filePayload.Length));
+
+        // Block in-place growth so mremap must move.
+        Assert.Equal((int)(oldMapAddr + LinuxConstants.PageSize),
+            await env.Call("SysMmap2", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write),
+                (uint)(MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous),
+                0, 0));
+
+        const uint MREMAP_MAYMOVE = 1;
+        var newMap = await env.Call("SysMremap", oldMapAddr, LinuxConstants.PageSize, LinuxConstants.PageSize * 2,
+            MREMAP_MAYMOVE, 0);
+        Assert.True(newMap > 0, $"newMap={newMap}");
+        Assert.NotEqual((int)oldMapAddr, newMap);
+
+        // Private dirty bytes must survive move.
+        Assert.Equal(privatePayload, env.ReadMappedBytes((uint)newMap, privatePayload.Length));
+        // Backing file must still remain unchanged.
+        Assert.Equal(0, await env.Call("SysLseek", (uint)fd, 0, 0));
+        Assert.Equal(filePayload.Length, await env.Call("SysRead", (uint)fd, 0x56000, (uint)filePayload.Length));
+        Assert.Equal(filePayload, env.ReadBytes(0x56000, filePayload.Length));
+
+        Assert.Equal(0, await env.Call("SysMunmap", (uint)newMap, LinuxConstants.PageSize * 2));
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+        Assert.Equal(0, inode.FileMmapRefCount);
+        Assert.Equal(0, inode.FileOpenRefCount);
+
+        // Cleanup guard mapping.
+        Assert.Equal(0, await env.Call("SysMunmap", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
+    }
+
+    [Fact]
+    public async Task Mremap_Move_Anonymous_PreservesContent()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x58000);
+
+        const uint oldMapAddr = 0x58000000;
+        var mapped = await env.Call("SysMmap2", oldMapAddr, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous),
+            0, 0);
+        Assert.Equal((int)oldMapAddr, mapped);
+
+        var payload = Encoding.ASCII.GetBytes("anon-mremap-preserve");
+        Assert.True(env.Vma.HandleFault(oldMapAddr, true, env.Engine));
+        env.WriteBytes(oldMapAddr, payload);
+
+        // Block in-place growth so mremap must move.
+        Assert.Equal((int)(oldMapAddr + LinuxConstants.PageSize),
+            await env.Call("SysMmap2", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write),
+                (uint)(MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous),
+                0, 0));
+
+        const uint MREMAP_MAYMOVE = 1;
+        var newMap = await env.Call("SysMremap", oldMapAddr, LinuxConstants.PageSize, LinuxConstants.PageSize * 2,
+            MREMAP_MAYMOVE, 0);
+        Assert.True(newMap > 0);
+        Assert.NotEqual((int)oldMapAddr, newMap);
+        Assert.Equal(payload, env.ReadMappedBytes((uint)newMap, payload.Length));
+
+        Assert.Equal(0, await env.Call("SysMunmap", (uint)newMap, LinuxConstants.PageSize * 2));
+        // Cleanup guard mapping.
+        Assert.Equal(0, await env.Call("SysMunmap", oldMapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
+    }
+
+    [Fact]
     public async Task Unlink_WithOpenFd_FstatAndFtruncate_StillWork()
     {
         using var env = new TestEnv();
@@ -164,6 +317,7 @@ public class InodeOrphanLifecycleSyscallTests
         {
             Engine = new Engine();
             Vma = new VMAManager();
+            Engine.PageFaultResolver = (addr, isWrite) => Vma.HandleFault(addr, isWrite, Engine);
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;

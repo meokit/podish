@@ -1,4 +1,5 @@
 using Fiberish.VFS;
+using System.Threading;
 
 namespace Fiberish.Memory;
 
@@ -29,7 +30,8 @@ public class VMA
     public uint End { get; set; } // Exclusive
     public Protection Perms { get; set; }
     public MapFlags Flags { get; set; }
-    public LinuxFile? File { get; set; }
+    public VmaFileMapping? FileMapping { get; set; }
+    public LinuxFile? File => FileMapping?.File;
     public long Offset { get; set; }
 
     // Max bytes of valid file data relative to the Start of this VMA. Used for zero-filling BSS and partial pages.
@@ -68,7 +70,7 @@ public class VMA
 
         // COW object: private per-process — deep-copy existing COW pages on fork
         MemoryObject? cowObj = CowObject?.ForkCloneForPrivate();
-        File?.Get();
+        var clonedFileMapping = FileMapping?.AddRef();
 
         return new VMA
         {
@@ -76,7 +78,7 @@ public class VMA
             End = End,
             Perms = Perms,
             Flags = Flags,
-            File = File, // File object is shared (like os.File in Go)
+            FileMapping = clonedFileMapping,
             Offset = Offset,
             FileBackingLength = FileBackingLength,
             Name = Name,
@@ -84,5 +86,36 @@ public class VMA
             CowObject = cowObj,
             ViewPageOffset = ViewPageOffset
         };
+    }
+}
+
+public sealed class VmaFileMapping
+{
+    private int _refCount = 1;
+
+    public VmaFileMapping(LinuxFile file)
+    {
+        File = file;
+    }
+
+    public LinuxFile File { get; }
+
+    public VmaFileMapping AddRef()
+    {
+        Interlocked.Increment(ref _refCount);
+        return this;
+    }
+
+    public void Release()
+    {
+        var remaining = Interlocked.Decrement(ref _refCount);
+        if (remaining > 0) return;
+        if (remaining == 0)
+        {
+            File.Close();
+            return;
+        }
+
+        VfsDebugTrace.FailInvariant($"VmaFileMapping refcount underflow file={File.Dentry.Name}");
     }
 }

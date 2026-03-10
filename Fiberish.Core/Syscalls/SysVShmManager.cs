@@ -215,7 +215,7 @@ public class SysVShmManager
                 End = attachEnd,
                 Perms = prot,
                 Flags = MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous,
-                File = null,
+                FileMapping = null,
                 Offset = 0,
                 FileBackingLength = segment.Size,
                 Name = $"[sysv shm:{shmid}]",

@@ -245,19 +245,12 @@ public partial class SyscallManager
                 return (int)oldAddr;
             }
 
-            // Otherwise we need to create a new anonymous VMA for the growth region
-            // and extend via a new mapping
-            try
-            {
-                ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, growStart, growLen, oldVma.Perms,
-                    MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
-                    null, 0, 0, oldVma.Name);
+            // For partial-range growth, map the appended slice with the same backing as oldVma.
+            var growRc = TryMapRemapSlice(sm, oldVma, growStart, growLen, growStart);
+            if (growRc == 0)
                 return (int)oldAddr;
-            }
-            catch
-            {
-                // Fall through to move case
-            }
+            if (growRc != -(int)Errno.ENOMEM)
+                return growRc;
         }
 
         // Case 4: Need to move
@@ -277,27 +270,121 @@ public partial class SyscallManager
             if (targetAddr == 0) return -(int)Errno.ENOMEM;
         }
 
+        // Allocate new region
+        var mapRc = TryMapRemapSlice(sm, oldVma, targetAddr, newLenAligned, oldAddr);
+        if (mapRc != 0)
+            return mapRc;
+
+        var copyLen = Math.Min(oldLenAligned, newLenAligned);
+        if (NeedsMoveCopy(oldVma, oldAddr, copyLen))
+        {
+            try
+            {
+                var buf = new byte[copyLen];
+                if (!sm.Engine.CopyFromUser(oldAddr, buf))
+                {
+                    ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                    return -(int)Errno.EFAULT;
+                }
+
+                if (!sm.Engine.CopyToUser(targetAddr, buf))
+                {
+                    ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                    return -(int)Errno.EFAULT;
+                }
+            }
+            catch (OutOfMemoryException)
+            {
+                ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                return -(int)Errno.ENOMEM;
+            }
+        }
+
+        // Unmap old region
+        ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, oldAddr, oldLenAligned);
+
+        return (int)targetAddr;
+    }
+
+    private static int TryMapRemapSlice(SyscallManager sm, VMA sourceVma, uint targetAddr, uint length, uint sourceAddr)
+    {
+        VFS.LinuxFile? clonedFile = null;
         try
         {
-            // Allocate new region
-            ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, targetAddr, newLenAligned, oldVma.Perms,
-                MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed,
-                null, 0, 0, oldVma.Name);
+            clonedFile = CloneMappingFile(sourceVma);
+            var offset = ComputeSliceOffset(sourceVma, sourceAddr);
+            var backingLength = ComputeSliceBackingLength(sourceVma, sourceAddr);
+            var flags = (sourceVma.Flags | MapFlags.Fixed) & ~MapFlags.FixedNoReplace;
 
-            // Copy old content to new location
-            var copyLen = Math.Min(oldLenAligned, newLenAligned);
-            var buf = new byte[copyLen];
-            sm.Engine.CopyFromUser(oldAddr, buf);
-            sm.Engine.CopyToUser(targetAddr, buf);
-
-            // Unmap old region
-            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, oldAddr, oldLenAligned);
-
-            return (int)targetAddr;
+            _ = ProcessAddressSpaceSync.Mmap(
+                sm.Mem,
+                sm.Engine,
+                targetAddr,
+                length,
+                sourceVma.Perms,
+                flags,
+                clonedFile,
+                offset,
+                backingLength,
+                sourceVma.Name);
+            clonedFile = null; // ownership transferred to the new VMA
+            return 0;
         }
-        catch
+        catch (OutOfMemoryException)
         {
             return -(int)Errno.ENOMEM;
         }
+        catch (ArgumentException)
+        {
+            return -(int)Errno.EINVAL;
+        }
+        catch (InvalidOperationException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+        finally
+        {
+            clonedFile?.Close();
+        }
+    }
+
+    private static VFS.LinuxFile? CloneMappingFile(VMA sourceVma)
+    {
+        var file = sourceVma.File;
+        if (file == null) return null;
+        file.Get();
+        return file;
+    }
+
+    private static long ComputeSliceOffset(VMA sourceVma, uint sourceAddr)
+    {
+        if (sourceVma.File == null) return 0;
+        return sourceVma.Offset + ((long)sourceAddr - sourceVma.Start);
+    }
+
+    private static long ComputeSliceBackingLength(VMA sourceVma, uint sourceAddr)
+    {
+        if (sourceVma.File == null) return 0;
+        var remaining = sourceVma.FileBackingLength - ((long)sourceAddr - sourceVma.Start);
+        return Math.Max(0, remaining);
+    }
+
+    private static bool NeedsMoveCopy(VMA sourceVma, uint sourceAddr, uint copyLen)
+    {
+        // Anonymous mappings have no stable backing store and must preserve bytes explicitly.
+        if (sourceVma.File == null) return true;
+
+        // File-backed mappings can be rebuilt from file/page cache unless there are private COW pages.
+        var cow = sourceVma.CowObject;
+        if (cow == null || copyLen == 0) return false;
+
+        var startPage =
+            sourceVma.ViewPageOffset + ((sourceAddr - sourceVma.Start) / LinuxConstants.PageSize);
+        var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+        for (uint i = 0; i < pageCount; i++)
+            if (cow.GetPage(startPage + i) != IntPtr.Zero)
+                return true;
+
+        return false;
     }
 }

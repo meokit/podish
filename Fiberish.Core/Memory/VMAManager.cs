@@ -95,6 +95,7 @@ public class VMAManager
         MemoryObject memObj;
         MemoryObject? cowObj = null;
         uint viewPageOff = 0;
+        VmaFileMapping? fileMapping = null;
 
         if (file == null)
         {
@@ -106,6 +107,7 @@ public class VMAManager
             // MAP_SHARED file: share the inode's global page cache
             memObj = MemoryObjects.GetOrCreateInodePageCache(file.OpenedInode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
+            fileMapping = new VmaFileMapping(file);
         }
         else
         {
@@ -113,6 +115,7 @@ public class VMAManager
             memObj = MemoryObjects.GetOrCreateInodePageCache(file.OpenedInode!);
             viewPageOff = (uint)(offset / LinuxConstants.PageSize);
             cowObj = MemoryObjects.CreateAnonymous(shared: false);
+            fileMapping = new VmaFileMapping(file);
         }
 
 
@@ -122,7 +125,7 @@ public class VMAManager
             End = end,
             Perms = perms,
             Flags = flags,
-            File = file,
+            FileMapping = fileMapping,
             Offset = offset,
             FileBackingLength = filesz,
             Name = name,
@@ -189,7 +192,7 @@ public class VMAManager
                 SyncVMA(vma, engine, vma.Start, vma.End);
                 vma.MemoryObject.Release();
                 vma.CowObject?.Release();
-                vma.File?.Close();
+                vma.FileMapping?.Release();
                 _vmas.RemoveAt(i--);
                 continue;
             }
@@ -217,7 +220,7 @@ public class VMAManager
                     End = tailEnd,
                     Perms = vma.Perms,
                     Flags = vma.Flags,
-                    File = vma.File,
+                    FileMapping = vma.FileMapping?.AddRef(),
                     Offset = tailOffset,
                     FileBackingLength = tailFileSz,
                     Name = vma.Name,
@@ -225,7 +228,6 @@ public class VMAManager
                     CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = vma.ViewPageOffset + ((tailStart - vma.Start) / LinuxConstants.PageSize)
                 };
-                vma.File?.Get();
                 vma.MemoryObject.AddRef();
 
                 _vmas.Insert(i + 1, tailVMA);
@@ -322,13 +324,14 @@ public class VMAManager
 
             // Prepare middle (the protected slice).
             var midDiff = (long)overlapStart - oldStart;
+            var originalFileMapping = vma.FileMapping;
             var mid = new VMA
             {
                 Start = overlapStart,
                 End = overlapEnd,
                 Perms = prot,
                 Flags = vma.Flags,
-                File = vma.File,
+                FileMapping = null,
                 Offset = vma.File != null ? oldOffset + midDiff : 0,
                 FileBackingLength = 0,
                 Name = vma.Name,
@@ -348,8 +351,7 @@ public class VMAManager
             // Left tail stays in the existing VMA.
             var hasLeft = overlapStart > oldStart;
             var hasRight = overlapEnd < oldEnd;
-            if (hasLeft)
-                mid.File?.Get();
+            mid.FileMapping = hasLeft ? originalFileMapping?.AddRef() : originalFileMapping;
 
             if (hasLeft)
             {
@@ -374,7 +376,7 @@ public class VMAManager
                     End = oldEnd,
                     Perms = oldPerms,
                     Flags = vma.Flags,
-                    File = vma.File,
+                    FileMapping = originalFileMapping?.AddRef(),
                     Offset = vma.File != null ? oldOffset + rightDiff : 0,
                     FileBackingLength = 0,
                     Name = vma.Name,
@@ -382,7 +384,6 @@ public class VMAManager
                     CowObject = vma.CowObject?.ForkCloneForPrivate(),
                     ViewPageOffset = oldViewPageOffset + ((uint)rightDiff / LinuxConstants.PageSize)
                 };
-                right.File?.Get();
                 vma.MemoryObject.AddRef();
                 if (vma.File != null)
                 {
@@ -401,13 +402,14 @@ public class VMAManager
                 vma.Start = mid.Start;
                 vma.End = mid.End;
                 vma.Perms = mid.Perms;
-                vma.File = mid.File;
+                vma.FileMapping = mid.FileMapping;
                 vma.Offset = mid.Offset;
                 vma.FileBackingLength = mid.FileBackingLength;
                 vma.Name = mid.Name;
                 vma.ViewPageOffset = mid.ViewPageOffset;
                 vma.CowObject = mid.CowObject;
                 mid.CowObject = null;
+                mid.FileMapping = null;
                 // Drop the temporary extra ref held by mid.
                 mid.MemoryObject.Release();
                 oldCow?.Release();
@@ -448,7 +450,7 @@ public class VMAManager
             engine.MemUnmap(vma.Start, vma.End - vma.Start);
             vma.MemoryObject.Release();
             vma.CowObject?.Release();
-            vma.File?.Close();
+            vma.FileMapping?.Release();
         }
 
         ExternalPages.Clear();
