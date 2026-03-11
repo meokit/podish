@@ -617,7 +617,7 @@ public partial class SyscallManager
 
         // Directly allocate the page in the engine with RW permissions for initial setup
         if (!Mem.MapAnonymousPage(vdsoAddr, Engine, Protection.Read | Protection.Write))
-            throw new Exception("Failed to allocate vDSO page");
+            throw new OutOfMemoryException("Failed to allocate vDSO page");
 
         // Write trampolines
         // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80

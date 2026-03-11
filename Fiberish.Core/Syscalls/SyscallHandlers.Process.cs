@@ -643,14 +643,11 @@ public partial class SyscallManager
                 task.SignalVforkDone(); // vfork: wake parent after exec
                 return 0;
             }
-            catch (FileNotFoundException)
-            {
-                return -(int)Errno.ENOENT;
-            }
             catch (Exception ex)
             {
-                Logger.LogWarning("[SysExecve] Shebang exec failed: {Message}", ex.Message);
-                return -(int)Errno.ENOENT;
+                var rc = MapExecveExceptionToErrno(ex);
+                Logger.LogWarning(ex, "[SysExecve] Shebang exec failed: rc={Rc} message={Message}", rc, ex.Message);
+                return rc;
             }
         }
 
@@ -737,15 +734,24 @@ public partial class SyscallManager
             task.SignalVforkDone(); // vfork: wake parent after exec
             return 0; // Success (Task continues at new EIP set by LoadExecutable)
         }
-        catch (FileNotFoundException)
-        {
-            return -(int)Errno.ENOENT;
-        }
         catch (Exception ex) // Catch other exceptions during execve
         {
-            Logger.LogWarning("Execve failed: {Message}", ex.Message);
-            return -(int)Errno.ENOENT;
+            var rc = MapExecveExceptionToErrno(ex);
+            Logger.LogWarning(ex, "Execve failed: rc={Rc} message={Message}", rc, ex.Message);
+            return rc;
         }
+    }
+
+    private static int MapExecveExceptionToErrno(Exception ex)
+    {
+        return ex switch
+        {
+            OutOfMemoryException => -(int)Errno.ENOMEM,
+            FileNotFoundException => -(int)Errno.ENOENT,
+            DirectoryNotFoundException => -(int)Errno.ENOENT,
+            UnauthorizedAccessException => -(int)Errno.EACCES,
+            _ => -(int)Errno.ENOENT
+        };
     }
 
     private static async ValueTask<int> SysSetSid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

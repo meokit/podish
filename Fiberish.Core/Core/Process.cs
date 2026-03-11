@@ -188,7 +188,7 @@ public class Process
              addr < ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
              addr += LinuxConstants.PageSize)
             if (!Syscalls.Mem.MapAnonymousPage(addr, engine, Protection.Read | Protection.Write))
-                throw new InvalidOperationException($"Failed to allocate stack page at 0x{addr:x}");
+                throw new OutOfMemoryException($"Failed to allocate stack page at 0x{addr:x}");
 
         if (!engine.CopyToUser(spBase, stackData))
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
