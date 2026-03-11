@@ -21,6 +21,12 @@ public readonly record struct MemoryStatsSnapshot(
     long InactiveBytes,
     long ActiveAnonBytes,
     long InactiveAnonBytes,
+    long PrivateAnonBytes,
+    long PrivateFileBytes,
+    long ActivePrivateAnonBytes,
+    long InactivePrivateAnonBytes,
+    long ActivePrivateFileBytes,
+    long InactivePrivateFileBytes,
     long ActiveFileBytes,
     long InactiveFileBytes)
 {
@@ -31,7 +37,7 @@ public readonly record struct MemoryStatsSnapshot(
         var allocated = ExternalPageManager.GetAllocatedBytes();
         var cache = GlobalPageCacheManager.GetCacheStats();
         var cacheStates = GlobalPageCacheManager.GetPageStatesSnapshot();
-        var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
+        var cachedBytes = (cache.TotalPages - cache.AnonSharedSourcePages) * LinuxConstants.PageSize;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
         var anonBytes = Math.Max(0, allocated - cachedBytes);
@@ -42,7 +48,9 @@ public readonly record struct MemoryStatsSnapshot(
         var shmemBytes = shmemCacheBytes + sysvShmBytes;
         var nowTicks = DateTime.UtcNow.Ticks;
         var (activeFile, inactiveFile, activeShmem, inactiveShmem) = SplitCacheByAge(cacheStates, nowTicks);
-        var (activeAnon, inactiveAnon) = SplitAnonymousByAge(sm, nowTicks);
+        var privateBreakdown = EstimatePrivateBreakdown(sm, nowTicks);
+        var activeAnon = privateBreakdown.ActiveAnon + privateBreakdown.ActiveFilePrivate;
+        var inactiveAnon = privateBreakdown.InactiveAnon + privateBreakdown.InactiveFilePrivate;
         var active = activeFile + activeShmem + activeAnon;
         var inactive = inactiveFile + inactiveShmem + inactiveAnon;
 
@@ -70,6 +78,12 @@ public readonly record struct MemoryStatsSnapshot(
             InactiveBytes: inactive,
             ActiveAnonBytes: activeAnon,
             InactiveAnonBytes: inactiveAnon,
+            PrivateAnonBytes: privateBreakdown.TotalAnon,
+            PrivateFileBytes: privateBreakdown.TotalFilePrivate,
+            ActivePrivateAnonBytes: privateBreakdown.ActiveAnon,
+            InactivePrivateAnonBytes: privateBreakdown.InactiveAnon,
+            ActivePrivateFileBytes: privateBreakdown.ActiveFilePrivate,
+            InactivePrivateFileBytes: privateBreakdown.InactiveFilePrivate,
             ActiveFileBytes: activeFile + activeShmem,
             InactiveFileBytes: inactiveFile + inactiveShmem);
     }
@@ -130,43 +144,73 @@ public readonly record struct MemoryStatsSnapshot(
         return (activeFile, inactiveFile, activeShmem, inactiveShmem);
     }
 
-    private static (long ActiveAnon, long InactiveAnon) SplitAnonymousByAge(SyscallManager? sm, long nowTicks)
+    private readonly record struct PrivateBreakdown(
+        long TotalAnon,
+        long TotalFilePrivate,
+        long ActiveAnon,
+        long InactiveAnon,
+        long ActiveFilePrivate,
+        long InactiveFilePrivate);
+
+    private static PrivateBreakdown EstimatePrivateBreakdown(SyscallManager? sm, long nowTicks)
     {
         var processes = ResolveProcesses(sm);
-        if (processes.Count == 0) return (0, 0);
+        if (processes.Count == 0) return default;
 
         var seenPtrs = new HashSet<nint>();
-        long active = 0;
-        long inactive = 0;
+        long totalAnon = 0;
+        long totalFilePrivate = 0;
+        long activeAnon = 0;
+        long inactiveAnon = 0;
+        long activeFilePrivate = 0;
+        long inactiveFilePrivate = 0;
         foreach (var process in processes)
         {
             foreach (var vma in process.Mem.VMAs)
             {
-                // Approximation: treat private anonymous mappings as anon active/inactive buckets.
-                if (vma.File != null) continue;
                 if ((vma.Flags & MapFlags.Private) == 0) continue;
 
-                var states = vma.MemoryObject.SnapshotPageStates();
-                foreach (var state in states)
+                if (vma.File == null)
                 {
-                    var key = (nint)state.Ptr;
-                    if (!seenPtrs.Add(key)) continue;
-                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) active += LinuxConstants.PageSize;
-                    else inactive += LinuxConstants.PageSize;
+                    foreach (var state in vma.SharedObject.SnapshotPageStates())
+                    {
+                        var key = (nint)state.Ptr;
+                        if (!seenPtrs.Add(key)) continue;
+                        totalAnon += LinuxConstants.PageSize;
+                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
+                        else inactiveAnon += LinuxConstants.PageSize;
+                    }
                 }
 
-                if (vma.CowObject == null) continue;
-                var cowStates = vma.CowObject.SnapshotPageStates();
-                foreach (var state in cowStates)
+                if (vma.PrivateObject == null) continue;
+                foreach (var state in vma.PrivateObject.SnapshotPageStates())
                 {
                     var key = (nint)state.Ptr;
                     if (!seenPtrs.Add(key)) continue;
-                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) active += LinuxConstants.PageSize;
-                    else inactive += LinuxConstants.PageSize;
+                    if (vma.File == null)
+                    {
+                        totalAnon += LinuxConstants.PageSize;
+                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
+                        else inactiveAnon += LinuxConstants.PageSize;
+                    }
+                    else
+                    {
+                        totalFilePrivate += LinuxConstants.PageSize;
+                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                            activeFilePrivate += LinuxConstants.PageSize;
+                        else
+                            inactiveFilePrivate += LinuxConstants.PageSize;
+                    }
                 }
             }
         }
 
-        return (active, inactive);
+        return new PrivateBreakdown(
+            totalAnon,
+            totalFilePrivate,
+            activeAnon,
+            inactiveAnon,
+            activeFilePrivate,
+            inactiveFilePrivate);
     }
 }

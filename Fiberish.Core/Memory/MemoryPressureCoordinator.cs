@@ -23,7 +23,7 @@ public static class MemoryPressureCoordinator
     {
         if (targetBytes <= 0 && targetMappedPages <= 0) return default;
         var unmappedPages = targetMappedPages > 0
-            ? addressSpace.DropMappedCleanFilePagesForPressure(engine, targetMappedPages)
+            ? addressSpace.DropMappedCleanRecoverablePagesForPressure(engine, targetMappedPages)
             : 0;
         var reclaimedBytes = targetBytes > 0 ? GlobalPageCacheManager.TryReclaimBytes(targetBytes) : 0;
         return new MemoryPressureResult(reclaimedBytes, unmappedPages);

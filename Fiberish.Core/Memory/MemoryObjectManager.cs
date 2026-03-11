@@ -31,8 +31,15 @@ public sealed class MemoryObjectManager
                 return existing;
             }
 
-            var obj = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(obj, IsShmemInode(inode)
+            var isShmem = IsShmemInode(inode);
+            var obj = new MemoryObject(
+                MemoryObjectKind.File,
+                null,
+                0,
+                0,
+                true,
+                isShmem ? MemoryObjectRole.ShmemSharedSource : MemoryObjectRole.FileSharedSource);
+            GlobalPageCacheManager.TrackPageCache(obj, isShmem
                 ? GlobalPageCacheManager.PageCacheClass.Shmem
                 : GlobalPageCacheManager.PageCacheClass.File);
             _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
@@ -52,14 +59,32 @@ public sealed class MemoryObjectManager
         inode.PageCacheManager = null;
     }
 
-    public MemoryObject CreateAnonymous(bool shared)
+    public MemoryObject CreateAnonymousSharedSource()
     {
-        return new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, shared);
+        var obj = new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, false,
+            MemoryObjectRole.AnonSharedSourceZeroFill);
+        GlobalPageCacheManager.TrackPageCache(obj, GlobalPageCacheManager.PageCacheClass.AnonSharedSource);
+        return obj;
+    }
+
+    public MemoryObject CreateSharedAnonymous()
+    {
+        var obj = new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, true,
+            MemoryObjectRole.ShmemSharedSource);
+        GlobalPageCacheManager.TrackPageCache(obj, GlobalPageCacheManager.PageCacheClass.Shmem);
+        return obj;
+    }
+
+    public MemoryObject CreatePrivateOverlay()
+    {
+        return new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, false,
+            MemoryObjectRole.PrivateOverlay);
     }
 
     public MemoryObject CreateFile(Fiberish.VFS.LinuxFile fileHandle, long fileBaseOffset, long fileSize, bool shared)
     {
-        return new MemoryObject(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, shared);
+        return new MemoryObject(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, shared,
+            shared ? MemoryObjectRole.FileSharedSource : MemoryObjectRole.PrivateOverlay);
     }
 
     public MemoryObject CreateOrOpenNamed(string name, Func<MemoryObject> factory, out bool created)

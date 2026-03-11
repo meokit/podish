@@ -16,10 +16,9 @@ public enum AllocationClass
 public enum AllocationSource
 {
     Unknown,
+    ZeroPage,
     AnonFault,
     AnonMapPreFault,
-    ForkClonePrivateAnon,
-    ForkClonePrivateFileImport,
     CowFirstPrivate,
     CowReplacePrivate
 }
@@ -48,6 +47,7 @@ public sealed class ExternalPageManager
         public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
         public long MemoryQuotaBytes = 256L * 1024 * 1024;
         public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
+        public nint SharedZeroPagePtr;
     }
 
     private sealed class ScopeRestore : IDisposable
@@ -237,6 +237,31 @@ public sealed class ExternalPageManager
     public static long GetAllocatedBytes()
     {
         return GetAllocatedPageCount() * LinuxConstants.PageSize;
+    }
+
+    public static IntPtr GetOrCreateSharedZeroPage()
+    {
+        var state = CurrentState;
+        lock (state.GlobalLock)
+        {
+            if (state.SharedZeroPagePtr != 0 && state.PageRefs.ContainsKey(state.SharedZeroPagePtr))
+                return (IntPtr)state.SharedZeroPagePtr;
+        }
+
+        var allocated = AllocateExternalPage(AllocationClass.KernelInternal, AllocationSource.ZeroPage);
+        if (allocated == IntPtr.Zero) return IntPtr.Zero;
+
+        lock (state.GlobalLock)
+        {
+            if (state.SharedZeroPagePtr != 0 && state.PageRefs.ContainsKey(state.SharedZeroPagePtr))
+            {
+                ReleasePtr(allocated);
+                return (IntPtr)state.SharedZeroPagePtr;
+            }
+
+            state.SharedZeroPagePtr = (nint)allocated;
+            return allocated;
+        }
     }
 
     public static (long StrictSuccess, long StrictReclaimSuccess, long StrictFail, long LegacyOverQuota)

@@ -204,13 +204,13 @@ public class MmapSupportTests
         var vma = env.Vma.FindVMA(baseAddr);
         Assert.NotNull(vma);
         var secondPageIndex = vma!.ViewPageOffset + 1;
-        Assert.False(vma.MemoryObject.IsDirty(secondPageIndex));
+        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
 
         Assert.Equal(0, await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize, (uint)Protection.Read));
-        Assert.False(vma.MemoryObject.IsDirty(secondPageIndex));
+        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
 
         Assert.Equal(0, await env.Call("SysMprotect", secondPage, LinuxConstants.PageSize, (uint)Protection.Read));
-        Assert.True(vma.MemoryObject.IsDirty(secondPageIndex));
+        Assert.True(vma.SharedObject.IsDirty(secondPageIndex));
     }
 
     [Fact]
@@ -243,7 +243,7 @@ public class MmapSupportTests
     }
 
     [Fact]
-    public async Task Mprotect_PrivateFileSplit_ReusesSameCowObject()
+    public async Task Mprotect_PrivateFileSplit_ReusesSamePrivateObject()
     {
         using var env = new TestEnv();
         env.MapUserPage(0x15000);
@@ -267,13 +267,13 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(3, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].CowObject);
-        Assert.Same(splitVmas[0].CowObject, splitVmas[1].CowObject);
-        Assert.Same(splitVmas[0].CowObject, splitVmas[2].CowObject);
+        Assert.NotNull(splitVmas[0].PrivateObject);
+        Assert.Same(splitVmas[0].PrivateObject, splitVmas[1].PrivateObject);
+        Assert.Same(splitVmas[0].PrivateObject, splitVmas[2].PrivateObject);
     }
 
     [Fact]
-    public async Task Munmap_PrivateFileMiddleSplit_ReusesSameCowObject()
+    public async Task Munmap_PrivateFileMiddleSplit_ReusesSamePrivateObject()
     {
         using var env = new TestEnv();
         env.MapUserPage(0x16000);
@@ -296,8 +296,8 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(2, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].CowObject);
-        Assert.Same(splitVmas[0].CowObject, splitVmas[1].CowObject);
+        Assert.NotNull(splitVmas[0].PrivateObject);
+        Assert.Same(splitVmas[0].PrivateObject, splitVmas[1].PrivateObject);
     }
 
     private sealed class TestEnv : IDisposable

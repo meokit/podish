@@ -50,13 +50,13 @@ public class TruncateMmapLifecycleTests
 
         var vma = Assert.Single(env.Mm.VMAs);
         var secondPageIndex = vma.ViewPageOffset + 1;
-        Assert.NotEqual(IntPtr.Zero, vma.MemoryObject.GetPage(secondPageIndex));
+        Assert.NotEqual(IntPtr.Zero, vma.SharedObject.GetPage(secondPageIndex));
 
         Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
         env.Mm.OnFileTruncate(env.File.Inode, LinuxConstants.PageSize, env.Engine);
 
         Assert.Equal(LinuxConstants.PageSize, vma.FileBackingLength);
-        Assert.Equal(IntPtr.Zero, vma.MemoryObject.GetPage(secondPageIndex));
+        Assert.Equal(IntPtr.Zero, vma.SharedObject.GetPage(secondPageIndex));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class TruncateMmapLifecycleTests
 
         var vma = Assert.Single(env.Mm1.VMAs, candidate => ReferenceEquals(candidate.File?.OpenedInode, env.Inode));
         var secondPageIndex = vma.ViewPageOffset + 1;
-        vma.MemoryObject.MarkDirty(secondPageIndex);
+        vma.SharedObject.MarkDirty(secondPageIndex);
         vma.FileBackingLength = LinuxConstants.PageSize;
         Assert.Equal(0UL, env.Task1.PendingSignals);
 
@@ -226,6 +226,40 @@ public class TruncateMmapLifecycleTests
         {
             KernelScheduler.Current = null;
         }
+    }
+
+    [Fact]
+    public void PrivateMapping_SeesSharedWriterUntilItTriggersCow()
+    {
+        using var env = new MixedMappingEnv(MapFlags.Private, MapFlags.Shared);
+
+        Assert.Equal((byte)'A', env.ReadByte1());
+        env.WriteByte2((byte)'S');
+        Assert.Equal((byte)'S', env.ReadByte1());
+
+        env.WriteByte1((byte)'P');
+        Assert.Equal((byte)'P', env.ReadByte1());
+
+        env.WriteByte2((byte)'T');
+        Assert.Equal((byte)'P', env.ReadByte1());
+        Assert.Equal((byte)'T', env.ReadByte2());
+    }
+
+    [Fact]
+    public void PrivateMappings_DoNotObserveEachOthersWrites()
+    {
+        using var env = new MixedMappingEnv(MapFlags.Private, MapFlags.Private);
+
+        Assert.Equal((byte)'A', env.ReadByte1());
+        Assert.Equal((byte)'A', env.ReadByte2());
+
+        env.WriteByte2((byte)'Q');
+        Assert.Equal((byte)'A', env.ReadByte1());
+        Assert.Equal((byte)'Q', env.ReadByte2());
+
+        env.WriteByte1((byte)'P');
+        Assert.Equal((byte)'P', env.ReadByte1());
+        Assert.Equal((byte)'Q', env.ReadByte2());
     }
 
     private sealed class TestEnv : IDisposable
@@ -343,6 +377,92 @@ public class TruncateMmapLifecycleTests
             Engine1.Dispose();
             Engine2.Dispose();
             KernelScheduler.Current = null;
+        }
+    }
+
+    private sealed class MixedMappingEnv : IDisposable
+    {
+        public MixedMappingEnv(MapFlags flags1, MapFlags flags2)
+        {
+            Scheduler = new KernelScheduler();
+            KernelScheduler.Current = Scheduler;
+
+            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
+            var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            var dentry = new Dentry("data.bin", null, sb.Root, sb);
+            sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
+            Inode = dentry.Inode!;
+
+            Engine1 = new Engine();
+            Engine2 = new Engine();
+            Mm1 = new VMAManager();
+            Mm2 = new VMAManager();
+            Sm1 = new SyscallManager(Engine1, Mm1, 0);
+            Sm2 = new SyscallManager(Engine2, Mm2, 0);
+            Process1 = new Process(9101, Mm1, Sm1);
+            Process2 = new Process(9102, Mm2, Sm2);
+            Scheduler.RegisterProcess(Process1);
+            Scheduler.RegisterProcess(Process2);
+
+            Task1 = new FiberTask(9101, Process1, Engine1, Scheduler);
+            Task2 = new FiberTask(9102, Process2, Engine2, Scheduler);
+            Engine1.Owner = Task1;
+            Engine2.Owner = Task2;
+            Engine1.PageFaultResolver = (addr, isWrite) => Mm1.HandleFault(addr, isWrite, Engine1);
+            Engine2.PageFaultResolver = (addr, isWrite) => Mm2.HandleFault(addr, isWrite, Engine2);
+
+            File1 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
+            File2 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
+            Assert.Equal(1, Inode.Write(File1, new byte[] { (byte)'A' }, 0));
+
+            Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1,
+                File1, 0, (long)Inode.Size, "map1", Engine1);
+            Map2 = Mm2.Mmap(0x46100000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags2,
+                File2, 0, (long)Inode.Size, "map2", Engine2);
+        }
+
+        public KernelScheduler Scheduler { get; }
+        public Engine Engine1 { get; }
+        public Engine Engine2 { get; }
+        public VMAManager Mm1 { get; }
+        public VMAManager Mm2 { get; }
+        public SyscallManager Sm1 { get; }
+        public SyscallManager Sm2 { get; }
+        public Process Process1 { get; }
+        public Process Process2 { get; }
+        public FiberTask Task1 { get; }
+        public FiberTask Task2 { get; }
+        public LinuxFile File1 { get; }
+        public LinuxFile File2 { get; }
+        public Inode Inode { get; }
+        public uint Map1 { get; }
+        public uint Map2 { get; }
+
+        public byte ReadByte1() => ReadByte(Engine1, Map1);
+        public byte ReadByte2() => ReadByte(Engine2, Map2);
+        public void WriteByte1(byte value) => WriteByte(Engine1, Map1, value);
+        public void WriteByte2(byte value) => WriteByte(Engine2, Map2, value);
+
+        public void Dispose()
+        {
+            File1.Close();
+            File2.Close();
+            Engine1.Dispose();
+            Engine2.Dispose();
+            KernelScheduler.Current = null;
+        }
+
+        private static byte ReadByte(Engine engine, uint addr)
+        {
+            var buffer = new byte[1];
+            Assert.True(engine.CopyFromUser(addr, buffer));
+            return buffer[0];
+        }
+
+        private static void WriteByte(Engine engine, uint addr, byte value)
+        {
+            Assert.True(engine.CopyToUser(addr, new[] { value }));
         }
     }
 }

@@ -15,24 +15,24 @@ public class CowForkCloneTests
         const uint mapAddr = 0x46000000;
         env.MapPrivate(mapAddr);
 
-        // Parent creates first private COW page.
+        // Parent creates the first private page overlay.
         Assert.True(env.ParentEngine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
         var parentVma = Assert.Single(env.ParentMm.VMAs);
-        Assert.NotNull(parentVma.CowObject);
+        Assert.NotNull(parentVma.PrivateObject);
         var pageIndex = parentVma.ViewPageOffset;
-        var parentPageBeforeClone = parentVma.CowObject!.GetPage(pageIndex);
+        var parentPageBeforeClone = parentVma.PrivateObject!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, parentPageBeforeClone);
 
-        // Fork-style clone: child gets independent CowObject metadata with shared page pointers.
+        // Fork-style clone: child gets independent PrivateObject metadata with shared page pointers.
         var childMm = env.ParentMm.Clone();
         using var childEngine = new Engine();
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
         var childVma = Assert.Single(childMm.VMAs);
-        Assert.NotNull(childVma.CowObject);
-        Assert.NotSame(parentVma.CowObject, childVma.CowObject);
-        var childPageBeforeWrite = childVma.CowObject!.GetPage(childVma.ViewPageOffset);
+        Assert.NotNull(childVma.PrivateObject);
+        Assert.NotSame(parentVma.PrivateObject, childVma.PrivateObject);
+        var childPageBeforeWrite = childVma.PrivateObject!.GetPage(childVma.ViewPageOffset);
         Assert.Equal(parentPageBeforeClone, childPageBeforeWrite);
 
         var initialChild = new byte[1];
@@ -49,11 +49,136 @@ public class CowForkCloneTests
         Assert.Equal((byte)'P', parentRead[0]);
         Assert.Equal((byte)'C', childRead[0]);
 
-        var parentPageAfterWrite = parentVma.CowObject!.GetPage(pageIndex);
-        var childPageAfterWrite = childVma.CowObject!.GetPage(childVma.ViewPageOffset);
+        var parentPageAfterWrite = parentVma.PrivateObject!.GetPage(pageIndex);
+        var childPageAfterWrite = childVma.PrivateObject!.GetPage(childVma.ViewPageOffset);
         Assert.NotEqual(IntPtr.Zero, parentPageAfterWrite);
         Assert.NotEqual(IntPtr.Zero, childPageAfterWrite);
         Assert.NotEqual(parentPageAfterWrite, childPageAfterWrite);
+    }
+
+    [Fact]
+    public void ForkClone_PrivateAnonymous_NoEagerCopyUntilWrite()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var parentEngine = new Engine();
+        var parentMm = new VMAManager();
+        parentEngine.PageFaultResolver =
+            (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
+
+        const uint mapAddr = 0x47000000;
+        Assert.Equal(mapAddr, parentMm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-cow", parentEngine));
+
+        var parentVma = Assert.Single(parentMm.VMAs);
+        Assert.Equal(FaultResult.Handled, parentMm.HandleFaultDetailed(mapAddr, isWrite: false, parentEngine));
+        Assert.Equal(IntPtr.Zero, parentVma.PrivateObject!.GetPage(parentVma.ViewPageOffset));
+        Assert.Equal(IntPtr.Zero, parentVma.SharedObject.GetPage(parentVma.ViewPageOffset));
+
+        var childMm = parentMm.Clone();
+        using var childEngine = new Engine();
+        childEngine.PageFaultResolver =
+            (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
+
+        var childVma = Assert.Single(childMm.VMAs);
+        Assert.Same(parentVma.SharedObject, childVma.SharedObject);
+        Assert.NotSame(parentVma.PrivateObject, childVma.PrivateObject);
+        Assert.Equal(IntPtr.Zero, childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
+
+        Assert.True(childEngine.CopyToUser(mapAddr, new byte[] { (byte)'C' }));
+
+        var parentRead = new byte[1];
+        var childRead = new byte[1];
+        Assert.True(parentEngine.CopyFromUser(mapAddr, parentRead));
+        Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
+        Assert.Equal(0, parentRead[0]);
+        Assert.Equal((byte)'C', childRead[0]);
+        Assert.Equal(IntPtr.Zero, parentVma.PrivateObject!.GetPage(parentVma.ViewPageOffset));
+        Assert.NotEqual(IntPtr.Zero, childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
+    }
+
+    [Fact]
+    public void PrivateAnonymousReadFault_MapsSharedReadOnlyZeroPage()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var engine = new Engine();
+        var mm = new VMAManager();
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+
+        const uint map1 = 0x47200000;
+        const uint map2 = 0x47300000;
+        Assert.Equal(map1, mm.Mmap(map1, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-zero-1", engine));
+        Assert.Equal(map2, mm.Mmap(map2, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-zero-2", engine));
+
+        var buf = new byte[1];
+        Assert.True(engine.CopyFromUser(map1, buf));
+        Assert.Equal(0, buf[0]);
+        Assert.True(engine.CopyFromUser(map2, buf));
+        Assert.Equal(0, buf[0]);
+
+        Assert.True(mm.ExternalPages.TryGet(map1, out var zero1));
+        Assert.True(mm.ExternalPages.TryGet(map2, out var zero2));
+        Assert.NotEqual(IntPtr.Zero, zero1);
+        Assert.Equal(zero1, zero2);
+
+        var vmas = mm.VMAs.OrderBy(vma => vma.Start).ToArray();
+        Assert.Equal(2, vmas.Length);
+        Assert.Equal(IntPtr.Zero, vmas[0].SharedObject.GetPage(vmas[0].ViewPageOffset));
+        Assert.Equal(IntPtr.Zero, vmas[1].SharedObject.GetPage(vmas[1].ViewPageOffset));
+
+        Assert.True(engine.CopyToUser(map1, new byte[] { (byte)'Z' }));
+        Assert.True(engine.CopyFromUser(map1, buf));
+        Assert.Equal((byte)'Z', buf[0]);
+        Assert.True(engine.CopyFromUser(map2, buf));
+        Assert.Equal(0, buf[0]);
+    }
+
+    [Fact]
+    public void ForkClone_PrivateAnonymous_AlreadyPrivatePage_SharesUntilWriteWithoutExtraCloneAllocation()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var parentEngine = new Engine();
+        var parentMm = new VMAManager();
+        parentEngine.PageFaultResolver =
+            (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
+
+        const uint mapAddr = 0x47100000;
+        Assert.Equal(mapAddr, parentMm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-cow-private", parentEngine));
+
+        Assert.True(parentEngine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
+        var parentVma = Assert.Single(parentMm.VMAs);
+        var pageIndex = parentVma.ViewPageOffset;
+        var parentPrivatePage = parentVma.PrivateObject!.GetPage(pageIndex);
+        Assert.NotEqual(IntPtr.Zero, parentPrivatePage);
+        var allocatedBeforeClone = ExternalPageManager.GetAllocatedBytes();
+
+        var childMm = parentMm.Clone();
+        using var childEngine = new Engine();
+        childEngine.PageFaultResolver =
+            (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
+
+        var childVma = Assert.Single(childMm.VMAs);
+        Assert.NotSame(parentVma.PrivateObject, childVma.PrivateObject);
+        Assert.Equal(parentPrivatePage, childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
+        Assert.Equal(allocatedBeforeClone, ExternalPageManager.GetAllocatedBytes());
+
+        var parentRead = new byte[1];
+        var childRead = new byte[1];
+        Assert.True(parentEngine.CopyFromUser(mapAddr, parentRead));
+        Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
+        Assert.Equal((byte)'P', parentRead[0]);
+        Assert.Equal((byte)'P', childRead[0]);
+
+        Assert.True(childEngine.CopyToUser(mapAddr, new byte[] { (byte)'C' }));
+
+        Assert.True(parentEngine.CopyFromUser(mapAddr, parentRead));
+        Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
+        Assert.Equal((byte)'P', parentRead[0]);
+        Assert.Equal((byte)'C', childRead[0]);
+        Assert.NotEqual(parentVma.PrivateObject!.GetPage(pageIndex), childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
     }
 
     private sealed class TestEnv : IDisposable

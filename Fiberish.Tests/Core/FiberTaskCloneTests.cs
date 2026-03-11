@@ -74,6 +74,40 @@ public class FiberTaskCloneTests
         Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
     }
 
+    [Fact]
+    public async Task Fork_PrivateAnonymousPage_DropsParentAndChildNativeMappings_ThenSplitsOnWrite()
+    {
+        using var env = new TestEnv();
+        const uint addr = 0x00510000;
+        env.MapUserPage(addr);
+        Assert.True(env.Engine.CopyToUser(addr, new byte[] { 0x5A }));
+
+        Assert.True(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
+        var childMm = child.Process.Mem;
+        var pageAddr = addr & LinuxConstants.PageMask;
+
+        Assert.False(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.False(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.False(env.Vma.ExternalPages.TryGet(pageAddr, out _));
+        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+
+        var parentRead = new byte[1];
+        var childRead = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(addr, parentRead));
+        Assert.True(child.CPU.CopyFromUser(addr, childRead));
+        Assert.Equal((byte)0x5A, parentRead[0]);
+        Assert.Equal((byte)0x5A, childRead[0]);
+
+        Assert.True(child.CPU.CopyToUser(addr, new byte[] { 0x43 }));
+
+        Assert.True(env.Engine.CopyFromUser(addr, parentRead));
+        Assert.True(child.CPU.CopyFromUser(addr, childRead));
+        Assert.Equal((byte)0x5A, parentRead[0]);
+        Assert.Equal((byte)0x43, childRead[0]);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         private readonly List<LinuxFile> _files = [];

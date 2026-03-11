@@ -10,6 +10,14 @@ public enum MemoryObjectKind
     Image
 }
 
+public enum MemoryObjectRole
+{
+    FileSharedSource,
+    ShmemSharedSource,
+    AnonSharedSourceZeroFill,
+    PrivateOverlay
+}
+
 public sealed class MemoryObject
 {
     private readonly Dictionary<uint, IntPtr> _pages = new();
@@ -18,20 +26,36 @@ public sealed class MemoryObject
     private readonly object _lock = new();
     private int _refCount = 1;
 
-    public MemoryObject(MemoryObjectKind kind, LinuxFile? file, long fileBaseOffset, long fileSize, bool shared)
+    public MemoryObject(MemoryObjectKind kind, LinuxFile? file, long fileBaseOffset, long fileSize, bool shared,
+        MemoryObjectRole? role = null)
     {
         Kind = kind;
         File = file;
         FileBaseOffset = fileBaseOffset;
         FileSize = fileSize;
         IsShared = shared;
+        Role = role ?? InferRole(kind, shared);
     }
 
     public MemoryObjectKind Kind { get; }
+    public MemoryObjectRole Role { get; }
     public LinuxFile? File { get; }
     public long FileBaseOffset { get; }
     public long FileSize { get; }
     public bool IsShared { get; }
+    public bool IsRecoverableWithoutSwap => Role is MemoryObjectRole.FileSharedSource or MemoryObjectRole.AnonSharedSourceZeroFill;
+    public bool IsPrivateOverlay => Role == MemoryObjectRole.PrivateOverlay;
+
+    private static MemoryObjectRole InferRole(MemoryObjectKind kind, bool shared)
+    {
+        return kind switch
+        {
+            MemoryObjectKind.File => MemoryObjectRole.FileSharedSource,
+            MemoryObjectKind.Anonymous when shared => MemoryObjectRole.ShmemSharedSource,
+            MemoryObjectKind.Anonymous => MemoryObjectRole.PrivateOverlay,
+            _ => MemoryObjectRole.PrivateOverlay
+        };
+    }
 
     public void AddRef()
     {
@@ -230,50 +254,14 @@ public sealed class MemoryObject
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
     }
 
-    public MemoryObject ForkCloneForPrivate()
-    {
-        var clone = new MemoryObject(Kind, File, FileBaseOffset, FileSize, false);
-        lock (_lock)
-        {
-            foreach (var (pageIndex, pagePtr) in _pages)
-            {
-                if (Kind == MemoryObjectKind.Anonymous)
-                {
-                    // Anonymous mappings lack CowObject, so they cannot rely on HandleFault COW.
-                    // Do a deep copy here to maintain strict isolation for MAP_PRIVATE anon.
-                    if (ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Anonymous,
-                            AllocationSource.ForkClonePrivateAnon))
-                    {
-                        unsafe
-                        {
-                            Buffer.MemoryCopy((void*)pagePtr, (void*)newPage, 4096, 4096);
-                        }
-
-                        clone._pages[pageIndex] = newPage;
-                        clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
-                    }
-                }
-                else
-                {
-                    // File-backed mappings rely on CowObject for copy-on-write
-                    ExternalPageManager.AddRef(pagePtr);
-                    clone._pages[pageIndex] = pagePtr;
-                    clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
-                }
-            }
-        }
-
-        return clone;
-    }
-
     /// <summary>
-    /// Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
-    /// Used for fork-time cloning of COW private-page containers so each process gets its own
+        /// Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
+    /// Used for fork-time cloning of private-page containers so each process gets its own
     /// metadata object while still deferring physical copy until the next write fault.
     /// </summary>
     public MemoryObject ForkCloneSharingPages()
     {
-        var clone = new MemoryObject(Kind, File, FileBaseOffset, FileSize, false);
+        var clone = new MemoryObject(Kind, File, FileBaseOffset, FileSize, false, Role);
         lock (_lock)
         {
             foreach (var (pageIndex, pagePtr) in _pages)
@@ -320,6 +308,7 @@ public sealed class MemoryObject
 
     public bool TryEvictCleanPage(uint pageIndex)
     {
+        if (!IsRecoverableWithoutSwap) return false;
         IntPtr ptr;
         lock (_lock)
         {

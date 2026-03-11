@@ -40,7 +40,8 @@ public static class GlobalPageCacheManager
     public enum PageCacheClass
     {
         File,
-        Shmem
+        Shmem,
+        AnonSharedSource
     }
 
     private readonly record struct TrackedEntry(WeakReference<MemoryObject> Cache, PageCacheClass Class);
@@ -117,7 +118,7 @@ public static class GlobalPageCacheManager
     }
 
     public readonly record struct CacheStats(long TotalPages, long CleanPages, long DirtyPages, long ShmemPages,
-        long WritebackPages);
+        long AnonSharedSourcePages, long WritebackPages);
     public readonly record struct CachePageState(PageCacheClass Class, bool Dirty, long LastAccessTicks);
 
     public static CacheStats GetCacheStats()
@@ -127,18 +128,26 @@ public static class GlobalPageCacheManager
         long total = 0;
         long dirty = 0;
         long shmem = 0;
+        long anonSharedSource = 0;
         foreach (var (cache, cacheClass) in caches)
         {
             var states = cache.SnapshotPageStates();
             total += states.Count;
             if (cacheClass == PageCacheClass.Shmem) shmem += states.Count;
+            if (cacheClass == PageCacheClass.AnonSharedSource) anonSharedSource += states.Count;
             foreach (var pageState in states)
             {
                 if (pageState.Dirty) dirty++;
             }
         }
 
-        return new CacheStats(total, total - dirty, dirty, shmem, Interlocked.Read(ref state.WritebackPagesInFlight));
+        return new CacheStats(
+            total,
+            total - dirty,
+            dirty,
+            shmem,
+            anonSharedSource,
+            Interlocked.Read(ref state.WritebackPagesInFlight));
     }
 
     public static IReadOnlyList<CachePageState> GetPageStatesSnapshot()

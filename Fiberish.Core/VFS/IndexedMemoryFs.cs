@@ -732,7 +732,10 @@ public abstract class IndexedMemoryInode : Inode
     protected MemoryObject EnsurePageCacheLocked()
     {
         if (PageCache != null) return PageCache;
-        PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
+        var role = CacheClass == GlobalPageCacheManager.PageCacheClass.Shmem
+            ? MemoryObjectRole.ShmemSharedSource
+            : MemoryObjectRole.FileSharedSource;
+        PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true, role);
         GlobalPageCacheManager.TrackPageCache(PageCache, CacheClass);
         OwnsPageCache = true;
         return PageCache;

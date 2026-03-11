@@ -37,13 +37,13 @@ public class VMA
     // Max bytes of valid file data relative to the Start of this VMA. Used for zero-filling BSS and partial pages.
     public long FileBackingLength { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;
-    public MemoryObject MemoryObject { get; set; } = null!;
+    public MemoryObject SharedObject { get; set; } = null!;
 
     /// <summary>
-    ///     For MAP_PRIVATE + file: holds COW'd private pages.
-    ///     Null for MAP_SHARED, MAP_PRIVATE anon, and threads.
+    ///     Holds per-process private pages for MAP_PRIVATE mappings.
+    ///     Null for MAP_SHARED and other non-private mappings.
     /// </summary>
-    public MemoryObject? CowObject { get; set; }
+    public MemoryObject? PrivateObject { get; set; }
 
     public uint ViewPageOffset { get; set; }
 
@@ -52,25 +52,9 @@ public class VMA
     public VMA Clone()
     {
         var shared = (Flags & MapFlags.Shared) != 0;
-        MemoryObject obj;
-
-        if (shared || CowObject != null)
-        {
-            // Shared VMA: share MemoryObject (MAP_SHARED file, MAP_SHARED anon, SysV shm)
-            // MAP_PRIVATE file mmap: MemoryObject IS the inode page cache (shared across processes);
-            //   per-process writes go into CowObject, not MemoryObject, so AddRef is correct.
-            MemoryObject.AddRef();
-            obj = MemoryObject;
-        }
-        else
-        {
-            // MAP_PRIVATE anonymous: deep-copy so child is fully isolated from parent
-            obj = MemoryObject.ForkCloneForPrivate();
-        }
-
-        // COW object: private metadata per-process, but pages are initially shared
-        // and split lazily on write fault.
-        MemoryObject? cowObj = CowObject?.ForkCloneSharingPages();
+        SharedObject.AddRef();
+        // Private pages are shared page-for-page across fork and split lazily on the next write.
+        MemoryObject? privateObj = PrivateObject?.ForkCloneSharingPages();
         var clonedFileMapping = FileMapping?.AddRef();
 
         return new VMA
@@ -83,8 +67,8 @@ public class VMA
             Offset = Offset,
             FileBackingLength = FileBackingLength,
             Name = Name,
-            MemoryObject = obj,
-            CowObject = cowObj,
+            SharedObject = SharedObject,
+            PrivateObject = privateObj,
             ViewPageOffset = ViewPageOffset
         };
     }

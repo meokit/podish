@@ -120,7 +120,7 @@ public class SysVShmManager
             DTime = DateTime.UtcNow,
             NAttch = 0,
             MarkedForDelete = false,
-            BackingObject = _memoryObjects.CreateAnonymous(true) // shared
+            BackingObject = _memoryObjects.CreateSharedAnonymous()
         };
 
         _segmentsByShmid[shmid] = segment;
@@ -219,7 +219,7 @@ public class SysVShmManager
                 Offset = 0,
                 FileBackingLength = segment.Size,
                 Name = $"[sysv shm:{shmid}]",
-                MemoryObject = segment.BackingObject,
+                SharedObject = segment.BackingObject,
                 ViewPageOffset = 0
             };
             segment.BackingObject.AddRef();

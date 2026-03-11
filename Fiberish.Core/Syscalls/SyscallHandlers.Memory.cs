@@ -375,15 +375,16 @@ public partial class SyscallManager
         // Anonymous mappings have no stable backing store and must preserve bytes explicitly.
         if (sourceVma.File == null) return true;
 
-        // File-backed mappings can be rebuilt from file/page cache unless there are private COW pages.
-        var cow = sourceVma.CowObject;
-        if (cow == null || copyLen == 0) return false;
+        // File-backed private mappings can be rebuilt from the shared source unless they
+        // already carry process-private pages in their private object.
+        var privateObject = sourceVma.PrivateObject;
+        if (privateObject == null || copyLen == 0) return false;
 
         var startPage =
             sourceVma.ViewPageOffset + ((sourceAddr - sourceVma.Start) / LinuxConstants.PageSize);
         var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
         for (uint i = 0; i < pageCount; i++)
-            if (cow.GetPage(startPage + i) != IntPtr.Zero)
+            if (privateObject.GetPage(startPage + i) != IntPtr.Zero)
                 return true;
 
         return false;
