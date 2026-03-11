@@ -38,6 +38,7 @@ public sealed class ContainerRunRequest
     public bool EnableHostConsoleInput { get; init; } = true;
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
     public bool UseEngineInit { get; init; }
+    public long? MemoryQuotaBytes { get; init; }
 }
 
 public sealed class ContainerRuntimeService
@@ -142,6 +143,9 @@ public sealed class ContainerRuntimeService
         
         INetworkBackend? networkBackend = null;
         ContainerNetworkContext? networkContext = null;
+        var actualExe = string.IsNullOrEmpty(request.Exe) ? "/bin/sh" : request.Exe;
+        var initProcessStarted = false;
+        var startupPhase = "bootstrap";
         try
         {
             if (!Directory.Exists(request.RootfsPath))
@@ -153,6 +157,9 @@ public sealed class ContainerRuntimeService
                     "rootfs not found"));
                 return 1;
             }
+
+            if (request.MemoryQuotaBytes.HasValue)
+                ExternalPageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
             
@@ -294,7 +301,6 @@ public sealed class ContainerRuntimeService
                 _logger.LogWarning(ex, "Failed to mount DNS configuration. Network resolution may not work.");
             }
 
-            var actualExe = string.IsNullOrEmpty(request.Exe) ? "/bin/sh" : request.Exe;
             var fullArgs = new[] { actualExe }.Concat(request.ExeArgs).ToArray();
 
             var finalEnvs = new List<string>
@@ -308,6 +314,7 @@ public sealed class ContainerRuntimeService
             foreach (var env in request.GuestEnvs)
                 finalEnvs.Add(env);
 
+            startupPhase = "resolve-init";
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
             if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
 
@@ -324,9 +331,12 @@ public sealed class ContainerRuntimeService
                 _logger.LogInformation("Engine init reaper enabled. PID 1 is reserved by runtime.");
             }
 
+            startupPhase = "load-init";
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, parentPid: engineInitProc?.TGID ?? 0);
+            initProcessStarted = true;
+            startupPhase = "running";
             request.ProcessController?.BindRuntimeControl(() =>
             {
                 scheduler.ScheduleFromAnyThread(() =>
@@ -384,6 +394,19 @@ public sealed class ContainerRuntimeService
                 request.Image,
                 mainTask.ExitStatus));
             return mainTask.ExitStatus;
+        }
+        catch (OutOfMemoryException ex)
+        {
+            var message = initProcessStarted
+                ? $"ENOMEM: container ran out of memory while running '{actualExe}'."
+                : $"ENOMEM: container startup failed before init process was ready (phase={startupPhase}, exe='{actualExe}').";
+            _logger.LogError(ex,
+                "Container OOM. containerId={ContainerId} initStarted={InitStarted} phase={Phase} exe={Exe}",
+                request.ContainerId, initProcessStarted, startupPhase, actualExe);
+            Console.Error.WriteLine($"[Podish OOM] {message}");
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image, 1, message));
+            return 1;
         }
         catch (Exception ex)
         {
