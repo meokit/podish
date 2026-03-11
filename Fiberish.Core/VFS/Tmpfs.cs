@@ -1,3 +1,5 @@
+using Fiberish.Native;
+
 namespace Fiberish.VFS;
 
 public class Tmpfs : FileSystem
@@ -9,7 +11,8 @@ public class Tmpfs : FileSystem
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        var sb = new TmpfsSuperBlock(fsType, DevManager);
+        var sizeLimitBytes = ParseSizeLimitBytes(data);
+        var sb = new TmpfsSuperBlock(fsType, DevManager, sizeLimitBytes);
         var rootInode = sb.AllocInode();
         rootInode.Type = InodeType.Directory;
         rootInode.Mode = 0x1FF;
@@ -20,12 +23,114 @@ public class Tmpfs : FileSystem
 
         return sb;
     }
+
+    private static long ParseSizeLimitBytes(object? data)
+    {
+        if (data is not string options || string.IsNullOrWhiteSpace(options))
+            return 0;
+
+        var limit = 0L;
+        var tokens = options.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var token in tokens)
+        {
+            if (!token.StartsWith("size=", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = token[5..].Trim();
+            limit = ParseSizeValue(value);
+        }
+
+        return limit;
+    }
+
+    private static long ParseSizeValue(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            throw new FormatException("tmpfs size= option is empty");
+
+        var s = raw.Trim().ToLowerInvariant();
+        long multiplier = 1;
+
+        char? unit = null;
+        if (s.EndsWith("ib", StringComparison.Ordinal) && s.Length > 2)
+        {
+            unit = s[^3];
+            s = s[..^2];
+        }
+        else if (s.EndsWith('b') && s.Length > 1 && char.IsLetter(s[^2]))
+        {
+            unit = s[^2];
+            s = s[..^1];
+        }
+        else if (char.IsLetter(s[^1]))
+        {
+            unit = s[^1];
+            s = s[..^1];
+        }
+
+        if (unit.HasValue)
+        {
+            multiplier = unit.Value switch
+            {
+                'k' => 1024L,
+                'm' => 1024L * 1024L,
+                'g' => 1024L * 1024L * 1024L,
+                't' => 1024L * 1024L * 1024L * 1024L,
+                _ => throw new FormatException($"Unsupported tmpfs size suffix: {unit.Value}")
+            };
+
+            if (s.EndsWith("i", StringComparison.Ordinal))
+                s = s[..^1];
+        }
+
+        if (!long.TryParse(s, out var value) || value < 0)
+            throw new FormatException($"Invalid tmpfs size value: {raw}");
+
+        return checked(value * multiplier);
+    }
 }
 
 public class TmpfsSuperBlock : IndexedMemorySuperBlock
 {
-    public TmpfsSuperBlock(FileSystemType type, DeviceNumberManager devManager) : base(type, devManager)
+    private long _usedDataBytes;
+
+    public TmpfsSuperBlock(FileSystemType type, DeviceNumberManager devManager, long sizeLimitBytes = 0) : base(type,
+        devManager)
     {
+        SizeLimitBytes = sizeLimitBytes;
+    }
+
+    public long SizeLimitBytes { get; }
+    public long UsedDataBytes
+    {
+        get
+        {
+            lock (Lock)
+                return _usedDataBytes;
+        }
+    }
+
+    public bool TryReserveDataBytes(long bytes)
+    {
+        if (bytes <= 0) return true;
+        lock (Lock)
+        {
+            if (SizeLimitBytes > 0 && _usedDataBytes > SizeLimitBytes - bytes)
+                return false;
+            _usedDataBytes += bytes;
+            return true;
+        }
+    }
+
+    public void ReleaseDataBytes(long bytes)
+    {
+        if (bytes <= 0) return;
+        lock (Lock)
+        {
+            _usedDataBytes -= bytes;
+            if (_usedDataBytes < 0)
+                _usedDataBytes = 0;
+        }
     }
 
     protected override IndexedMemoryInode CreateIndexedInode(ulong ino)
@@ -41,4 +146,89 @@ public class TmpfsInode : IndexedMemoryInode
     }
 
     protected override bool PinNamespaceDentries => true;
+
+    private TmpfsSuperBlock TmpfsSb => (TmpfsSuperBlock)SuperBlock;
+
+    protected override int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        if (Type != InodeType.File)
+            return base.BackendWrite(linuxFile, buffer, offset);
+        if (offset < 0)
+            return -(int)Errno.EINVAL;
+
+        long endOffset;
+        try
+        {
+            endOffset = checked(offset + buffer.Length);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.EFBIG;
+        }
+
+        var oldSize = (long)Size;
+        var growth = Math.Max(0L, endOffset - oldSize);
+        if (growth > 0 && !TmpfsSb.TryReserveDataBytes(growth))
+            return -(int)Errno.ENOSPC;
+
+        try
+        {
+            var rc = base.BackendWrite(linuxFile, buffer, offset);
+            if (rc < 0 && growth > 0)
+                TmpfsSb.ReleaseDataBytes(growth);
+            return rc;
+        }
+        catch
+        {
+            if (growth > 0)
+                TmpfsSb.ReleaseDataBytes(growth);
+            throw;
+        }
+    }
+
+    public override int Truncate(long size)
+    {
+        if (Type != InodeType.File)
+            return base.Truncate(size);
+        if (size < 0)
+            return -(int)Errno.EINVAL;
+
+        var oldSize = (long)Size;
+        if (size > oldSize)
+        {
+            var growth = size - oldSize;
+            if (!TmpfsSb.TryReserveDataBytes(growth))
+                return -(int)Errno.ENOSPC;
+
+            try
+            {
+                var rc = base.Truncate(size);
+                if (rc < 0)
+                    TmpfsSb.ReleaseDataBytes(growth);
+                return rc;
+            }
+            catch
+            {
+                TmpfsSb.ReleaseDataBytes(growth);
+                throw;
+            }
+        }
+
+        var shrink = oldSize - size;
+        var result = base.Truncate(size);
+        if (result == 0 && shrink > 0)
+            TmpfsSb.ReleaseDataBytes(shrink);
+        return result;
+    }
+
+    protected override void OnFinalizeDelete()
+    {
+        if (Type == InodeType.File && Size > 0)
+        {
+            TmpfsSb.ReleaseDataBytes((long)Size);
+            Size = 0;
+        }
+
+        base.OnFinalizeDelete();
+    }
 }
