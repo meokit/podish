@@ -479,7 +479,7 @@ public sealed class HostfsMountOptions
     public int Umask { get; init; } = -1;
     public int Fmask { get; init; } = -1;
     public int Dmask { get; init; } = -1;
-    public bool MetadataLess { get; init; }
+    public bool MetadataLess { get; init; } = true;
     public HostfsMountBoundaryMode MountBoundaryMode { get; init; } = HostfsMountBoundaryMode.SingleDomain;
     public HostfsSpecialNodeMode SpecialNodeMode { get; init; } = HostfsSpecialNodeMode.Strict;
     public IMountBoundaryPolicy? MountBoundaryPolicy { get; init; }
@@ -534,7 +534,7 @@ public sealed class HostfsMountOptions
         var umask = -1;
         var fmask = -1;
         var dmask = -1;
-        var metadataLess = false;
+        var metadataLess = true;
         var mountBoundaryMode = HostfsMountBoundaryMode.SingleDomain;
         var specialNodeMode = HostfsSpecialNodeMode.Strict;
 
@@ -542,13 +542,7 @@ public sealed class HostfsMountOptions
         foreach (var token in tokens)
         {
             var eq = token.IndexOf('=');
-            if (eq <= 0 || eq == token.Length - 1)
-            {
-                var flag = token.Trim().ToLowerInvariant();
-                if (flag is "metadataless" or "nometa")
-                    metadataLess = true;
-                continue;
-            }
+            if (eq <= 0 || eq == token.Length - 1) continue;
 
             var key = token[..eq].Trim().ToLowerInvariant();
             var value = token[(eq + 1)..].Trim();
@@ -569,6 +563,9 @@ public sealed class HostfsMountOptions
                     break;
                 case "dmask":
                     if (TryParseMask(value, out var parsedDmask)) dmask = parsedDmask;
+                    break;
+                case "metadata":
+                    metadataLess = !IsEnabledOption(value);
                     break;
                 case "mount_boundary":
                 case "mountboundary":
@@ -627,6 +624,14 @@ public sealed class HostfsMountOptions
             parsed = 0;
             return false;
         }
+    }
+
+    private static bool IsEnabledOption(string value)
+    {
+        return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+               value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 }
 

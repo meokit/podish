@@ -14,6 +14,7 @@ public class HostfsMountOptionsTests
         Assert.Equal(-1, opts.Umask);
         Assert.Equal(-1, opts.Fmask);
         Assert.Equal(-1, opts.Dmask);
+        Assert.True(opts.MetadataLess);
         Assert.Equal(HostfsMountBoundaryMode.SingleDomain, opts.MountBoundaryMode);
         Assert.Equal(HostfsSpecialNodeMode.Strict, opts.SpecialNodeMode);
     }
@@ -21,12 +22,20 @@ public class HostfsMountOptionsTests
     [Fact]
     public void Parse_Full()
     {
-        var opts = HostfsMountOptions.Parse("uid=1000,gid=1000,umask=022,fmask=011,dmask=000");
+        var opts = HostfsMountOptions.Parse("uid=1000,gid=1000,umask=022,fmask=011,dmask=000,metadata=1");
         Assert.Equal(1000, opts.MountUid);
         Assert.Equal(1000, opts.MountGid);
         Assert.Equal(18, opts.Umask); // 022 octal = 18 decimal
         Assert.Equal(9, opts.Fmask);  // 011 octal = 9 decimal
         Assert.Equal(0, opts.Dmask);
+        Assert.False(opts.MetadataLess);
+    }
+
+    [Fact]
+    public void Parse_MetadataDisabledExplicitly()
+    {
+        var opts = HostfsMountOptions.Parse("metadata=0");
+        Assert.True(opts.MetadataLess);
     }
 
     [Fact]

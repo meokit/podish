@@ -735,7 +735,6 @@ public partial class SyscallManager
         if (readOnly)
         {
             fsCtx.SetFlag("ro");
-            fsCtx.SetFlag("metadataless");
         }
         else
         {
