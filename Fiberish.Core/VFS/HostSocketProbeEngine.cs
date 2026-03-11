@@ -179,12 +179,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
             // Prefer runtime async readiness (epoll/kqueue under the hood) over synchronous probing.
             MaybeArmProbesForPoll(events);
 
-            var writeProbeInFlight = Volatile.Read(ref _writeProbeInFlight) != 0;
-            var readProbeInFlight = Volatile.Read(ref _readProbeInFlight) != 0 || Volatile.Read(ref _acceptProbeInFlight) != 0;
-
             var needWrite = (events & PollEvents.POLLOUT) != 0;
             var canWrite = false;
-            if (needWrite && !writeProbeInFlight)
+            if (needWrite)
             {
                 try
                 {
@@ -201,31 +198,25 @@ internal sealed class HostSocketProbeEngine : IDisposable
             {
                 if (!IsListeningSocket())
                 {
-                    if (!readProbeInFlight)
+                    try
                     {
-                        try
-                        {
-                            canRead = _socket.Available > 0;
-                        }
-                        catch (SocketException)
-                        {
-                            // keep false
-                        }
+                        canRead = _socket.Available > 0;
+                    }
+                    catch (SocketException)
+                    {
+                        // keep false
                     }
                 }
             }
 
             var hasError = false;
-            if (!writeProbeInFlight)
+            try
             {
-                try
-                {
-                    hasError = _socket.Poll(0, SelectMode.SelectError);
-                }
-                catch (SocketException)
-                {
-                    hasError = true;
-                }
+                hasError = _socket.Poll(0, SelectMode.SelectError);
+            }
+            catch (SocketException)
+            {
+                hasError = true;
             }
             if ((events & PollEvents.POLLOUT) != 0 &&
                 _socket.SocketType == SocketType.Stream &&

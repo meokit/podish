@@ -53,6 +53,39 @@ public class HostSocketReadinessTests
     }
 
     [Fact(Timeout = TestTimeoutMs)]
+    public void Poll_ConnectedReadableSocket_DispatcherStalled_StillReturnsPollIn()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(ep);
+        using var server = listener.Accept();
+        server.Blocking = false;
+
+        var inode = new HostSocketInode(3011, env.SyscallManager.MemfdSuperBlock, server);
+        var file = new LinuxFile(new Dentry("readiness-stalled-dispatcher", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
+            Logging.CreateLogger<HostSocketReadinessTests>(), new StalledReadyDispatcher());
+
+        _ = client.Send([0x43]);
+        short revents = 0;
+        for (var i = 0; i < 100; i++)
+        {
+            revents = readiness.Poll(file, PollEvents.POLLIN);
+            if ((revents & PollEvents.POLLIN) != 0)
+                break;
+            Thread.Sleep(2);
+        }
+
+        Assert.True((revents & PollEvents.POLLIN) != 0);
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
     public async Task WaitForSocketEventAsync_ConnectedReadable_CompletesTrue()
     {
         using var env = new ReadinessEnv();
@@ -426,6 +459,17 @@ public class HostSocketReadinessTests
         {
             KernelScheduler.Current = null;
             GC.KeepAlive(Task);
+        }
+    }
+
+    private sealed class StalledReadyDispatcher : IReadyDispatcher
+    {
+        public bool CanDispatch => true;
+        public FiberTask? CurrentTask => null;
+
+        public void Post(Action callback)
+        {
+            // Intentionally drop callbacks to emulate a scheduler that cannot drain events.
         }
     }
 }
