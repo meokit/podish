@@ -203,7 +203,7 @@ internal static class ProcessAddressSpaceSync
                 len,
                 captureDirtySharedPages: false,
                 invalidateCodeRange: true,
-                releaseExternalPages: false);
+                releaseExternalPages: true);
         }
     }
 

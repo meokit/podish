@@ -238,6 +238,8 @@ public class MmapSupportTests
             (uint)Protection.Read));
 
         Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, isWrite: false, env.Engine));
+        var probe = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(middlePage, probe));
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Threading;
 
 namespace Fiberish.Memory;
@@ -192,10 +193,72 @@ public class VMAManager
         return end < addr ? uint.MaxValue : end;
     }
 
+    private static (ulong Start, ulong EndExclusive) ComputePageAlignedRange(uint addr, uint len)
+    {
+        if (len == 0) return (0, 0);
+        var start = (ulong)(addr & LinuxConstants.PageMask);
+        var rawEndExclusive = (ulong)addr + len;
+        var maxExclusive = (ulong)uint.MaxValue + 1;
+        if (rawEndExclusive > maxExclusive) rawEndExclusive = maxExclusive;
+
+        var endExclusive = (rawEndExclusive + LinuxConstants.PageOffsetMask) & (ulong)LinuxConstants.PageMask;
+        if (endExclusive > maxExclusive) endExclusive = maxExclusive;
+        return (start, endExclusive);
+    }
+
+    [Conditional("DEBUG")]
+    private static void DebugAssert(bool condition, string message)
+    {
+        if (!condition)
+            throw new InvalidOperationException(message);
+    }
+
+    [Conditional("DEBUG")]
+    private void AssertExternalPagesReleasedForRange(uint addr, uint len, string source)
+    {
+        if (len == 0) return;
+        var (start, endExclusive) = ComputePageAlignedRange(addr, len);
+        for (var page = start; page < endExclusive; page += LinuxConstants.PageSize)
+        {
+            if (ExternalPages.TryGet((uint)page, out var ptr))
+            {
+                throw new InvalidOperationException(
+                    $"{source}: stale external page mapping remains at 0x{page:x8}, ptr=0x{ptr.ToInt64():x}");
+            }
+        }
+    }
+
+    private static List<NativeRange> MergeRanges(List<NativeRange> ranges)
+    {
+        if (ranges.Count <= 1) return ranges;
+        ranges.Sort(static (a, b) => a.Start.CompareTo(b.Start));
+        var merged = new List<NativeRange>(ranges.Count) { ranges[0] };
+        for (var i = 1; i < ranges.Count; i++)
+        {
+            var current = ranges[i];
+            var lastIndex = merged.Count - 1;
+            var last = merged[lastIndex];
+            var lastEnd = (ulong)last.Start + last.Length;
+            if (current.Start <= lastEnd)
+            {
+                var currentEnd = (ulong)current.Start + current.Length;
+                var mergedEnd = Math.Max(lastEnd, currentEnd);
+                merged[lastIndex] = new NativeRange(last.Start, (uint)(mergedEnd - last.Start));
+                continue;
+            }
+
+            merged.Add(current);
+        }
+
+        return merged;
+    }
+
     public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
         bool invalidateCodeRange, bool releaseExternalPages)
     {
         if (len == 0) return;
+        DebugAssert(releaseExternalPages,
+            $"TearDownNativeMappings must release external pages whenever MemUnmap is performed. addr=0x{addr:x8} len={len}");
         if (captureDirtySharedPages)
         {
             var end = ComputeRangeEnd(addr, len);
@@ -205,8 +268,8 @@ public class VMAManager
         if (invalidateCodeRange)
             engine.InvalidateRange(addr, len);
         engine.MemUnmap(addr, len);
-        if (releaseExternalPages)
-            ExternalPages.ReleaseRange(addr, len);
+        ExternalPages.ReleaseRange(addr, len);
+        AssertExternalPagesReleasedForRange(addr, len, "TearDownNativeMappings");
     }
 
     private List<NativeRange> ApplyFileTruncateMetadata(Inode inode, long newSize)
@@ -215,28 +278,34 @@ public class VMAManager
 
         var ranges = new List<NativeRange>();
         var touchedObjects = new HashSet<MemoryObject>();
+        var touchedCowObjects = new HashSet<MemoryObject>();
         foreach (var vma in _vmas)
         {
             if (!ReferenceEquals(vma.File?.OpenedInode, inode)) continue;
 
             var validBytes = newSize > vma.Offset ? newSize - vma.Offset : 0;
+            if (validBytes > vma.Length) validBytes = vma.Length;
             vma.FileBackingLength = validBytes;
             touchedObjects.Add(vma.MemoryObject);
+            if (vma.CowObject != null)
+                touchedCowObjects.Add(vma.CowObject);
 
             if (validBytes >= vma.Length) continue;
 
-            var invalidateFrom = validBytes <= 0
+            var tearDownFrom = validBytes <= 0
                 ? vma.Start
                 : vma.Start + (uint)(((validBytes + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize) *
                                      LinuxConstants.PageSize);
-            if (invalidateFrom < vma.End)
-                ranges.Add(new NativeRange(invalidateFrom, vma.End - invalidateFrom));
+            if (tearDownFrom < vma.End)
+                ranges.Add(new NativeRange(tearDownFrom, vma.End - tearDownFrom));
         }
 
         foreach (var memoryObject in touchedObjects)
             memoryObject.TruncateToSize(newSize);
+        foreach (var cowObject in touchedCowObjects)
+            cowObject.TruncateToSize(newSize);
 
-        return ranges;
+        return MergeRanges(ranges);
     }
 
     public void OnFileTruncate(Inode inode, long newSize, Engine engine)
@@ -247,7 +316,12 @@ public class VMAManager
     public void OnFileTruncate(Inode inode, long newSize, IReadOnlyList<Engine> engines)
     {
         var ranges = ApplyFileTruncateMetadata(inode, newSize);
-        if (ranges.Count == 0 || engines.Count == 0) return;
+        if (ranges.Count == 0 || engines.Count == 0)
+        {
+            foreach (var range in ranges)
+                AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate.no-engines");
+            return;
+        }
 
         foreach (var engine in engines)
         foreach (var range in ranges)
@@ -258,6 +332,9 @@ public class VMAManager
                 captureDirtySharedPages: false,
                 invalidateCodeRange: true,
                 releaseExternalPages: true);
+
+        foreach (var range in ranges)
+            AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");
     }
 
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset, long filesz,
@@ -674,7 +751,7 @@ public class VMAManager
                 vma.End - vma.Start,
                 captureDirtySharedPages: false,
                 invalidateCodeRange: true,
-                releaseExternalPages: false);
+                releaseExternalPages: true);
             vma.MemoryObject.Release();
             vma.CowObject?.Release();
             vma.FileMapping?.Release();
@@ -685,7 +762,6 @@ public class VMAManager
             TrackMappedInodeOnVmaRemoved(vma);
 
         _mappedInodeRefCounts.Clear();
-        ExternalPages.Clear();
         _vmas.Clear();
     }
 

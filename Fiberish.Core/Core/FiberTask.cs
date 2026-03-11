@@ -1369,19 +1369,24 @@ public class FiberTask
 
             if (!cloneVm)
             {
-                // Drop all inherited native mappings in the child engine and force refault.
-                // This re-attaches pages through VMAManager/MemoryObject (including COW metadata)
-                // instead of keeping stale deep-copied MMU pages from Engine.Clone(false).
+                // Drop inherited native mappings in child to force VMAManager-backed refaults.
+                // However, for MAP_PRIVATE file mappings (e.g. dynamic linker/data segments),
+                // Engine.Clone(false) already contains the exact post-relocation bytes.
+                // Reconstructing those pages via generic refault may lose process-private runtime
+                // state and can crash fork children before exec. Keep those mappings intact.
                 foreach (var vma in newMem.VMAs)
                 {
                     if (vma.Length == 0) continue;
+                    var isPrivateFile = vma.File != null && (vma.Flags & MapFlags.Private) != 0;
+                    if (isPrivateFile) continue;
+
                     newMem.TearDownNativeMappings(
                         newCpu,
                         vma.Start,
                         vma.Length,
                         captureDirtySharedPages: false,
                         invalidateCodeRange: true,
-                        releaseExternalPages: false);
+                        releaseExternalPages: true);
                 }
             }
 

@@ -74,6 +74,53 @@ public class TruncateMmapLifecycleTests
     }
 
     [Fact]
+    public void NotifyInodeTruncated_BroadcastsInvalidateBeyondEofAcrossAllProcesses()
+    {
+        using var env = new MultiProcessEnv();
+        var second1 = env.Map1 + LinuxConstants.PageSize;
+        var second2 = env.Map2 + LinuxConstants.PageSize;
+
+        Assert.Equal(FaultResult.Handled, env.Mm1.HandleFaultDetailed(second1, true, env.Engine1));
+        Assert.Equal(FaultResult.Handled, env.Mm2.HandleFaultDetailed(second2, true, env.Engine2));
+        Assert.True(env.Mm1.ExternalPages.TryGet(second1, out _));
+        Assert.True(env.Mm2.ExternalPages.TryGet(second2, out _));
+
+        Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
+        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize, env.Process1);
+
+        Assert.False(env.Mm1.ExternalPages.TryGet(second1, out _));
+        Assert.False(env.Mm2.ExternalPages.TryGet(second2, out _));
+        Assert.Equal(FaultResult.BusError, env.Mm1.HandleFaultDetailed(second1, true, env.Engine1));
+        Assert.Equal(FaultResult.BusError, env.Mm2.HandleFaultDetailed(second2, true, env.Engine2));
+    }
+
+    [Fact]
+    public void PrefaultThenTruncate_RealAccessPath_ReportsBusError()
+    {
+        using var env = new TestEnv();
+        var mapped = env.MapShared(0x44000000, LinuxConstants.PageSize * 2);
+        var secondPage = mapped + LinuxConstants.PageSize;
+        var scratch = new byte[1];
+
+        Assert.True(env.Engine.CopyFromUser(secondPage, scratch));
+        Assert.True(env.Mm.ExternalPages.TryGet(secondPage, out _));
+
+        Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
+        env.Mm.OnFileTruncate(env.File.Inode, LinuxConstants.PageSize, env.Engine);
+
+        Assert.False(env.Mm.ExternalPages.TryGet(secondPage, out _));
+        FaultResult? lastFault = null;
+        env.Engine.PageFaultResolver = (addr, isWrite) =>
+        {
+            lastFault = env.Mm.HandleFaultDetailed(addr, isWrite, env.Engine);
+            return lastFault == FaultResult.Handled;
+        };
+
+        Assert.False(env.Engine.CopyFromUser(secondPage, scratch));
+        Assert.Equal(FaultResult.BusError, lastFault);
+    }
+
+    [Fact]
     public void SyncVma_BeyondBackingLength_DoesNotPostAsyncSigbus()
     {
         using var env = new MultiProcessEnv();
