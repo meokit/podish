@@ -28,6 +28,7 @@ public class CloneThreadLifecycleTests
         Assert.True(env.Engine.CopyToUser(tlsPtr, tlsDesc));
 
         var flags = LinuxConstants.CLONE_VM |
+                    LinuxConstants.CLONE_SIGHAND |
                     LinuxConstants.CLONE_THREAD |
                     LinuxConstants.CLONE_SETTLS |
                     LinuxConstants.CLONE_CHILD_SETTID |
@@ -44,6 +45,56 @@ public class CloneThreadLifecycleTests
         var tidBuf = new byte[4];
         Assert.True(env.Engine.CopyFromUser(ctidPtr, tidBuf));
         Assert.Equal(childTid, BinaryPrimitives.ReadInt32LittleEndian(tidBuf));
+    }
+
+    [Fact]
+    public async Task SysClone_ThreadWithoutVm_ReturnsEinval()
+    {
+        using var env = new TestEnv(tgid: 110, tid: 110);
+
+        var rc = await CallSys("SysClone", env.Engine.State, LinuxConstants.CLONE_THREAD, 0, 0, 0, 0);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task SysClone_ThreadWithoutSighand_ReturnsEinval()
+    {
+        using var env = new TestEnv(tgid: 111, tid: 111);
+
+        var flags = LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD;
+        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, 0, 0);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task SysClone_SetTlsReadFailure_RollsBackThreadChild()
+    {
+        using var env = new TestEnv(tgid: 112, tid: 112);
+        const uint invalidTlsPtr = 0x00D00000;
+        var flags = LinuxConstants.CLONE_VM |
+                    LinuxConstants.CLONE_SIGHAND |
+                    LinuxConstants.CLONE_THREAD |
+                    LinuxConstants.CLONE_SETTLS;
+
+        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, invalidTlsPtr, 0);
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+        Assert.Single(env.Process.Threads);
+        Assert.Same(env.Task, env.Process.Threads[0]);
+    }
+
+    [Fact]
+    public async Task SysClone_ParentSetTidWriteFailure_RollsBackProcessChild()
+    {
+        using var env = new TestEnv(tgid: 113, tid: 113);
+        const uint invalidPtidPtr = 0x00E00000;
+        var flags = LinuxConstants.CLONE_PARENT_SETTID;
+
+        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, invalidPtidPtr, 0, 0);
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+        Assert.Empty(env.Process.Children);
+        Assert.Single(env.Process.Threads);
+        Assert.Same(env.Task, env.Process.Threads[0]);
+        Assert.Empty(env.Scheduler.GetProcessesSnapshot());
     }
 
     [Fact]

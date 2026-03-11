@@ -10,11 +10,13 @@ struct BasicBlock;
 }  // namespace fiberish
 typedef fiberish::EmuState EmuState;
 typedef fiberish::BasicBlock BasicBlock;
+struct X86_DetachedMmu;
 #else
 #include <stddef.h>
 #include <stdint.h>
 typedef struct EmuState EmuState;
 typedef struct BasicBlock BasicBlock;
+typedef struct X86_DetachedMmu X86_DetachedMmu;
 #endif
 
 #ifdef __cplusplus
@@ -29,7 +31,13 @@ typedef struct {
     void* host_page;
 } X86_PageMapping;
 
+typedef struct {
+    EmuState* state;
+    uintptr_t mmu_identity;
+} X86_MmuRef;
+
 enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
+enum { X86_MMU_CLONE_MODE_FULL = 0, X86_MMU_CLONE_MODE_SKIP_EXTERNAL = 1 };
 
 // Creation / Destruction
 EmuState* X86_Create();
@@ -80,6 +88,19 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
 // Map external memory to guest address (caller owns memory), returns 1 on success
 int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms);
+// Borrowed MMU ref token for current engine state (non-owning, no refcount).
+X86_MmuRef X86_GetMmuRef(EmuState* state);
+// Detach MMU from engine into a detached handle. Engine receives a fresh empty MMU.
+X86_DetachedMmu* X86_DetachMmu(EmuState* state);
+// Clone MMU from mmu ref into detached handle.
+// mode: X86_MMU_CLONE_MODE_FULL or X86_MMU_CLONE_MODE_SKIP_EXTERNAL
+X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref, int mode);
+// Attach detached MMU to engine and consume handle on success.
+int X86_AttachMmu(EmuState* state, X86_DetachedMmu* detached);
+// Query clone mode of detached MMU handle.
+int X86_DetachedMmuGetCloneMode(X86_DetachedMmu* detached);
+// Destroy detached MMU handle if not attached/consumed.
+void X86_DestroyDetachedMmu(X86_DetachedMmu* detached);
 
 // Execution
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);

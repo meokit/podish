@@ -172,6 +172,37 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int MapExternalPage(IntPtr state, uint addr, void* externalPage, byte perms);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MmuRef
+    {
+        public IntPtr State;
+        public nuint MmuIdentity;
+    }
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetMmuRef")]
+    [SuppressGCTransition]
+    public static partial MmuRef GetMmuRef(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DetachMmu")]
+    [SuppressGCTransition]
+    public static partial IntPtr DetachMmu(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_CloneMmuFromRef")]
+    [SuppressGCTransition]
+    public static partial IntPtr CloneMmuFromRef(MmuRef mmuRef, int mode);
+
+    [LibraryImport(LibName, EntryPoint = "X86_AttachMmu")]
+    [SuppressGCTransition]
+    public static partial int AttachMmu(IntPtr state, IntPtr detachedMmu);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DetachedMmuGetCloneMode")]
+    [SuppressGCTransition]
+    public static partial int DetachedMmuGetCloneMode(IntPtr detachedMmu);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DestroyDetachedMmu")]
+    [SuppressGCTransition]
+    public static partial void DestroyDetachedMmu(IntPtr detachedMmu);
+
     [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
     public static partial void FlushCache(IntPtr state);
 

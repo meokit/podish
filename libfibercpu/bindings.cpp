@@ -25,6 +25,11 @@
 using namespace fiberish;
 using MicroTLB = mem::MicroTLB;
 
+struct X86_DetachedMmu {
+    std::shared_ptr<mem::PageDirectory> page_dir;
+    int clone_mode = X86_MMU_CLONE_MODE_FULL;
+};
+
 extern "C" {
 
 // ----------------------------------------------------------------------------
@@ -66,8 +71,8 @@ static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, in
     }
 }
 
-// Invalidate all blocks on a specific page
-static void X86_InvalidatePage(EmuState* state, uint32_t page_addr) {
+// Invalidate all translated blocks linked to one guest page.
+static void X86_InvalidateCodeCacheByPage(EmuState* state, uint32_t page_addr) {
     uint32_t page_idx = page_addr >> 12;
     auto it = state->page_to_blocks.find(page_idx);
     if (it != state->page_to_blocks.end()) {
@@ -88,7 +93,13 @@ static void X86_InvalidatePage(EmuState* state, uint32_t page_addr) {
 static void InternalSmcBridge(void* opaque, uint32_t addr) {
     EmuState* state = static_cast<EmuState*>(opaque);
     // Invalidate the page containing 'addr'
-    X86_InvalidatePage(state, addr);
+    X86_InvalidateCodeCacheByPage(state, addr);
+}
+
+static void X86_ResetCodeCache(EmuState* state) {
+    if (!state) return;
+    state->block_cache.clear();
+    state->page_to_blocks.clear();
 }
 
 // Signal Handler for safety
@@ -336,6 +347,58 @@ void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms) { return s
 
 int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms) {
     return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(external_page), perms) ? 1 : 0;
+}
+
+X86_MmuRef X86_GetMmuRef(EmuState* state) {
+    X86_MmuRef mmu_ref{};
+    if (!state) return mmu_ref;
+    mmu_ref.state = state;
+    mmu_ref.mmu_identity = state->mmu.page_directory_identity();
+    return mmu_ref;
+}
+
+static bool X86_IsMmuRefValid(X86_MmuRef mmu_ref) {
+    if (!mmu_ref.state || mmu_ref.mmu_identity == 0) return false;
+    return mmu_ref.state->mmu.page_directory_identity() == mmu_ref.mmu_identity;
+}
+
+X86_DetachedMmu* X86_DetachMmu(EmuState* state) {
+    if (!state) return nullptr;
+
+    auto* detached = new X86_DetachedMmu();
+    detached->page_dir = state->mmu.detach_page_directory();
+    detached->clone_mode = X86_MMU_CLONE_MODE_FULL;
+    X86_ResetCodeCache(state);
+    return detached;
+}
+
+X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref, int mode) {
+    if (mode != X86_MMU_CLONE_MODE_FULL && mode != X86_MMU_CLONE_MODE_SKIP_EXTERNAL) return nullptr;
+    if (!X86_IsMmuRefValid(mmu_ref)) return nullptr;
+
+    auto* detached = new X86_DetachedMmu();
+    detached->clone_mode = mode;
+    detached->page_dir = mmu_ref.state->mmu.clone_page_directory(mode == X86_MMU_CLONE_MODE_SKIP_EXTERNAL);
+    return detached;
+}
+
+int X86_AttachMmu(EmuState* state, X86_DetachedMmu* detached) {
+    if (!state || !detached || !detached->page_dir) return 0;
+
+    state->mmu.attach_page_directory(std::move(detached->page_dir));
+    X86_ResetCodeCache(state);
+    delete detached;
+    return 1;
+}
+
+int X86_DetachedMmuGetCloneMode(X86_DetachedMmu* detached) {
+    if (!detached) return -1;
+    return detached->clone_mode;
+}
+
+void X86_DestroyDetachedMmu(X86_DetachedMmu* detached) {
+    if (!detached) return;
+    delete detached;
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {

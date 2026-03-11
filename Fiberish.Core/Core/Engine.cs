@@ -5,8 +5,79 @@ using X86Native = Fiberish.X86.Native.X86Native;
 
 namespace Fiberish.Core;
 
+public enum MmuCloneMode
+{
+    Full = 0,
+    SkipExternal = 1
+}
+
+public enum EngineCloneMemoryMode
+{
+    InlineClone = 0,
+    SkipMmu = 1
+}
+
+public readonly struct MmuRef
+{
+    internal MmuRef(X86Native.MmuRef nativeRef)
+    {
+        NativeRef = nativeRef;
+    }
+
+    internal X86Native.MmuRef NativeRef { get; }
+    public IntPtr State => NativeRef.State;
+    public nuint Identity => NativeRef.MmuIdentity;
+    public bool IsValid => State != IntPtr.Zero && Identity != 0;
+}
+
 public class Engine : IDisposable
 {
+    public sealed class DetachedMmu : IDisposable
+    {
+        private IntPtr _handle;
+        private bool _consumed;
+
+        internal DetachedMmu(IntPtr handle)
+        {
+            _handle = handle;
+        }
+
+        public bool IsConsumed => _consumed;
+
+        public MmuCloneMode GetCloneMode()
+        {
+            if (_consumed || _handle == IntPtr.Zero)
+                throw new InvalidOperationException("Detached MMU handle is no longer valid.");
+
+            var cloneMode = X86Native.DetachedMmuGetCloneMode(_handle);
+            return cloneMode switch
+            {
+                0 => MmuCloneMode.Full,
+                1 => MmuCloneMode.SkipExternal,
+                _ => throw new InvalidOperationException($"Invalid detached MMU clone mode: {cloneMode}.")
+            };
+        }
+
+        internal IntPtr ConsumeHandle()
+        {
+            if (_consumed || _handle == IntPtr.Zero)
+                throw new InvalidOperationException("Detached MMU handle is no longer valid.");
+
+            _consumed = true;
+            var handle = _handle;
+            _handle = IntPtr.Zero;
+            return handle;
+        }
+
+        public void Dispose()
+        {
+            if (_handle == IntPtr.Zero) return;
+            X86Native.DestroyDetachedMmu(_handle);
+            _handle = IntPtr.Zero;
+            _consumed = true;
+        }
+    }
+
     private bool _disposed;
     private GCHandle _gcHandle;
 
@@ -149,7 +220,37 @@ public class Engine : IDisposable
 
     public Engine Clone(bool shareMem)
     {
-        var newState = X86Native.Clone(State, shareMem ? 1 : 0);
+        return Clone(shareMem, MmuCloneMode.Full, EngineCloneMemoryMode.InlineClone);
+    }
+
+    public Engine Clone(bool shareMem, MmuCloneMode mmuCloneMode)
+    {
+        return Clone(shareMem, mmuCloneMode, EngineCloneMemoryMode.InlineClone);
+    }
+
+    public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode)
+    {
+        return Clone(shareMem, MmuCloneMode.Full, memoryMode);
+    }
+
+    public Engine Clone(bool shareMem, MmuCloneMode mmuCloneMode, EngineCloneMemoryMode memoryMode)
+    {
+        _ = ToNativeMmuCloneMode(mmuCloneMode);
+        if (shareMem && mmuCloneMode != MmuCloneMode.Full)
+            throw new ArgumentException("shareMem=true only supports MmuCloneMode.Full.", nameof(mmuCloneMode));
+        if (shareMem && memoryMode != EngineCloneMemoryMode.InlineClone)
+            throw new ArgumentException("shareMem=true only supports EngineCloneMemoryMode.InlineClone.",
+                nameof(memoryMode));
+        if (memoryMode == EngineCloneMemoryMode.SkipMmu && mmuCloneMode != MmuCloneMode.Full)
+            throw new ArgumentException("SkipMmu mode requires MmuCloneMode.Full.", nameof(mmuCloneMode));
+
+        var customMmuClone = !shareMem && mmuCloneMode != MmuCloneMode.Full;
+        var skipMmu = !shareMem && memoryMode == EngineCloneMemoryMode.SkipMmu;
+        var shareMemForNativeClone = shareMem || customMmuClone || skipMmu;
+        var newState = X86Native.Clone(State, shareMemForNativeClone ? 1 : 0);
+        if (newState == IntPtr.Zero)
+            throw new InvalidOperationException("Failed to clone Fiberish state.");
+
         var newEngine = new Engine(newState)
         {
             FaultHandler = FaultHandler,
@@ -157,7 +258,74 @@ public class Engine : IDisposable
             PageFaultResolver = PageFaultResolver,
             LogHandler = LogHandler // Copy the handler delegate
         };
+
+        if (customMmuClone)
+        {
+            DetachedMmu? detached = null;
+            try
+            {
+                var mmuRef = GetMmuRef();
+                detached = CloneMmu(mmuRef, mmuCloneMode);
+                newEngine.AttachMmu(detached);
+            }
+            catch
+            {
+                detached?.Dispose();
+                newEngine.Dispose();
+                throw;
+            }
+        }
+        else if (skipMmu)
+        {
+            using var detached = newEngine.DetachMmu();
+        }
+
         return newEngine;
+    }
+
+    public MmuRef GetMmuRef()
+    {
+        return new MmuRef(X86Native.GetMmuRef(State));
+    }
+
+    public DetachedMmu DetachMmu()
+    {
+        var handle = X86Native.DetachMmu(State);
+        if (handle == IntPtr.Zero)
+            throw new InvalidOperationException("Failed to detach MMU from engine.");
+        return new DetachedMmu(handle);
+    }
+
+    public DetachedMmu CloneMmu(MmuRef mmuRef, MmuCloneMode mode)
+    {
+        if (!mmuRef.IsValid)
+            throw new ArgumentException("MMU ref is invalid.", nameof(mmuRef));
+
+        var handle = X86Native.CloneMmuFromRef(mmuRef.NativeRef, ToNativeMmuCloneMode(mode));
+        if (handle == IntPtr.Zero)
+            throw new InvalidOperationException("Failed to clone MMU from engine.");
+        return new DetachedMmu(handle);
+    }
+
+    public void AttachMmu(DetachedMmu detachedMmu)
+    {
+        ArgumentNullException.ThrowIfNull(detachedMmu);
+        var handle = detachedMmu.ConsumeHandle();
+        var attached = X86Native.AttachMmu(State, handle);
+        if (attached != 0) return;
+
+        X86Native.DestroyDetachedMmu(handle);
+        throw new InvalidOperationException("Failed to attach detached MMU to engine.");
+    }
+
+    private static int ToNativeMmuCloneMode(MmuCloneMode mode)
+    {
+        return mode switch
+        {
+            MmuCloneMode.Full => 0,
+            MmuCloneMode.SkipExternal => 1,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported MMU clone mode.")
+        };
     }
 
     public void MemMap(uint addr, uint size, byte perms)

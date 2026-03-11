@@ -279,6 +279,52 @@ public:
         tlb.flush();
     }
 
+    [[nodiscard]] uintptr_t page_directory_identity() const { return reinterpret_cast<uintptr_t>(page_dir.get()); }
+
+    [[nodiscard]] std::shared_ptr<PageDirectory> detach_page_directory() {
+        auto detached = std::move(page_dir);
+        page_dir = std::make_shared<PageDirectory>();
+        tlb.flush();
+        return detached;
+    }
+
+    void attach_page_directory(std::shared_ptr<PageDirectory> new_page_dir) {
+        page_dir = new_page_dir ? std::move(new_page_dir) : std::make_shared<PageDirectory>();
+        tlb.flush();
+    }
+
+    [[nodiscard]] std::shared_ptr<PageDirectory> clone_page_directory(bool skip_external) const {
+        if (!page_dir) return std::make_shared<PageDirectory>();
+        if (!skip_external) return std::make_shared<PageDirectory>(*page_dir);
+
+        auto cloned = std::make_shared<PageDirectory>();
+        for (size_t l1 = 0; l1 < page_dir->l1_directory.size(); ++l1) {
+            const auto& src_chunk = page_dir->l1_directory[l1];
+            if (!src_chunk) continue;
+
+            std::unique_ptr<PageTableChunk> dst_chunk;
+            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
+                const auto perms = src_chunk->permissions[l2];
+                if (perms == Property::None) continue;
+                if (has_property(perms, Property::External)) continue;
+
+                if (!dst_chunk) {
+                    dst_chunk = std::make_unique<PageTableChunk>();
+                }
+
+                dst_chunk->permissions[l2] = perms;
+                if (src_chunk->pages[l2]) {
+                    dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
+                    std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
+                }
+            }
+
+            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
+        }
+
+        return cloned;
+    }
+
     // Internal helper for resolution (TLB or Slow) without hooks
     [[nodiscard]] FORCE_INLINE MemResult<HostAddr> resolve_ptr(GuestAddr addr, Property req_perm);
 

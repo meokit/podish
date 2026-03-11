@@ -77,13 +77,46 @@ public partial class SyscallManager
         var tlsPtr = a4;
         var ctidPtr = a5;
 
-        // Clone
-        var child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
+        var flagError = ValidateCloneFlags(flags);
+        if (flagError != 0) return flagError;
+
+        FiberTask child;
+        try
+        {
+            child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
+        }
+        catch (OutOfMemoryException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+        catch (ArgumentException)
+        {
+            return -(int)Errno.EINVAL;
+        }
+        catch (InvalidOperationException)
+        {
+            return -(int)Errno.EFAULT;
+        }
 
         if ((flags & LinuxConstants.CLONE_THREAD) == 0)
             ProcFsManager.OnProcessStart(child.Process.Syscalls, child.Process);
 
         return child.TID;
+    }
+
+    private static int ValidateCloneFlags(uint flags)
+    {
+        var cloneVm = (flags & LinuxConstants.CLONE_VM) != 0;
+        var cloneThread = (flags & LinuxConstants.CLONE_THREAD) != 0;
+        var cloneSighand = (flags & LinuxConstants.CLONE_SIGHAND) != 0;
+        var cloneVfork = (flags & LinuxConstants.CLONE_VFORK) != 0;
+
+        if (cloneThread && !cloneVm) return -(int)Errno.EINVAL;
+        if (cloneSighand && !cloneVm) return -(int)Errno.EINVAL;
+        if (cloneThread && !cloneSighand) return -(int)Errno.EINVAL;
+        if (cloneVfork && !cloneVm) return -(int)Errno.EINVAL;
+
+        return 0;
     }
 
     private static async ValueTask<int> SysFork(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

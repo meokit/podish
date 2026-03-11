@@ -1350,131 +1350,209 @@ public class FiberTask
         var cloneChildClearTid = (flags & CLONE_CHILD_CLEARTID) != 0;
         var cloneChildSetTid = (flags & CLONE_CHILD_SETTID) != 0;
 
-        // 1. Clone CPU
-        var newCpu = CPU.Clone(cloneVm);
+        Engine? newCpu = null;
+        FiberTask? child = null;
+        Process? createdProcess = null;
+        var linkedToParentChildren = false;
 
-        // 2. Resource Management
-        Process newProc;
-        if (cloneThread)
+        try
         {
-            newProc = Process; // Shared process
-        }
-        else
-        {
-            var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
-            if (cloneVm)
+            // 1. Clone CPU
+            newCpu = CPU.Clone(cloneVm, cloneVm ? MmuCloneMode.Full : MmuCloneMode.SkipExternal);
+
+            // 2. Resource Management
+            Process newProc;
+            if (cloneThread)
             {
-                newMem.AddSharedRef();
+                newProc = Process; // Shared process
+            }
+            else
+            {
+                var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
+                if (cloneVm)
+                {
+                    newMem.AddSharedRef();
+                }
+
+                if (!cloneVm)
+                {
+                    // Drop inherited native mappings in child to force VMAManager-backed refaults.
+                    // For RW MAP_PRIVATE file mappings, synchronize clone-time native snapshot pages
+                    // into child CowObject before teardown, so refault sees exact fork snapshot state.
+                    foreach (var vma in newMem.VMAs)
+                    {
+                        if (vma.Length == 0) continue;
+                        ImportForkPrivateFileWritableSnapshot(vma, CPU);
+
+                        newMem.TearDownNativeMappings(
+                            newCpu,
+                            vma.Start,
+                            vma.Length,
+                            captureDirtySharedPages: false,
+                            invalidateCodeRange: true,
+                            releaseExternalPages: true);
+                    }
+                }
+
+                var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
+                // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
+                newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
+                {
+                    PPID = Process.TGID,
+                    PGID = Process.PGID,
+                    SID = Process.SID,
+                    ControllingTty = Process.ControllingTty // Inherit controlling tty
+                };
+                createdProcess = newProc;
+                newProc.CopyImageFrom(Process);
+
+                // Inherit signal dispositions
+                foreach (var kv in Process.SignalActions)
+                {
+                    newProc.SignalActions[kv.Key] = kv.Value;
+                }
+
+                CommonKernel.RegisterProcess(newProc);
             }
 
-            if (!cloneVm)
-            {
-                // Drop inherited native mappings in child to force VMAManager-backed refaults.
-                // For RW MAP_PRIVATE file mappings, synchronize clone-time native snapshot pages
-                // into child CowObject before teardown, so refault sees exact fork snapshot state.
-                foreach (var vma in newMem.VMAs)
-                {
-                    if (vma.Length == 0) continue;
-                    ImportForkPrivateFileWritableSnapshot(vma, newCpu);
+            var newTid = cloneThread ? CommonKernel.AllocateTaskId() : newProc.TGID;
+            child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
+            child.SignalMask = SignalMask;
+            child.PendingSignals = 0;
+            child.InterruptingSignal = null;
 
-                    newMem.TearDownNativeMappings(
-                        newCpu,
-                        vma.Start,
-                        vma.Length,
-                        captureDirtySharedPages: false,
-                        invalidateCodeRange: true,
-                        releaseExternalPages: true);
+            // Register engine with SyscallManager
+            if (!cloneThread)
+            {
+                child.Process.Syscalls.RegisterEngine(newCpu);
+            }
+            else
+            {
+                // Thread shares SyscallManager
+                Process.Syscalls.RegisterEngine(newCpu);
+            }
+
+            // 3. Setup Child State
+            if (stackPtr != 0) child.CPU.RegWrite(Reg.ESP, stackPtr);
+            child.CPU.RegWrite(Reg.EAX, 0); // Return 0 to child
+
+            // TLS
+            if (cloneSetTls && tlsPtr != 0)
+            {
+                var tlsBuf = new byte[4];
+                if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf))
+                    throw new InvalidOperationException("Failed to read TLS base from child address space");
+                var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
+                child.CPU.SetSegBase(Seg.GS, baseAddr);
+            }
+
+            // TID Pointers
+            if (cloneParentSetTid && ptidPtr != 0)
+            {
+                var tidBuf = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+                if (!CPU.CopyToUser(ptidPtr, tidBuf))
+                    throw new InvalidOperationException("Failed to write TID to parent address space");
+            }
+
+            if (cloneChildSetTid && ctidPtr != 0)
+            {
+                var tidBuf = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+                if (!child.CPU.CopyToUser(ctidPtr, tidBuf))
+                    throw new InvalidOperationException("Failed to write TID to child address space");
+            }
+
+            if (cloneChildClearTid) child.ChildClearTidPtr = ctidPtr;
+
+            if (!cloneThread)
+            {
+                Process.Children.Add(child.Process.TGID);
+                linkedToParentChildren = true;
+            }
+
+            if (cloneVfork)
+            {
+                // vfork semantics: parent is suspended until child calls exec or exit.
+                // The child shares the parent's address space (CLONE_VM), so the parent
+                // MUST NOT run until the child replaces the memory (exec) or exits.
+                var vforkEvent = new AsyncWaitQueue();
+                child.VforkDoneEvent = vforkEvent;
+                child.VforkParent = this;
+                Logger.LogInformation(
+                    "[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
+                    TID, child.TID);
+                await vforkEvent;
+                Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
+                    TID, child.TID);
+            }
+
+            return child;
+        }
+        catch
+        {
+            if (child != null)
+            {
+                try
+                {
+                    CommonKernel.DetachTask(child);
+                }
+                catch
+                {
+                    // best-effort rollback
                 }
             }
 
-            var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
-            // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
-            newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
+            if (!cloneThread && createdProcess != null)
             {
-                PPID = Process.TGID,
-                PGID = Process.PGID,
-                SID = Process.SID,
-                ControllingTty = Process.ControllingTty // Inherit controlling tty
-            };
-            newProc.CopyImageFrom(Process);
+                if (linkedToParentChildren)
+                    Process.Children.Remove(createdProcess.TGID);
 
-            // Inherit signal dispositions
-            foreach (var kv in Process.SignalActions)
-            {
-                newProc.SignalActions[kv.Key] = kv.Value;
+                try
+                {
+                    CommonKernel.UnregisterProcess(createdProcess.TGID);
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+                try
+                {
+                    createdProcess.Syscalls.Close();
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+                if (newCpu != null)
+                {
+                    try
+                    {
+                        CommonKernel.TryReleaseProcessMemory(createdProcess, newCpu);
+                    }
+                    catch
+                    {
+                        // best-effort rollback
+                    }
+                }
             }
 
-            CommonKernel.RegisterProcess(newProc);
+            if (newCpu != null)
+            {
+                try
+                {
+                    newCpu.Dispose();
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+            }
+
+            throw;
         }
-
-        var newTid = cloneThread ? CommonKernel.AllocateTaskId() : newProc.TGID;
-        var child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
-        child.SignalMask = SignalMask;
-        child.PendingSignals = 0;
-        child.InterruptingSignal = null;
-
-        // Register engine with SyscallManager
-        if (!cloneThread)
-        {
-            child.Process.Syscalls.RegisterEngine(newCpu);
-            Process.Children.Add(child.Process.TGID);
-        }
-        else
-        {
-            // Thread shares SyscallManager
-            Process.Syscalls.RegisterEngine(newCpu);
-        }
-
-        // 3. Setup Child State
-        if (stackPtr != 0) child.CPU.RegWrite(Reg.ESP, stackPtr);
-        child.CPU.RegWrite(Reg.EAX, 0); // Return 0 to child
-
-        // TLS
-        if (cloneSetTls && tlsPtr != 0)
-        {
-            var tlsBuf = new byte[4];
-            if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf))
-                throw new InvalidOperationException("Failed to read TLS base from child address space");
-            var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
-            child.CPU.SetSegBase(Seg.GS, baseAddr);
-        }
-
-        // TID Pointers
-        if (cloneParentSetTid && ptidPtr != 0)
-        {
-            var tidBuf = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
-            if (!CPU.CopyToUser(ptidPtr, tidBuf))
-                throw new InvalidOperationException("Failed to write TID to parent address space");
-        }
-
-        if (cloneChildSetTid && ctidPtr != 0)
-        {
-            var tidBuf = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
-            if (!child.CPU.CopyToUser(ctidPtr, tidBuf))
-                throw new InvalidOperationException("Failed to write TID to child address space");
-        }
-
-        if (cloneChildClearTid) child.ChildClearTidPtr = ctidPtr;
-
-        if (cloneVfork)
-        {
-            // vfork semantics: parent is suspended until child calls exec or exit.
-            // The child shares the parent's address space (CLONE_VM), so the parent
-            // MUST NOT run until the child replaces the memory (exec) or exits.
-            var vforkEvent = new AsyncWaitQueue();
-            child.VforkDoneEvent = vforkEvent;
-            child.VforkParent = this;
-            Logger.LogInformation(
-                "[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
-                TID, child.TID);
-            await vforkEvent;
-            Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
-                TID, child.TID);
-        }
-
-        return child;
     }
 
     private static bool IsPrivateFileVma(VMA vma)
