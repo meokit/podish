@@ -204,8 +204,8 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int EngineAttachMmu(IntPtr state, IntPtr mmuHandle);
 
-    [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
-    public static partial void FlushCache(IntPtr state);
+    [LibraryImport(LibName, EntryPoint = "X86_ResetAllCodeCache")]
+    public static partial void ResetAllCodeCache(IntPtr state);
 
     [LibraryImport(LibName, EntryPoint = "X86_FlushMmuTlb")]
     [SuppressGCTransition]
@@ -214,8 +214,12 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_ResetMemory")]
     public static partial void ResetMemory(IntPtr state);
 
-    [LibraryImport(LibName, EntryPoint = "X86_InvalidateRange")]
-    public static partial void InvalidateRange(IntPtr state, uint addr, uint size);
+    [LibraryImport(LibName, EntryPoint = "X86_ResetCodeCacheByRange")]
+    public static partial void ResetCodeCacheByRange(IntPtr state, uint addr, uint size);
+
+    [LibraryImport(LibName, EntryPoint = "X86_ReprotectMappedRange")]
+    [SuppressGCTransition]
+    public static partial void ReprotectMappedRange(IntPtr state, uint addr, uint size, byte perms);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetLogCallback")]
     public static partial void SetLogCallback(IntPtr state, delegate* unmanaged<int, IntPtr, IntPtr, void> callback,

@@ -224,7 +224,7 @@ public class Process
         }
 
         // Clear old native MMU page tables + JIT cache.
-        // FlushCache only clears JIT; ResetMemory also resets the native page directory
+        // ResetAllCodeCache only clears JIT; ResetMemory also resets the native page directory
         // so the new binary's pages are demand-faulted fresh (not stale from old image).
         Syscalls.Engine.ResetMemory();
 

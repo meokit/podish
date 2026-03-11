@@ -193,10 +193,10 @@ Current model:
 Pseudocode:
 
 ```csharp
-var currentSeq = vmaManager.CollectInvalidationRangesSince(engine.AddressSpaceMapSequenceSeen, ranges);
+var currentSeq = vmaManager.CollectCodeCacheResetRangesSince(engine.AddressSpaceMapSequenceSeen, ranges);
 engine.FlushMmuTlbOnly();
 foreach (var range in ranges)
-    engine.InvalidateRange(range.Start, range.Length);
+    engine.ResetCodeCacheByRange(range.Start, range.Length);
 engine.AddressSpaceMapSequenceSeen = currentSeq;
 ```
 
@@ -362,7 +362,7 @@ This guarantees that two processes with different virtual addresses mapping the 
 ### munmap
 
 `VMAManager.Munmap` does four things:
-1. **`engine.InvalidateRange`**: Invalidates per-engine translated code for the affected range.
+1. **`engine.ResetCodeCacheByRange`**: Resets per-engine translated code for the affected range.
 2. **`engine.MemUnmap`**: Removes mappings from the native MMU.
 3. **`ExternalPages.ReleaseRange`**: Decrements `GlobalRefs`, potentially freeing memory.
 4. Truncates or deletes the `VMA`, releasing `MemoryObject` / `CowObject` references as needed.

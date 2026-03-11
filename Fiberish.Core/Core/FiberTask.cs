@@ -1391,30 +1391,24 @@ public class FiberTask
 
                 if (!cloneVm)
                 {
+                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
+
                     foreach (var vma in Process.Mem.VMAs)
                     {
                         if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
-                        Process.Mem.TearDownNativeMappings(
-                            CPU,
-                            vma.Start,
-                            vma.Length,
-                            captureDirtySharedPages: false,
-                            invalidateCodeRange: true,
-                            releaseExternalPages: true);
+                        var reprotectPerms = vma.Perms & ~Protection.Write;
+                        Process.Mem.ReprotectNativeMappings(CPU, vma.Start, vma.Length, reprotectPerms,
+                            resetCodeCacheRange: false);
+                        ProcessAddressSpaceSync.PublishProtectionChange(Process.Mem, CPU, vma.Start, vma.Length,
+                            resetCodeCacheRange: false);
                     }
 
-                    // Drop inherited native mappings in child to force VMAManager-backed refaults.
                     foreach (var vma in newMem.VMAs)
                     {
-                        if (vma.Length == 0) continue;
-
-                        newMem.TearDownNativeMappings(
-                            newCpu,
-                            vma.Start,
-                            vma.Length,
-                            captureDirtySharedPages: false,
-                            invalidateCodeRange: true,
-                            releaseExternalPages: true);
+                        if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
+                        var reprotectPerms = vma.Perms & ~Protection.Write;
+                        newMem.ReprotectNativeMappings(newCpu, vma.Start, vma.Length, reprotectPerms,
+                            resetCodeCacheRange: false);
                     }
                 }
 

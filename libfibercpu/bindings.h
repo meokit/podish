@@ -35,7 +35,7 @@ enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
 
 // Creation / Destruction
 EmuState* X86_Create();
-// share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (Copy Memory)
+// share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
 EmuState* X86_Clone(EmuState* parent, int share_mem);
 void X86_Destroy(EmuState* state);
 
@@ -70,6 +70,7 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
 // Memory Access
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
+void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
 // DEPRECATED: Use ResolvePtr + direct memcpy instead. These are slow (byte-by-byte) and for testing only.
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
@@ -111,10 +112,10 @@ void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata);
 void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata);
 
 // Cache Control
-void X86_FlushCache(EmuState* state);
+void X86_ResetAllCodeCache(EmuState* state);
 void X86_FlushMmuTlb(EmuState* state);
 void X86_ResetMemory(EmuState* state);
-void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size);
+void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
 
 // Diagnostics
 int32_t X86_GetFaultVector(EmuState* state);

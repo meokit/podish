@@ -70,7 +70,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void CloneFork_DropsExternalMappings_ByDefault()
+    public void CloneFork_PreservesExternalMappings_ByDefault()
     {
         using var parent = new Engine();
         const uint externalAddr = 0x00700000;
@@ -93,7 +93,8 @@ public class EngineMmuTransferTests
             Assert.NotEqual(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
 
             var read = new byte[1];
-            Assert.False(child.CopyFromUser(externalAddr, read));
+            Assert.True(child.CopyFromUser(externalAddr, read));
+            Assert.Equal((byte)0x44, read[0]);
             Assert.True(child.CopyFromUser(ownedAddr, read));
             Assert.Equal((byte)0x66, read[0]);
         }

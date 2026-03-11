@@ -2,6 +2,7 @@ using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Threading;
@@ -28,8 +29,8 @@ public class VMAManager
     private VMA? _lastFaultVma;
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
     internal readonly record struct NativeRange(uint Start, uint Length);
-    private readonly record struct InvalidationEntry(long Sequence, NativeRange Range);
-    private readonly List<InvalidationEntry> _pendingInvalidations = [];
+    private readonly record struct CodeCacheResetEntry(long Sequence, NativeRange Range);
+    private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
 
@@ -55,24 +56,24 @@ public class VMAManager
         return Interlocked.Increment(ref _mapSequence);
     }
 
-    internal void RecordInvalidationRange(long sequence, uint addr, uint len)
+    internal void RecordCodeCacheResetRange(long sequence, uint addr, uint len)
     {
         if (len == 0) return;
         var (start, endExclusive) = ComputePageAlignedRange(addr, len);
         if (endExclusive <= start) return;
         var range = new NativeRange((uint)start, (uint)(endExclusive - start));
-        _pendingInvalidations.Add(new InvalidationEntry(sequence, range));
-        if (_pendingInvalidations.Count > MaxInvalidationEntries)
-            CompactInvalidationRanges(sequence);
+        _pendingCodeCacheResets.Add(new CodeCacheResetEntry(sequence, range));
+        if (_pendingCodeCacheResets.Count > MaxInvalidationEntries)
+            CompactCodeCacheResetRanges(sequence);
     }
 
-    internal long CollectInvalidationRangesSince(long seenSequence, List<NativeRange> output)
+    internal long CollectCodeCacheResetRangesSince(long seenSequence, List<NativeRange> output)
     {
         output.Clear();
         var current = CurrentMapSequence;
         if (seenSequence >= current) return current;
 
-        foreach (var entry in _pendingInvalidations)
+        foreach (var entry in _pendingCodeCacheResets)
         {
             if (entry.Sequence <= seenSequence) continue;
             output.Add(entry.Range);
@@ -84,27 +85,27 @@ public class VMAManager
         return current;
     }
 
-    internal void PruneInvalidationRanges(long minSeenSequence)
+    internal void PruneCodeCacheResetRanges(long minSeenSequence)
     {
-        if (_pendingInvalidations.Count == 0) return;
+        if (_pendingCodeCacheResets.Count == 0) return;
         var removeCount = 0;
-        while (removeCount < _pendingInvalidations.Count &&
-               _pendingInvalidations[removeCount].Sequence <= minSeenSequence)
+        while (removeCount < _pendingCodeCacheResets.Count &&
+               _pendingCodeCacheResets[removeCount].Sequence <= minSeenSequence)
             removeCount++;
         if (removeCount > 0)
-            _pendingInvalidations.RemoveRange(0, removeCount);
+            _pendingCodeCacheResets.RemoveRange(0, removeCount);
     }
 
-    private void CompactInvalidationRanges(long sequence)
+    private void CompactCodeCacheResetRanges(long sequence)
     {
-        if (_pendingInvalidations.Count == 0) return;
-        var ranges = new List<NativeRange>(_pendingInvalidations.Count);
-        foreach (var entry in _pendingInvalidations)
+        if (_pendingCodeCacheResets.Count == 0) return;
+        var ranges = new List<NativeRange>(_pendingCodeCacheResets.Count);
+        foreach (var entry in _pendingCodeCacheResets)
             ranges.Add(entry.Range);
         MergeRangesInPlace(ranges);
-        _pendingInvalidations.Clear();
+        _pendingCodeCacheResets.Clear();
         foreach (var range in ranges)
-            _pendingInvalidations.Add(new InvalidationEntry(sequence, range));
+            _pendingCodeCacheResets.Add(new CodeCacheResetEntry(sequence, range));
     }
 
     public int AddSharedRef()
@@ -331,10 +332,44 @@ public class VMAManager
         }
 
         if (invalidateCodeRange)
-            engine.InvalidateRange(addr, len);
+            engine.ResetCodeCacheByRange(addr, len);
         engine.MemUnmap(addr, len);
         ExternalPages.ReleaseRange(addr, len);
         AssertExternalPagesReleasedForRange(addr, len, "TearDownNativeMappings");
+    }
+
+    public void ReprotectNativeMappings(Engine engine, uint addr, uint len, Protection perms,
+        bool resetCodeCacheRange)
+    {
+        if (len == 0) return;
+        engine.ReprotectMappedRange(addr, len, (byte)perms);
+        if (resetCodeCacheRange)
+            engine.ResetCodeCacheByRange(addr, len);
+    }
+
+    public void RebuildExternalMappingsFromNative(Engine engine, IEnumerable<VMA> vmas)
+    {
+        const int MaxPagesPerChunk = 256;
+        var buffer = new X86Native.PageMapping[MaxPagesPerChunk];
+
+        foreach (var vma in vmas)
+        {
+            if (vma.Length == 0) continue;
+
+            for (var cursor = vma.Start; cursor < vma.End;)
+            {
+                var chunkLen = Math.Min(vma.End - cursor, (uint)(MaxPagesPerChunk * LinuxConstants.PageSize));
+                var count = engine.CollectMappedPages(cursor, chunkLen, buffer);
+                for (var i = 0; i < count; i++)
+                {
+                    var mapping = buffer[i];
+                    if ((mapping.Flags & X86Native.PageMappingFlags.External) == 0) continue;
+                    ExternalPages.AddMapping(mapping.GuestPage, mapping.HostPage, out _);
+                }
+
+                cursor += chunkLen;
+            }
+        }
     }
 
     private List<NativeRange> ApplyFileTruncateMetadata(Inode inode, long newSize)
@@ -387,7 +422,7 @@ public class VMAManager
 
         var sequence = BumpMapSequence();
         foreach (var range in ranges)
-            RecordInvalidationRange(sequence, range.Start, range.Length);
+            RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
         if (engines.Count == 0)
         {
@@ -652,8 +687,9 @@ public class VMAManager
             releaseExternalPages: true);
     }
 
-    public int Mprotect(uint addr, uint len, Protection prot, Engine engine)
+    public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
     {
+        resetCodeCacheRange = false;
         if (len == 0) return 0;
 
         uint end;
@@ -693,6 +729,7 @@ public class VMAManager
             var oldOffset = vma.Offset;
             var oldFileSz = vma.FileBackingLength;
             var oldViewPageOffset = vma.ViewPageOffset;
+            resetCodeCacheRange |= ((oldPerms ^ prot) & Protection.Exec) != 0;
 
             // Fully covered: just flip perms.
             if (overlapStart == oldStart && overlapEnd == oldEnd)
@@ -815,15 +852,7 @@ public class VMAManager
             }
         }
 
-        // Capture shared dirty bits before dropping native mappings for this engine.
-        // MemUnmap below forces refault with updated VMA perms without clobbering dirty state.
-        TearDownNativeMappings(
-            engine,
-            addr,
-            len,
-            captureDirtySharedPages: true,
-            invalidateCodeRange: true,
-            releaseExternalPages: true);
+        ReprotectNativeMappings(engine, addr, len, prot, resetCodeCacheRange);
 
         return 0;
     }

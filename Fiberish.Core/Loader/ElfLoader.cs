@@ -196,7 +196,7 @@ public class ElfLoader
 
         PushUint32((uint)args.Length);
 
-        sys.Engine.FlushCache();
+        sys.Engine.ResetAllCodeCache();
 
         // If there's an interpreter, start execution at interpreter's entry point; 
         // otherwise at the main binary's entry point.

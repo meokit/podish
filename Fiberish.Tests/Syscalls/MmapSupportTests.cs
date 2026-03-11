@@ -177,7 +177,7 @@ public class MmapSupportTests
     }
 
     [Fact]
-    public async Task Mprotect_CapturesDirtyOnlyWithinRequestedRange()
+    public async Task Mprotect_DoesNotCaptureOrUnmapSharedDirtyPages()
     {
         using var env = new TestEnv();
         env.MapUserPage(0x12000);
@@ -205,12 +205,15 @@ public class MmapSupportTests
         Assert.NotNull(vma);
         var secondPageIndex = vma!.ViewPageOffset + 1;
         Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
 
         Assert.Equal(0, await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize, (uint)Protection.Read));
         Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
 
         Assert.Equal(0, await env.Call("SysMprotect", secondPage, LinuxConstants.PageSize, (uint)Protection.Read));
-        Assert.True(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
     }
 
     [Fact]

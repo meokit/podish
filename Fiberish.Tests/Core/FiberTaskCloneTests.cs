@@ -26,7 +26,7 @@ public class FiberTaskCloneTests
     }
 
     [Fact]
-    public async Task Fork_ChildPrivateMapping_RefaultsIntoChildExternalPages()
+    public async Task Fork_ChildPrivateMapping_PreservesMappedExternalPages()
     {
         using var env = new TestEnv();
         const uint addr = 0x00410000;
@@ -38,16 +38,16 @@ public class FiberTaskCloneTests
 
         var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
         var childMm = child.Process.Mem;
-        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
 
         var childRead = new byte[1];
         Assert.True(child.CPU.CopyFromUser(addr, childRead));
         Assert.Equal((byte)0x5A, childRead[0]);
-        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
     }
 
     [Fact]
-    public async Task Fork_PrivateFileDirtyPage_DropsNativeMappings_ButPreservesBytes()
+    public async Task Fork_PrivateFileDirtyPage_PreservesNativeMappings_AndBytes()
     {
         using var env = new TestEnv();
         const uint addr = 0x00500000;
@@ -64,18 +64,16 @@ public class FiberTaskCloneTests
         var childMm = child.Process.Mem;
         var pageAddr = addr & LinuxConstants.PageMask;
 
-        // Child clone must not retain stale native mappings after fork teardown.
-        Assert.False(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
 
         var childRead = new byte[1];
         Assert.True(child.CPU.CopyFromUser(addr, childRead));
         Assert.Equal((byte)'Z', childRead[0]);
-        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
     }
 
     [Fact]
-    public async Task Fork_PrivateAnonymousPage_DropsParentAndChildNativeMappings_ThenSplitsOnWrite()
+    public async Task Fork_PrivateAnonymousPage_PreservesMappings_ThenSplitsOnWrite()
     {
         using var env = new TestEnv();
         const uint addr = 0x00510000;
@@ -88,10 +86,10 @@ public class FiberTaskCloneTests
         var childMm = child.Process.Mem;
         var pageAddr = addr & LinuxConstants.PageMask;
 
-        Assert.False(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.False(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.False(env.Vma.ExternalPages.TryGet(pageAddr, out _));
-        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.True(env.Vma.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
 
         var parentRead = new byte[1];
         var childRead = new byte[1];

@@ -178,8 +178,8 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
         state->mmu.attach_core(parent->mmu.core_handle(), true);
     } else {
         // Independent Memory (Fork)
-        // Clone MMU with fixed policy: skip external pages, never internalize.
-        state->mmu.attach_core(mem::Mmu::CloneCoreSkipExternal(parent->mmu.core_handle()), false);
+        // Clone MMU with fork semantics: copy owned pages, preserve external mappings.
+        state->mmu.attach_core(mem::Mmu::CloneCorePreserveExternal(parent->mmu.core_handle()), false);
     }
 
     // 3. Link Internal Pointers
@@ -339,6 +339,11 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 // ----------------------------------------------------------------------------
 
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { state->mmu.mmap(addr, size, perms); }
+
+void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
+    if (!state) return;
+    state->mmu.reprotect_mapped_range(addr, size, perms);
+}
 
 void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms) { return state->mmu.allocate_page(addr, perms); }
 
@@ -716,7 +721,7 @@ int32_t X86_GetFaultVector(EmuState* state) {
     return (state->fault_vector == 0xFF) ? -1 : (int32_t)state->fault_vector;
 }
 
-void X86_FlushCache(EmuState* state) {
+void X86_ResetAllCodeCache(EmuState* state) {
     if (state) {
         state->block_cache.clear();
         state->page_to_blocks.clear();
@@ -737,7 +742,7 @@ void X86_ResetMemory(EmuState* state) {
     }
 }
 
-void X86_InvalidateRange(EmuState* state, uint32_t addr, uint32_t size) {
+void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state || size == 0) return;
 
     uint32_t start_page = addr >> 12;

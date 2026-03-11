@@ -271,7 +271,7 @@ public class Engine : IDisposable
 
     /// <summary>
     ///     Clone engine execution state.
-    ///     If <paramref name="shareMem"/> is false, MMU cloning always skips External pages.
+    ///     If <paramref name="shareMem"/> is false, MMU cloning copies owned pages and preserves External mappings.
     ///     External pages are never converted into owned pages.
     /// </summary>
     public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode)
@@ -637,9 +637,9 @@ public class Engine : IDisposable
         return CollectMappedPages(addr, size, page) > 0;
     }
 
-    public void InvalidateRange(uint addr, uint size)
+    public void ResetCodeCacheByRange(uint addr, uint size)
     {
-        X86Native.InvalidateRange(State, addr, size);
+        X86Native.ResetCodeCacheByRange(State, addr, size);
     }
 
     public void FlushMmuTlbOnly()
@@ -647,9 +647,14 @@ public class Engine : IDisposable
         X86Native.FlushMmuTlb(State);
     }
 
-    public void FlushCache()
+    public void ReprotectMappedRange(uint addr, uint size, byte perms)
     {
-        X86Native.FlushCache(State);
+        X86Native.ReprotectMappedRange(State, addr, size, perms);
+    }
+
+    public void ResetAllCodeCache()
+    {
+        X86Native.ResetAllCodeCache(State);
     }
 
     /// <summary>

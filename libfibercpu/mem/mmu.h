@@ -277,6 +277,44 @@ public:
         return create_core(std::move(cloned));
     }
 
+    static MmuCore* CloneCorePreserveExternal(MmuCore* core) {
+        if (!core || !core->page_directory) {
+            return CreateEmptyCore();
+        }
+
+        auto cloned = std::make_unique<PageDirectory>();
+        auto* source = core->page_directory.get();
+        for (size_t l1 = 0; l1 < source->l1_directory.size(); ++l1) {
+            const auto& src_chunk = source->l1_directory[l1];
+            if (!src_chunk) continue;
+
+            std::unique_ptr<PageTableChunk> dst_chunk;
+            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
+                const auto perms = src_chunk->permissions[l2];
+                if (perms == Property::None) continue;
+
+                if (!dst_chunk) {
+                    dst_chunk = std::make_unique<PageTableChunk>();
+                }
+
+                dst_chunk->permissions[l2] = perms;
+                if (!src_chunk->pages[l2]) continue;
+
+                if (has_property(perms, Property::External)) {
+                    dst_chunk->pages[l2] = src_chunk->pages[l2];
+                    continue;
+                }
+
+                dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
+                std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
+            }
+
+            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
+        }
+
+        return create_core(std::move(cloned));
+    }
+
     [[nodiscard]] MmuCore* core_handle() const { return core_; }
 
     // Callback Setup
@@ -328,6 +366,32 @@ public:
             if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
             entry_perms = perms | preserved;
         }
+        tlb.flush();
+    }
+
+    void reprotect_mapped_range(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+        if (!page_dir || size == 0) return;
+
+        Property perms = static_cast<Property>(perms_raw);
+        uint32_t start = addr & ~PAGE_MASK;
+        uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
+
+        for (uint32_t curr = start; curr < end_addr; curr += PAGE_SIZE) {
+            uint32_t l1_idx = curr >> 22;
+            uint32_t l2_idx = (curr >> 12) & 0x3FF;
+
+            auto& chunk = page_dir->l1_directory[l1_idx];
+            if (!chunk) continue;
+
+            auto& entry_perms = chunk->permissions[l2_idx];
+            if (entry_perms == Property::None) continue;
+
+            Property preserved = Property::None;
+            if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
+            if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+            entry_perms = perms | preserved;
+        }
+
         tlb.flush();
     }
 
