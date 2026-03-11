@@ -910,7 +910,7 @@ public class VMAManager
         return baseAddr;
     }
 
-    private int DropMappedCleanFilePages(Engine engine, int maxPages)
+    internal int DropMappedCleanFilePagesForPressure(Engine engine, int maxPages)
     {
         if (maxPages <= 0) return 0;
 
@@ -950,13 +950,16 @@ public class VMAManager
     private bool TryRelieveFaultMemoryPressure(Engine engine, uint faultAddr, string source)
     {
         const int TargetPages = 1024; // 4 MiB
-        var unmappedPages = DropMappedCleanFilePages(engine, TargetPages);
-        var reclaimedBytes = GlobalPageCacheManager.TryReclaimBytes((long)LinuxConstants.PageSize * TargetPages);
-        if (unmappedPages > 0 || reclaimedBytes > 0)
+        var result = MemoryPressureCoordinator.TryRelieveFault(
+            this,
+            engine,
+            (long)LinuxConstants.PageSize * TargetPages,
+            TargetPages);
+        if (result.MadeProgress)
         {
             Logger.LogDebug(
                 "[FaultPressure] source={Source} fault=0x{FaultAddr:x} unmappedPages={UnmappedPages} reclaimedBytes={ReclaimedBytes}",
-                source, faultAddr, unmappedPages, reclaimedBytes);
+                source, faultAddr, result.UnmappedPages, result.ReclaimedBytes);
             return true;
         }
 

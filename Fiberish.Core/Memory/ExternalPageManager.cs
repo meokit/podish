@@ -494,8 +494,8 @@ public sealed class ExternalPageManager
 
         if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
         {
-            if (allocationClass != AllocationClass.Readahead)
-                reclaimed = GlobalPageCacheManager.TryReclaimBytes(bytesLong) > 0;
+            reclaimed = MemoryPressureCoordinator.TryReclaimForAllocation(bytesLong, allocationClass, allocationSource) >
+                        0;
 
             if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
             {
@@ -627,8 +627,10 @@ public sealed class ExternalPageManager
         if (!HasQuotaCapacity())
         {
             // Best-effort one-shot reclaim before failing strict allocation.
-            if (allocationClass != AllocationClass.Readahead)
-                reclaimed = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize) > 0;
+            reclaimed = MemoryPressureCoordinator.TryReclaimForAllocation(
+                LinuxConstants.PageSize,
+                allocationClass,
+                allocationSource) > 0;
 
             if (!HasQuotaCapacity())
             {
