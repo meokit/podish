@@ -196,6 +196,56 @@ public MemoryObject GetOrCreateInodePageCache(Inode inode) {
 
 Any `mmap(MAP_SHARED)` on the same file receives this identical `MemoryObject`. Writes from one process immediately affect the physical pages, becoming instantly visible to all other processes mapping the file.
 
+### 6.1.1 HostFS / SilkFS Host-Mapped Page Cache Policy
+
+For `HostFS` and `SilkFS`, clean file-backed pages may be backed directly by a host file mapping instead of an emulator-owned anonymous page. This is an optimization, but it must not change guest-visible file semantics.
+
+Current policy:
+
+- Full guest 4K file pages:
+  - Use the regular host-mapped page cache backend.
+  - On all supported hosts, the default implementation uses a host-granularity window cache.
+- Partial EOF tail pages:
+  - On Darwin/Linux, direct mapping is allowed.
+  - On Windows/WASI, direct mapping is disabled and the tail page falls back to the buffered path.
+
+The backend is intentionally split:
+
+- Normal full-page windows still use `.NET MemoryMappedFile`.
+- Unix tail-extension windows use native `mmap/msync/munmap`.
+
+Reason:
+
+- `.NET MemoryMappedFile` with `capacity=0` cannot create a view that extends past the file length for the final partial page.
+- Setting `capacity` to the rounded page/window size causes the host file itself to be extended, which is incorrect for guest `mmap` semantics because mapping must not mutate `i_size`.
+- Native Unix `mmap` does support the required behavior: the final page can be mapped without extending the file, with EOF tail bytes zero-filled and whole pages beyond EOF delivering `SIGBUS`.
+
+Observed Darwin/Linux behavior validated by probe programs:
+
+- Partial EOF tail bytes are initially zero-filled.
+- `MAP_SHARED` writes to the tail area are visible to other shared mappings of the same page.
+- Those tail writes do not become file contents via `msync`.
+- Later `ftruncate` growth does not resurrect prior tail writes as persisted file data.
+- Access to a page fully beyond EOF triggers `SIGBUS`.
+
+Important design choice:
+
+- If a host-mapped tail page remains cached and a later guest shared mapping reuses it, EOF-tail bytes may be observed again.
+- This is accepted for Darwin/Linux because it matches the validated host behavior and Linux permits this style of page-cache-visible tail state.
+- We do not sanitize or zero that state on reuse.
+
+Pseudocode:
+
+```csharp
+if (!isTailPage)
+    return MapWithMemoryMappedFileWindow();
+
+if (!geometry.SupportsDirectMappedTailPage)
+    return false; // buffered fallback
+
+return MapWithNativeUnixMmapWindow();
+```
+
 ### 6.2 SysV Shared Memory (shmget/shmat)
 
 SysV `shmget` creates a long-lived `MemoryObject` held by the `SysVShmManager`.
@@ -248,3 +298,9 @@ This guarantees that two processes with different virtual addresses mapping the 
 
 When a `MAP_SHARED` file mapping is unmapped or `msync`'d, `SyncVMA` checks the Native MMU's `Dirty` bit for every page.
 Dirty pages are extracted via `CopyFromUser` and written back to the `Inode`. `SyncVMA` strictly respects `FileBackingLength` using exact absolute and relative offsets to prevent out-of-bounds file I/O.
+
+For host-mapped pages, `SyncVMA` first tries filesystem-specific direct flush:
+
+- `HostFS` / `SilkFS` call `TryFlushMappedPage(pageIndex)`.
+- If the page is backed by a host mapping window, the backend flushes the host view directly.
+- If no direct-flush path exists, `SyncVMA` falls back to the normal page-copy writeback path.

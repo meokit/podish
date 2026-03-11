@@ -8,7 +8,8 @@ namespace Fiberish.Tests.Memory;
 public class WindowedMappedFilePageBackendTests
 {
     private static readonly HostMemoryMapGeometry Geometry16K =
-        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true);
+        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true,
+            SupportsDirectMappedTailPage: true);
 
     [Fact]
     public void FourGuestPagesWithin16KWindow_UseSingleWindow()
@@ -111,9 +112,52 @@ public class WindowedMappedFilePageBackendTests
         }
     }
 
+    [Fact]
+    public void PartialTailPage_OnUnix_UsesDirectMappedWindow()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-tail-{Guid.NewGuid():N}.bin");
+        var fileSize = LinuxConstants.PageSize + 123;
+        File.WriteAllBytes(path, BuildFile(fileSize, (byte)'t'));
+
+        try
+        {
+            var geometry = HostMemoryMapGeometryProvider.GetCurrent();
+            using var backend = new WindowedMappedFilePageBackend(path, geometry);
+
+            Assert.True(backend.TryAcquirePageHandle(1, fileSize, writable: true, out var handle));
+            Assert.NotNull(handle);
+
+            var tailBytes = new byte[24];
+            Marshal.Copy(handle!.Pointer + 123, tailBytes, 0, tailBytes.Length);
+            Assert.All(tailBytes, b => Assert.Equal((byte)0, b));
+
+            Marshal.Copy("TAIL!"u8.ToArray(), 0, handle.Pointer + 123 + 16, 5);
+            Assert.True(backend.TryAcquirePageHandle(1, fileSize, writable: true, out var peerHandle));
+            Assert.NotNull(peerHandle);
+            Assert.Equal("TAIL!", ReadString(peerHandle!.Pointer + 123 + 16, 5));
+
+            handle.Dispose();
+            peerHandle.Dispose();
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     private static byte[] BuildPage(byte fill)
     {
         var data = new byte[LinuxConstants.PageSize];
+        Array.Fill(data, fill);
+        return data;
+    }
+
+    private static byte[] BuildFile(int length, byte fill)
+    {
+        var data = new byte[length];
         Array.Fill(data, fill);
         return data;
     }

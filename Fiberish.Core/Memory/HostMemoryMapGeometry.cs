@@ -8,7 +8,8 @@ internal readonly record struct HostMemoryMapGeometry(
     int GuestPageSize,
     int HostPageSize,
     int AllocationGranularity,
-    bool SupportsMappedFileBackend);
+    bool SupportsMappedFileBackend,
+    bool SupportsDirectMappedTailPage);
 
 internal static partial class HostMemoryMapGeometryProvider
 {
@@ -61,7 +62,8 @@ internal static partial class HostMemoryMapGeometryProvider
                 guestPageSize,
                 hostPageSize > 0 ? hostPageSize : guestPageSize,
                 granularity > 0 ? granularity : guestPageSize,
-                SupportsMappedFileBackend: true);
+                SupportsMappedFileBackend: true,
+                SupportsDirectMappedTailPage: false);
         }
 
         var unixPageSize = Environment.SystemPageSize;
@@ -72,7 +74,8 @@ internal static partial class HostMemoryMapGeometryProvider
             guestPageSize,
             unixPageSize,
             unixPageSize,
-            SupportsMappedFileBackend: true);
+            SupportsMappedFileBackend: true,
+            SupportsDirectMappedTailPage: true);
     }
 
     private static HostMemoryMapGeometry Unsupported()
@@ -81,7 +84,8 @@ internal static partial class HostMemoryMapGeometryProvider
             LinuxConstants.PageSize,
             LinuxConstants.PageSize,
             LinuxConstants.PageSize,
-            SupportsMappedFileBackend: false);
+            SupportsMappedFileBackend: false,
+            SupportsDirectMappedTailPage: false);
     }
 
     [StructLayout(LayoutKind.Sequential)]

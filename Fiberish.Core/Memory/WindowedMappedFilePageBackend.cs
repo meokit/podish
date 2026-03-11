@@ -1,5 +1,7 @@
 using System.IO.MemoryMappedFiles;
+using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Win32.SafeHandles;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
@@ -12,27 +14,145 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         ReadWrite
     }
 
-    private sealed class Window : IDisposable
+    private interface IWindowMapping : IDisposable
     {
-        public required long Start { get; init; }
-        public required long Length { get; init; }
-        public required MemoryMappedFile Mmf { get; init; }
-        public required MemoryMappedViewAccessor View { get; init; }
-        public required nint RawPtr { get; init; }
-        public required nint Ptr { get; init; }
-        public required WindowAccessMode AccessMode { get; init; }
-        public int RefCount { get; set; }
-        public bool Retired { get; set; }
+        nint RawPtr { get; }
+        nint Ptr { get; }
+        long Length { get; }
+        bool Flush();
+    }
+
+    private sealed class MmfWindowMapping : IWindowMapping
+    {
+        private readonly MemoryMappedFile _mmf;
+        private readonly MemoryMappedViewAccessor _view;
+
+        public MmfWindowMapping(MemoryMappedFile mmf, MemoryMappedViewAccessor view, nint rawPtr, nint ptr, long length)
+        {
+            _mmf = mmf;
+            _view = view;
+            RawPtr = rawPtr;
+            Ptr = ptr;
+            Length = length;
+        }
+
+        public nint RawPtr { get; }
+        public nint Ptr { get; }
+        public long Length { get; }
+
+        public bool Flush()
+        {
+            try
+            {
+                _view.Flush();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         public void Dispose()
         {
             unsafe
             {
-                View.SafeMemoryMappedViewHandle.ReleasePointer();
+                _view.SafeMemoryMappedViewHandle.ReleasePointer();
             }
 
-            View.Dispose();
-            Mmf.Dispose();
+            _view.Dispose();
+            _mmf.Dispose();
+        }
+    }
+
+    private sealed class UnixWindowMapping : IWindowMapping
+    {
+        private const int ProtRead = 0x1;
+        private const int ProtWrite = 0x2;
+        private const int MapShared = 0x01;
+
+        private readonly nint _addr;
+
+        private UnixWindowMapping(nint addr, long length)
+        {
+            _addr = addr;
+            Length = length;
+        }
+
+        public nint RawPtr => _addr;
+        public nint Ptr => _addr;
+        public long Length { get; }
+
+        public bool Flush()
+        {
+            return msync(_addr, checked((nuint)Length), GetMsSyncFlag()) == 0;
+        }
+
+        public void Dispose()
+        {
+            _ = munmap(_addr, checked((nuint)Length));
+        }
+
+        public static UnixWindowMapping? TryCreate(string path, long offset, long length, bool writable)
+        {
+            try
+            {
+                using var handle = File.OpenHandle(
+                    path,
+                    FileMode.Open,
+                    writable ? FileAccess.ReadWrite : FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                var fd = checked((int)handle.DangerousGetHandle());
+                var prot = writable ? ProtRead | ProtWrite : ProtRead;
+                var addr = mmap(0, checked((nuint)length), prot, MapShared, fd, (nint)offset);
+                if (addr == new nint(-1))
+                    return null;
+                return new UnixWindowMapping(addr, length);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static int GetMsSyncFlag()
+        {
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst() ||
+                OperatingSystem.IsTvOS() || OperatingSystem.IsWatchOS())
+                return 0x0010;
+            return 0x0004;
+        }
+
+        [DllImport("libc", EntryPoint = "mmap")]
+        private static extern nint mmap(nint addr, nuint length, int prot, int flags, int fd, nint offset);
+
+        [DllImport("libc", EntryPoint = "munmap")]
+        private static extern int munmap(nint addr, nuint length);
+
+        [DllImport("libc", EntryPoint = "msync")]
+        private static extern int msync(nint addr, nuint length, int flags);
+    }
+
+    private sealed class Window : IDisposable
+    {
+        public required long Start { get; init; }
+        public required IWindowMapping Mapping { get; init; }
+        public required WindowAccessMode AccessMode { get; init; }
+        public int RefCount { get; set; }
+        public bool Retired { get; set; }
+
+        public long Length => Mapping.Length;
+        public nint RawPtr => Mapping.RawPtr;
+        public nint Ptr => Mapping.Ptr;
+
+        public bool Flush()
+        {
+            return Mapping.Flush();
+        }
+
+        public void Dispose()
+        {
+            Mapping.Dispose();
         }
     }
 
@@ -97,15 +217,15 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
 
         var pageStart = checked(filePageIndex * LinuxConstants.PageSize);
         if (pageStart < 0 || pageStart >= fileSize) return false;
-        if (checked(pageStart + LinuxConstants.PageSize) > fileSize)
-        {
-            // Keep EOF tail pages on the buffered path to preserve guest 4K semantics.
+
+        var isTailPage = checked(pageStart + LinuxConstants.PageSize) > fileSize;
+        if (isTailPage && !_geometry.SupportsDirectMappedTailPage)
             return false;
-        }
 
         var windowStart = AlignDown(pageStart, _geometry.AllocationGranularity);
         var offsetInWindow = pageStart - windowStart;
         if (offsetInWindow < 0) return false;
+        var requiredCoverage = checked(offsetInWindow + LinuxConstants.PageSize);
 
         lock (_lock)
         {
@@ -114,6 +234,11 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
                 if (existing.Retired)
                 {
                     _windows.Remove(windowStart);
+                }
+                else if (existing.Length < requiredCoverage)
+                {
+                    _windows.Remove(windowStart);
+                    existing.Retired = true;
                 }
                 else if (!writable || existing.AccessMode == WindowAccessMode.ReadWrite)
                 {
@@ -130,7 +255,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
                 }
             }
 
-            var created = CreateWindowLocked(windowStart, fileSize, writable);
+            var created = CreateWindowLocked(windowStart, fileSize, writable, requiredCoverage);
             if (created == null) return false;
 
             created.RefCount = 1;
@@ -156,15 +281,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
             if (window.AccessMode == WindowAccessMode.ReadOnly)
                 return true;
 
-            try
-            {
-                window.View.Flush();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return window.Flush();
         }
     }
 
@@ -203,14 +320,34 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         DisposeWindows(disposeNow);
     }
 
-    private Window? CreateWindowLocked(long windowStart, long fileSize, bool writable)
+    private Window? CreateWindowLocked(long windowStart, long fileSize, bool writable, long requiredCoverage)
     {
         var remaining = fileSize - windowStart;
         if (remaining <= 0) return null;
+        var requiresTailExtension = requiredCoverage > remaining;
 
-        var windowLength = Math.Min((long)_geometry.AllocationGranularity, remaining);
-        if (windowLength <= 0) return null;
+        var cappedWindowLength = Math.Min((long)_geometry.AllocationGranularity, Math.Max(remaining, requiredCoverage));
+        if (cappedWindowLength < requiredCoverage)
+            return null;
 
+        IWindowMapping? mapping = !OperatingSystem.IsWindows() && requiresTailExtension
+            ? CreateUnixMappedWindow(windowStart, cappedWindowLength, writable)
+            : CreateMemoryMappedWindow(windowStart, Math.Min(cappedWindowLength, remaining), writable);
+        if (mapping == null)
+            return null;
+
+        return new Window
+        {
+            Start = windowStart,
+            Mapping = mapping,
+            AccessMode = writable ? WindowAccessMode.ReadWrite : WindowAccessMode.ReadOnly,
+            RefCount = 0,
+            Retired = false
+        };
+    }
+
+    private IWindowMapping? CreateMemoryMappedWindow(long windowStart, long windowLength, bool writable)
+    {
         try
         {
             var access = writable ? MemoryMappedFileAccess.ReadWrite : MemoryMappedFileAccess.Read;
@@ -230,24 +367,21 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
 
                 var rawPtr = (nint)raw;
                 var ptr = rawPtr + (nint)view.PointerOffset;
-                return new Window
-                {
-                    Start = windowStart,
-                    Length = windowLength,
-                    Mmf = mmf,
-                    View = view,
-                    RawPtr = rawPtr,
-                    Ptr = ptr,
-                    AccessMode = writable ? WindowAccessMode.ReadWrite : WindowAccessMode.ReadOnly,
-                    RefCount = 0,
-                    Retired = false
-                };
+                return new MmfWindowMapping(mmf, view, rawPtr, ptr, windowLength);
             }
         }
         catch
         {
             return null;
         }
+    }
+
+    private IWindowMapping? CreateUnixMappedWindow(long windowStart, long windowLength, bool writable)
+    {
+        var alignedLength = AlignUp(windowLength, _geometry.HostPageSize);
+        if (alignedLength <= 0)
+            return null;
+        return UnixWindowMapping.TryCreate(_path, windowStart, alignedLength, writable);
     }
 
     private void ReleaseHandle(long pageIndex, Window window)
@@ -300,6 +434,13 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
     {
         if (alignment <= 0) return value;
         return (value / alignment) * alignment;
+    }
+
+    private static long AlignUp(long value, int alignment)
+    {
+        if (alignment <= 0) return value;
+        var mask = alignment - 1L;
+        return (value + mask) & ~mask;
     }
 
     private static void DisposeWindows(IEnumerable<Window> windows)

@@ -33,7 +33,7 @@ public class PageCacheConsistencyTests
             var n = file.Dentry.Inode!.Read(file, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hZZlo", Encoding.ASCII.GetString(buf));
-            Assert.Equal("hello", File.ReadAllText(hostFile));
+            Assert.Equal("hZZlo", File.ReadAllText(hostFile));
         }
         finally
         {
@@ -138,7 +138,7 @@ public class PageCacheConsistencyTests
             var rc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
 
-            Assert.Equal("hello", File.ReadAllText(hostFile));
+            Assert.Equal("hXYlo", File.ReadAllText(hostFile));
 
             mm.SyncAllMappedSharedFiles(engine);
             Assert.Equal("hXYlo", File.ReadAllText(hostFile));

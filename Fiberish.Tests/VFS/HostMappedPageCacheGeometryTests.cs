@@ -11,7 +11,8 @@ namespace Fiberish.Tests.VFS;
 public class HostMappedPageCacheGeometryTests
 {
     private static readonly HostMemoryMapGeometry Geometry16K =
-        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true);
+        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true,
+            SupportsDirectMappedTailPage: true);
 
     [Fact]
     public void Hostfs_16KGeometry_CoalescesFourGuestPagesIntoSingleWindow()
@@ -42,7 +43,7 @@ public class HostMappedPageCacheGeometryTests
             for (var i = 0; i < 4; i++)
                 Assert.True(mm.HandleFault(mapAddr + (uint)(i * LinuxConstants.PageSize), true, engine));
 
-            var hostInode = Assert.IsType<HostInode>(loc.Dentry.Inode);
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
             var diagnostics = hostInode.GetMappedPageCacheDiagnostics();
             Assert.Equal(1, diagnostics.WindowCount);
             Assert.Equal(16384, diagnostics.WindowBytes);
@@ -93,7 +94,7 @@ public class HostMappedPageCacheGeometryTests
                 MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED_RO", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-            var hostInode = Assert.IsType<HostInode>(loc.Dentry.Inode);
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
             var diagnostics = hostInode.GetMappedPageCacheDiagnostics();
             Assert.Equal(1, diagnostics.WindowCount);
             Assert.Equal(1, diagnostics.GuestPageCount);
@@ -182,6 +183,59 @@ public class HostMappedPageCacheGeometryTests
         finally
         {
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_OnUnix_PartialTailPage_UsesDirectMap()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "tail.bin");
+        var bytes = new byte[LinuxConstants.PageSize + 123];
+        Array.Fill(bytes, (byte)'q');
+        File.WriteAllBytes(hostFile, bytes);
+
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/tail.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            const uint mapAddr = 0x47300000;
+            mm.Mmap(mapAddr, (uint)(LinuxConstants.PageSize * 2), Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED_TAIL", engine);
+
+            var tailPageAddr = mapAddr + (uint)LinuxConstants.PageSize;
+            Assert.True(mm.HandleFault(tailPageAddr, true, engine));
+
+            var probe = new byte[24];
+            Assert.True(engine.CopyFromUser(tailPageAddr + 123, probe));
+            Assert.All(probe, b => Assert.Equal((byte)0, b));
+
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var diagnostics = hostInode.GetMappedPageCacheDiagnostics();
+            Assert.Equal(1, diagnostics.WindowCount);
+            Assert.Equal(1, diagnostics.GuestPageCount);
+
+            Assert.True(engine.CopyToUser(tailPageAddr + 123 + 16, "TAIL!"u8.ToArray()));
+            var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
+            VMAManager.SyncVMA(vma, engine, tailPageAddr, tailPageAddr + (uint)LinuxConstants.PageSize);
+
+            var refreshed = File.ReadAllBytes(hostFile);
+            Assert.Equal(bytes.Length, refreshed.Length);
+            Assert.All(refreshed.AsSpan(bytes.Length - 8).ToArray(), b => Assert.Equal((byte)'q', b));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
         }
     }
 
