@@ -12,7 +12,8 @@ public enum FaultResult
 {
     Handled = 0,
     Segv = 1,
-    BusError = 2
+    BusError = 2,
+    Oom = 3
 }
 
 public class VMAManager
@@ -909,6 +910,59 @@ public class VMAManager
         return baseAddr;
     }
 
+    private int DropMappedCleanFilePages(Engine engine, int maxPages)
+    {
+        if (maxPages <= 0) return 0;
+
+        var pages = ExternalPages.SnapshotMappedPages();
+        if (pages.Count == 0) return 0;
+
+        var sorted = pages.ToArray();
+        Array.Sort(sorted);
+
+        var dropped = 0;
+        foreach (var pageAddr in sorted)
+        {
+            if (dropped >= maxPages) break;
+            if (!ExternalPages.TryGet(pageAddr, out _)) continue;
+
+            var vma = FindVMA(pageAddr);
+            if (vma == null || vma.File == null) continue;
+
+            var pageIndex = vma.ViewPageOffset + ((pageAddr - vma.Start) / LinuxConstants.PageSize);
+            if (engine.IsDirty(pageAddr)) continue;
+            if (vma.MemoryObject.IsDirty(pageIndex)) continue;
+            if (vma.CowObject != null && vma.CowObject.IsDirty(pageIndex)) continue;
+
+            TearDownNativeMappings(
+                engine,
+                pageAddr,
+                LinuxConstants.PageSize,
+                captureDirtySharedPages: false,
+                invalidateCodeRange: true,
+                releaseExternalPages: true);
+            dropped++;
+        }
+
+        return dropped;
+    }
+
+    private bool TryRelieveFaultMemoryPressure(Engine engine, uint faultAddr, string source)
+    {
+        const int TargetPages = 1024; // 4 MiB
+        var unmappedPages = DropMappedCleanFilePages(engine, TargetPages);
+        var reclaimedBytes = GlobalPageCacheManager.TryReclaimBytes((long)LinuxConstants.PageSize * TargetPages);
+        if (unmappedPages > 0 || reclaimedBytes > 0)
+        {
+            Logger.LogDebug(
+                "[FaultPressure] source={Source} fault=0x{FaultAddr:x} unmappedPages={UnmappedPages} reclaimedBytes={ReclaimedBytes}",
+                source, faultAddr, unmappedPages, reclaimedBytes);
+            return true;
+        }
+
+        return false;
+    }
+
     public FaultResult HandleFaultDetailed(uint addr, bool isWrite, Engine engine)
     {
         var vma = FindVMA(addr);
@@ -964,7 +1018,12 @@ public class VMAManager
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
                         if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow,
                                 AllocationSource.CowReplacePrivate))
-                            return FaultResult.Segv;
+                        {
+                            if (!TryRelieveFaultMemoryPressure(engine, addr, "CowReplacePrivate") ||
+                                !ExternalPageManager.TryAllocateExternalPageStrict(out newPage, AllocationClass.Cow,
+                                    AllocationSource.CowReplacePrivate))
+                                return FaultResult.Oom;
+                        }
                         Interlocked.Increment(ref _cowAllocReplaceCount);
                         var owner = engine.Owner as FiberTask;
                         Logger.LogTrace(
@@ -1044,7 +1103,12 @@ public class VMAManager
                     // Allocate private copy from inode cache
                     if (!ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow,
                             AllocationSource.CowFirstPrivate))
-                        return FaultResult.Segv;
+                    {
+                        if (!TryRelieveFaultMemoryPressure(engine, addr, "CowFirstPrivate") ||
+                            !ExternalPageManager.TryAllocateExternalPageStrict(out existingCow, AllocationClass.Cow,
+                                AllocationSource.CowFirstPrivate))
+                            return FaultResult.Oom;
+                    }
                     Interlocked.Increment(ref _cowAllocFirstCount);
                     var owner2 = engine.Owner as FiberTask;
                     Logger.LogTrace(
@@ -1114,9 +1178,12 @@ public class VMAManager
         var allocationClass = strictQuota ? AllocationClass.Anonymous : AllocationClass.PageCache;
 
         IntPtr hostPtr;
-        if (!TryResolveMappedFilePage(vma, pageIndex, normalAbsoluteFileOffset, out hostPtr))
+        IntPtr AllocateOrResolveHostPage()
         {
-            hostPtr = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
+            if (TryResolveMappedFilePage(vma, pageIndex, normalAbsoluteFileOffset, out var resolvedPage))
+                return resolvedPage;
+
+            return vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
             {
                 if (vma.File == null)
                 {
@@ -1149,6 +1216,13 @@ public class VMAManager
                 return true;
             }, out _, strictQuota, allocationClass, strictQuota ? AllocationSource.AnonFault : AllocationSource.Unknown);
         }
+
+        hostPtr = AllocateOrResolveHostPage();
+        if (hostPtr == IntPtr.Zero && strictQuota)
+        {
+            if (TryRelieveFaultMemoryPressure(engine, addr, "AnonymousFault"))
+                hostPtr = AllocateOrResolveHostPage();
+        }
         if (hostPtr == IntPtr.Zero)
         {
             var allocatedBytes = ExternalPageManager.GetAllocatedBytes();
@@ -1164,7 +1238,7 @@ public class VMAManager
                 pageStart, addr, isWrite, vma.Name, vma.Perms, pageIndex, strictQuota, allocationClass,
                 quotaBytes, allocatedBytes,
                 strictSuccess, strictReclaimSuccess, strictFail, legacyOverQuota);
-            return FaultResult.Segv;
+            return strictQuota ? FaultResult.Oom : FaultResult.Segv;
         }
 
         if (!ExternalPages.AddMapping(pageStart, hostPtr, out var added))

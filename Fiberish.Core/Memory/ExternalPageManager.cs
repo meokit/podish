@@ -205,6 +205,12 @@ public sealed class ExternalPageManager
         foreach (var pageAddr in _pages.Keys.ToArray()) Release(pageAddr);
     }
 
+    public IReadOnlyList<uint> SnapshotMappedPages()
+    {
+        if (_pages.Count == 0) return Array.Empty<uint>();
+        return _pages.Keys.ToArray();
+    }
+
     public static void AddRef(IntPtr ptr)
     {
         AddGlobalRef(ptr);

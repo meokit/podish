@@ -329,6 +329,16 @@ public class FiberTask
             var faultResult = Process.Mem.HandleFaultDetailed(addr, isWrite, CPU);
             if (faultResult == FaultResult.Handled)
                 return true;
+            if (faultResult == FaultResult.Oom)
+            {
+                Logger.LogError(
+                    "Page Fault at 0x{Addr:X} ({Mode}) failed due to OOM. Simulating OOM killer with SIGKILL.",
+                    addr, isWrite ? "Write" : "Read");
+                TerminateBySignal((int)Signal.SIGKILL, coreDumped: false);
+                _pendingFaultFromInterrupt = true;
+                CPU.Yield();
+                return true;
+            }
 
             var fatalSignal = faultResult == FaultResult.BusError ? Signal.SIGBUS : Signal.SIGSEGV;
             Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting {Signal}.",

@@ -198,6 +198,7 @@ public class Process
     {
         var oldMem = Mem;
         var oldEngine = Syscalls.Engine;
+        var hadSharedAddressSpace = oldMem.GetSharedRefCount() > 1;
         var shouldDetachSysVShm = oldMem.GetSharedRefCount() == 1;
 
         // Linux execve semantics: detach SysV SHM segments from the old address space.
@@ -215,6 +216,13 @@ public class Process
         ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, freshMem, oldEngine);
         MemoryReleased = false;
         oldMem.ReleaseSharedRef(oldEngine);
+
+        // CLONE_VM/vfork case: this engine can still share the native MMU core with parent.
+        // Detach first so exec's ResetMemory + new mappings don't clobber the parent's live mappings.
+        if (hadSharedAddressSpace)
+        {
+            using var detachedSharedCore = Syscalls.Engine.DetachMmu();
+        }
 
         // Clear old native MMU page tables + JIT cache.
         // FlushCache only clears JIT; ResetMemory also resets the native page directory
