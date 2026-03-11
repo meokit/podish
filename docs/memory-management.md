@@ -60,6 +60,25 @@ Responsibilities are strictly separated across layers:
 - **ExternalPageManager**: Manages "host memory reference counts" (safe cross-process deallocation).
 - **Native MMU**: Manages "how the guest CPU accesses it fast" (TLBs, page fault callbacks).
 
+### 1.1 Ownership Summary
+
+The most important ownership boundaries are:
+
+| Object | Owned By | Holds References To | Notes |
+|--------|----------|---------------------|-------|
+| `Engine` | `FiberTask` / runtime | native CPU state, current `MmuHandle` | One engine always has exactly one current MMU attached |
+| `MmuHandle` | managed owner (`Engine` or detached handle) | native MMU core | Native lifetime is ref-counted; managed code controls attachment semantics |
+| `VMAManager` | `Process` | `VMA[]`, `ExternalPageManager`, `MemoryObjectManager` | Authoritative address-space metadata |
+| `VMA` | `VMAManager` | `MemoryObject`, optional `CowObject`, optional `VmaFileMapping` | Pure metadata plus backing-object refs |
+| `MemoryObject` | `VMA`, inode page cache manager, SysV shm manager, etc. | host page pointers | Ref-counted shared backing object |
+| `Inode.PageCache` | inode + `MemoryObjectManager` named-object table | `MemoryObject` | Analogous to Linux `address_space`; shared by all mappings of that live inode |
+| `ExternalPageManager` | `VMAManager` | per-address-space mapped host-page refs | Releases native external-page refs when MMU mappings are torn down |
+
+Two rules matter in practice:
+
+- **Managed objects own semantics.** `VMAManager`, `VMA`, `MemoryObject`, and inode page cache decide what memory should exist.
+- **Native MMU owns only acceleration state.** Its mappings are disposable caches and can be invalidated and rebuilt from managed state at any time.
+
 ---
 
 ## 2. Native Layer: libfibercpu MMU
@@ -86,10 +105,27 @@ PageDirectory
 `Property::External` is the core flag separating "owned pages" from "external pages".
 Shared anonymous memory and file mappings are injected via `map_external_page`, and their lifecycles are managed by the C# `ExternalPageManager`.
 
-### 2.3 Fork Deep Copy Behavior
+### 2.3 MMU Handles and Fork Behavior
 
-When `X86_Clone(parent, share_mem=false)` is invoked (the fork path), the `PageDirectory` performs a **deep copy**. All pages—including external ones—are memcpy'd into new private native allocations.
-Because this breaks C# shared memory semantics, `FiberTask.Clone()` loops over all `MAP_SHARED` VMAs and explicitly calls `MemUnmap()` on the new native CPU instance. This clears the bogus private copies, forcing a fault upon the next access so the child maps the exact same host pointer as the parent.
+The native MMU is no longer treated as an anonymous blob hidden behind `X86_Clone`. The managed `Engine` owns an explicit `MmuHandle`, and MMU lifetime is tracked through:
+
+- `Engine.CurrentMmu`
+- `Engine.ReplaceMmu(...)`
+- `Engine.ShareMmuFrom(...)`
+- `Engine.DetachMmu()`
+- `MmuHandle.CloneSkipExternal()`
+
+Current behavior:
+
+- `CLONE_VM` / shared-address-space cases share the same native MMU core.
+- Non-`CLONE_VM` clone still starts from `X86_Clone(...)`, but the child does **not** keep inherited native mappings as authoritative memory state.
+- `FiberTask.Clone()` tears down inherited native mappings across the cloned address space and forces later accesses to refault through `VMAManager`.
+- For writable `MAP_PRIVATE` file mappings, clone-time private snapshot pages are imported into the child COW object before teardown so the child preserves the correct fork snapshot.
+
+The practical rule is:
+
+- **Managed VMA / MemoryObject state is authoritative.**
+- The native MMU is a fast cache of currently installed mappings and may be torn down and rebuilt from managed state after fork, `mprotect`, `truncate`, or other address-space changes.
 
 ---
 
@@ -124,7 +160,7 @@ public VMA Clone() {
     MemoryObject obj;
 
     if (shared || CowObject != null) {
-        // MAP_SHARED or MAP_PRIVATE file: The MemoryObject is shared across processes (e.g. Inode page cache).
+        // MAP_SHARED or MAP_PRIVATE file: The base MemoryObject remains shared.
         MemoryObject.AddRef();
         obj = MemoryObject;
     } else {
@@ -132,12 +168,39 @@ public VMA Clone() {
         obj = MemoryObject.ForkCloneForPrivate();
     }
 
-    // Deep copy any existing COW pages for child isolation.
-    MemoryObject? cowObj = CowObject?.ForkCloneForPrivate();
+    // Existing COW pages are initially shared between parent/child and split lazily on write.
+    MemoryObject? cowObj = CowObject?.ForkCloneSharingPages();
+    var clonedFileMapping = FileMapping?.AddRef();
 
-    return new VMA { ..., MemoryObject = obj, CowObject = cowObj };
+    return new VMA { ..., FileMapping = clonedFileMapping, MemoryObject = obj, CowObject = cowObj };
 }
 ```
+
+### 3.3 Address-Space Synchronization Model
+
+Address-space mutations are not applied by eagerly walking every registered engine and rewriting all native mappings immediately.
+
+Current model:
+
+- `VMAManager` owns a monotonically increasing `CurrentMapSequence`.
+- Each mapping mutation records one or more invalidation ranges in `_pendingInvalidations`.
+- Each `Engine` remembers `AddressSpaceMapSequenceSeen`.
+- `ProcessAddressSpaceSync.SyncEngineBeforeRun(...)` reconciles a specific engine just before it runs:
+  - flushes MMU TLB state for that engine
+  - invalidates translated code for the recorded ranges
+  - advances `AddressSpaceMapSequenceSeen`
+
+Pseudocode:
+
+```csharp
+var currentSeq = vmaManager.CollectInvalidationRangesSince(engine.AddressSpaceMapSequenceSeen, ranges);
+engine.FlushMmuTlbOnly();
+foreach (var range in ranges)
+    engine.InvalidateRange(range.Start, range.Length);
+engine.AddressSpaceMapSequenceSeen = currentSeq;
+```
+
+This is why operations such as `munmap`, `mprotect`, `truncate`, or inode-size updates are described as changing **managed state first** and reconciling each engine on its next run boundary.
 
 ---
 
@@ -159,8 +222,14 @@ Key operations:
 
 ### 4.2 ExternalPageManager
 
-The `ExternalPageManager` per `SyscallManager` tracks which host pages have been mapped into the native MMU. A static `GlobalRefs` dictionary (`nint → int`) maintains the global reference count of each host pointer.
+Each `VMAManager` owns an `ExternalPageManager` instance tracking which host pages are currently installed into that address space's native MMU. A static `GlobalRefs` dictionary (`nint → int`) maintains the global reference count of each host pointer across all address spaces.
 A host page is only `NativeMemory.AlignedFree`'d when its `GlobalRefs` drops to 0.
+
+`ExternalPageManager` should be read as "native mapping ref tracker", not "owner of page semantics":
+
+- `MemoryObject` decides whether a page exists and keeps the page pointer alive.
+- `ExternalPageManager` tracks how many native MMU mappings currently point at that page inside one address space.
+- `ReleaseRange` is therefore paired with native `MemUnmap`, not with inode/page-cache eviction itself.
 
 ---
 
@@ -187,18 +256,20 @@ File mappings use an Inode-level global page cache to ensure that all processes 
 
 ```csharp
 public MemoryObject GetOrCreateInodePageCache(Inode inode) {
-    var key = $"pagecache:{HashCode(inode.SuperBlock)}:{inode.Ino}";
+    var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
     var obj = CreateOrOpenNamed(key, ...);
     inode.PageCache ??= obj;
     return obj;
 }
 ```
 
-Any `mmap(MAP_SHARED)` on the same file receives this identical `MemoryObject`. Writes from one process immediately affect the physical pages, becoming instantly visible to all other processes mapping the file.
+Any `mmap(MAP_SHARED)` on the same live `Inode` object receives this identical `MemoryObject`. Writes from one process immediately affect the physical pages, becoming instantly visible to all other processes mapping the same inode instance.
+
+This sharing is by **inode object identity**, not by path string. Hard links or other aliases only share page cache if they resolve to the same live inode object.
 
 ### 6.1.1 HostFS / SilkFS Host-Mapped Page Cache Policy
 
-For `HostFS` and `SilkFS`, clean file-backed pages may be backed directly by a host file mapping instead of an emulator-owned anonymous page. This is an optimization, but it must not change guest-visible file semantics.
+For `HostFS` and `SilkFS`, file-backed pages may be backed directly by a host file mapping instead of an emulator-owned anonymous page. This is an optimization, but it must not change guest-visible file semantics.
 
 Current policy:
 
@@ -257,9 +328,9 @@ SysV `shmget` creates a long-lived `MemoryObject` held by the `SysVShmManager`.
 
 | Type | Clone Action | Native Action |
 |------|--------------|---------------|
-| `MAP_PRIVATE` (Anon) | `MemoryObject.ForkCloneForPrivate()` → Eager deep copy host pages. | Deep copy `PageDirectory` |
-| `MAP_PRIVATE` (File) | Copy `CowObject` pages. `MemoryObject` (Inode Cache) remains shared. | Deep copy `PageDirectory` |
-| `MAP_SHARED` | `MemoryObject.AddRef()`. | `PageDirectory` deep copy **(Cleared by C# via `MemUnmap`)** |
+| `MAP_PRIVATE` (Anon) | `MemoryObject.ForkCloneForPrivate()` → Eager deep copy host pages. | Child inherited native mappings are torn down and rebuilt on demand from the cloned managed memory objects |
+| `MAP_PRIVATE` (File) | Copy `CowObject` pages. `MemoryObject` (Inode Cache) remains shared. | Child inherited native mappings are torn down and rebuilt on demand; writable private snapshot pages are imported into the child COW object before teardown |
+| `MAP_SHARED` | `MemoryObject.AddRef()`. | Child inherited native mappings are torn down and rebuilt on demand from managed VMA / MemoryObject state |
 
 ---
 
@@ -267,10 +338,10 @@ SysV `shmget` creates a long-lived `MemoryObject` held by the `SysVShmManager`.
 
 A Futex (Fast Userspace muTEX) involves waiting on a specific memory address. For shared futexes across processes, the wait queue must be keyed by the **Host Physical Pointer**, not the guest virtual address.
 
-**Shared Futex Resolution:**
+**Shared Futex Resolution (WAIT path):**
 ```csharp
-// 1. Force a page fault to guarantee the page is mapped in the native MMU
-sm.Engine.CopyFromUser(uaddr, new byte[1]);
+// 1. Read the current futex value; this also faults the page in
+sm.Engine.CopyFromUser(uaddr, valueBytes);
 
 // 2. Fetch the Host Physical Pointer to use as a global cross-process key
 var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
@@ -280,7 +351,9 @@ nint sharedKey = (nint)hostPtr;
 sm.Futex.PrepareWaitShared(sharedKey);
 ```
 
-This guarantees that two processes with different virtual addresses mapping the same `MAP_SHARED` file will wake each other up correctly.
+For `FUTEX_WAKE`, the implementation first tries to fault/touch the page so a shared host key can be resolved in the current engine. If that still fails, wake falls back to the private virtual-address key as a best-effort path instead of crashing.
+
+This guarantees that two processes with different virtual addresses mapping the same `MAP_SHARED` file wake each other up correctly once the shared page is actually mapped.
 
 ---
 
@@ -289,15 +362,20 @@ This guarantees that two processes with different virtual addresses mapping the 
 ### munmap
 
 `VMAManager.Munmap` does four things:
-1. **`engine.InvalidateRange`**: Clears JIT block caches to prevent SMC bugs.
+1. **`engine.InvalidateRange`**: Invalidates per-engine translated code for the affected range.
 2. **`engine.MemUnmap`**: Removes mappings from the native MMU.
 3. **`ExternalPages.ReleaseRange`**: Decrements `GlobalRefs`, potentially freeing memory.
-4. Truncates or deletes the `VMA`, calling `Release()` on the `MemoryObject` and `CowObject`.
+4. Truncates or deletes the `VMA`, releasing `MemoryObject` / `CowObject` references as needed.
 
 ### Syncing to Disk (`msync` / `munmap`)
 
-When a `MAP_SHARED` file mapping is unmapped or `msync`'d, `SyncVMA` checks the Native MMU's `Dirty` bit for every page.
-Dirty pages are extracted via `CopyFromUser` and written back to the `Inode`. `SyncVMA` strictly respects `FileBackingLength` using exact absolute and relative offsets to prevent out-of-bounds file I/O.
+When a `MAP_SHARED` file mapping is unmapped or `msync`'d, `SyncVMA` checks the native MMU's `Dirty` bit for every page.
+Dirty pages are synchronized in two tiers:
+
+- If the filesystem exposes a direct host-mapped flush path, `SyncVMA` asks the inode to flush that mapped page directly.
+- Otherwise, `SyncVMA` copies page contents back from the guest mapping and writes them to the inode.
+
+`SyncVMA` strictly respects `FileBackingLength` using exact absolute and relative offsets to prevent out-of-bounds file I/O. Pages fully beyond the current backing range are not written back.
 
 For host-mapped pages, `SyncVMA` first tries filesystem-specific direct flush:
 
