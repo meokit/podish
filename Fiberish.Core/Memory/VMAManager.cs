@@ -18,6 +18,12 @@ public enum FaultResult
 
 public class VMAManager
 {
+    private enum AnonymousMapMode
+    {
+        MaterializeWritable,
+        MapSharedZeroReadOnly
+    }
+
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
     private static long _cowAllocFirstCount;
     private static long _cowAllocReplaceCount;
@@ -1003,18 +1009,21 @@ public class VMAManager
         }
     }
 
-    private FaultResult ResolveAnonymousSharedSourcePage(VMA vma, uint pageIndex, bool materializePage,
-        out IntPtr pagePtr)
+    private FaultResult ResolveAnonymousSharedSourceForRead(VMA vma, uint pageIndex, out IntPtr pagePtr)
     {
         pagePtr = vma.SharedObject.GetPage(pageIndex);
         if (pagePtr != IntPtr.Zero)
             return FaultResult.Handled;
 
-        if (!materializePage)
-        {
-            pagePtr = ExternalPageManager.GetOrCreateSharedZeroPage();
-            return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Oom;
-        }
+        pagePtr = ZeroPageProvider.GetPointer();
+        return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Oom;
+    }
+
+    private FaultResult ResolveAnonymousSharedSourceForMaterialize(VMA vma, uint pageIndex, out IntPtr pagePtr)
+    {
+        pagePtr = vma.SharedObject.GetPage(pageIndex);
+        if (pagePtr != IntPtr.Zero)
+            return FaultResult.Handled;
 
         pagePtr = vma.SharedObject.GetOrCreatePage(pageIndex, ptr =>
         {
@@ -1034,7 +1043,7 @@ public class VMAManager
     {
         pagePtr = IntPtr.Zero;
         if (vma.File == null && vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
-            return ResolveAnonymousSharedSourcePage(vma, pageIndex, materializePage: false, out pagePtr);
+            return ResolveAnonymousSharedSourceForRead(vma, pageIndex, out pagePtr);
 
         if (vma.File != null && vmaRelativeOffset >= vma.FileBackingLength)
             return FaultResult.BusError;
@@ -1176,8 +1185,7 @@ public class VMAManager
         IntPtr sourcePage;
         if (vma.File == null)
         {
-            var sharedSourceResult =
-                ResolveAnonymousSharedSourcePage(vma, pageIndex, materializePage: false, out sourcePage);
+            var sharedSourceResult = ResolveAnonymousSharedSourceForRead(vma, pageIndex, out sourcePage);
             if (sharedSourceResult != FaultResult.Handled)
                 return sharedSourceResult;
 
@@ -1393,6 +1401,11 @@ public class VMAManager
 
     public bool MapAnonymousPage(uint addr, Engine engine, Protection perms)
     {
+        return MapAnonymousPage(addr, engine, perms, AnonymousMapMode.MaterializeWritable);
+    }
+
+    private bool MapAnonymousPage(uint addr, Engine engine, Protection perms, AnonymousMapMode mode)
+    {
         var pageStart = addr & LinuxConstants.PageMask;
         var vma = FindVMA(pageStart);
         if (vma == null)
@@ -1402,7 +1415,10 @@ public class VMAManager
         IntPtr hostPtr;
         if (vma.File == null && vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
         {
-            if (ResolveAnonymousSharedSourcePage(vma, pageIndex, materializePage: true, out hostPtr) != FaultResult.Handled)
+            var faultResult = mode == AnonymousMapMode.MapSharedZeroReadOnly
+                ? ResolveAnonymousSharedSourceForRead(vma, pageIndex, out hostPtr)
+                : ResolveAnonymousSharedSourceForMaterialize(vma, pageIndex, out hostPtr);
+            if (faultResult != FaultResult.Handled)
                 return false;
         }
         else

@@ -21,6 +21,9 @@ public readonly record struct MemoryStatsSnapshot(
     long InactiveBytes,
     long ActiveAnonBytes,
     long InactiveAnonBytes,
+    long AnonymousZeroMappedBytes,
+    long AnonymousSharedMaterializedBytes,
+    long UnreclaimablePrivateOverlayBytes,
     long PrivateAnonBytes,
     long PrivateFileBytes,
     long ActivePrivateAnonBytes,
@@ -40,15 +43,18 @@ public readonly record struct MemoryStatsSnapshot(
         var cachedBytes = (cache.TotalPages - cache.AnonSharedSourcePages) * LinuxConstants.PageSize;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
-        var anonBytes = Math.Max(0, allocated - cachedBytes);
+        var nowTicks = DateTime.UtcNow.Ticks;
+        var privateBreakdown = EstimatePrivateBreakdown(sm, nowTicks);
+        var anonymousZeroMappedBytes = EstimateAnonymousZeroMappedBytes(sm);
+        var anonymousSharedMaterializedBytes = cache.AnonSharedSourcePages * LinuxConstants.PageSize;
+        var privateOverlayBytes = privateBreakdown.TotalAnon + privateBreakdown.TotalFilePrivate;
+        var anonBytes = Math.Max(0, allocated - cachedBytes) + anonymousSharedMaterializedBytes;
         var shmemCacheBytes = cache.ShmemPages * LinuxConstants.PageSize;
         var writebackBytes = cache.WritebackPages * LinuxConstants.PageSize;
         var committedBytes = EstimateCommittedBytes(sm);
         var sysvShmBytes = EstimateSysVShmBytes(sm);
         var shmemBytes = shmemCacheBytes + sysvShmBytes;
-        var nowTicks = DateTime.UtcNow.Ticks;
         var (activeFile, inactiveFile, activeShmem, inactiveShmem) = SplitCacheByAge(cacheStates, nowTicks);
-        var privateBreakdown = EstimatePrivateBreakdown(sm, nowTicks);
         var activeAnon = privateBreakdown.ActiveAnon + privateBreakdown.ActiveFilePrivate;
         var inactiveAnon = privateBreakdown.InactiveAnon + privateBreakdown.InactiveFilePrivate;
         var active = activeFile + activeShmem + activeAnon;
@@ -78,6 +84,9 @@ public readonly record struct MemoryStatsSnapshot(
             InactiveBytes: inactive,
             ActiveAnonBytes: activeAnon,
             InactiveAnonBytes: inactiveAnon,
+            AnonymousZeroMappedBytes: anonymousZeroMappedBytes,
+            AnonymousSharedMaterializedBytes: anonymousSharedMaterializedBytes,
+            UnreclaimablePrivateOverlayBytes: privateOverlayBytes,
             PrivateAnonBytes: privateBreakdown.TotalAnon,
             PrivateFileBytes: privateBreakdown.TotalFilePrivate,
             ActivePrivateAnonBytes: privateBreakdown.ActiveAnon,
@@ -109,6 +118,34 @@ public readonly record struct MemoryStatsSnapshot(
     {
         if (sm == null) return 0;
         return sm.SysVShm.GetResidentBytesSnapshot();
+    }
+
+    private static long EstimateAnonymousZeroMappedBytes(SyscallManager? sm)
+    {
+        var processes = ResolveProcesses(sm);
+        if (processes.Count == 0) return 0;
+
+        long bytes = 0;
+        foreach (var process in processes)
+        {
+            foreach (var vma in process.Mem.VMAs)
+            {
+                if ((vma.Flags & MapFlags.Private) == 0) continue;
+                if (vma.File != null) continue;
+                if (vma.SharedObject.Role != MemoryObjectRole.AnonSharedSourceZeroFill) continue;
+
+                var pageCount = vma.Length / LinuxConstants.PageSize;
+                for (uint i = 0; i < pageCount; i++)
+                {
+                    var pageIndex = vma.ViewPageOffset + i;
+                    if (vma.SharedObject.GetPage(pageIndex) != IntPtr.Zero) continue;
+                    if (vma.PrivateObject?.GetPage(pageIndex) != IntPtr.Zero) continue;
+                    bytes += LinuxConstants.PageSize;
+                }
+            }
+        }
+
+        return bytes;
     }
 
     private static IReadOnlyList<Process> ResolveProcesses(SyscallManager? sm)

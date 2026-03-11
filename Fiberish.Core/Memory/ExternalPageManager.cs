@@ -16,7 +16,6 @@ public enum AllocationClass
 public enum AllocationSource
 {
     Unknown,
-    ZeroPage,
     AnonFault,
     AnonMapPreFault,
     CowFirstPrivate,
@@ -47,7 +46,6 @@ public sealed class ExternalPageManager
         public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
         public long MemoryQuotaBytes = 256L * 1024 * 1024;
         public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
-        public nint SharedZeroPagePtr;
     }
 
     private sealed class ScopeRestore : IDisposable
@@ -179,8 +177,11 @@ public sealed class ExternalPageManager
             return existing == ptr;
         }
 
-        AddGlobalRef(ptr);
-        addedRef = true;
+        if (!ZeroPageProvider.IsZeroPage(ptr))
+        {
+            AddGlobalRef(ptr);
+            addedRef = true;
+        }
         _pages[pageAddr] = ptr;
         return true;
     }
@@ -189,7 +190,8 @@ public sealed class ExternalPageManager
     {
         if (!_pages.TryGetValue(pageAddr, out var ptr)) return;
         _pages.Remove(pageAddr);
-        ReleaseGlobalRef(ptr);
+        if (!ZeroPageProvider.IsZeroPage(ptr))
+            ReleaseGlobalRef(ptr);
     }
 
     public void ReleaseRange(uint addr, uint length)
@@ -213,11 +215,13 @@ public sealed class ExternalPageManager
 
     public static void AddRef(IntPtr ptr)
     {
+        if (ZeroPageProvider.IsZeroPage(ptr)) return;
         AddGlobalRef(ptr);
     }
 
     public static int GetRefCount(IntPtr ptr)
     {
+        if (ZeroPageProvider.IsZeroPage(ptr)) return 0;
         var state = CurrentState;
         lock (state.GlobalLock)
         {
@@ -237,31 +241,6 @@ public sealed class ExternalPageManager
     public static long GetAllocatedBytes()
     {
         return GetAllocatedPageCount() * LinuxConstants.PageSize;
-    }
-
-    public static IntPtr GetOrCreateSharedZeroPage()
-    {
-        var state = CurrentState;
-        lock (state.GlobalLock)
-        {
-            if (state.SharedZeroPagePtr != 0 && state.PageRefs.ContainsKey(state.SharedZeroPagePtr))
-                return (IntPtr)state.SharedZeroPagePtr;
-        }
-
-        var allocated = AllocateExternalPage(AllocationClass.KernelInternal, AllocationSource.ZeroPage);
-        if (allocated == IntPtr.Zero) return IntPtr.Zero;
-
-        lock (state.GlobalLock)
-        {
-            if (state.SharedZeroPagePtr != 0 && state.PageRefs.ContainsKey(state.SharedZeroPagePtr))
-            {
-                ReleasePtr(allocated);
-                return (IntPtr)state.SharedZeroPagePtr;
-            }
-
-            state.SharedZeroPagePtr = (nint)allocated;
-            return allocated;
-        }
     }
 
     public static (long StrictSuccess, long StrictReclaimSuccess, long StrictFail, long LegacyOverQuota)
@@ -689,12 +668,18 @@ public sealed class ExternalPageManager
     public static void AddRefPtr(IntPtr ptr, IDisposable? externalOwner = null)
     {
         if (ptr == IntPtr.Zero) return;
+        if (ZeroPageProvider.IsZeroPage(ptr))
+        {
+            externalOwner?.Dispose();
+            return;
+        }
         AddGlobalRef(ptr, externalOwner: externalOwner);
     }
 
     public static void ReleasePtr(IntPtr ptr)
     {
         if (ptr == IntPtr.Zero) return;
+        if (ZeroPageProvider.IsZeroPage(ptr)) return;
         ReleaseGlobalRef(ptr);
     }
 }
