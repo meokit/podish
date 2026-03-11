@@ -50,21 +50,36 @@ public static class ProcessFactory
         scheduler.RegisterProcess(proc);
         scheduler.SetInitPid(proc.TGID);
 
-        var mainTask = new FiberTask(proc.TGID, proc, runtime.Engine, scheduler);
-        runtime.Engine.Owner = mainTask;
-
-        proc.LoadExecutable(dentry, guestPath, args, envs, mount ?? runtime.Syscalls.RootMount!);
-        ProcFsManager.OnProcessStart(runtime.Syscalls, proc);
-
-        if (parentPid > 0)
+        FiberTask? mainTask = null;
+        try
         {
-            var parent = scheduler.GetProcess(parentPid);
-            if (parent != null)
-            {
-                if (!parent.Children.Contains(proc.TGID)) parent.Children.Add(proc.TGID);
-            }
-        }
+            mainTask = new FiberTask(proc.TGID, proc, runtime.Engine, scheduler);
+            runtime.Engine.Owner = mainTask;
 
-        return mainTask;
+            proc.LoadExecutable(dentry, guestPath, args, envs, mount ?? runtime.Syscalls.RootMount!);
+            ProcFsManager.OnProcessStart(runtime.Syscalls, proc);
+
+            if (parentPid > 0)
+            {
+                var parent = scheduler.GetProcess(parentPid);
+                if (parent != null)
+                {
+                    if (!parent.Children.Contains(proc.TGID)) parent.Children.Add(proc.TGID);
+                }
+            }
+
+            return mainTask;
+        }
+        catch
+        {
+            if (mainTask != null)
+            {
+                scheduler.DetachProcessTasks(proc.TGID);
+                runtime.Engine.Owner = null;
+            }
+
+            scheduler.UnregisterProcess(proc.TGID);
+            throw;
+        }
     }
 }
