@@ -1370,15 +1370,12 @@ public class FiberTask
             if (!cloneVm)
             {
                 // Drop inherited native mappings in child to force VMAManager-backed refaults.
-                // However, for MAP_PRIVATE file mappings (e.g. dynamic linker/data segments),
-                // Engine.Clone(false) already contains the exact post-relocation bytes.
-                // Reconstructing those pages via generic refault may lose process-private runtime
-                // state and can crash fork children before exec. Keep those mappings intact.
+                // For RW MAP_PRIVATE file mappings, synchronize clone-time native snapshot pages
+                // into child CowObject before teardown, so refault sees exact fork snapshot state.
                 foreach (var vma in newMem.VMAs)
                 {
                     if (vma.Length == 0) continue;
-                    var isPrivateFile = vma.File != null && (vma.Flags & MapFlags.Private) != 0;
-                    if (isPrivateFile) continue;
+                    ImportForkPrivateFileWritableSnapshot(vma, newCpu);
 
                     newMem.TearDownNativeMappings(
                         newCpu,
@@ -1478,6 +1475,68 @@ public class FiberTask
         }
 
         return child;
+    }
+
+    private static bool IsPrivateFileVma(VMA vma)
+    {
+        return vma.File != null && (vma.Flags & MapFlags.Private) != 0 && (vma.Flags & MapFlags.Anonymous) == 0 &&
+               vma.CowObject != null;
+    }
+
+    private static uint ComputeRangeEnd(uint start, uint length)
+    {
+        var end = unchecked(start + length);
+        return end < start ? uint.MaxValue : end;
+    }
+
+    private static void ImportForkPrivateFileWritableSnapshot(VMA vma, Engine engine)
+    {
+        if (!IsPrivateFileVma(vma)) return;
+        if ((vma.Perms & Protection.Write) == 0) return;
+
+        const int BatchSize = 128;
+        Span<X86Native.PageMapping> mappings = stackalloc X86Native.PageMapping[BatchSize];
+        var cursor = vma.Start;
+        var rangeEnd = vma.End;
+        var cowObject = vma.CowObject!;
+
+        while (cursor < rangeEnd)
+        {
+            var length = rangeEnd - cursor;
+            var count = engine.CollectMappedPages(cursor, length, mappings);
+            if (count <= 0) break;
+
+            var batch = mappings[..count];
+            for (var i = 0; i < batch.Length; i++)
+            {
+                ref var mapping = ref batch[i];
+                if (mapping.HostPage == IntPtr.Zero) continue;
+
+                var pageAddr = mapping.GuestPage;
+                if (pageAddr < vma.Start || pageAddr >= vma.End) continue;
+
+                var pageIndex = vma.ViewPageOffset + ((pageAddr - vma.Start) / LinuxConstants.PageSize);
+                if (!ExternalPageManager.TryAllocateExternalPageStrict(out var pageCopy, AllocationClass.Cow,
+                        AllocationSource.ForkClonePrivateFileImport))
+                    continue;
+
+                unsafe
+                {
+                    Buffer.MemoryCopy((void*)mapping.HostPage, (void*)pageCopy, LinuxConstants.PageSize,
+                        LinuxConstants.PageSize);
+                }
+
+                var existing = cowObject.GetPage(pageIndex);
+                cowObject.SetPage(pageIndex, pageCopy);
+                if (existing != IntPtr.Zero)
+                    ExternalPageManager.ReleasePtr(existing);
+                cowObject.MarkDirty(pageIndex);
+            }
+
+            var next = ComputeRangeEnd(batch[^1].GuestPage, LinuxConstants.PageSize);
+            if (next <= cursor) break;
+            cursor = next;
+        }
     }
 
 

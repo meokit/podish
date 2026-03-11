@@ -386,6 +386,46 @@ void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write) {
     return state->mmu.resolve_safe(addr, perm);
 }
 
+size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer,
+                              size_t max_count) {
+    if (!state || !buffer || max_count == 0 || size == 0 || !state->mmu.page_dir) return 0;
+
+    constexpr uint64_t kPageSize = static_cast<uint64_t>(mem::PAGE_SIZE);
+    constexpr uint64_t kPageMask = static_cast<uint64_t>(~mem::PAGE_MASK);
+
+    const uint64_t start_page = static_cast<uint64_t>(addr) & kPageMask;
+    const uint64_t end_exclusive = static_cast<uint64_t>(addr) + static_cast<uint64_t>(size);
+    const uint64_t end_page = (end_exclusive + mem::PAGE_MASK) & kPageMask;
+
+    size_t count = 0;
+    for (uint64_t page = start_page; page < end_page; page += kPageSize) {
+        const uint32_t page_addr = static_cast<uint32_t>(page);
+        const uint32_t l1_idx = page_addr >> 22;
+        const uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
+
+        auto& chunk = state->mmu.page_dir->l1_directory[l1_idx];
+        if (!chunk) continue;
+
+        auto* page_ptr = chunk->pages[l2_idx];
+        if (!page_ptr) continue;
+
+        const auto perms = chunk->permissions[l2_idx];
+        uint8_t flags = 0;
+        if (mem::has_property(perms, mem::Property::Dirty)) flags |= X86_PAGE_FLAG_DIRTY;
+        if (mem::has_property(perms, mem::Property::External)) flags |= X86_PAGE_FLAG_EXTERNAL;
+
+        buffer[count].guest_page = page_addr;
+        buffer[count].perms = static_cast<uint8_t>(static_cast<uint32_t>(perms));
+        buffer[count].flags = flags;
+        buffer[count].reserved = 0;
+        buffer[count].host_page = page_ptr;
+        count++;
+        if (count == max_count) break;
+    }
+
+    return count;
+}
+
 // ----------------------------------------------------------------------------
 // Execution
 // ----------------------------------------------------------------------------

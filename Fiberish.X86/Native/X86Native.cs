@@ -159,6 +159,11 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial void* ResolvePtr(IntPtr state, uint addr, int isWrite);
 
+    [LibraryImport(LibName, EntryPoint = "X86_CollectMappedPages")]
+    [SuppressGCTransition]
+    public static partial nuint CollectMappedPages(IntPtr state, uint addr, uint size, PageMapping* buffer,
+        nuint maxCount);
+
     [LibraryImport(LibName, EntryPoint = "X86_AllocatePage")]
     [SuppressGCTransition]
     public static partial void* AllocatePage(IntPtr state, uint addr, byte perms);
@@ -220,5 +225,23 @@ public unsafe partial class X86Native
         public IntPtr jit_func;
         // Padding to 32 bytes implied before ops
         // DecodedOp ops[1] follows at offset 32
+    }
+
+    [Flags]
+    public enum PageMappingFlags : byte
+    {
+        None = 0,
+        Dirty = 1 << 0,
+        External = 1 << 1
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PageMapping
+    {
+        public uint GuestPage;
+        public byte Perms;
+        public PageMappingFlags Flags;
+        public ushort Reserved;
+        public IntPtr HostPage;
     }
 }

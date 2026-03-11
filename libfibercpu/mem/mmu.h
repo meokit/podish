@@ -182,13 +182,12 @@ public:
             }
 
             auto& entry_perms = page_dir->l1_directory[l1_idx]->permissions[l2_idx];
-            // Preserve External flag: mmap is used to change R/W/X permissions,
-            // but must not drop the External ownership marker.
-            if (has_property(entry_perms, Property::External)) {
-                entry_perms = perms | Property::External;
-            } else {
-                entry_perms = perms;
-            }
+            // Preserve state bits across permission changes.
+            // mprotect/mmap should not clear dirty tracking, and must keep external ownership marker.
+            Property preserved = Property::None;
+            if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
+            if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+            entry_perms = perms | preserved;
         }
         tlb.flush();
     }

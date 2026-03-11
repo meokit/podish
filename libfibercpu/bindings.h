@@ -21,6 +21,16 @@ typedef struct BasicBlock BasicBlock;
 extern "C" {
 #endif
 
+typedef struct {
+    uint32_t guest_page;
+    uint8_t perms;
+    uint8_t flags;
+    uint16_t reserved;
+    void* host_page;
+} X86_PageMapping;
+
+enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
+
 // Creation / Destruction
 EmuState* X86_Create();
 // share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (Copy Memory)
@@ -64,6 +74,8 @@ void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
 int X86_MemIsDirty(EmuState* state, uint32_t addr);
 // Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
 void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write);
+// Collect present page mappings in [addr, addr + size), one record per mapped page.
+size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer, size_t max_count);
 // Allocate a single page with given permissions, returns host pointer to page
 void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
 // Map external memory to guest address (caller owns memory), returns 1 on success

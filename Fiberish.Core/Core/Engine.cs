@@ -395,6 +395,21 @@ public class Engine : IDisposable
         return X86Native.IsDirty(State, addr) != 0;
     }
 
+    public unsafe int CollectMappedPages(uint addr, uint size, Span<X86Native.PageMapping> buffer)
+    {
+        if (size == 0 || buffer.Length == 0) return 0;
+        fixed (X86Native.PageMapping* pBuffer = buffer)
+        {
+            return (int)X86Native.CollectMappedPages(State, addr, size, pBuffer, (nuint)buffer.Length);
+        }
+    }
+
+    public bool HasMappedPage(uint addr, uint size)
+    {
+        Span<X86Native.PageMapping> page = stackalloc X86Native.PageMapping[1];
+        return CollectMappedPages(addr, size, page) > 0;
+    }
+
     public void InvalidateRange(uint addr, uint size)
     {
         X86Native.InvalidateRange(State, addr, size);

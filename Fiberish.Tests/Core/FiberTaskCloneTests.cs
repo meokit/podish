@@ -3,6 +3,7 @@ using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
@@ -45,8 +46,38 @@ public class FiberTaskCloneTests
         Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
     }
 
+    [Fact]
+    public async Task Fork_PrivateFileDirtyPage_DropsNativeMappings_ButPreservesBytes()
+    {
+        using var env = new TestEnv();
+        const uint addr = 0x00500000;
+        env.MapPrivateFilePage(addr, (byte)'A');
+
+        var read = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(addr, read));
+        Assert.Equal((byte)'A', read[0]);
+
+        Assert.True(env.Engine.CopyToUser(addr, new byte[] { (byte)'Z' }));
+        Assert.True(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
+        var childMm = child.Process.Mem;
+        var pageAddr = addr & LinuxConstants.PageMask;
+
+        // Child clone must not retain stale native mappings after fork teardown.
+        Assert.False(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
+        Assert.False(childMm.ExternalPages.TryGet(pageAddr, out _));
+
+        var childRead = new byte[1];
+        Assert.True(child.CPU.CopyFromUser(addr, childRead));
+        Assert.Equal((byte)'Z', childRead[0]);
+        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
+    }
+
     private sealed class TestEnv : IDisposable
     {
+        private readonly List<LinuxFile> _files = [];
+
         public TestEnv()
         {
             Engine = new Engine();
@@ -74,8 +105,24 @@ public class FiberTaskCloneTests
             Assert.True(Vma.HandleFault(addr, true, Engine));
         }
 
+        public void MapPrivateFilePage(uint addr, byte initialByte)
+        {
+            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "clone-private-file", null);
+            var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+            var dentry = new Dentry("clone.bin", null, sb.Root, sb);
+            sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
+            var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
+            _files.Add(file);
+
+            Assert.Equal(1, dentry.Inode!.Write(file, new byte[] { initialByte }, 0));
+            Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed, file, 0, (long)dentry.Inode.Size, "[private-file]", Engine);
+        }
+
         public void Dispose()
         {
+            foreach (var file in _files) file.Close();
             GC.KeepAlive(Parent);
         }
     }

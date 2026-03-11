@@ -19,6 +19,7 @@ public enum AllocationSource
     AnonFault,
     AnonMapPreFault,
     ForkClonePrivateAnon,
+    ForkClonePrivateFileImport,
     CowFirstPrivate,
     CowReplacePrivate
 }

@@ -852,11 +852,14 @@ public class VMAManager
                     engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)(vma.Perms & ~Protection.Write));
                     engine.Yield();
 
+                    var hasCurrentMapping = ExternalPages.TryGet(pageStart, out var mappedPtr);
+                    var mapsExistingCow = hasCurrentMapping && mappedPtr == existingCow;
+
                     // 2. Check reference count to see if we have exclusive ownership.
                     // An exclusively mapped COW page will have a global ref count of 2:
                     // 1 reference owned by the vma.CowObject
                     // 1 reference owned by the ExternalPages tracking (current VMA)
-                    if (ExternalPageManager.GetRefCount(existingCow) == 2)
+                    if (mapsExistingCow && ExternalPageManager.GetRefCount(existingCow) == 2)
                     {
                         // We are the exclusive owner. No need to copy, just upgrade to Writable.
                         engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
@@ -864,6 +867,17 @@ public class VMAManager
                     }
                     else
                     {
+                        if (!hasCurrentMapping)
+                        {
+                            if (!ExternalPages.AddMapping(pageStart, existingCow, out var addedRef))
+                                return FaultResult.Segv;
+                            if (!engine.MapExternalPage(pageStart, existingCow, (byte)(vma.Perms & ~Protection.Write)))
+                            {
+                                if (addedRef) ExternalPages.Release(pageStart);
+                                return FaultResult.Segv;
+                            }
+                        }
+
                         // Page is shared (e.g. after fork). Must Copy-On-Write.
                         if (!ExternalPageManager.TryAllocateExternalPageStrict(out var newPage, AllocationClass.Cow,
                                 AllocationSource.CowReplacePrivate))
