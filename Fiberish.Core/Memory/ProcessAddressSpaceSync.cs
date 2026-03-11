@@ -9,6 +9,33 @@ internal static class ProcessAddressSpaceSync
     private static readonly object AddressSpaceRegistryLock = new();
     private static readonly Dictionary<VMAManager, HashSet<Engine>> EnginesByAddressSpace = [];
     private static readonly Dictionary<IntPtr, (VMAManager AddressSpace, Engine Engine)> AddressSpaceByEngineState = [];
+    [ThreadStatic] private static Stack<EngineSnapshotBuffer>? SnapshotBufferPool;
+
+    private sealed class EngineSnapshotBuffer
+    {
+        public readonly List<Engine> Engines = [];
+        public readonly HashSet<IntPtr> SeenStates = [];
+    }
+
+    private readonly struct EngineSnapshotLease : IDisposable
+    {
+        private readonly EngineSnapshotBuffer _buffer;
+
+        public EngineSnapshotLease(EngineSnapshotBuffer buffer)
+        {
+            _buffer = buffer;
+        }
+
+        public List<Engine> Engines => _buffer.Engines;
+        public HashSet<IntPtr> SeenStates => _buffer.SeenStates;
+
+        public void Dispose()
+        {
+            _buffer.Engines.Clear();
+            _buffer.SeenStates.Clear();
+            (SnapshotBufferPool ??= new Stack<EngineSnapshotBuffer>()).Push(_buffer);
+        }
+    }
 
     internal readonly struct AddressSpaceScope : IDisposable
     {
@@ -28,8 +55,15 @@ internal static class ProcessAddressSpaceSync
         return process ?? (engine.Owner as FiberTask)?.Process;
     }
 
+    private static void AssertSchedulerThread(Engine engine, string caller)
+    {
+        if (engine.Owner is FiberTask task)
+            task.CommonKernel.AssertSchedulerThread(caller);
+    }
+
     internal static AddressSpaceScope EnterAddressSpaceScope(Engine engine, Process? process = null)
     {
+        AssertSchedulerThread(engine, nameof(EnterAddressSpaceScope));
         var ownerProcess = ResolveProcess(engine, process);
         return new AddressSpaceScope(ownerProcess);
     }
@@ -38,6 +72,7 @@ internal static class ProcessAddressSpaceSync
     {
         var state = engine.State;
         if (state == IntPtr.Zero) return;
+        engine.AddressSpaceMapSequenceSeen = addressSpace.CurrentMapSequence;
 
         lock (AddressSpaceRegistryLock)
         {
@@ -54,7 +89,13 @@ internal static class ProcessAddressSpaceSync
                 }
                 else
                 {
-                    existing.Engine = engine;
+                    if (!ReferenceEquals(existing.Engine, engine) &&
+                        EnginesByAddressSpace.TryGetValue(addressSpace, out var existingSet))
+                    {
+                        existingSet.Remove(existing.Engine);
+                        if (existingSet.Count == 0)
+                            EnginesByAddressSpace.Remove(addressSpace);
+                    }
                 }
             }
 
@@ -127,15 +168,21 @@ internal static class ProcessAddressSpaceSync
         RegisterEngineAddressSpace(newAddressSpace, engine);
     }
 
-    private static List<Engine> SnapshotAddressSpaceEngines(VMAManager addressSpace, Engine? includeEngine = null)
+    private static EngineSnapshotLease RentEngineSnapshot()
     {
-        var engines = new List<Engine>();
-        var seen = new HashSet<IntPtr>();
+        var pool = SnapshotBufferPool ??= new Stack<EngineSnapshotBuffer>();
+        if (!pool.TryPop(out var buffer))
+            buffer = new EngineSnapshotBuffer();
+        return new EngineSnapshotLease(buffer);
+    }
 
+    private static void FillAddressSpaceEngineSnapshot(VMAManager addressSpace, List<Engine> engines,
+        HashSet<IntPtr> seenStates, Engine? includeEngine = null)
+    {
         if (includeEngine != null && includeEngine.State != IntPtr.Zero)
         {
             engines.Add(includeEngine);
-            seen.Add(includeEngine.State);
+            seenStates.Add(includeEngine.State);
         }
 
         lock (AddressSpaceRegistryLock)
@@ -146,13 +193,29 @@ internal static class ProcessAddressSpaceSync
                 {
                     var state = engine.State;
                     if (state == IntPtr.Zero) continue;
-                    if (!seen.Add(state)) continue;
+                    if (!seenStates.Add(state)) continue;
                     engines.Add(engine);
                 }
             }
         }
+    }
 
-        return engines;
+    private static long GetMinSeenSequence(VMAManager addressSpace)
+    {
+        long min = long.MaxValue;
+        lock (AddressSpaceRegistryLock)
+        {
+            if (!EnginesByAddressSpace.TryGetValue(addressSpace, out var set))
+                return long.MaxValue;
+            foreach (var engine in set)
+            {
+                if (engine.State == IntPtr.Zero) continue;
+                if (engine.AddressSpaceMapSequenceSeen < min)
+                    min = engine.AddressSpaceMapSequenceSeen;
+            }
+        }
+
+        return min;
     }
 
     private static uint AlignLengthToPage(uint len)
@@ -169,11 +232,6 @@ internal static class ProcessAddressSpaceSync
         return end < addr ? uint.MaxValue : end;
     }
 
-    private static void SyncSharedMappingsForEngine(VMAManager vmaManager, Engine engine, uint addr, uint len)
-    {
-        SyncSharedMappingsForEngines(vmaManager, [engine], addr, len);
-    }
-
     private static void SyncSharedMappingsForEngines(VMAManager vmaManager, IReadOnlyList<Engine> engines, uint addr,
         uint len)
     {
@@ -187,39 +245,20 @@ internal static class ProcessAddressSpaceSync
         }
     }
 
-    private static void UnmapPeerNativeMappings(VMAManager vmaManager, Engine engine, uint addr, uint len,
-        Process? process, bool syncShared)
+    private static void MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len)
     {
-        if (len == 0) return;
-        var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-        foreach (var cpu in engines)
-        {
-            if (ReferenceEquals(cpu, engine)) continue;
-
-            if (syncShared) SyncSharedMappingsForEngine(vmaManager, cpu, addr, len);
-            vmaManager.TearDownNativeMappings(
-                cpu,
-                addr,
-                len,
-                captureDirtySharedPages: false,
-                invalidateCodeRange: true,
-                releaseExternalPages: true);
-        }
-    }
-
-    private static void MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process)
-    {
-        var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-        SyncSharedMappingsForEngines(vmaManager, engines, addr, len);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         vmaManager.Munmap(addr, len, engine);
-        UnmapPeerNativeMappings(vmaManager, engine, addr, len, process, syncShared: false);
+        PublishInvalidation(vmaManager, engine, addr, len);
     }
 
     internal static void Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
     {
         if (len == 0) return;
         using var scope = EnterAddressSpaceScope(engine, process);
-        MunmapCore(vmaManager, engine, addr, len, process);
+        MunmapCore(vmaManager, engine, addr, len);
     }
 
     internal static int Mprotect(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection prot,
@@ -227,10 +266,35 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         var rc = vmaManager.Mprotect(addr, len, prot, engine);
         if (rc == 0)
-            UnmapPeerNativeMappings(vmaManager, engine, addr, len, process, syncShared: true);
+            PublishInvalidation(vmaManager, engine, addr, len);
         return rc;
+    }
+
+    internal static void SyncEngineBeforeRun(VMAManager vmaManager, Engine engine, Process? process = null)
+    {
+        if (vmaManager == null) return;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        if (engine.AddressSpaceMapSequenceSeen >= vmaManager.CurrentMapSequence) return;
+
+        var ranges = engine.AddressSpaceInvalidationScratch;
+        ranges.Clear();
+        var currentSeq = vmaManager.CollectInvalidationRangesSince(engine.AddressSpaceMapSequenceSeen, ranges);
+        if (engine.AddressSpaceMapSequenceSeen >= currentSeq) return;
+
+        // The engine already shares the same MMU core, so we only need per-engine cache shootdown.
+        engine.FlushMmuTlbOnly();
+        foreach (var range in ranges)
+            engine.InvalidateRange(range.Start, range.Length);
+        engine.AddressSpaceMapSequenceSeen = currentSeq;
+
+        var minSeen = GetMinSeenSequence(vmaManager);
+        if (minSeen != long.MaxValue)
+            vmaManager.PruneInvalidationRanges(minSeen);
     }
 
     internal static uint Mmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection perms, MapFlags flags,
@@ -240,9 +304,19 @@ internal static class ProcessAddressSpaceSync
         var alignedLen = AlignLengthToPage(len);
         var fixedReplace = (flags & MapFlags.Fixed) != 0 && (flags & MapFlags.FixedNoReplace) == 0;
         if (fixedReplace && addr != 0 && alignedLen != 0)
-            MunmapCore(vmaManager, engine, addr, alignedLen, process);
+            MunmapCore(vmaManager, engine, addr, alignedLen);
 
-        return vmaManager.Mmap(addr, len, perms, flags, file, offset, filesz, name, engine);
+        var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, filesz, name, engine);
+        PublishInvalidation(vmaManager, engine, mapped, alignedLen);
+        return mapped;
+    }
+
+    internal static void PublishMappingChange(VMAManager vmaManager, Engine engine, uint addr, uint len,
+        Process? process = null)
+    {
+        if (len == 0) return;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        PublishInvalidation(vmaManager, engine, addr, len);
     }
 
     internal static void SyncSharedRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
@@ -250,8 +324,9 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return;
         using var scope = EnterAddressSpaceScope(engine, process);
-        var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-        SyncSharedMappingsForEngines(vmaManager, engines, addr, len);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
     }
 
     internal static void SyncMappedFile(VMAManager vmaManager, Engine engine, LinuxFile file, Process? process = null)
@@ -260,30 +335,33 @@ internal static class ProcessAddressSpaceSync
         var inode = file.OpenedInode;
         if (inode == null)
         {
-            var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-            vmaManager.SyncMappedFile(file, engines);
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+            vmaManager.SyncMappedFile(file, snapshot.Engines);
             return;
         }
 
         var targets = inode.SnapshotMappedAddressSpaces();
         if (targets.Length == 0)
         {
-            var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-            vmaManager.SyncMappedFile(file, engines.Count == 0 ? [engine] : engines);
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+            vmaManager.SyncMappedFile(file, snapshot.Engines.Count == 0 ? [engine] : snapshot.Engines);
             return;
         }
 
         foreach (var target in targets)
         {
             var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
-            var engines = SnapshotAddressSpaceEngines(target, fallback);
-            if (engines.Count == 0)
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
+            if (snapshot.Engines.Count == 0)
             {
                 target.SyncMappedFile(file, Array.Empty<Engine>());
                 continue;
             }
 
-            target.SyncMappedFile(file, engines);
+            target.SyncMappedFile(file, snapshot.Engines);
         }
     }
 
@@ -294,25 +372,35 @@ internal static class ProcessAddressSpaceSync
         var targets = inode.SnapshotMappedAddressSpaces();
         if (targets.Length == 0)
         {
-            var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-            if (engines.Count == 0) engines = [engine];
-            vmaManager.OnFileTruncate(inode, newSize, engines);
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+            if (snapshot.Engines.Count == 0) snapshot.Engines.Add(engine);
+            vmaManager.OnFileTruncate(inode, newSize, snapshot.Engines);
             return;
         }
 
         foreach (var target in targets)
         {
             var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
-            var engines = SnapshotAddressSpaceEngines(target, fallback);
-            if (engines.Count == 0) engines = [];
-            target.OnFileTruncate(inode, newSize, engines);
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
+            target.OnFileTruncate(inode, newSize, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
         }
     }
 
     internal static void SyncAllMappedSharedFiles(VMAManager vmaManager, Engine engine, Process? process = null)
     {
         using var scope = EnterAddressSpaceScope(engine, process);
-        var engines = SnapshotAddressSpaceEngines(vmaManager, engine);
-        vmaManager.SyncAllMappedSharedFiles(engines);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        vmaManager.SyncAllMappedSharedFiles(snapshot.Engines);
+    }
+
+    private static void PublishInvalidation(VMAManager vmaManager, Engine engine, uint addr, uint len)
+    {
+        if (len == 0) return;
+        var sequence = vmaManager.BumpMapSequence();
+        vmaManager.RecordInvalidationRange(sequence, addr, len);
+        engine.AddressSpaceMapSequenceSeen = sequence;
     }
 }

@@ -425,6 +425,8 @@ public:
 
     [[nodiscard]] uintptr_t page_directory_identity() const { return core_ ? core_->identity : 0; }
 
+    void flush_tlb_only() { tlb.flush(); }
+
     [[nodiscard]] MmuCore* detach_core() {
         if (!core_) {
             bind_core(CreateEmptyCore(), false);

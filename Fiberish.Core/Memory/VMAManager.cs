@@ -20,11 +20,15 @@ public class VMAManager
     private static readonly ILogger Logger = Logging.CreateLogger<VMAManager>();
     private static long _cowAllocFirstCount;
     private static long _cowAllocReplaceCount;
+    private const int MaxInvalidationEntries = 4096;
+    private long _mapSequence;
     private int _sharedRefCount = 1;
     private readonly List<VMA> _vmas = [];
     private VMA? _lastFaultVma;
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
-    private readonly record struct NativeRange(uint Start, uint Length);
+    internal readonly record struct NativeRange(uint Start, uint Length);
+    private readonly record struct InvalidationEntry(long Sequence, NativeRange Range);
+    private readonly List<InvalidationEntry> _pendingInvalidations = [];
     public ExternalPageManager ExternalPages { get; } = new();
     public MemoryObjectManager MemoryObjects { get; }
 
@@ -41,6 +45,65 @@ public class VMAManager
     public int GetSharedRefCount()
     {
         return Volatile.Read(ref _sharedRefCount);
+    }
+
+    public long CurrentMapSequence => Interlocked.Read(ref _mapSequence);
+
+    internal long BumpMapSequence()
+    {
+        return Interlocked.Increment(ref _mapSequence);
+    }
+
+    internal void RecordInvalidationRange(long sequence, uint addr, uint len)
+    {
+        if (len == 0) return;
+        var (start, endExclusive) = ComputePageAlignedRange(addr, len);
+        if (endExclusive <= start) return;
+        var range = new NativeRange((uint)start, (uint)(endExclusive - start));
+        _pendingInvalidations.Add(new InvalidationEntry(sequence, range));
+        if (_pendingInvalidations.Count > MaxInvalidationEntries)
+            CompactInvalidationRanges(sequence);
+    }
+
+    internal long CollectInvalidationRangesSince(long seenSequence, List<NativeRange> output)
+    {
+        output.Clear();
+        var current = CurrentMapSequence;
+        if (seenSequence >= current) return current;
+
+        foreach (var entry in _pendingInvalidations)
+        {
+            if (entry.Sequence <= seenSequence) continue;
+            output.Add(entry.Range);
+        }
+
+        if (output.Count > 1)
+            MergeRangesInPlace(output);
+
+        return current;
+    }
+
+    internal void PruneInvalidationRanges(long minSeenSequence)
+    {
+        if (_pendingInvalidations.Count == 0) return;
+        var removeCount = 0;
+        while (removeCount < _pendingInvalidations.Count &&
+               _pendingInvalidations[removeCount].Sequence <= minSeenSequence)
+            removeCount++;
+        if (removeCount > 0)
+            _pendingInvalidations.RemoveRange(0, removeCount);
+    }
+
+    private void CompactInvalidationRanges(long sequence)
+    {
+        if (_pendingInvalidations.Count == 0) return;
+        var ranges = new List<NativeRange>(_pendingInvalidations.Count);
+        foreach (var entry in _pendingInvalidations)
+            ranges.Add(entry.Range);
+        MergeRangesInPlace(ranges);
+        _pendingInvalidations.Clear();
+        foreach (var range in ranges)
+            _pendingInvalidations.Add(new InvalidationEntry(sequence, range));
     }
 
     public int AddSharedRef()
@@ -228,29 +291,30 @@ public class VMAManager
         }
     }
 
-    private static List<NativeRange> MergeRanges(List<NativeRange> ranges)
+    private static void MergeRangesInPlace(List<NativeRange> ranges)
     {
-        if (ranges.Count <= 1) return ranges;
+        if (ranges.Count <= 1) return;
         ranges.Sort(static (a, b) => a.Start.CompareTo(b.Start));
-        var merged = new List<NativeRange>(ranges.Count) { ranges[0] };
-        for (var i = 1; i < ranges.Count; i++)
+        var writeIndex = 0;
+        for (var readIndex = 1; readIndex < ranges.Count; readIndex++)
         {
-            var current = ranges[i];
-            var lastIndex = merged.Count - 1;
-            var last = merged[lastIndex];
+            var current = ranges[readIndex];
+            var last = ranges[writeIndex];
             var lastEnd = (ulong)last.Start + last.Length;
             if (current.Start <= lastEnd)
             {
                 var currentEnd = (ulong)current.Start + current.Length;
                 var mergedEnd = Math.Max(lastEnd, currentEnd);
-                merged[lastIndex] = new NativeRange(last.Start, (uint)(mergedEnd - last.Start));
+                ranges[writeIndex] = new NativeRange(last.Start, (uint)(mergedEnd - last.Start));
                 continue;
             }
 
-            merged.Add(current);
+            writeIndex++;
+            ranges[writeIndex] = current;
         }
 
-        return merged;
+        if (writeIndex + 1 < ranges.Count)
+            ranges.RemoveRange(writeIndex + 1, ranges.Count - (writeIndex + 1));
     }
 
     public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
@@ -305,7 +369,8 @@ public class VMAManager
         foreach (var cowObject in touchedCowObjects)
             cowObject.TruncateToSize(newSize);
 
-        return MergeRanges(ranges);
+        MergeRangesInPlace(ranges);
+        return ranges;
     }
 
     public void OnFileTruncate(Inode inode, long newSize, Engine engine)
@@ -316,22 +381,40 @@ public class VMAManager
     public void OnFileTruncate(Inode inode, long newSize, IReadOnlyList<Engine> engines)
     {
         var ranges = ApplyFileTruncateMetadata(inode, newSize);
-        if (ranges.Count == 0 || engines.Count == 0)
+        if (ranges.Count == 0)
+            return;
+
+        var sequence = BumpMapSequence();
+        foreach (var range in ranges)
+            RecordInvalidationRange(sequence, range.Start, range.Length);
+
+        if (engines.Count == 0)
         {
             foreach (var range in ranges)
                 AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate.no-engines");
             return;
         }
 
+        var primary = engines[0];
         foreach (var engine in engines)
+        {
+            if (engine.CurrentMmuIdentity != primary.CurrentMmuIdentity)
+            {
+                throw new InvalidOperationException(
+                    "OnFileTruncate requires all engines in the same address space to share one MMU core.");
+            }
+        }
+
         foreach (var range in ranges)
             TearDownNativeMappings(
-                engine,
+                primary,
                 range.Start,
                 range.Length,
                 captureDirtySharedPages: false,
                 invalidateCodeRange: true,
                 releaseExternalPages: true);
+
+        primary.AddressSpaceMapSequenceSeen = sequence;
 
         foreach (var range in ranges)
             AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");

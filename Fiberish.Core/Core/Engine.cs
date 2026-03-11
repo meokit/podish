@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
+using Fiberish.Memory;
 using Fiberish.X86.Native;
 using X86Native = Fiberish.X86.Native.X86Native;
 
@@ -20,6 +21,7 @@ public class Engine : IDisposable
     private bool _disposed;
     private GCHandle _gcHandle;
     private MmuHandle _currentMmu = null!;
+    private readonly List<VMAManager.NativeRange> _addressSpaceInvalidationScratch = [];
     private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
 
     public unsafe Engine()
@@ -62,6 +64,7 @@ public class Engine : IDisposable
 
     public IntPtr State { get; private set; }
     internal GCHandle GcHandle => _gcHandle;
+    internal long AddressSpaceMapSequenceSeen { get; set; }
     public nuint CurrentMmuIdentity => _currentMmu.Identity;
     public MmuHandle CurrentMmu => _currentMmu.AddRefHandle();
 
@@ -83,6 +86,13 @@ public class Engine : IDisposable
             task.CommonKernel.AssertSchedulerThread(caller);
     }
 
+    private void EnsureAddressSpaceSynchronized()
+    {
+        AssertSchedulerThread();
+        if (Owner is not FiberTask task) return;
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(task.Process.Mem, this, task.Process);
+    }
+
     private void InitializeCurrentMmuFromState()
     {
         var handle = X86Native.EngineGetMmu(State);
@@ -93,26 +103,39 @@ public class Engine : IDisposable
         Debug.Assert(_currentMmu.Identity != 0);
     }
 
-    private void RegisterAttachment(MmuHandle mmu)
+    private bool TryRegisterAttachment(MmuHandle mmu)
     {
         var id = mmu.Identity;
         var engineKey = (nint)State;
         var engines = MmuAttachmentRegistry.GetOrAdd(id, _ => new ConcurrentDictionary<nint, byte>());
+        return engines.TryAdd(engineKey, 0);
+    }
 
-        if (!engines.TryAdd(engineKey, 0))
+    private bool TryUnregisterAttachment(MmuHandle mmu)
+    {
+        var id = mmu.Identity;
+        var engineKey = (nint)State;
+        if (!MmuAttachmentRegistry.TryGetValue(id, out var engines))
+            return false;
+        if (!engines.TryRemove(engineKey, out _))
+            return false;
+        if (engines.IsEmpty)
+            MmuAttachmentRegistry.TryRemove(new KeyValuePair<nuint, ConcurrentDictionary<nint, byte>>(id, engines));
+        return true;
+    }
+
+    private void RegisterAttachment(MmuHandle mmu)
+    {
+        var id = mmu.Identity;
+        if (!TryRegisterAttachment(mmu))
             throw new InvalidOperationException($"Engine already attached to MMU {id}.");
     }
 
     private void UnregisterAttachment(MmuHandle mmu)
     {
         var id = mmu.Identity;
-        var engineKey = (nint)State;
-        if (!MmuAttachmentRegistry.TryGetValue(id, out var engines))
-            throw new InvalidOperationException($"MMU {id} attachment registry entry is missing.");
-        if (!engines.TryRemove(engineKey, out _))
+        if (!TryUnregisterAttachment(mmu))
             throw new InvalidOperationException($"Engine attachment missing for MMU {id}.");
-        if (engines.IsEmpty)
-            MmuAttachmentRegistry.TryRemove(new KeyValuePair<nuint, ConcurrentDictionary<nint, byte>>(id, engines));
     }
 
     public static int GetAttachmentCount(nuint mmuId)
@@ -122,21 +145,37 @@ public class Engine : IDisposable
 
     public int CurrentMmuAttachmentCount => GetAttachmentCount(_currentMmu.Identity);
 
-    private void SwapCurrentMmu(MmuHandle next)
+    internal List<VMAManager.NativeRange> AddressSpaceInvalidationScratch => _addressSpaceInvalidationScratch;
+
+    private bool TrySwapCurrentMmu(MmuHandle next, out string? error)
     {
         var previous = _currentMmu;
         if (previous.Identity == next.Identity)
         {
             next.Dispose();
-            return;
+            error = null;
+            return true;
         }
 
-        RegisterAttachment(next);
-        _currentMmu = next;
-        UnregisterAttachment(previous);
-        previous.Dispose();
+        if (!TryRegisterAttachment(next))
+        {
+            error = $"Failed to register attachment for MMU {next.Identity}.";
+            return false;
+        }
 
+        _currentMmu = next;
+        if (!TryUnregisterAttachment(previous))
+        {
+            _currentMmu = previous;
+            _ = TryUnregisterAttachment(next);
+            error = $"Failed to unregister previous MMU attachment {previous.Identity}.";
+            return false;
+        }
+
+        previous.Dispose();
         Debug.Assert(GetAttachmentCount(_currentMmu.Identity) > 0);
+        error = null;
+        return true;
     }
 
     public virtual uint Eip
@@ -278,6 +317,7 @@ public class Engine : IDisposable
         mmu.ThrowIfInvalid();
         if (mmu.Identity == _currentMmu.Identity) return;
 
+        using var previous = _currentMmu.AddRefHandle();
         MmuHandle? nextOwned = null;
         try
         {
@@ -285,7 +325,19 @@ public class Engine : IDisposable
             var attached = X86Native.EngineAttachMmu(State, mmu.DangerousMmuHandle());
             if (attached == 0)
                 throw new InvalidOperationException("Failed to attach MMU to engine.");
-            SwapCurrentMmu(nextOwned);
+
+            if (!TrySwapCurrentMmu(nextOwned, out var swapError))
+            {
+                var rollbackRc = X86Native.EngineAttachMmu(State, previous.DangerousMmuHandle());
+                if (rollbackRc == 0)
+                    throw new InvalidOperationException(
+                        $"MMU attach swap failed and rollback failed: {swapError}");
+                if (rollbackRc != 0)
+                    Debug.Assert(_currentMmu.Identity == previous.Identity);
+                throw new InvalidOperationException(
+                    $"MMU attach succeeded but managed state swap failed: {swapError}");
+            }
+
             nextOwned = null;
         }
         finally
@@ -297,6 +349,7 @@ public class Engine : IDisposable
     public MmuHandle DetachMmu()
     {
         AssertSchedulerThread();
+        using var previous = _currentMmu.AddRefHandle();
         var detachedHandle = X86Native.EngineDetachMmu(State);
         if (detachedHandle == IntPtr.Zero)
             throw new InvalidOperationException("Failed to detach MMU from engine.");
@@ -310,17 +363,20 @@ public class Engine : IDisposable
 
         var detached = new MmuHandle(detachedHandle);
         var nextCurrent = new MmuHandle(nextCurrentRaw);
-        try
+        if (!TrySwapCurrentMmu(nextCurrent, out var swapError))
         {
-            SwapCurrentMmu(nextCurrent);
-            return detached;
-        }
-        catch
-        {
+            var rollbackRc = X86Native.EngineAttachMmu(State, previous.DangerousMmuHandle());
             nextCurrent.Dispose();
             detached.Dispose();
-            throw;
+            if (rollbackRc == 0)
+                throw new InvalidOperationException(
+                    $"MMU detach swap failed and rollback failed: {swapError}");
+            Debug.Assert(_currentMmu.Identity == previous.Identity);
+            throw new InvalidOperationException(
+                $"MMU detach succeeded but managed state swap failed: {swapError}");
         }
+
+        return detached;
     }
 
     public void MemMap(uint addr, uint size, byte perms)
@@ -357,6 +413,7 @@ public class Engine : IDisposable
     [Obsolete("Use CopyToUser instead. MemWrite is slow and risks recursive faults.")]
     public unsafe void MemWrite(uint addr, ReadOnlySpan<byte> data)
     {
+        EnsureAddressSpaceSynchronized();
         fixed (byte* p = data)
         {
             X86Native.MemWrite(State, addr, p, (uint)data.Length);
@@ -369,6 +426,7 @@ public class Engine : IDisposable
     [Obsolete("Use CopyFromUser instead. MemRead is slow and risks recursive faults.")]
     public unsafe byte[] MemRead(uint addr, uint size)
     {
+        EnsureAddressSpaceSynchronized();
         var buf = new byte[size];
         fixed (byte* p = buf)
         {
@@ -380,6 +438,7 @@ public class Engine : IDisposable
 
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
     {
+        EnsureAddressSpaceSynchronized();
         return (IntPtr)X86Native.ResolvePtr(State, vaddr, isWrite ? 1 : 0);
     }
 
@@ -390,6 +449,7 @@ public class Engine : IDisposable
 
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
     {
+        EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var written = 0;
 
@@ -418,6 +478,7 @@ public class Engine : IDisposable
 
     public unsafe bool CopyFromUser(uint vaddr, Span<byte> data)
     {
+        EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var read = 0;
 
@@ -450,6 +511,7 @@ public class Engine : IDisposable
     /// </summary>
     public unsafe int CopyFromUserNoFault(uint vaddr, Span<byte> data)
     {
+        EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var read = 0;
 
@@ -474,6 +536,7 @@ public class Engine : IDisposable
 
     public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
     {
+        EnsureAddressSpaceSynchronized();
         if (addr == 0) return "";
 
         var sb = new StringBuilder();
@@ -560,6 +623,7 @@ public class Engine : IDisposable
 
     public unsafe int CollectMappedPages(uint addr, uint size, Span<X86Native.PageMapping> buffer)
     {
+        EnsureAddressSpaceSynchronized();
         if (size == 0 || buffer.Length == 0) return 0;
         fixed (X86Native.PageMapping* pBuffer = buffer)
         {
@@ -576,6 +640,11 @@ public class Engine : IDisposable
     public void InvalidateRange(uint addr, uint size)
     {
         X86Native.InvalidateRange(State, addr, size);
+    }
+
+    public void FlushMmuTlbOnly()
+    {
+        X86Native.FlushMmuTlb(State);
     }
 
     public void FlushCache()

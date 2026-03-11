@@ -207,6 +207,10 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
     public static partial void FlushCache(IntPtr state);
 
+    [LibraryImport(LibName, EntryPoint = "X86_FlushMmuTlb")]
+    [SuppressGCTransition]
+    public static partial void FlushMmuTlb(IntPtr state);
+
     [LibraryImport(LibName, EntryPoint = "X86_ResetMemory")]
     public static partial void ResetMemory(IntPtr state);
 

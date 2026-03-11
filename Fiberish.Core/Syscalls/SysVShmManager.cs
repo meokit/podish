@@ -226,6 +226,7 @@ public class SysVShmManager
 
             // Add VMA to manager
             vmaManager.AddVma(vma);
+            ProcessAddressSpaceSync.PublishMappingChange(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
 
             // Record attachment
             var attach = new SysVShmAttach

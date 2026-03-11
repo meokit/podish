@@ -723,6 +723,12 @@ void X86_FlushCache(EmuState* state) {
     }
 }
 
+void X86_FlushMmuTlb(EmuState* state) {
+    if (state) {
+        state->mmu.flush_tlb_only();
+    }
+}
+
 void X86_ResetMemory(EmuState* state) {
     if (state) {
         state->mmu.reset_memory();

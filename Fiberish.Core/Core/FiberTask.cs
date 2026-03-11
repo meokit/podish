@@ -1070,6 +1070,8 @@ public class FiberTask
         CommonKernel.CurrentTask = this;
         try
         {
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(Process.Mem, CPU, Process);
+
             // We must NOT process pending signals if we are in the middle of waiting
             // for an async syscall to finish its C# awaiter (or its continuation).
             // If we deliver the signal now, it will save the PRE-SYSCALL completion EAX (SyscallNr)
