@@ -172,32 +172,37 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int MapExternalPage(IntPtr state, uint addr, void* externalPage, byte perms);
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MmuRef
-    {
-        public IntPtr State;
-        public nuint MmuIdentity;
-    }
-
-    [LibraryImport(LibName, EntryPoint = "X86_GetMmuRef")]
+    [LibraryImport(LibName, EntryPoint = "X86_MmuCreateEmpty")]
     [SuppressGCTransition]
-    public static partial MmuRef GetMmuRef(IntPtr state);
+    public static partial IntPtr MmuCreateEmpty();
 
-    [LibraryImport(LibName, EntryPoint = "X86_DetachMmu")]
+    [LibraryImport(LibName, EntryPoint = "X86_MmuCloneSkipExternal")]
     [SuppressGCTransition]
-    public static partial IntPtr DetachMmu(IntPtr state);
+    public static partial IntPtr MmuCloneSkipExternal(IntPtr mmuHandle);
 
-    [LibraryImport(LibName, EntryPoint = "X86_CloneMmuFromRef")]
+    [LibraryImport(LibName, EntryPoint = "X86_MmuRetain")]
     [SuppressGCTransition]
-    public static partial IntPtr CloneMmuFromRef(MmuRef mmuRef);
+    public static partial IntPtr MmuRetain(IntPtr mmuHandle);
 
-    [LibraryImport(LibName, EntryPoint = "X86_AttachMmu")]
+    [LibraryImport(LibName, EntryPoint = "X86_MmuRelease")]
     [SuppressGCTransition]
-    public static partial int AttachMmu(IntPtr state, IntPtr detachedMmu);
+    public static partial void MmuRelease(IntPtr mmuHandle);
 
-    [LibraryImport(LibName, EntryPoint = "X86_DestroyDetachedMmu")]
+    [LibraryImport(LibName, EntryPoint = "X86_MmuGetIdentity")]
     [SuppressGCTransition]
-    public static partial void DestroyDetachedMmu(IntPtr detachedMmu);
+    public static partial nuint MmuGetIdentity(IntPtr mmuHandle);
+
+    [LibraryImport(LibName, EntryPoint = "X86_EngineGetMmu")]
+    [SuppressGCTransition]
+    public static partial IntPtr EngineGetMmu(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_EngineDetachMmu")]
+    [SuppressGCTransition]
+    public static partial IntPtr EngineDetachMmu(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_EngineAttachMmu")]
+    [SuppressGCTransition]
+    public static partial int EngineAttachMmu(IntPtr state, IntPtr mmuHandle);
 
     [LibraryImport(LibName, EntryPoint = "X86_FlushCache")]
     public static partial void FlushCache(IntPtr state);

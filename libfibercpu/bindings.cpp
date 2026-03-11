@@ -25,8 +25,8 @@
 using namespace fiberish;
 using MicroTLB = mem::MicroTLB;
 
-struct X86_DetachedMmu {
-    std::shared_ptr<mem::PageDirectory> page_dir;
+struct X86_MmuHandle {
+    mem::MmuCore* core = nullptr;
 };
 
 extern "C" {
@@ -175,13 +175,11 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // 2. Memory Handling
     if (share_mem) {
         // Shared Memory (CLONE_VM) -> Threads
-        // Copy the shared_ptr, incrementing refcount
-        state->mmu = mem::Mmu(parent->mmu.page_dir);
+        state->mmu.attach_core(parent->mmu.core_handle(), true);
     } else {
         // Independent Memory (Fork)
-        // Deep copy the PageDirectory
-        auto new_pd = std::make_shared<mem::PageDirectory>(*parent->mmu.page_dir);
-        state->mmu = mem::Mmu(std::move(new_pd));
+        // Clone MMU with fixed policy: skip external pages, never internalize.
+        state->mmu.attach_core(mem::Mmu::CloneCoreSkipExternal(parent->mmu.core_handle()), false);
     }
 
     // 3. Link Internal Pointers
@@ -348,48 +346,55 @@ int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uin
     return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(external_page), perms) ? 1 : 0;
 }
 
-X86_MmuRef X86_GetMmuRef(EmuState* state) {
-    X86_MmuRef mmu_ref{};
-    if (!state) return mmu_ref;
-    mmu_ref.state = state;
-    mmu_ref.mmu_identity = state->mmu.page_directory_identity();
-    return mmu_ref;
+static X86_MmuHandle* X86_NewMmuHandle(mem::MmuCore* core, bool add_ref) {
+    if (!core) return nullptr;
+    if (add_ref) mem::Mmu::RetainCore(core);
+    auto* handle = new X86_MmuHandle();
+    handle->core = core;
+    return handle;
 }
 
-static bool X86_IsMmuRefValid(X86_MmuRef mmu_ref) {
-    if (!mmu_ref.state || mmu_ref.mmu_identity == 0) return false;
-    return mmu_ref.state->mmu.page_directory_identity() == mmu_ref.mmu_identity;
+X86_MmuHandle* X86_MmuCreateEmpty() { return X86_NewMmuHandle(mem::Mmu::CreateEmptyCore(), false); }
+
+X86_MmuHandle* X86_MmuCloneSkipExternal(X86_MmuHandle* mmu) {
+    if (!mmu || !mmu->core) return nullptr;
+    return X86_NewMmuHandle(mem::Mmu::CloneCoreSkipExternal(mmu->core), false);
 }
 
-X86_DetachedMmu* X86_DetachMmu(EmuState* state) {
+X86_MmuHandle* X86_MmuRetain(X86_MmuHandle* mmu) {
+    if (!mmu || !mmu->core) return nullptr;
+    return X86_NewMmuHandle(mmu->core, true);
+}
+
+void X86_MmuRelease(X86_MmuHandle* mmu) {
+    if (!mmu) return;
+    mem::Mmu::ReleaseCore(mmu->core);
+    mmu->core = nullptr;
+    delete mmu;
+}
+
+uintptr_t X86_MmuGetIdentity(X86_MmuHandle* mmu) {
+    if (!mmu || !mmu->core) return 0;
+    return mmu->core->identity;
+}
+
+X86_MmuHandle* X86_EngineGetMmu(EmuState* state) {
     if (!state) return nullptr;
-
-    auto* detached = new X86_DetachedMmu();
-    detached->page_dir = state->mmu.detach_page_directory();
-    X86_ResetCodeCache(state);
-    return detached;
+    return X86_NewMmuHandle(state->mmu.core_handle(), true);
 }
 
-X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref) {
-    if (!X86_IsMmuRefValid(mmu_ref)) return nullptr;
-
-    auto* detached = new X86_DetachedMmu();
-    detached->page_dir = mmu_ref.state->mmu.clone_page_directory();
-    return detached;
+X86_MmuHandle* X86_EngineDetachMmu(EmuState* state) {
+    if (!state) return nullptr;
+    auto* detached_core = state->mmu.detach_core();
+    X86_ResetCodeCache(state);
+    return X86_NewMmuHandle(detached_core, false);
 }
 
-int X86_AttachMmu(EmuState* state, X86_DetachedMmu* detached) {
-    if (!state || !detached || !detached->page_dir) return 0;
-
-    state->mmu.attach_page_directory(std::move(detached->page_dir));
+int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
+    if (!state || !mmu || !mmu->core) return 0;
+    state->mmu.attach_core(mmu->core, true);
     X86_ResetCodeCache(state);
-    delete detached;
     return 1;
-}
-
-void X86_DestroyDetachedMmu(X86_DetachedMmu* detached) {
-    if (!detached) return;
-    delete detached;
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {

@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -80,12 +81,20 @@ struct PageDirectory {
     PageDirectory& operator=(const PageDirectory&) = delete;
 };
 
+struct MmuCore {
+    std::atomic<uint32_t> ref_count{1};
+    std::unique_ptr<PageDirectory> page_directory;
+    uintptr_t identity = 0;
+    uint32_t state_flags = 0;
+};
+
 class Mmu {
 public:
-    // Shared pointer to the page tables
-    std::shared_ptr<PageDirectory> page_dir;
+    // Fast non-owning alias for access paths.
+    PageDirectory* page_dir = nullptr;
 
 private:
+    MmuCore* core_ = nullptr;
     SoftTlb tlb;
 
     // Callbacks
@@ -108,6 +117,43 @@ private:
 
     // Slow Path: Resolve address, handle allocation/permissions/faults
     [[nodiscard]] MemResult<HostAddr> resolve_slow(GuestAddr addr, Property req_perm);
+
+    static uintptr_t next_identity() {
+        static std::atomic<uintptr_t> identity{1};
+        return identity.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static MmuCore* create_core(std::unique_ptr<PageDirectory> page_directory) {
+        auto* core = new MmuCore();
+        core->page_directory = std::move(page_directory);
+        core->identity = next_identity();
+        core->state_flags = 0;
+        return core;
+    }
+
+    static void retain_core(MmuCore* core) {
+        if (!core) return;
+        core->ref_count.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static void release_core(MmuCore* core) {
+        if (!core) return;
+        if (core->ref_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            delete core;
+        }
+    }
+
+    void bind_core(MmuCore* core, bool add_ref) {
+        if (core && add_ref) {
+            retain_core(core);
+        }
+
+        auto* old_core = core_;
+        core_ = core;
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
+        release_core(old_core);
+        tlb.flush();
+    }
 
 public:
     // Safe resolution without faulting
@@ -142,10 +188,96 @@ public:
     }
 
 public:
-    Mmu() { page_dir = std::make_shared<PageDirectory>(); }
+    Mmu() {
+        core_ = create_core(std::make_unique<PageDirectory>());
+        page_dir = core_->page_directory.get();
+    }
 
-    // Explicitly share memory with another MMU
-    explicit Mmu(std::shared_ptr<PageDirectory> shared_pd) : page_dir(std::move(shared_pd)) {}
+    Mmu(const Mmu& other) {
+        core_ = other.core_;
+        page_dir = other.page_dir;
+        retain_core(core_);
+    }
+
+    Mmu(Mmu&& other) noexcept {
+        core_ = other.core_;
+        page_dir = other.page_dir;
+        other.core_ = nullptr;
+        other.page_dir = nullptr;
+    }
+
+    Mmu& operator=(const Mmu& other) {
+        if (this == &other) return *this;
+        retain_core(other.core_);
+        auto* old_core = core_;
+        core_ = other.core_;
+        page_dir = other.page_dir;
+        release_core(old_core);
+        tlb.flush();
+        return *this;
+    }
+
+    Mmu& operator=(Mmu&& other) noexcept {
+        if (this == &other) return *this;
+        release_core(core_);
+        core_ = other.core_;
+        page_dir = other.page_dir;
+        other.core_ = nullptr;
+        other.page_dir = nullptr;
+        tlb.flush();
+        return *this;
+    }
+
+    ~Mmu() {
+        release_core(core_);
+        core_ = nullptr;
+        page_dir = nullptr;
+    }
+
+    static MmuCore* CreateEmptyCore() { return create_core(std::make_unique<PageDirectory>()); }
+
+    static MmuCore* RetainCore(MmuCore* core) {
+        retain_core(core);
+        return core;
+    }
+
+    static void ReleaseCore(MmuCore* core) { release_core(core); }
+
+    static MmuCore* CloneCoreSkipExternal(MmuCore* core) {
+        if (!core || !core->page_directory) {
+            return CreateEmptyCore();
+        }
+
+        auto cloned = std::make_unique<PageDirectory>();
+        auto* source = core->page_directory.get();
+        for (size_t l1 = 0; l1 < source->l1_directory.size(); ++l1) {
+            const auto& src_chunk = source->l1_directory[l1];
+            if (!src_chunk) continue;
+
+            std::unique_ptr<PageTableChunk> dst_chunk;
+            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
+                const auto perms = src_chunk->permissions[l2];
+                if (perms == Property::None) continue;
+                if (has_property(perms, Property::External)) continue;
+
+                if (!dst_chunk) {
+                    dst_chunk = std::make_unique<PageTableChunk>();
+                }
+
+                dst_chunk->permissions[l2] = perms;
+                if (src_chunk->pages[l2]) {
+                    dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
+                    std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
+                }
+            }
+
+            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
+        }
+
+        return create_core(std::move(cloned));
+    }
+
+    [[nodiscard]] MmuCore* core_handle() const { return core_; }
 
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {
@@ -278,57 +410,37 @@ public:
         tlb.flush();
     }
 
-    // API: reset_memory - Replace entire page directory with a fresh empty one.
+    // API: reset_memory - Replace page directory contents with a fresh empty one.
     // Used during execve to clear all native pages before loading the new binary.
-    // Old pages (including external ones) are released by the old PageDirectory destructor.
+    // Keep core identity stable so C# MMU handles remain valid.
     void reset_memory() {
-        page_dir = std::make_shared<PageDirectory>();
+        if (!core_) {
+            bind_core(CreateEmptyCore(), false);
+            return;
+        }
+        core_->page_directory = std::make_unique<PageDirectory>();
+        page_dir = core_->page_directory.get();
         tlb.flush();
     }
 
-    [[nodiscard]] uintptr_t page_directory_identity() const { return reinterpret_cast<uintptr_t>(page_dir.get()); }
+    [[nodiscard]] uintptr_t page_directory_identity() const { return core_ ? core_->identity : 0; }
 
-    [[nodiscard]] std::shared_ptr<PageDirectory> detach_page_directory() {
-        auto detached = std::move(page_dir);
-        page_dir = std::make_shared<PageDirectory>();
-        tlb.flush();
+    [[nodiscard]] MmuCore* detach_core() {
+        if (!core_) {
+            bind_core(CreateEmptyCore(), false);
+        }
+
+        auto* detached = RetainCore(core_);
+        bind_core(CreateEmptyCore(), false);
         return detached;
     }
 
-    void attach_page_directory(std::shared_ptr<PageDirectory> new_page_dir) {
-        page_dir = new_page_dir ? std::move(new_page_dir) : std::make_shared<PageDirectory>();
-        tlb.flush();
-    }
-
-    // Clone page directory into a detached copy. External pages are always skipped.
-    [[nodiscard]] std::shared_ptr<PageDirectory> clone_page_directory() const {
-        if (!page_dir) return std::make_shared<PageDirectory>();
-        auto cloned = std::make_shared<PageDirectory>();
-        for (size_t l1 = 0; l1 < page_dir->l1_directory.size(); ++l1) {
-            const auto& src_chunk = page_dir->l1_directory[l1];
-            if (!src_chunk) continue;
-
-            std::unique_ptr<PageTableChunk> dst_chunk;
-            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
-                const auto perms = src_chunk->permissions[l2];
-                if (perms == Property::None) continue;
-                if (has_property(perms, Property::External)) continue;
-
-                if (!dst_chunk) {
-                    dst_chunk = std::make_unique<PageTableChunk>();
-                }
-
-                dst_chunk->permissions[l2] = perms;
-                if (src_chunk->pages[l2]) {
-                    dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
-                    std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
-                }
-            }
-
-            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
+    void attach_core(MmuCore* core, bool add_ref = true) {
+        if (!core) {
+            bind_core(CreateEmptyCore(), false);
+            return;
         }
-
-        return cloned;
+        bind_core(core, add_ref);
     }
 
     // Internal helper for resolution (TLB or Slow) without hooks

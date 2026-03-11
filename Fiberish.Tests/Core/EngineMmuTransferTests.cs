@@ -18,21 +18,20 @@ public class EngineMmuTransferTests
         Assert.NotEqual(IntPtr.Zero, page);
         Marshal.WriteByte(page, 0x5A);
 
-        var before = engine.GetMmuRef();
+        var beforeIdentity = engine.CurrentMmuIdentity;
         var detached = engine.DetachMmu();
-        Assert.True(before.IsValid);
-        Assert.NotEqual(before.Identity, engine.GetMmuRef().Identity);
+        Assert.NotEqual(beforeIdentity, engine.CurrentMmuIdentity);
 
         var read = new byte[1];
         Assert.False(engine.CopyFromUser(addr, read));
 
-        engine.AttachMmu(detached);
-        Assert.True(detached.IsConsumed);
-        Assert.Throws<InvalidOperationException>(() => engine.AttachMmu(detached));
+        engine.ReplaceMmu(detached);
+        Assert.Equal(beforeIdentity, engine.CurrentMmuIdentity);
 
         Assert.True(engine.CopyFromUser(addr, read));
         Assert.Equal((byte)0x5A, read[0]);
         detached.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => engine.ReplaceMmu(detached));
     }
 
     [Fact]
@@ -56,9 +55,8 @@ public class EngineMmuTransferTests
             Assert.NotEqual(IntPtr.Zero, owned);
             Marshal.WriteByte(owned, 0x22);
 
-            var mmuRef = parent.GetMmuRef();
-            using var detached = parent.CloneMmu(mmuRef);
-            child.AttachMmu(detached);
+            using var cloned = parent.CurrentMmu.CloneSkipExternal();
+            child.ReplaceMmu(cloned);
 
             var read = new byte[1];
             Assert.False(child.CopyFromUser(externalAddr, read));
@@ -92,7 +90,7 @@ public class EngineMmuTransferTests
             Marshal.WriteByte(owned, 0x66);
 
             using var child = parent.Clone(shareMem: false);
-            Assert.NotEqual(parent.GetMmuRef().Identity, child.GetMmuRef().Identity);
+            Assert.NotEqual(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
 
             var read = new byte[1];
             Assert.False(child.CopyFromUser(externalAddr, read));
@@ -130,9 +128,8 @@ public class EngineMmuTransferTests
             Assert.False(child.CopyFromUser(externalAddr, read));
             Assert.False(child.CopyFromUser(ownedAddr, read));
 
-            var mmuRef = parent.GetMmuRef();
-            using var detached = parent.CloneMmu(mmuRef);
-            child.AttachMmu(detached);
+            using var cloned = parent.CurrentMmu.CloneSkipExternal();
+            child.ReplaceMmu(cloned);
 
             Assert.False(child.CopyFromUser(externalAddr, read));
             Assert.True(child.CopyFromUser(ownedAddr, read));
@@ -142,5 +139,22 @@ public class EngineMmuTransferTests
         {
             Marshal.FreeHGlobal(external);
         }
+    }
+
+    [Fact]
+    public void ShareMmuFrom_UsesSameMmuIdentity()
+    {
+        using var parent = new Engine();
+        var sharedId = parent.CurrentMmuIdentity;
+        Assert.Equal(1, Engine.GetAttachmentCount(sharedId));
+
+        using (var child = new Engine())
+        {
+            child.ShareMmuFrom(parent);
+            Assert.Equal(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
+            Assert.Equal(2, Engine.GetAttachmentCount(sharedId));
+        }
+
+        Assert.Equal(1, Engine.GetAttachmentCount(sharedId));
     }
 }

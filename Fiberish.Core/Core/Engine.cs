@@ -1,5 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using Fiberish.X86.Native;
 using X86Native = Fiberish.X86.Native.X86Native;
 
@@ -11,55 +15,12 @@ public enum EngineCloneMemoryMode
     SkipMmu = 1
 }
 
-public readonly struct MmuRef
-{
-    internal MmuRef(X86Native.MmuRef nativeRef)
-    {
-        NativeRef = nativeRef;
-    }
-
-    internal X86Native.MmuRef NativeRef { get; }
-    public IntPtr State => NativeRef.State;
-    public nuint Identity => NativeRef.MmuIdentity;
-    public bool IsValid => State != IntPtr.Zero && Identity != 0;
-}
-
 public class Engine : IDisposable
 {
-    public sealed class DetachedMmu : IDisposable
-    {
-        private IntPtr _handle;
-        private bool _consumed;
-
-        internal DetachedMmu(IntPtr handle)
-        {
-            _handle = handle;
-        }
-
-        public bool IsConsumed => _consumed;
-
-        internal IntPtr ConsumeHandle()
-        {
-            if (_consumed || _handle == IntPtr.Zero)
-                throw new InvalidOperationException("Detached MMU handle is no longer valid.");
-
-            _consumed = true;
-            var handle = _handle;
-            _handle = IntPtr.Zero;
-            return handle;
-        }
-
-        public void Dispose()
-        {
-            if (_handle == IntPtr.Zero) return;
-            X86Native.DestroyDetachedMmu(_handle);
-            _handle = IntPtr.Zero;
-            _consumed = true;
-        }
-    }
-
     private bool _disposed;
     private GCHandle _gcHandle;
+    private MmuHandle _currentMmu = null!;
+    private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
 
     public unsafe Engine()
     {
@@ -76,6 +37,7 @@ public class Engine : IDisposable
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
+        InitializeCurrentMmuFromState();
     }
 
     protected Engine(bool mock)
@@ -95,10 +57,13 @@ public class Engine : IDisposable
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
+        InitializeCurrentMmuFromState();
     }
 
     public IntPtr State { get; private set; }
     internal GCHandle GcHandle => _gcHandle;
+    public nuint CurrentMmuIdentity => _currentMmu.Identity;
+    public MmuHandle CurrentMmu => _currentMmu.AddRefHandle();
 
     // Callbacks
     public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
@@ -111,6 +76,68 @@ public class Engine : IDisposable
 
     // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
     public object? Owner { get; set; }
+
+    private void AssertSchedulerThread([CallerMemberName] string? caller = null)
+    {
+        if (Owner is FiberTask task)
+            task.CommonKernel.AssertSchedulerThread(caller);
+    }
+
+    private void InitializeCurrentMmuFromState()
+    {
+        var handle = X86Native.EngineGetMmu(State);
+        if (handle == IntPtr.Zero)
+            throw new InvalidOperationException("Failed to get MMU handle from engine state.");
+        _currentMmu = new MmuHandle(handle);
+        RegisterAttachment(_currentMmu);
+        Debug.Assert(_currentMmu.Identity != 0);
+    }
+
+    private void RegisterAttachment(MmuHandle mmu)
+    {
+        var id = mmu.Identity;
+        var engineKey = (nint)State;
+        var engines = MmuAttachmentRegistry.GetOrAdd(id, _ => new ConcurrentDictionary<nint, byte>());
+
+        if (!engines.TryAdd(engineKey, 0))
+            throw new InvalidOperationException($"Engine already attached to MMU {id}.");
+    }
+
+    private void UnregisterAttachment(MmuHandle mmu)
+    {
+        var id = mmu.Identity;
+        var engineKey = (nint)State;
+        if (!MmuAttachmentRegistry.TryGetValue(id, out var engines))
+            throw new InvalidOperationException($"MMU {id} attachment registry entry is missing.");
+        if (!engines.TryRemove(engineKey, out _))
+            throw new InvalidOperationException($"Engine attachment missing for MMU {id}.");
+        if (engines.IsEmpty)
+            MmuAttachmentRegistry.TryRemove(new KeyValuePair<nuint, ConcurrentDictionary<nint, byte>>(id, engines));
+    }
+
+    public static int GetAttachmentCount(nuint mmuId)
+    {
+        return MmuAttachmentRegistry.TryGetValue(mmuId, out var engines) ? engines.Count : 0;
+    }
+
+    public int CurrentMmuAttachmentCount => GetAttachmentCount(_currentMmu.Identity);
+
+    private void SwapCurrentMmu(MmuHandle next)
+    {
+        var previous = _currentMmu;
+        if (previous.Identity == next.Identity)
+        {
+            next.Dispose();
+            return;
+        }
+
+        RegisterAttachment(next);
+        _currentMmu = next;
+        UnregisterAttachment(previous);
+        previous.Dispose();
+
+        Debug.Assert(GetAttachmentCount(_currentMmu.Identity) > 0);
+    }
 
     public virtual uint Eip
     {
@@ -210,15 +237,14 @@ public class Engine : IDisposable
     /// </summary>
     public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode)
     {
+        AssertSchedulerThread();
         if (shareMem && memoryMode != EngineCloneMemoryMode.InlineClone)
             throw new ArgumentException(
                 "shareMem=true only supports EngineCloneMemoryMode.InlineClone.",
                 nameof(memoryMode));
 
-        var cloneDetachedMmu = !shareMem && memoryMode == EngineCloneMemoryMode.InlineClone;
         var skipMmu = !shareMem && memoryMode == EngineCloneMemoryMode.SkipMmu;
-        var shareMemForNativeClone = shareMem || cloneDetachedMmu || skipMmu;
-        var newState = X86Native.Clone(State, shareMemForNativeClone ? 1 : 0);
+        var newState = X86Native.Clone(State, shareMem ? 1 : 0);
         if (newState == IntPtr.Zero)
             throw new InvalidOperationException("Failed to clone Fiberish state.");
 
@@ -230,23 +256,7 @@ public class Engine : IDisposable
             LogHandler = LogHandler // Copy the handler delegate
         };
 
-        if (cloneDetachedMmu)
-        {
-            DetachedMmu? detached = null;
-            try
-            {
-                var mmuRef = GetMmuRef();
-                detached = CloneMmu(mmuRef);
-                newEngine.AttachMmu(detached);
-            }
-            catch
-            {
-                detached?.Dispose();
-                newEngine.Dispose();
-                throw;
-            }
-        }
-        else if (skipMmu)
+        if (skipMmu)
         {
             using var detached = newEngine.DetachMmu();
         }
@@ -254,43 +264,63 @@ public class Engine : IDisposable
         return newEngine;
     }
 
-    public MmuRef GetMmuRef()
+    public void ShareMmuFrom(Engine source)
     {
-        return new MmuRef(X86Native.GetMmuRef(State));
+        ArgumentNullException.ThrowIfNull(source);
+        using var handle = source.CurrentMmu;
+        ReplaceMmu(handle);
     }
 
-    public DetachedMmu DetachMmu()
+    public void ReplaceMmu(MmuHandle mmu)
     {
-        var handle = X86Native.DetachMmu(State);
-        if (handle == IntPtr.Zero)
+        AssertSchedulerThread();
+        ArgumentNullException.ThrowIfNull(mmu);
+        mmu.ThrowIfInvalid();
+        if (mmu.Identity == _currentMmu.Identity) return;
+
+        MmuHandle? nextOwned = null;
+        try
+        {
+            nextOwned = mmu.AddRefHandle();
+            var attached = X86Native.EngineAttachMmu(State, mmu.DangerousMmuHandle());
+            if (attached == 0)
+                throw new InvalidOperationException("Failed to attach MMU to engine.");
+            SwapCurrentMmu(nextOwned);
+            nextOwned = null;
+        }
+        finally
+        {
+            nextOwned?.Dispose();
+        }
+    }
+
+    public MmuHandle DetachMmu()
+    {
+        AssertSchedulerThread();
+        var detachedHandle = X86Native.EngineDetachMmu(State);
+        if (detachedHandle == IntPtr.Zero)
             throw new InvalidOperationException("Failed to detach MMU from engine.");
-        return new DetachedMmu(handle);
-    }
 
-    /// <summary>
-    ///     Clone MMU from a borrowed view into a detached handle.
-    ///     External pages are always skipped and never converted to owned pages.
-    /// </summary>
-    public DetachedMmu CloneMmu(MmuRef mmuRef)
-    {
-        if (!mmuRef.IsValid)
-            throw new ArgumentException("MMU ref is invalid.", nameof(mmuRef));
+        var nextCurrentRaw = X86Native.EngineGetMmu(State);
+        if (nextCurrentRaw == IntPtr.Zero)
+        {
+            X86Native.MmuRelease(detachedHandle);
+            throw new InvalidOperationException("Detached MMU but failed to fetch replacement MMU.");
+        }
 
-        var handle = X86Native.CloneMmuFromRef(mmuRef.NativeRef);
-        if (handle == IntPtr.Zero)
-            throw new InvalidOperationException("Failed to clone MMU from engine.");
-        return new DetachedMmu(handle);
-    }
-
-    public void AttachMmu(DetachedMmu detachedMmu)
-    {
-        ArgumentNullException.ThrowIfNull(detachedMmu);
-        var handle = detachedMmu.ConsumeHandle();
-        var attached = X86Native.AttachMmu(State, handle);
-        if (attached != 0) return;
-
-        X86Native.DestroyDetachedMmu(handle);
-        throw new InvalidOperationException("Failed to attach detached MMU to engine.");
+        var detached = new MmuHandle(detachedHandle);
+        var nextCurrent = new MmuHandle(nextCurrentRaw);
+        try
+        {
+            SwapCurrentMmu(nextCurrent);
+            return detached;
+        }
+        catch
+        {
+            nextCurrent.Dispose();
+            detached.Dispose();
+            throw;
+        }
     }
 
     public void MemMap(uint addr, uint size, byte perms)
@@ -577,6 +607,20 @@ public class Engine : IDisposable
     {
         if (!_disposed)
         {
+            if (_currentMmu != null && !_currentMmu.IsClosed)
+            {
+                try
+                {
+                    if (State != IntPtr.Zero) UnregisterAttachment(_currentMmu);
+                }
+                catch
+                {
+                    // best-effort during dispose/finalize
+                }
+
+                _currentMmu.Dispose();
+            }
+
             if (State != IntPtr.Zero)
             {
                 X86Native.Destroy(State);
