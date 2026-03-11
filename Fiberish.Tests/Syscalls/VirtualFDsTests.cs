@@ -1,52 +1,22 @@
-using System;
 using System.Buffers.Binary;
-using System.Threading;
-using System.Threading.Tasks;
-using Xunit;
+using System.Reflection;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
 public class VirtualFDsTests
 {
-    private class TestEnv : IDisposable
-    {
-        public KernelScheduler Scheduler { get; }
-        public Process Process { get; }
-        public FiberTask Task { get; }
-        public SuperBlock MemfdSuperBlock { get; }
-
-        public TestEnv()
-        {
-            Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
-
-            var fs = new Tmpfs();
-            MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
-
-            var vma = new Fiberish.Memory.VMAManager();
-            var engine = new Engine();
-            Process = new Process(100, vma, null!);
-            Task = new FiberTask(100, Process, engine, Scheduler);
-
-            typeof(KernelScheduler).GetProperty("CurrentTask")!.SetValue(Scheduler, Task);
-        }
-
-        public void Dispose()
-        {
-            KernelScheduler.Current = null;
-        }
-    }
-
     [Fact]
     public void EventFd_Counter_ReadWrite()
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, FileFlags.O_RDWR);
-        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         // Read initial value 5
@@ -76,12 +46,12 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, (FileFlags)LinuxConstants.EFD_SEMAPHORE);
-        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock),
+        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock),
             (FileFlags)LinuxConstants.EFD_SEMAPHORE, null!);
 
         var buf = new byte[8];
         // Read should return 1 and decrement counter
-        for (int i = 0; i < 5; i++)
+        for (var i = 0; i < 5; i++)
         {
             var readLen = inode.Read(efd, buf, 0);
             Assert.Equal(8, readLen);
@@ -107,7 +77,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         inode.SetTime(2000, 5000, false);
@@ -122,12 +92,12 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new Fiberish.VFS.LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
+        var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         // Manually invoke the callback to simulate expiration
         var method = typeof(TimerFdInode).GetMethod("TimerCallback",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            BindingFlags.NonPublic | BindingFlags.Instance);
 
         method!.Invoke(inode, null);
         method.Invoke(inode, null);
@@ -148,7 +118,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var sfd = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         // Queue a signal
@@ -182,7 +152,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 1, FileFlags.O_RDWR);
-        var efd = new Fiberish.VFS.LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         var fired = 0;
@@ -196,7 +166,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new Fiberish.VFS.LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var sfd = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         var fired = 0;
@@ -213,5 +183,34 @@ public class VirtualFDsTests
 
         SpinWait.SpinUntil(() => Volatile.Read(ref fired) > 0, 200);
         Assert.Equal(1, Volatile.Read(ref fired));
+    }
+
+    private class TestEnv : IDisposable
+    {
+        public TestEnv()
+        {
+            Scheduler = new KernelScheduler();
+            KernelScheduler.Current = Scheduler;
+
+            var fs = new Tmpfs();
+            MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
+
+            var vma = new VMAManager();
+            var engine = new Engine();
+            Process = new Process(100, vma, null!);
+            Task = new FiberTask(100, Process, engine, Scheduler);
+
+            typeof(KernelScheduler).GetProperty("CurrentTask")!.SetValue(Scheduler, Task);
+        }
+
+        public KernelScheduler Scheduler { get; }
+        public Process Process { get; }
+        public FiberTask Task { get; }
+        public SuperBlock MemfdSuperBlock { get; }
+
+        public void Dispose()
+        {
+            KernelScheduler.Current = null;
+        }
     }
 }

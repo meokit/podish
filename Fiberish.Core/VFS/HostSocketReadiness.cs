@@ -1,6 +1,4 @@
 using System.Net.Sockets;
-using Fiberish.Core;
-using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
@@ -11,7 +9,8 @@ internal sealed class HostSocketReadiness : IDisposable
     private readonly HostSocketProbeEngine _probeEngine;
     private readonly ReadinessWaiter _waiter;
 
-    public HostSocketReadiness(HostSocketInode owner, Socket socket, ILogger logger, IReadyDispatcher? dispatcher = null)
+    public HostSocketReadiness(HostSocketInode owner, Socket socket, ILogger logger,
+        IReadyDispatcher? dispatcher = null)
     {
         _dispatcher = dispatcher ?? SchedulerReadyDispatcher.FromCurrent();
         _probeEngine = new HostSocketProbeEngine(owner, socket, logger, _dispatcher);
@@ -21,22 +20,43 @@ internal sealed class HostSocketReadiness : IDisposable
             () => _dispatcher.CurrentTask);
     }
 
-    public short Poll(LinuxFile file, short events) => _probeEngine.Poll(events);
+    public void Dispose()
+    {
+        _probeEngine.Dispose();
+    }
 
-    public bool RegisterWait(LinuxFile file, Action callback, short events) =>
-        _probeEngine.RegisterWaitHandle(file, callback, events) != null;
+    public short Poll(LinuxFile file, short events)
+    {
+        return _probeEngine.Poll(events);
+    }
 
-    public IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events) =>
-        _probeEngine.RegisterWaitHandle(file, callback, events);
+    public bool RegisterWait(LinuxFile file, Action callback, short events)
+    {
+        return _probeEngine.RegisterWaitHandle(file, callback, events) != null;
+    }
 
-    public ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events) =>
-        _waiter.WaitAsync(file, events);
+    public IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        return _probeEngine.RegisterWaitHandle(file, callback, events);
+    }
 
-    public void ClearReadyBits(short bits) => _probeEngine.ClearReadyBits(bits);
+    public ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
+    {
+        return _waiter.WaitAsync(file, events);
+    }
 
-    public bool TryDequeueAcceptedSocket(out Socket socket) => _probeEngine.TryDequeueAcceptedSocket(out socket);
+    public void ClearReadyBits(short bits)
+    {
+        _probeEngine.ClearReadyBits(bits);
+    }
 
-    public bool HasBufferedAcceptedSocket() => _probeEngine.HasBufferedAcceptedSocket();
+    public bool TryDequeueAcceptedSocket(out Socket socket)
+    {
+        return _probeEngine.TryDequeueAcceptedSocket(out socket);
+    }
 
-    public void Dispose() => _probeEngine.Dispose();
+    public bool HasBufferedAcceptedSocket()
+    {
+        return _probeEngine.HasBufferedAcceptedSocket();
+    }
 }

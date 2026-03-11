@@ -32,8 +32,8 @@ public sealed class ProcessFactoryTests
                 ["/hello_static"],
                 Array.Empty<string>(),
                 scheduler,
-                tty: null,
-                mount: loc.Mount));
+                null,
+                loc.Mount));
 
             Assert.Empty(scheduler.GetProcessesSnapshot());
             Assert.Null(runtime.Engine.Owner);

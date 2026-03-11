@@ -1,11 +1,9 @@
-using System;
-using System.IO;
 using System.Reflection;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
-using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
@@ -29,23 +27,23 @@ public class FcntlCloexecTests
             env.MapUserPage(pathAddr);
             env.WriteCString(pathAddr, testFile);
 
-            Assert.Equal(0, await env.Call("SysOpen", pathAddr, (uint)FileFlags.O_RDONLY, 0));
-            Assert.Equal(1, await env.Call("SysOpen", pathAddr, (uint)FileFlags.O_RDONLY, 0));
-            Assert.Equal(2, await env.Call("SysOpen", pathAddr, (uint)FileFlags.O_RDONLY, 0));
+            Assert.Equal(0, await env.Call("SysOpen", pathAddr));
+            Assert.Equal(1, await env.Call("SysOpen", pathAddr));
+            Assert.Equal(2, await env.Call("SysOpen", pathAddr));
 
             var savedStdout = await env.Call("SysFcntl64", 1, F_DUPFD, 10);
             Assert.Equal(10, savedStdout);
 
-            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD, 0));
+            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD));
             Assert.Equal(0, await env.Call("SysFcntl64", (uint)savedStdout, F_SETFD, FD_CLOEXEC));
-            Assert.Equal((int)FD_CLOEXEC, await env.Call("SysFcntl64", (uint)savedStdout, F_GETFD, 0));
-            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD, 0));
+            Assert.Equal((int)FD_CLOEXEC, await env.Call("SysFcntl64", (uint)savedStdout, F_GETFD));
+            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD));
 
             Assert.Equal(1, await env.Call("SysDup2", (uint)savedStdout, 1));
-            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD, 0));
+            Assert.Equal(0, await env.Call("SysFcntl64", 1, F_GETFD));
             Assert.Equal(0, await env.Call("SysClose", (uint)savedStdout));
 
-            var openedFd = await env.Call("SysOpen", pathAddr, (uint)FileFlags.O_RDONLY, 0);
+            var openedFd = await env.Call("SysOpen", pathAddr);
             Assert.Equal(3, openedFd);
         }
         finally
@@ -83,7 +81,7 @@ public class FcntlCloexecTests
 
         public void WriteCString(uint addr, string value)
         {
-            Assert.True(Engine.CopyToUser(addr, System.Text.Encoding.UTF8.GetBytes(value + "\0")));
+            Assert.True(Engine.CopyToUser(addr, Encoding.UTF8.GetBytes(value + "\0")));
         }
 
         public ValueTask<int> Call(string name, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0,

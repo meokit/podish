@@ -1,7 +1,7 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Threading;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
@@ -9,6 +9,7 @@ using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
+using Process = Fiberish.Core.Process;
 
 namespace Fiberish.Tests.VFS;
 
@@ -67,7 +68,8 @@ public class HostSocketReadinessTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(3011, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("readiness-stalled-dispatcher", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(
+            new Dentry("readiness-stalled-dispatcher", inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>(), new StalledReadyDispatcher());
@@ -161,7 +163,8 @@ public class HostSocketReadinessTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode, [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.Contains(ex.SocketErrorCode,
+                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
         }
 
         var revents = readiness.Poll(file, PollEvents.POLLOUT);
@@ -316,7 +319,8 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3012, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("readiness-connect-soerror", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(
+            new Dentry("readiness-connect-soerror", inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -363,13 +367,11 @@ public class HostSocketReadinessTests
 
         using var reg = readiness.RegisterWaitHandle(file, static () => { }, PollEvents.POLLOUT);
         if (reg == null)
-        {
             await DrainUntil(() =>
             {
                 var revents = readiness.Poll(file, PollEvents.POLLOUT);
                 return (revents & PollEvents.POLLOUT) != 0 || (revents & PollEvents.POLLERR) != 0;
             }, env, 300);
-        }
     }
 
     [Fact(Timeout = TestTimeoutMs)]
@@ -383,7 +385,8 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3010, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("readiness-connect-callback", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(
+            new Dentry("readiness-connect-callback", inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -416,7 +419,7 @@ public class HostSocketReadinessTests
 
     private static async Task DrainUntil(Func<bool> done, ReadinessEnv env, int timeoutMs = TestTimeoutMs)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         while (!done() && sw.ElapsedMilliseconds < timeoutMs)
         {
             env.DrainEvents();
@@ -450,15 +453,15 @@ public class HostSocketReadinessTests
         public KernelScheduler Scheduler { get; }
         public SyscallManager SyscallManager { get; }
 
-        public void DrainEvents()
-        {
-            DrainEventsMethod.Invoke(Scheduler, null);
-        }
-
         public void Dispose()
         {
             KernelScheduler.Current = null;
             GC.KeepAlive(Task);
+        }
+
+        public void DrainEvents()
+        {
+            DrainEventsMethod.Invoke(Scheduler, null);
         }
     }
 

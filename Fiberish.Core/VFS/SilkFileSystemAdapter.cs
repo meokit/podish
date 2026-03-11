@@ -1,13 +1,12 @@
-using Fiberish.SilkFS;
 using Fiberish.Memory;
 using Fiberish.Native;
-using System.Threading;
+using Fiberish.SilkFS;
 
 namespace Fiberish.VFS;
 
 /// <summary>
-/// Core-side VFS adapter for SilkFS.
-/// SilkFS project stays storage-focused and independent from Core VFS types.
+///     Core-side VFS adapter for SilkFS.
+///     SilkFS project stays storage-focused and independent from Core VFS types.
 /// </summary>
 public sealed class SilkFileSystem : FileSystem
 {
@@ -30,12 +29,28 @@ public sealed class SilkFileSystem : FileSystem
 
 public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDropper
 {
-    public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type, devManager)
+    public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type,
+        devManager)
     {
         Repository = repository;
     }
 
     public SilkRepository Repository { get; }
+
+    public long DropDentryCache()
+    {
+        if (Root == null) return 0;
+
+        long dropped = 0;
+        var children = Root.Children.Values.ToList();
+        foreach (var child in children)
+        {
+            if (child.IsMounted) continue;
+            dropped += VfsShrinker.DetachCachedSubtree(child);
+        }
+
+        return dropped;
+    }
 
     protected override IndexedMemoryInode CreateIndexedInode(ulong ino)
     {
@@ -107,7 +122,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
             rootInode.Mode = 0x1FF;
             rootInode.SetInitialLinkCount(2, "SilkSuperBlock.LoadFromMetadata.root-init");
             Repository.Metadata.UpsertInode((long)rootInode.Ino, SilkInodeKind.Directory, rootInode.Mode, 0, 0,
-                nlink: rootInode.LinkCount);
+                rootInode.LinkCount);
             maxIno = Math.Max(maxIno, (long)rootInode.Ino);
         }
 
@@ -140,32 +155,17 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 
         _nextIno = (ulong)Math.Max(maxIno + 1, 2);
     }
-
-    public long DropDentryCache()
-    {
-        if (Root == null) return 0;
-
-        long dropped = 0;
-        var children = Root.Children.Values.ToList();
-        foreach (var child in children)
-        {
-            if (child.IsMounted) continue;
-            dropped += VfsShrinker.DetachCachedSubtree(child);
-        }
-
-        return dropped;
-    }
 }
 
 public sealed class SilkInode : IndexedMemoryInode
 {
-    private readonly SilkRepository _repository;
-    private readonly SilkMetadataStore _metadata;
-    private bool _hasPendingPageWriteback;
-    private readonly object _persistLock = new();
-    private readonly object _mappedCacheLock = new();
-    private MappedFilePageCache? _mappedPageCache;
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
+    private readonly object _mappedCacheLock = new();
+    private readonly SilkMetadataStore _metadata;
+    private readonly object _persistLock = new();
+    private readonly SilkRepository _repository;
+    private bool _hasPendingPageWriteback;
+    private MappedFilePageCache? _mappedPageCache;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -174,6 +174,8 @@ public sealed class SilkInode : IndexedMemoryInode
     }
 
     protected override GlobalPageCacheManager.PageCacheClass CacheClass => GlobalPageCacheManager.PageCacheClass.File;
+
+    private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
 
     public static SilkInodeKind MapInodeKind(InodeType type)
     {
@@ -205,24 +207,9 @@ public sealed class SilkInode : IndexedMemoryInode
         };
     }
 
-    private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
-
     private static IDisposable SuppressNamespaceMetadataMutations()
     {
         return new NamespaceMutationScope();
-    }
-
-    private sealed class NamespaceMutationScope : IDisposable
-    {
-        public NamespaceMutationScope()
-        {
-            NamespaceMutationDepth.Value = NamespaceMutationDepth.Value + 1;
-        }
-
-        public void Dispose()
-        {
-            NamespaceMutationDepth.Value = Math.Max(0, NamespaceMutationDepth.Value - 1);
-        }
     }
 
     public void LoadXAttrsFromMetadata()
@@ -250,9 +237,9 @@ public sealed class SilkInode : IndexedMemoryInode
             Mode,
             Uid,
             Gid,
-            nlink: LinkCount,
-            rdev: Rdev,
-            size: (long)Size);
+            LinkCount,
+            Rdev,
+            (long)Size);
     }
 
     private void PersistData()
@@ -264,14 +251,14 @@ public sealed class SilkInode : IndexedMemoryInode
 
     private byte[] ReadAllData()
     {
-        var len = checked((int)Math.Min((ulong)int.MaxValue, Size));
+        var len = checked((int)Math.Min(int.MaxValue, Size));
         if (len == 0) return Array.Empty<byte>();
 
         var result = new byte[len];
         var pos = 0;
         while (pos < len)
         {
-            var n = base.Read(null!, result.AsSpan(pos), pos);
+            var n = Read(null!, result.AsSpan(pos), pos);
             if (n <= 0) break;
             pos += n;
         }
@@ -289,6 +276,7 @@ public sealed class SilkInode : IndexedMemoryInode
                 EnsureSymlinkDataLoadedLocked();
                 return base.BackendRead(linuxFile, buffer, offset);
             }
+
             if (offset < 0) return -(int)Errno.EINVAL;
 
             var fileSize = (long)Size;
@@ -471,9 +459,9 @@ public sealed class SilkInode : IndexedMemoryInode
             inode.Mode,
             inode.Uid,
             inode.Gid,
-            nlink: inode.LinkCount,
-            rdev: inode.Rdev,
-            size: (long)inode.Size);
+            inode.LinkCount,
+            inode.Rdev,
+            (long)inode.Size);
     }
 
     private static void UpsertInodeMetadataIfLive(SilkMetadataStore.SilkMetadataTransaction tx, Inode? inode)
@@ -625,6 +613,7 @@ public sealed class SilkInode : IndexedMemoryInode
             PersistData();
             ClearPageCacheDirtyState();
         }
+
         return rc;
     }
 
@@ -632,12 +621,10 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var rc = base.WritePage(linuxFile, request, pageBuffer, sync);
         if (rc == 0 && request.Length > 0)
-        {
             lock (_persistLock)
             {
                 _hasPendingPageWriteback = true;
             }
-        }
 
         return rc;
     }
@@ -664,12 +651,10 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         var rc = base.SetPageDirty(pageIndex);
         if (rc == 0)
-        {
             lock (_persistLock)
             {
                 _hasPendingPageWriteback = true;
             }
-        }
 
         return rc;
     }
@@ -701,10 +686,8 @@ public sealed class SilkInode : IndexedMemoryInode
         lock (Lock)
         {
             if (PageCache != null)
-            {
                 foreach (var state in PageCache.SnapshotPageStates())
                     PageCache.ClearDirty(state.PageIndex);
-            }
 
             DirtyPageIndexes.Clear();
         }
@@ -795,5 +778,18 @@ public sealed class SilkInode : IndexedMemoryInode
         }
 
         base.OnFinalizeDelete();
+    }
+
+    private sealed class NamespaceMutationScope : IDisposable
+    {
+        public NamespaceMutationScope()
+        {
+            NamespaceMutationDepth.Value = NamespaceMutationDepth.Value + 1;
+        }
+
+        public void Dispose()
+        {
+            NamespaceMutationDepth.Value = Math.Max(0, NamespaceMutationDepth.Value - 1);
+        }
     }
 }

@@ -113,7 +113,7 @@ internal class Program
         runCommand.AddOption(publishOption);
         runCommand.AddArgument(runArgsArgument);
 
-        runCommand.SetHandler(async (context) =>
+        runCommand.SetHandler(async context =>
         {
             var volumes = context.ParseResult.GetValueForOption(volumeOption) ?? Array.Empty<string>();
             var interactive = context.ParseResult.GetValueForOption(interactiveOption);
@@ -133,7 +133,7 @@ internal class Program
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
             string? exe = null;
-            string[] exeArgs = Array.Empty<string>();
+            var exeArgs = Array.Empty<string>();
 
             if (useRootfs)
             {
@@ -206,10 +206,12 @@ internal class Program
             {
                 if (!TryParsePublishedPort(p, out var pSpec))
                 {
-                    Console.Error.WriteLine($"[Podish.Cli] invalid published port format: {p}. Expected hostPort:containerPort");
+                    Console.Error.WriteLine(
+                        $"[Podish.Cli] invalid published port format: {p}. Expected hostPort:containerPort");
                     context.ExitCode = 125;
                     return;
                 }
+
                 publishedPorts.Add(pSpec);
             }
 
@@ -367,6 +369,7 @@ internal class Program
             {
                 PodishContainerMetadataStore.Write(containersDir, metadata);
             }
+
             context.ExitCode = exitCode;
         });
 
@@ -374,7 +377,7 @@ internal class Program
         var startCommand = new Command("start", "Start an existing container by name or ID");
         var startContainerArgument = new Argument<string>("container", "Container name or ID");
         startCommand.AddArgument(startContainerArgument);
-        startCommand.SetHandler(async (context) =>
+        startCommand.SetHandler(async context =>
         {
             var containerId = context.ParseResult.GetValueForArgument(startContainerArgument);
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
@@ -410,6 +413,7 @@ internal class Program
                 context.ExitCode = 125;
                 return;
             }
+
             containerId = metadata.ContainerId;
             var containerDir = Path.Combine(containersDir, containerId);
 
@@ -517,7 +521,7 @@ internal class Program
             "Store image as OCI blobs + layer indexes (no host filesystem extraction)");
         pullCommand.AddArgument(pullImageArgument);
         pullCommand.AddOption(pullStoreOciOption);
-        pullCommand.SetHandler(async (context) =>
+        pullCommand.SetHandler(async context =>
         {
             var image = context.ParseResult.GetValueForArgument(pullImageArgument);
             var storeOci = context.ParseResult.GetValueForOption(pullStoreOciOption);
@@ -583,7 +587,7 @@ internal class Program
         };
         saveCommand.AddOption(saveOutputOption);
         saveCommand.AddArgument(saveImagesArgument);
-        saveCommand.SetHandler((context) =>
+        saveCommand.SetHandler(context =>
         {
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
@@ -625,7 +629,7 @@ internal class Program
                 "Read from archive file")
             { IsRequired = true };
         loadCommand.AddOption(loadInputOption);
-        loadCommand.SetHandler((context) =>
+        loadCommand.SetHandler(context =>
         {
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
@@ -667,7 +671,7 @@ internal class Program
             "Target image reference");
         importCommand.AddArgument(importSourceArgument);
         importCommand.AddArgument(importReferenceArgument);
-        importCommand.SetHandler((context) =>
+        importCommand.SetHandler(context =>
         {
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
@@ -711,7 +715,7 @@ internal class Program
         var exportContainerArgument = new Argument<string>("container", "Container ID");
         exportCommand.AddOption(exportOutputOption);
         exportCommand.AddArgument(exportContainerArgument);
-        exportCommand.SetHandler((context) =>
+        exportCommand.SetHandler(context =>
         {
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
@@ -764,7 +768,7 @@ internal class Program
             "Output format (table|json)");
         psCommand.AddOption(psAllOption);
         psCommand.AddOption(psFormatOption);
-        psCommand.SetHandler((context) =>
+        psCommand.SetHandler(context =>
         {
             var showAll = context.ParseResult.GetValueForOption(psAllOption);
             var format = context.ParseResult.GetValueForOption(psFormatOption) ?? "table";
@@ -806,7 +810,7 @@ internal class Program
         var renameNewArgument = new Argument<string>("new-name", "New container name");
         renameCommand.AddArgument(renameOldArgument);
         renameCommand.AddArgument(renameNewArgument);
-        renameCommand.SetHandler((context) =>
+        renameCommand.SetHandler(context =>
         {
             var oldQuery = context.ParseResult.GetValueForArgument(renameOldArgument);
             var newName = context.ParseResult.GetValueForArgument(renameNewArgument);
@@ -854,7 +858,7 @@ internal class Program
         var rmForceOption = new Option<bool>(new[] { "--force", "-f" }, "Force remove running container metadata");
         rmCommand.AddArgument(rmContainersArgument);
         rmCommand.AddOption(rmForceOption);
-        rmCommand.SetHandler((context) =>
+        rmCommand.SetHandler(context =>
         {
             var targets = context.ParseResult.GetValueForArgument(rmContainersArgument) ?? Array.Empty<string>();
             var force = context.ParseResult.GetValueForOption(rmForceOption);
@@ -893,14 +897,15 @@ internal class Program
 
         // --- Images Command ---
         var imagesCommand = new Command("images", "List local images");
-        imagesCommand.SetHandler((context) =>
+        imagesCommand.SetHandler(context =>
         {
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var ociStoreImagesDir = Path.Combine(fiberpodDir, "oci", "images");
             if (!Directory.Exists(ociStoreImagesDir))
                 return;
 
-            Console.WriteLine("REPOSITORY                    TAG                 DIGEST                             LAYERS");
+            Console.WriteLine(
+                "REPOSITORY                    TAG                 DIGEST                             LAYERS");
             foreach (var dir in Directory.GetDirectories(ociStoreImagesDir).OrderBy(x => x, StringComparer.Ordinal))
             {
                 var imagePath = Path.Combine(dir, "image.json");
@@ -934,7 +939,7 @@ internal class Program
             Arity = ArgumentArity.OneOrMore
         };
         imageRmCommand.AddArgument(imageRmTargets);
-        imageRmCommand.SetHandler((context) =>
+        imageRmCommand.SetHandler(context =>
         {
             var targets = context.ParseResult.GetValueForArgument(imageRmTargets) ?? Array.Empty<string>();
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
@@ -969,7 +974,7 @@ internal class Program
         var logsTimestampsOption = new Option<bool>(new[] { "--timestamps" }, "Show timestamps");
         logsCommand.AddArgument(logsContainerArgument);
         logsCommand.AddOption(logsTimestampsOption);
-        logsCommand.SetHandler((context) =>
+        logsCommand.SetHandler(context =>
         {
             var containerQuery = context.ParseResult.GetValueForArgument(logsContainerArgument);
             var showTimestamps = context.ParseResult.GetValueForOption(logsTimestampsOption);
@@ -1015,7 +1020,7 @@ internal class Program
             () => "default",
             "Output format (default|json)");
         eventsCommand.AddOption(eventsFormatOption);
-        eventsCommand.SetHandler((context) =>
+        eventsCommand.SetHandler(context =>
         {
             var format = context.ParseResult.GetValueForOption(eventsFormatOption) ?? "default";
 
@@ -1062,10 +1067,8 @@ internal class Program
             builder.ClearProviders();
             builder.SetMinimumLevel(logLevel);
             if (!string.IsNullOrEmpty(logFile))
-            {
                 // Write only to file; never emit engine logs to console.
                 builder.AddProvider(new FileLoggerProvider(logFile));
-            }
         });
         Logger = ProgramLoggerFactory.CreateLogger<Program>();
     }
@@ -1081,10 +1084,8 @@ internal class Program
 
         // If user already provided `--`, keep raw tokens.
         for (var i = runIdx + 1; i < args.Length; i++)
-        {
             if (args[i] == "--")
                 return args;
-        }
 
         var optionsWithValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1113,7 +1114,7 @@ internal class Program
             "--rm"
         };
 
-        bool hasRootfs = false;
+        var hasRootfs = false;
         var firstPositional = -1;
         for (var i = runIdx + 1; i < args.Length; i++)
         {
@@ -1225,7 +1226,7 @@ internal class Program
             return null;
 
         Directory.CreateDirectory(logsDir);
-        CleanupOldAutoEngineLogs(logsDir, keep: 20);
+        CleanupOldAutoEngineLogs(logsDir, 20);
         return Path.Combine(logsDir, $"engine_{DateTime.Now:yyyyMMdd_HHmmss}_{Environment.ProcessId}.log");
     }
 
@@ -1274,8 +1275,10 @@ internal class Program
     }
 
     private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit, bool useOverlay, string containersDir,
-        string containerId, string? containerName, string hostname, NetworkMode networkMode, string image, string containerDir, ContainerLogDriver logDriver,
+        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit, bool useOverlay,
+        string containersDir,
+        string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
+        string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1314,7 +1317,7 @@ internal static class ContainerLogDriverExtensions
 }
 
 /// <summary>
-/// Simple file logger provider that writes logs to a file.
+///     Simple file logger provider that writes logs to a file.
 /// </summary>
 file class FileLoggerProvider : ILoggerProvider
 {
@@ -1332,7 +1335,10 @@ file class FileLoggerProvider : ILoggerProvider
         };
     }
 
-    public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, this);
+    public ILogger CreateLogger(string categoryName)
+    {
+        return new FileLogger(categoryName, this);
+    }
 
     public void Dispose()
     {
@@ -1360,9 +1366,15 @@ file class FileLogger : ILogger
         _provider = provider;
     }
 
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+    {
+        return null;
+    }
 
-    public bool IsEnabled(LogLevel logLevel) => true;
+    public bool IsEnabled(LogLevel logLevel)
+    {
+        return true;
+    }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
         Func<TState, Exception?, string> formatter)

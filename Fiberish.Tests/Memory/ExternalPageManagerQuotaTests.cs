@@ -29,7 +29,7 @@ public class ExternalPageManagerQuotaTests
     {
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
         ExternalPageManager.MemoryQuotaBytes = long.MaxValue;
-        IntPtr ptr = IntPtr.Zero;
+        var ptr = IntPtr.Zero;
         try
         {
             var ok = ExternalPageManager.TryAllocateExternalPageStrict(out ptr, AllocationClass.Anonymous);
@@ -48,7 +48,7 @@ public class ExternalPageManagerQuotaTests
     {
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
         ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
-        IntPtr ptr = IntPtr.Zero;
+        var ptr = IntPtr.Zero;
         try
         {
             ptr = ExternalPageManager.AllocateExternalPage();
@@ -70,7 +70,7 @@ public class ExternalPageManagerQuotaTests
         {
             var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
                 out var basePtr,
-                pageCount: 3,
+                3,
                 AllocationClass.Anonymous);
             Assert.False(ok);
             Assert.Equal(IntPtr.Zero, basePtr);
@@ -88,12 +88,12 @@ public class ExternalPageManagerQuotaTests
         ExternalPageManager.MemoryQuotaBytes = long.MaxValue;
         var beforePages = ExternalPageManager.GetAllocatedPageCount();
 
-        IntPtr basePtr = IntPtr.Zero;
+        var basePtr = IntPtr.Zero;
         try
         {
             var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
                 out basePtr,
-                pageCount: 4,
+                4,
                 AllocationClass.Cow);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, basePtr);
@@ -132,12 +132,12 @@ public class ExternalPageManagerQuotaTests
         ExternalPageManager.PreferredBackend = ExternalPageBackend.MmapAnonymous;
         var beforePages = ExternalPageManager.GetAllocatedPageCount();
 
-        IntPtr basePtr = IntPtr.Zero;
+        var basePtr = IntPtr.Zero;
         try
         {
             var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
                 out basePtr,
-                pageCount: 2,
+                2,
                 AllocationClass.PageCache);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, basePtr);

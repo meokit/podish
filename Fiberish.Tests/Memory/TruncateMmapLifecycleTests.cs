@@ -4,6 +4,7 @@ using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
+using LinuxFile = Fiberish.VFS.LinuxFile;
 
 namespace Fiberish.Tests.Memory;
 
@@ -17,12 +18,12 @@ public class TruncateMmapLifecycleTests
         Assert.Equal((uint)0x40000000, mapped);
 
         var secondPage = mapped + LinuxConstants.PageSize;
-        Assert.Equal(FaultResult.Handled, env.Mm.HandleFaultDetailed(secondPage, isWrite: true, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Mm.HandleFaultDetailed(secondPage, true, env.Engine));
 
         Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
         env.Mm.OnFileTruncate(env.File.Inode, LinuxConstants.PageSize, env.Engine);
 
-        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, isWrite: true, env.Engine));
+        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, true, env.Engine));
     }
 
     [Fact]
@@ -36,8 +37,8 @@ public class TruncateMmapLifecycleTests
         Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
         env.Mm.OnFileTruncate(env.File.Inode, LinuxConstants.PageSize, env.Engine);
 
-        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, isWrite: false, env.Engine));
-        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, isWrite: true, env.Engine));
+        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, false, env.Engine));
+        Assert.Equal(FaultResult.BusError, env.Mm.HandleFaultDetailed(secondPage, true, env.Engine));
     }
 
     [Fact]
@@ -46,7 +47,7 @@ public class TruncateMmapLifecycleTests
         using var env = new TestEnv();
         var mapped = env.MapShared(0x41000000, LinuxConstants.PageSize * 2);
         var secondPage = mapped + LinuxConstants.PageSize;
-        Assert.Equal(FaultResult.Handled, env.Mm.HandleFaultDetailed(secondPage, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Mm.HandleFaultDetailed(secondPage, false, env.Engine));
 
         var vma = Assert.Single(env.Mm.VMAs);
         var secondPageIndex = vma.ViewPageOffset + 1;
@@ -63,11 +64,14 @@ public class TruncateMmapLifecycleTests
     public void NotifyInodeTruncated_BroadcastsToOtherProcesses_SharedInodeMappings()
     {
         using var env = new MultiProcessEnv();
-        Assert.Equal(FaultResult.Handled, env.Mm1.HandleFaultDetailed(env.Map1 + LinuxConstants.PageSize, true, env.Engine1));
-        Assert.Equal(FaultResult.Handled, env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
+        Assert.Equal(FaultResult.Handled,
+            env.Mm1.HandleFaultDetailed(env.Map1 + LinuxConstants.PageSize, true, env.Engine1));
+        Assert.Equal(FaultResult.Handled,
+            env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
 
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
-        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize, env.Process1);
+        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize,
+            env.Process1);
 
         Assert.Equal(FaultResult.BusError,
             env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
@@ -86,7 +90,8 @@ public class TruncateMmapLifecycleTests
         Assert.True(env.Mm2.ExternalPages.TryGet(second2, out _));
 
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
-        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize, env.Process1);
+        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize,
+            env.Process1);
 
         Assert.False(env.Mm1.ExternalPages.TryGet(second1, out _));
         Assert.False(env.Mm2.ExternalPages.TryGet(second2, out _));
@@ -142,13 +147,16 @@ public class TruncateMmapLifecycleTests
     public void NotifyInodeTruncated_UsesInodeIndex_WhenSchedulerUnavailable()
     {
         using var env = new MultiProcessEnv();
-        Assert.Equal(FaultResult.Handled, env.Mm1.HandleFaultDetailed(env.Map1 + LinuxConstants.PageSize, true, env.Engine1));
-        Assert.Equal(FaultResult.Handled, env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
+        Assert.Equal(FaultResult.Handled,
+            env.Mm1.HandleFaultDetailed(env.Map1 + LinuxConstants.PageSize, true, env.Engine1));
+        Assert.Equal(FaultResult.Handled,
+            env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
 
         KernelScheduler.Current = null;
 
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
-        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize, env.Process1);
+        ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize,
+            env.Process1);
 
         Assert.Equal(FaultResult.BusError,
             env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
@@ -185,7 +193,8 @@ public class TruncateMmapLifecycleTests
                 payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
                 Assert.Equal(payload.Length, inode.Write(file, payload, 0));
 
-                var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write, MapFlags.Shared,
+                var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                    MapFlags.Shared,
                     file, 0, (long)inode.Size, "shared-mm-map", engine);
                 var secondPage = map + LinuxConstants.PageSize;
                 Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(secondPage, true, engine));
@@ -286,7 +295,13 @@ public class TruncateMmapLifecycleTests
 
         public Engine Engine { get; }
         public VMAManager Mm { get; }
-        public (LinuxFile Handle, Inode Inode) File { get; }
+        public (LinuxFile Handle, Fiberish.VFS.Inode Inode) File { get; }
+
+        public void Dispose()
+        {
+            File.Handle.Close();
+            Engine.Dispose();
+        }
 
         public uint MapShared(uint addr, uint len)
         {
@@ -298,12 +313,6 @@ public class TruncateMmapLifecycleTests
         {
             return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Private, File.Handle, 0,
                 (long)File.Inode.Size, "test-map-private", Engine);
-        }
-
-        public void Dispose()
-        {
-            File.Handle.Close();
-            Engine.Dispose();
         }
     }
 
@@ -347,9 +356,11 @@ public class TruncateMmapLifecycleTests
             payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
             Assert.Equal(payload.Length, Inode.Write(File1, payload, 0));
 
-            Map1 = Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write, MapFlags.Shared,
+            Map1 = Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared,
                 File1, 0, (long)Inode.Size, "p1-map", Engine1);
-            Map2 = Mm2.Mmap(0x43000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write, MapFlags.Shared,
+            Map2 = Mm2.Mmap(0x43000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared,
                 File2, 0, (long)Inode.Size, "p2-map", Engine2);
         }
 
@@ -414,7 +425,7 @@ public class TruncateMmapLifecycleTests
 
             File1 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             File2 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
-            Assert.Equal(1, Inode.Write(File1, new byte[] { (byte)'A' }, 0));
+            Assert.Equal(1, Inode.Write(File1, new[] { (byte)'A' }, 0));
 
             Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1,
                 File1, 0, (long)Inode.Size, "map1", Engine1);
@@ -439,11 +450,6 @@ public class TruncateMmapLifecycleTests
         public uint Map1 { get; }
         public uint Map2 { get; }
 
-        public byte ReadByte1() => ReadByte(Engine1, Map1);
-        public byte ReadByte2() => ReadByte(Engine2, Map2);
-        public void WriteByte1(byte value) => WriteByte(Engine1, Map1, value);
-        public void WriteByte2(byte value) => WriteByte(Engine2, Map2, value);
-
         public void Dispose()
         {
             File1.Close();
@@ -451,6 +457,26 @@ public class TruncateMmapLifecycleTests
             Engine1.Dispose();
             Engine2.Dispose();
             KernelScheduler.Current = null;
+        }
+
+        public byte ReadByte1()
+        {
+            return ReadByte(Engine1, Map1);
+        }
+
+        public byte ReadByte2()
+        {
+            return ReadByte(Engine2, Map2);
+        }
+
+        public void WriteByte1(byte value)
+        {
+            WriteByte(Engine1, Map1, value);
+        }
+
+        public void WriteByte2(byte value)
+        {
+            WriteByte(Engine2, Map2, value);
         }
 
         private static byte ReadByte(Engine engine, uint addr)

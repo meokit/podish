@@ -1,16 +1,17 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Fiberish.Core;
-using Fiberish.Native;
-using Fiberish.Core.VFS.TTY;
 using Fiberish.Core.Net;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
-using Fiberish.Diagnostics;
+using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
+using Podish.Core.Networking;
 
 namespace Podish.Core;
 
@@ -45,13 +46,13 @@ public sealed class ContainerRuntimeService
 {
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly Networking.PortForwardManager _portForwardManager;
+    private readonly PortForwardManager _portForwardManager;
 
     public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
     {
         _logger = logger ?? NullLogger.Instance;
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
-        _portForwardManager = new Networking.PortForwardManager(_loggerFactory);
+        _portForwardManager = new PortForwardManager(_loggerFactory);
     }
 
     public async Task<int> RunAsync(ContainerRunRequest request)
@@ -95,15 +96,22 @@ public sealed class ContainerRuntimeService
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                var res = Fiberish.Core.VFS.TTY.MacOSTermios.EnableRawMode(0);
+                var res = MacOSTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
 
                 // Last-resort cleanup: disable raw mode on any exit path
                 // (Ctrl-C, unhandled exception, Environment.Exit, etc.)
                 void RawModeCleanup()
                 {
-                    try { Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(0); } catch { }
+                    try
+                    {
+                        MacOSTermios.DisableRawMode(0);
+                    }
+                    catch
+                    {
+                    }
                 }
+
                 AppDomain.CurrentDomain.ProcessExit += (_, _) => RawModeCleanup();
                 Console.CancelKeyPress += (_, e) =>
                 {
@@ -116,7 +124,6 @@ public sealed class ContainerRuntimeService
             inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
                 try
                 {
                     if (!Console.IsOutputRedirected)
@@ -138,9 +145,8 @@ public sealed class ContainerRuntimeService
                 catch
                 {
                 }
-            }
         }
-        
+
         INetworkBackend? networkBackend = null;
         ContainerNetworkContext? networkContext = null;
         var actualExe = string.IsNullOrEmpty(request.Exe) ? "/bin/sh" : request.Exe;
@@ -162,19 +168,16 @@ public sealed class ContainerRuntimeService
                 ExternalPageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
-            
+
             if (request.NetworkMode == NetworkMode.Private)
-            {
                 networkBackend = new PrivateNetworkBackend(new DummySwitch());
-            }
             else
-            {
                 networkBackend = new HostNetworkBackend();
-            }
- 
+
             if (request.NetworkMode == NetworkMode.Private)
             {
-                networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec { ContainerId = request.ContainerId });
+                networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec
+                    { ContainerId = request.ContainerId });
                 _portForwardManager.Start(networkContext, publishedPorts);
                 runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
             }
@@ -275,7 +278,7 @@ public sealed class ContainerRuntimeService
                         "/etc/hostname",
                         "hostname",
                         Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)),
-                        readOnly: true);
+                        true);
                 }
 
                 if (!string.IsNullOrWhiteSpace(request.Hostname))
@@ -285,7 +288,7 @@ public sealed class ContainerRuntimeService
                         "/etc/hosts",
                         "hosts",
                         Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)),
-                        readOnly: true);
+                        true);
                 }
 
                 var resolvConf = BuildResolvConfContent(request.DnsServers);
@@ -294,7 +297,7 @@ public sealed class ContainerRuntimeService
                     "/etc/resolv.conf",
                     "resolv.conf",
                     Encoding.UTF8.GetBytes(resolvConf),
-                    readOnly: true);
+                    true);
             }
             catch (Exception ex)
             {
@@ -334,7 +337,7 @@ public sealed class ContainerRuntimeService
             startupPhase = "load-init";
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
-                scheduler, ttyDiag, loc.Mount!, uts, parentPid: engineInitProc?.TGID ?? 0);
+                scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
             initProcessStarted = true;
             startupPhase = "running";
             request.ProcessController?.BindRuntimeControl(() =>
@@ -371,7 +374,8 @@ public sealed class ContainerRuntimeService
 
             _logger.LogDebug(
                 "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver} publishedPortCount={PublishedPortCount}",
-                request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty, request.Volumes.Length,
+                request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty,
+                request.Volumes.Length,
                 request.LogDriver, publishedPorts.Count);
             scheduler.Run();
             _logger.LogDebug(
@@ -432,29 +436,31 @@ public sealed class ContainerRuntimeService
             Console.Out.Flush();
             Console.Error.Flush();
 
-            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}", request.ContainerId);
+            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}",
+                request.ContainerId);
             stdinStream?.Dispose();
 
             if (inputCts != null)
             {
-                _logger.LogTrace("Container teardown cancelling input loop containerId={ContainerId}", request.ContainerId);
+                _logger.LogTrace("Container teardown cancelling input loop containerId={ContainerId}",
+                    request.ContainerId);
                 inputCts.Cancel();
                 if (inputTask != null)
-                {
                     try
                     {
-                        _logger.LogTrace("Container teardown waiting for input loop containerId={ContainerId}", request.ContainerId);
+                        _logger.LogTrace("Container teardown waiting for input loop containerId={ContainerId}",
+                            request.ContainerId);
                         Task.WhenAny(inputTask, Task.Delay(100)).Wait();
                     }
                     catch
                     {
                     }
-                }
 
                 inputCts.Dispose();
             }
 
-            _logger.LogTrace("Container teardown disposing SIGWINCH registration containerId={ContainerId}", request.ContainerId);
+            _logger.LogTrace("Container teardown disposing SIGWINCH registration containerId={ContainerId}",
+                request.ContainerId);
             sigwinch?.Dispose();
             if (driver is IDisposable driverDisposable)
             {
@@ -477,8 +483,9 @@ public sealed class ContainerRuntimeService
 
             if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}", request.ContainerId);
-                Fiberish.Core.VFS.TTY.MacOSTermios.DisableRawMode(0);
+                _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
+                    request.ContainerId);
+                MacOSTermios.DisableRawMode(0);
             }
 
             _logger.LogTrace("Container teardown unbinding controller containerId={ContainerId}", request.ContainerId);
@@ -493,9 +500,12 @@ public sealed class ContainerRuntimeService
                 }
                 else
                 {
-                    _logger.LogCritical("Port forwarding loop failed to stop gracefully for container {ContainerId}. Leaking network resources to prevent memory corruption.", request.ContainerId);
+                    _logger.LogCritical(
+                        "Port forwarding loop failed to stop gracefully for container {ContainerId}. Leaking network resources to prevent memory corruption.",
+                        request.ContainerId);
                 }
             }
+
             networkBackend?.Dispose();
 
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
@@ -520,7 +530,7 @@ public sealed class ContainerRuntimeService
         OciStoredImage? storedImage;
         try
         {
-            storedImage = System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(imagePath),
+            storedImage = JsonSerializer.Deserialize(File.ReadAllText(imagePath),
                 PodishJsonContext.Default.OciStoredImage);
         }
         catch (Exception ex)
@@ -563,7 +573,6 @@ public sealed class ContainerRuntimeService
             }
 
             if (!File.Exists(indexPath))
-            {
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(indexPath) ?? ociStoreDir);
@@ -573,7 +582,7 @@ public sealed class ContainerRuntimeService
                         .Select(e => e with { InlineData = null })
                         .ToList();
                     File.WriteAllText(indexPath,
-                        System.Text.Json.JsonSerializer.Serialize(persistedEntries,
+                        JsonSerializer.Serialize(persistedEntries,
                             PodishJsonContext.Default.ListLayerIndexEntry));
                     _logger.LogWarning(
                         "Rebuilt missing layer index '{IndexPath}' from blob '{BlobPath}' for digest {Digest}",
@@ -585,7 +594,6 @@ public sealed class ContainerRuntimeService
                     error = $"missing layer index file: {layer.IndexPath}; rebuild failed: {ex.Message}";
                     return false;
                 }
-            }
 
             if (!File.Exists(indexPath))
             {
@@ -596,7 +604,7 @@ public sealed class ContainerRuntimeService
             try
             {
                 var entries =
-                    System.Text.Json.JsonSerializer.Deserialize(File.ReadAllText(indexPath),
+                    JsonSerializer.Deserialize(File.ReadAllText(indexPath),
                         PodishJsonContext.Default.ListLayerIndexEntry);
                 if (entries == null)
                 {
@@ -622,7 +630,6 @@ public sealed class ContainerRuntimeService
         }
 
         if (metadataChanged)
-        {
             try
             {
                 var repaired = storedImage with
@@ -630,13 +637,12 @@ public sealed class ContainerRuntimeService
                     StoreDirectory = OciStorePath.RelativeStoreDirectory, Layers = normalizedLayers
                 };
                 File.WriteAllText(imagePath,
-                    System.Text.Json.JsonSerializer.Serialize(repaired, PodishJsonContext.Default.OciStoredImage));
+                    JsonSerializer.Serialize(repaired, PodishJsonContext.Default.OciStoredImage));
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to persist repaired OCI image metadata at {ImagePath}", imagePath);
             }
-        }
 
         var merged = MergeLayerIndexes(layerIndexes);
         var layerType = FileSystemRegistry.Get("layerfs");
@@ -656,7 +662,7 @@ public sealed class ContainerRuntimeService
     {
         var merged = new Dictionary<string, LayerIndexEntry>(StringComparer.Ordinal)
         {
-            ["/"] = new LayerIndexEntry("/", InodeType.Directory, 0x1ED)
+            ["/"] = new("/", InodeType.Directory, 0x1ED)
         };
 
         foreach (var layer in layers)
@@ -752,12 +758,10 @@ public sealed class ContainerRuntimeService
             var hostResolvConf = "/etc/resolv.conf";
             var definedNameservers = 0;
             if (File.Exists(hostResolvConf))
-            {
                 try
                 {
                     var lines = File.ReadAllLines(hostResolvConf);
                     foreach (var line in lines)
-                    {
                         if (line.TrimStart().StartsWith("nameserver "))
                         {
                             var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -782,13 +786,11 @@ public sealed class ContainerRuntimeService
                         {
                             sb.AppendLine(line);
                         }
-                    }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to read host /etc/resolv.conf");
                 }
-            }
 
             if (definedNameservers == 0)
                 sb.AppendLine("nameserver 8.8.8.8");
@@ -821,15 +823,54 @@ public sealed class ContainerRuntimeService
         return sb.ToString();
     }
 
+    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token)
+    {
+        var buffer = new byte[256];
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var read = await stdin.ReadAsync(buffer, token);
+                if (read == 0) break;
+                tty.Input(buffer.AsSpan(0, read).ToArray());
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir,
+        ILoggerFactory loggerFactory)
+    {
+        return driver switch
+        {
+            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log"),
+                loggerFactory.CreateLogger<JsonFileContainerLogSink>()),
+            ContainerLogDriver.None => new NoneContainerLogSink(),
+            _ => new NoneContainerLogSink()
+        };
+    }
+
     private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
     {
         private readonly Dictionary<string, string> _digestToBlobPath;
-        private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
         private readonly object _lock = new();
+        private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
 
         public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)
         {
             _digestToBlobPath = digestToBlobPath;
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                foreach (var s in _streams.Values)
+                    s.Dispose();
+                _streams.Clear();
+            }
         }
 
         public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
@@ -877,52 +918,13 @@ public sealed class ContainerRuntimeService
                 return true;
             }
         }
-
-        public void Dispose()
-        {
-            lock (_lock)
-            {
-                foreach (var s in _streams.Values)
-                    s.Dispose();
-                _streams.Clear();
-            }
-        }
-    }
-
-    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token)
-    {
-        var buffer = new byte[256];
-        try
-        {
-            while (!token.IsCancellationRequested)
-            {
-                var read = await stdin.ReadAsync(buffer, token);
-                if (read == 0) break;
-                tty.Input(buffer.AsSpan(0, read).ToArray());
-            }
-        }
-        catch
-        {
-        }
-    }
-
-    private IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir,
-        ILoggerFactory loggerFactory)
-    {
-        return driver switch
-        {
-            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log"),
-                loggerFactory.CreateLogger<JsonFileContainerLogSink>()),
-            ContainerLogDriver.None => new NoneContainerLogSink(),
-            _ => new NoneContainerLogSink()
-        };
     }
 
     private sealed class ConsoleTtyDriver : ITtyDriver
     {
+        private readonly IContainerLogSink _containerLogSink;
         private readonly Stream _stderr = Console.OpenStandardError();
         private readonly Stream _stdout = Console.OpenStandardOutput();
-        private readonly IContainerLogSink _containerLogSink;
         private TtyDiscipline? _tty;
 
         public ConsoleTtyDriver(IContainerLogSink containerLogSink)
@@ -960,22 +962,38 @@ public sealed class ContainerRuntimeService
 
     private sealed class BridgeTtyDriver : ITtyDriver, IDisposable
     {
-        private readonly object _lock = new();
-        private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
-        private readonly AsyncWaitQueue _writeReady = new();
-        private readonly AutoResetEvent _hasData = new(false);
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _pumpTask;
+        private const int OutputQueueCapacityBytes = 64 * 1024;
         private readonly PodishTerminalBridge _bridge;
         private readonly IContainerLogSink _containerLogSink;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly AutoResetEvent _hasData = new(false);
+        private readonly object _lock = new();
+        private readonly Task _pumpTask;
+        private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
+        private readonly AsyncWaitQueue _writeReady = new();
         private int _queuedBytes;
-        private const int OutputQueueCapacityBytes = 64 * 1024;
 
         public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink)
         {
             _bridge = bridge;
             _containerLogSink = containerLogSink;
             _pumpTask = Task.Run(PumpLoop);
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _hasData.Set();
+            try
+            {
+                _pumpTask.Wait(200);
+            }
+            catch
+            {
+            }
+
+            _cts.Dispose();
+            _hasData.Dispose();
         }
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
@@ -1056,22 +1074,6 @@ public sealed class ContainerRuntimeService
                     _bridge.EmitOutput(item.Kind, item.Data);
                 }
             }
-        }
-
-        public void Dispose()
-        {
-            _cts.Cancel();
-            _hasData.Set();
-            try
-            {
-                _pumpTask.Wait(200);
-            }
-            catch
-            {
-            }
-
-            _cts.Dispose();
-            _hasData.Dispose();
         }
     }
 

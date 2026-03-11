@@ -10,6 +10,11 @@ public enum TtyEndpointKind
 public interface ITtyDriver
 {
     /// <summary>
+    ///     Indicates whether output can be accepted without blocking.
+    /// </summary>
+    bool CanWrite { get; }
+
+    /// <summary>
     ///     Writes data to the TTY output.
     /// </summary>
     /// <param name="kind">The endpoint to write to (Stdout/Stderr).</param>
@@ -21,11 +26,6 @@ public interface ITtyDriver
     ///     Flushes any buffered output.
     /// </summary>
     void Flush();
-
-    /// <summary>
-    ///     Indicates whether output can be accepted without blocking.
-    /// </summary>
-    bool CanWrite { get; }
 
     /// <summary>
     ///     Registers a callback to be invoked when output might become writable.

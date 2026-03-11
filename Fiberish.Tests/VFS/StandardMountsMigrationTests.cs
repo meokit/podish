@@ -1,4 +1,5 @@
 using Fiberish.Core;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -87,8 +88,8 @@ public class StandardMountsMigrationTests
 
             try
             {
-                var pair1 = Assert.IsType<Fiberish.Core.VFS.TTY.PtyPair>(file1.PrivateData);
-                var pair2 = Assert.IsType<Fiberish.Core.VFS.TTY.PtyPair>(file2.PrivateData);
+                var pair1 = Assert.IsType<PtyPair>(file1.PrivateData);
+                var pair2 = Assert.IsType<PtyPair>(file2.PrivateData);
 
                 Assert.Equal(0, pair1.Index);
                 Assert.Equal(0, pair2.Index);

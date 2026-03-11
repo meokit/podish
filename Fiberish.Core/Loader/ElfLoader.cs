@@ -1,14 +1,14 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
+using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
-using Fiberish.Core;
 using LibObjectFile.Elf;
 using Microsoft.Extensions.Logging;
-using File = System.IO.File;
 using LinuxFile = Fiberish.VFS.LinuxFile;
 
 namespace Fiberish.Loader;
@@ -26,22 +26,6 @@ public class ElfLoader
     public const uint StackTop = 0xC0000000;
     public const uint StackSize = 0x800000;
     private static readonly ILogger Logger = Logging.CreateLogger<ElfLoader>();
-
-    // Auxv types moved to LinuxConstants
-
-    /// <summary>
-    /// Result of loading an ELF's LOAD segments into guest memory.
-    /// </summary>
-    private class ElfLoadInfo
-    {
-        public uint PhdrAddr { get; set; }
-        public uint PhNum { get; set; }
-        public uint PhEnt { get; set; }
-        public uint EntryPoint { get; set; }
-        public uint BrkAddr { get; set; }
-        public uint FirstLoadVaddr { get; set; }
-        public string? InterpPath { get; set; }
-    }
 
     public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args,
         string[] envs, Mount mount)
@@ -63,7 +47,7 @@ public class ElfLoader
 
         // Check for PT_INTERP (dynamic linker)
         uint interpBase = 0;
-        uint interpEntry = mainInfo.EntryPoint;
+        var interpEntry = mainInfo.EntryPoint;
 
         if (mainInfo.InterpPath != null)
         {
@@ -80,13 +64,9 @@ public class ElfLoader
             var interpElf = ElfFile.Read(interpStream);
 
             if (interpElf.FileType == ElfFileType.Dynamic)
-            {
                 interpBase = 0x56555000; // Load ld.so at a distinct base
-            }
             else
-            {
                 throw new NotSupportedException($"Unsupported interpreter type: {interpElf.FileType}");
-            }
 
             Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
             var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPath,
@@ -136,7 +116,7 @@ public class ElfLoader
         salt.CopyTo(hashInput);
         guestPathBytes.CopyTo(hashInput.AsSpan(salt.Length));
 
-        var fullHash = System.Security.Cryptography.SHA256.HashData(hashInput);
+        var fullHash = SHA256.HashData(hashInput);
         var randBytes = new byte[16];
         Array.Copy(fullHash, randBytes, 16);
 
@@ -148,14 +128,14 @@ public class ElfLoader
         // To achieve this, we count the number of words we're about to push:
         // argc (1) + argv (ArgCount + 1) + envp (EnvCount + 1) + auxv ((AuxCount + 1) * 2)
         // Note: each auxv entry is 2 words (key, value).
-        int auxCount = 14; // 13 + AT_SECURE
-        int totalWords = 1 + (args.Length + 1) + (envs.Length + 1) + (auxCount * 2);
-        int totalSize = totalWords * 4;
+        var auxCount = 14; // 13 + AT_SECURE
+        var totalWords = 1 + args.Length + 1 + envs.Length + 1 + auxCount * 2;
+        var totalSize = totalWords * 4;
 
         // We want (sp - totalSize) % 16 == 0.
         // So sp % 16 should be totalSize % 16.
-        uint targetSp = sp - (uint)totalSize;
-        uint alignedTargetSp = targetSp & ~0xFu;
+        var targetSp = sp - (uint)totalSize;
+        var alignedTargetSp = targetSp & ~0xFu;
         sp = alignedTargetSp + (uint)totalSize;
 
         void PushAux(uint k, uint v)
@@ -216,8 +196,8 @@ public class ElfLoader
     }
 
     /// <summary>
-    /// Load all PT_LOAD segments from an ELF file into guest memory.
-    /// Also detects PT_INTERP and PT_PHDR.
+    ///     Load all PT_LOAD segments from an ELF file into guest memory.
+    ///     Also detects PT_INTERP and PT_PHDR.
     /// </summary>
     private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
         Dentry? dentry, string fileDesc, Stream elfStream, Mount? mount = null)
@@ -229,7 +209,7 @@ public class ElfLoader
         };
 
         uint firstLoadVaddr = 0;
-        bool foundFirstLoad = false;
+        var foundFirstLoad = false;
 
         foreach (var segment in elf.Segments)
         {
@@ -262,7 +242,7 @@ public class ElfLoader
 
                     // Map the FILE portion (which includes the overlapping BSS on the last page)
                     var fileMapEnd = (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-                    var fileMapLen = (uint)(fileMapEnd - pageStart);
+                    var fileMapLen = fileMapEnd - pageStart;
 
                     if (fileMapLen > 0)
                     {
@@ -279,17 +259,15 @@ public class ElfLoader
                         var zeroLen = (int)(Math.Min(fileMapEnd, bssEnd) - bssStart);
                         var zeroes = new byte[zeroLen];
                         if (!engine.CopyToUser(bssStart, zeroes))
-                        {
                             Logger.LogWarning("ElfLoader: Failed to zero-fill BSS tail at 0x{Addr:x} (len {Len})",
                                 bssStart, zeroLen);
-                        }
                     }
 
                     // Map the remaining full BSS pages as Anonymous
                     if (bssEnd > fileMapEnd)
                     {
-                        var anonLen = (uint)((bssEnd - fileMapEnd + LinuxConstants.PageOffsetMask) &
-                                             LinuxConstants.PageMask);
+                        var anonLen = (bssEnd - fileMapEnd + LinuxConstants.PageOffsetMask) &
+                                      LinuxConstants.PageMask;
                         ProcessAddressSpaceSync.Mmap(mm, engine, fileMapEnd, anonLen, perms,
                             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "ELF_BSS");
                     }
@@ -302,9 +280,7 @@ public class ElfLoader
             }
 
             if (segment.Type == ElfSegmentTypeCore.ProgramHeader)
-            {
                 info.PhdrAddr = (uint)segment.VirtualAddress + loadBase;
-            }
 
             // Detect PT_INTERP
             if (segment.Type == ElfSegmentTypeCore.Interpreter)
@@ -332,5 +308,21 @@ public class ElfLoader
             fileDesc, loadBase, info.PhdrAddr, info.PhNum, info.EntryPoint, info.BrkAddr);
 
         return info;
+    }
+
+    // Auxv types moved to LinuxConstants
+
+    /// <summary>
+    ///     Result of loading an ELF's LOAD segments into guest memory.
+    /// </summary>
+    private class ElfLoadInfo
+    {
+        public uint PhdrAddr { get; set; }
+        public uint PhNum { get; set; }
+        public uint PhEnt { get; set; }
+        public uint EntryPoint { get; set; }
+        public uint BrkAddr { get; set; }
+        public uint FirstLoadVaddr { get; set; }
+        public string? InterpPath { get; set; }
     }
 }

@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Native;
-using Microsoft.Extensions.Logging;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -10,7 +10,7 @@ public partial class SyscallManager
     private const int ITIMER_REAL = 0;
     private const int USEC_PER_SEC = 1_000_000;
 
-    private static long GetRemainingMs(Fiberish.Core.Timer? timer, KernelScheduler scheduler)
+    private static long GetRemainingMs(Timer? timer, KernelScheduler scheduler)
     {
         if (timer == null || timer.Canceled) return 0;
         var remaining = timer.ExpirationTick - scheduler.CurrentTick;
@@ -41,9 +41,9 @@ public partial class SyscallManager
     private static bool WriteItimerval32(SyscallManager sm, uint ptr, long intervalMs, long valueMs)
     {
         var intervalSec = intervalMs / 1000;
-        var intervalUsec = (intervalMs % 1000) * 1000;
+        var intervalUsec = intervalMs % 1000 * 1000;
         var valueSec = valueMs / 1000;
-        var valueUsec = (valueMs % 1000) * 1000;
+        var valueUsec = valueMs % 1000 * 1000;
 
         var buf = new byte[16];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)intervalSec);
@@ -75,7 +75,8 @@ public partial class SyscallManager
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators
-    private static async ValueTask<int> SysAlarm(IntPtr state, uint seconds, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysAlarm(IntPtr state, uint seconds, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -106,7 +107,8 @@ public partial class SyscallManager
         return remainingSeconds;
     }
 
-    private static async ValueTask<int> SysSetitimer(IntPtr state, uint which, uint newValuePtr, uint oldValuePtr, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetitimer(IntPtr state, uint which, uint newValuePtr, uint oldValuePtr,
+        uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -132,7 +134,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysGetitimer(IntPtr state, uint which, uint currValuePtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetitimer(IntPtr state, uint which, uint currValuePtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -150,19 +153,22 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysClockSetTime64(IntPtr state, uint clockId, uint tsPtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockSetTime64(IntPtr state, uint clockId, uint tsPtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         // Not permitted
         return -(int)Errno.EPERM;
     }
 
-    private static async ValueTask<int> SysClockAdjTime64(IntPtr state, uint clockId, uint txPtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockAdjTime64(IntPtr state, uint clockId, uint txPtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         // Not permitted / Stubbed
         return -(int)Errno.EPERM;
     }
 
-    private static async ValueTask<int> SysClockGetResTime64(IntPtr state, uint clockId, uint resPtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysClockGetResTime64(IntPtr state, uint clockId, uint resPtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -178,7 +184,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetTime32(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerGetTime32(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -197,10 +204,10 @@ public partial class SyscallManager
             var remainingMs = timer.ActiveTimer.ExpirationTick - KernelScheduler.Current!.CurrentTick;
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
-            valueNsec = (remainingMs % 1000) * 1000000;
-            
+            valueNsec = remainingMs % 1000 * 1000000;
+
             intervalSec = (long)(timer.IntervalMs / 1000);
-            intervalNsec = (long)((timer.IntervalMs % 1000) * 1000000);
+            intervalNsec = (long)(timer.IntervalMs % 1000 * 1000000);
         }
 
         var buf = new byte[16]; // old_itimerspec is 16 bytes (4 sec, 4 nsec, 4 sec, 4 nsec)
@@ -213,7 +220,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetTime64(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerGetTime64(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -232,10 +240,10 @@ public partial class SyscallManager
             var remainingMs = timer.ActiveTimer.ExpirationTick - KernelScheduler.Current!.CurrentTick;
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
-            valueNsec = (remainingMs % 1000) * 1000000;
-            
+            valueNsec = remainingMs % 1000 * 1000000;
+
             intervalSec = (long)(timer.IntervalMs / 1000);
-            intervalNsec = (long)((timer.IntervalMs % 1000) * 1000000);
+            intervalNsec = (long)(timer.IntervalMs % 1000 * 1000000);
         }
 
         var buf = new byte[32]; // itimerspec64 is 32 bytes (8 sec, 8 nsec, 8 sec, 8 nsec) on 32-bit x86
@@ -248,7 +256,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerSetTime32(IntPtr state, uint timerId, uint flags, uint newPtr, uint oldPtr, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerSetTime32(IntPtr state, uint timerId, uint flags, uint newPtr,
+        uint oldPtr, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -269,14 +278,11 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
         var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
 
-        ulong intervalMs = (ulong)(intervalSec * 1000L + intervalNsec / 1000000L);
-        ulong valueMs = (ulong)(valueSec * 1000L + valueNsec / 1000000L);
+        var intervalMs = (ulong)(intervalSec * 1000L + intervalNsec / 1000000L);
+        var valueMs = (ulong)(valueSec * 1000L + valueNsec / 1000000L);
 
         // Fetch old if needed
-        if (oldPtr != 0)
-        {
-            await SysTimerGetTime32(state, timerId, oldPtr, 0, 0, 0, 0);
-        }
+        if (oldPtr != 0) await SysTimerGetTime32(state, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
         timer.ActiveTimer?.Cancel();
@@ -313,16 +319,16 @@ public partial class SyscallManager
                 }
             }
 
-            long targetDelayMs = (long)valueMs;
+            var targetDelayMs = (long)valueMs;
             if ((flags & 1) != 0) // TIMER_ABSTIME
             {
                 if (timer.ClockId == LinuxConstants.CLOCK_REALTIME)
                 {
-                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); 
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     targetDelayMs = (long)valueMs - now;
-                    if (targetDelayMs < 0) targetDelayMs = 0; 
+                    if (targetDelayMs < 0) targetDelayMs = 0;
                 }
-                else 
+                else
                 {
                     targetDelayMs = (long)valueMs - scheduler.CurrentTick;
                     if (targetDelayMs < 0) targetDelayMs = 0;
@@ -330,14 +336,15 @@ public partial class SyscallManager
             }
 
             if (targetDelayMs == 0 && valueMs > 0) targetDelayMs = 1; // Fire ASAP
-            
+
             timer.ActiveTimer = scheduler.ScheduleTimer(targetDelayMs, OnTimerTick);
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerSetTime64(IntPtr state, uint timerId, uint flags, uint newPtr, uint oldPtr, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerSetTime64(IntPtr state, uint timerId, uint flags, uint newPtr,
+        uint oldPtr, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -358,14 +365,11 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(16, 8));
         var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(24, 8));
 
-        ulong intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
-        ulong valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
+        var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
+        var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
         // Fetch old if needed
-        if (oldPtr != 0)
-        {
-            await SysTimerGetTime64(state, timerId, oldPtr, 0, 0, 0, 0);
-        }
+        if (oldPtr != 0) await SysTimerGetTime64(state, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
         timer.ActiveTimer?.Cancel();
@@ -405,7 +409,7 @@ public partial class SyscallManager
             // Note: TIMER_ABSTIME (1) means valueMs is absolute time, otherwise relative
             // For now, we assume relative or simulate relative delta if absolute is requested.
             // A perfect implementation would parse `flags & TIMER_ABSTIME`.
-            long targetDelayMs = (long)valueMs;
+            var targetDelayMs = (long)valueMs;
             if ((flags & 1) != 0) // TIMER_ABSTIME
             {
                 // Simple approx: valueMs - current physical time (Assuming CLOCK_REALTIME/MONOTONIC matching)
@@ -413,7 +417,7 @@ public partial class SyscallManager
                 if (timer.ClockId == LinuxConstants.CLOCK_REALTIME)
                 {
                     targetDelayMs = (long)valueMs - now;
-                    if (targetDelayMs < 0) targetDelayMs = 0; 
+                    if (targetDelayMs < 0) targetDelayMs = 0;
                 }
                 else // CLOCK_MONOTONIC uses KernelScheduler.CurrentTick
                 {
@@ -423,14 +427,15 @@ public partial class SyscallManager
             }
 
             if (targetDelayMs == 0 && valueMs > 0) targetDelayMs = 1; // Fire ASAP
-            
+
             timer.ActiveTimer = scheduler.ScheduleTimer(targetDelayMs, OnTimerTick);
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerCreate(IntPtr state, uint clockId, uint sevpPtr, uint timerIdPtr, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerCreate(IntPtr state, uint clockId, uint sevpPtr, uint timerIdPtr,
+        uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -444,10 +449,12 @@ public partial class SyscallManager
         {
             var buf = new byte[64]; // sigevent is generally padded to 64 bytes
             if (!sm.Engine.CopyFromUser(sevpPtr, buf)) return -(int)Errno.EFAULT;
-            
-            sigEvent.Value = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(0, 8)); // Note: Depending on padding, might be (0,4) for 32 bit sys
+
+            sigEvent.Value =
+                BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(0,
+                    8)); // Note: Depending on padding, might be (0,4) for 32 bit sys
             // i386 sigevent: union sigval (4 bytes), int sigev_signo (4 bytes), int sigev_notify (4 bytes), union (padding + thread spec)
-            
+
             // Re-read carefully for 32-bit x86 sigevent ABI
             sigEvent.Value = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
             sigEvent.Signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
@@ -461,20 +468,21 @@ public partial class SyscallManager
             sigEvent.Value = (ulong)timerId;
         }
 
-        var timer = new PosixTimer((int)timerId, (int)clockId, sigEvent, proc);
-        proc.PosixTimers[(int)timerId] = timer;
+        var timer = new PosixTimer(timerId, (int)clockId, sigEvent, proc);
+        proc.PosixTimers[timerId] = timer;
 
         if (timerIdPtr != 0)
         {
             var idBuf = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(idBuf, (int)timerId);
+            BinaryPrimitives.WriteInt32LittleEndian(idBuf, timerId);
             if (!sm.Engine.CopyToUser(timerIdPtr, idBuf)) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerDelete(IntPtr state, uint timerId, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerDelete(IntPtr state, uint timerId, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -489,7 +497,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetOverrun(IntPtr state, uint timerId, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerGetOverrun(IntPtr state, uint timerId, uint a2, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -501,7 +510,8 @@ public partial class SyscallManager
         return timer.OverrunCount;
     }
 
-    private static async ValueTask<int> SysTimerFdGetTime64(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerFdGetTime64(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4,
+        uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -511,20 +521,21 @@ public partial class SyscallManager
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
-        timerFd.GetTime(out long intervalMs, out long valueMs);
+        timerFd.GetTime(out var intervalMs, out var valueMs);
 
         var buf = new byte[32];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), intervalMs / 1000);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), (intervalMs % 1000) * 1000000);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), intervalMs % 1000 * 1000000);
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(16, 8), valueMs / 1000);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), (valueMs % 1000) * 1000000);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), valueMs % 1000 * 1000000);
 
         if (!sm.Engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
-        return 0; 
+        return 0;
     }
 
-    private static async ValueTask<int> SysTimerFdSetTime64(IntPtr state, uint fd, uint flags, uint newValuePtr, uint oldValuePtr, uint a5, uint a6)
+    private static async ValueTask<int> SysTimerFdSetTime64(IntPtr state, uint fd, uint flags, uint newValuePtr,
+        uint oldValuePtr, uint a5, uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -542,15 +553,12 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(16, 8));
         var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(24, 8));
 
-        if (oldValuePtr != 0)
-        {
-            await SysTimerFdGetTime64(state, fd, oldValuePtr, 0, 0, 0, 0);
-        }
+        if (oldValuePtr != 0) await SysTimerFdGetTime64(state, fd, oldValuePtr, 0, 0, 0, 0);
 
         var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
 
-        ulong intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
-        ulong valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
+        var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
+        var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
         timerFd.SetTime((long)intervalMs, (long)valueMs, isAbsolute);
 

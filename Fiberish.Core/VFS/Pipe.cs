@@ -1,6 +1,6 @@
-using Fiberish.Native;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
+using Fiberish.Native;
 using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 // For Errno
@@ -24,19 +24,6 @@ public class PipeInode : Inode
     private int _writerCount;
     private bool _writersClosed;
 
-    private readonly struct StateScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
-
-    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
-    {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
-        return default;
-    }
-
     public PipeInode()
     {
         Type = InodeType.Fifo;
@@ -44,6 +31,12 @@ public class PipeInode : Inode
         _buffer = new byte[BufferSize];
         // Initially writable (empty)
         _writeHandle.Set();
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
     }
 
     public void AddReader()
@@ -96,14 +89,18 @@ public class PipeInode : Inode
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
         if (mode == (int)FileFlags.O_RDONLY)
+        {
             AddReader();
+        }
         else if (mode == (int)FileFlags.O_RDWR)
         {
             AddReader();
             AddWriter();
         }
         else
+        {
             AddWriter();
+        }
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
@@ -324,6 +321,32 @@ public class PipeInode : Inode
         };
     }
 
+    public override void Release(LinuxFile linuxFile)
+    {
+        const int O_ACCMODE = 3;
+        var mode = (int)linuxFile.Flags & O_ACCMODE;
+        if (mode == (int)FileFlags.O_RDONLY)
+        {
+            RemoveReader();
+        }
+        else if (mode == (int)FileFlags.O_RDWR)
+        {
+            RemoveReader();
+            RemoveWriter();
+        }
+        else
+        {
+            RemoveWriter();
+        }
+    }
+
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
     private sealed class CompositeDisposable : IDisposable
     {
         private List<IDisposable>? _items;
@@ -339,20 +362,5 @@ public class PipeInode : Inode
             if (items == null) return;
             foreach (var item in items) item.Dispose();
         }
-    }
-
-    public override void Release(LinuxFile linuxFile)
-    {
-        const int O_ACCMODE = 3;
-        var mode = (int)linuxFile.Flags & O_ACCMODE;
-        if (mode == (int)FileFlags.O_RDONLY)
-            RemoveReader();
-        else if (mode == (int)FileFlags.O_RDWR)
-        {
-            RemoveReader();
-            RemoveWriter();
-        }
-        else
-            RemoveWriter();
     }
 }

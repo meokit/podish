@@ -61,7 +61,7 @@ public class MembarrierSyscallTests
     public async Task NonZeroFlags_ReturnsEinval()
     {
         using var env = new TestEnv();
-        var rc = await CallSysMembarrier(env, LinuxConstants.MEMBARRIER_CMD_QUERY, flags: 1);
+        var rc = await CallSysMembarrier(env, LinuxConstants.MEMBARRIER_CMD_QUERY, 1);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 

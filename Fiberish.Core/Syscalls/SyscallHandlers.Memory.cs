@@ -1,6 +1,6 @@
-using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -23,7 +23,6 @@ public partial class SyscallManager
             var start = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
             var end = (newBrk + 0xFFF) & ~0xFFFu;
             if (end > start)
-            {
                 try
                 {
                     // Map anonymous
@@ -35,7 +34,6 @@ public partial class SyscallManager
                 {
                     return (int)sm.BrkAddr;
                 }
-            }
 
             sm.BrkAddr = newBrk;
             return (int)sm.BrkAddr;
@@ -45,10 +43,8 @@ public partial class SyscallManager
         {
             var start = (newBrk + 0xFFF) & ~0xFFFu;
             var end = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
-            if (end > start)
-            {
-                ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, start, end - start);
-            }
+            if (end > start) ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, start, end - start);
+
             sm.BrkAddr = newBrk;
         }
 
@@ -76,8 +72,8 @@ public partial class SyscallManager
         if (isFixed && addr == 0)
             return -(int)Errno.EINVAL;
 
-        VFS.LinuxFile? f = null;
-        VFS.LinuxFile? mmapFile = null;
+        LinuxFile? f = null;
+        LinuxFile? mmapFile = null;
         var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
         var isShared = (flags & (int)MapFlags.Shared) != 0;
         var isPrivate = (flags & (int)MapFlags.Private) != 0;
@@ -107,18 +103,19 @@ public partial class SyscallManager
             if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
             if (isShared && (prot & (int)Protection.Write) != 0)
             {
-                var canWrite = (f.Flags & (VFS.FileFlags.O_WRONLY | VFS.FileFlags.O_RDWR)) != 0;
+                var canWrite = (f.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) != 0;
                 if (!canWrite) return -(int)Errno.EACCES;
             }
         }
 
         try
         {
-            long trueFileSz = (long)(f?.OpenedInode?.Size ?? 0);
+            var trueFileSz = (long)(f?.OpenedInode?.Size ?? 0);
             if (f != null)
-                mmapFile = new VFS.LinuxFile(f.Dentry, f.Flags, f.Mount, VFS.LinuxFile.ReferenceKind.MmapHold);
+                mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold);
 
-            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags, mmapFile,
+            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags,
+                mmapFile,
                 offset, trueFileSz, "MMAP2");
             mmapFile = null; // ownership transferred to VMAs
             return (int)res;
@@ -228,13 +225,11 @@ public partial class SyscallManager
         var canGrowInPlace = true;
         var nextVmas = sm.Mem.FindVMAsInRange(growStart, growStart + growLen);
         foreach (var v in nextVmas)
-        {
             if (v != oldVma) // ignore the VMA itself if it extends past oldLen
             {
                 canGrowInPlace = false;
                 break;
             }
-        }
 
         if (canGrowInPlace)
         {
@@ -278,7 +273,6 @@ public partial class SyscallManager
 
         var copyLen = Math.Min(oldLenAligned, newLenAligned);
         if (NeedsMoveCopy(oldVma, oldAddr, copyLen))
-        {
             try
             {
                 var buf = new byte[copyLen];
@@ -299,7 +293,6 @@ public partial class SyscallManager
                 ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
                 return -(int)Errno.ENOMEM;
             }
-        }
 
         // Unmap old region
         ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, oldAddr, oldLenAligned);
@@ -309,7 +302,7 @@ public partial class SyscallManager
 
     private static int TryMapRemapSlice(SyscallManager sm, VMA sourceVma, uint targetAddr, uint length, uint sourceAddr)
     {
-        VFS.LinuxFile? clonedFile = null;
+        LinuxFile? clonedFile = null;
         try
         {
             clonedFile = CloneMappingFile(sourceVma);
@@ -349,7 +342,7 @@ public partial class SyscallManager
         }
     }
 
-    private static VFS.LinuxFile? CloneMappingFile(VMA sourceVma)
+    private static LinuxFile? CloneMappingFile(VMA sourceVma)
     {
         var file = sourceVma.File;
         if (file == null) return null;
@@ -381,7 +374,7 @@ public partial class SyscallManager
         if (privateObject == null || copyLen == 0) return false;
 
         var startPage =
-            sourceVma.ViewPageOffset + ((sourceAddr - sourceVma.Start) / LinuxConstants.PageSize);
+            sourceVma.ViewPageOffset + (sourceAddr - sourceVma.Start) / LinuxConstants.PageSize;
         var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
         for (uint i = 0; i < pageCount; i++)
             if (privateObject.PeekPage(startPage + i) != IntPtr.Zero)

@@ -1,6 +1,4 @@
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using Fiberish.Core;
 
 namespace Fiberish.VFS;
@@ -12,39 +10,19 @@ namespace Fiberish.VFS;
 /// </summary>
 public class MountNamespace
 {
-    private int _refCount = 1;
-    private Mount? _rootMount;
-    public readonly record struct MountInfoEntry(
-        long Id,
-        long ParentId,
-        string Source,
-        string Target,
-        string FsType,
-        string Options);
-
-    private readonly struct NamespaceScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
-
-    private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
-    {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
-        return default;
-    }
+    /// <summary>
+    ///     Hash-based lookup for child mounts: (parent_mount, mount_point_dentry) -> child_mount.
+    ///     Equivalent to Linux's mount hash table.
+    /// </summary>
+    private readonly Dictionary<(Mount?, Dentry), Mount> _mountHash = [];
 
     /// <summary>
     ///     List of all Mount objects in this namespace.
     /// </summary>
     private readonly List<Mount> _mounts = [];
 
-    /// <summary>
-    ///     Hash-based lookup for child mounts: (parent_mount, mount_point_dentry) -> child_mount.
-    ///     Equivalent to Linux's mount hash table.
-    /// </summary>
-    private readonly Dictionary<(Mount?, Dentry), Mount> _mountHash = [];
+    private int _refCount = 1;
+    private Mount? _rootMount;
 
     /// <summary>
     ///     The root mount (for the filesystem namespace).
@@ -95,6 +73,12 @@ public class MountNamespace
                 return _mounts.Count;
             }
         }
+    }
+
+    private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
     }
 
     /// <summary>
@@ -219,6 +203,7 @@ public class MountNamespace
         {
             mountsSnapshot = _mounts.ToList();
         }
+
         foreach (var mount in mountsSnapshot)
         {
             var target = BuildMountPath(mount);
@@ -233,6 +218,7 @@ public class MountNamespace
         {
             mountsSnapshot = _mounts.ToList();
         }
+
         foreach (var mount in mountsSnapshot)
         {
             var target = BuildMountPath(mount);
@@ -269,6 +255,21 @@ public class MountNamespace
         using (EnterNamespaceScope())
         {
             _rootMount = null;
+        }
+    }
+
+    public readonly record struct MountInfoEntry(
+        long Id,
+        long ParentId,
+        string Source,
+        string Target,
+        string FsType,
+        string Options);
+
+    private readonly struct NamespaceScope : IDisposable
+    {
+        public void Dispose()
+        {
         }
     }
 }

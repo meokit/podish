@@ -6,25 +6,6 @@ namespace Fiberish.Tests.Memory;
 
 public class MemoryObjectManagerTests
 {
-    private sealed class TestSuperBlock : SuperBlock
-    {
-        public override Inode AllocInode()
-        {
-            throw new NotSupportedException();
-        }
-    }
-
-    private sealed class TestInode : Inode
-    {
-        public TestInode(SuperBlock sb, ulong ino)
-        {
-            SuperBlock = sb;
-            Ino = ino;
-            Type = InodeType.File;
-            Mode = 0x1A4; // 0644
-        }
-    }
-
     [Fact]
     public void InodePageCache_DoesNotCollide_ForDifferentInodesWithSameIno()
     {
@@ -71,6 +52,25 @@ public class MemoryObjectManagerTests
         {
             managerB.ReleaseInodePageCache(inode);
             cacheB.Release();
+        }
+    }
+
+    private sealed class TestSuperBlock : SuperBlock
+    {
+        public override Inode AllocInode()
+        {
+            throw new NotSupportedException();
+        }
+    }
+
+    private sealed class TestInode : Inode
+    {
+        public TestInode(SuperBlock sb, ulong ino)
+        {
+            SuperBlock = sb;
+            Ino = ino;
+            Type = InodeType.File;
+            Mode = 0x1A4; // 0644
         }
     }
 }

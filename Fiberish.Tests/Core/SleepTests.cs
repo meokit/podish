@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Fiberish.Core;
 using Fiberish.X86.Native;
 using Xunit;
@@ -43,12 +44,12 @@ public class SleepTests
 
         var result = sb.ToString();
 
-        var match = System.Text.RegularExpressions.Regex.Match(result, @"SleepStart@(\d+);SleepEnd@(\d+);");
+        var match = Regex.Match(result, @"SleepStart@(\d+);SleepEnd@(\d+);");
         Assert.True(match.Success, $"Regex match failed on result: {result}");
-        
+
         var start = long.Parse(match.Groups[1].Value);
         var end = long.Parse(match.Groups[2].Value);
-        
+
         Assert.True(end - start >= 5, $"Expected at least 5 ticks to elapse, but got {end - start}. Result: {result}");
     }
 

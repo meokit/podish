@@ -2,6 +2,7 @@ using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Fiberish.VFS;
 
@@ -248,7 +249,8 @@ public class DevPtsSuperBlock : SuperBlock
     private readonly PtyManager _ptyManager;
     private readonly Dictionary<int, Dentry> _slaveDentries = new();
 
-    public DevPtsSuperBlock(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger, DeviceNumberManager? devManager = null) : base(devManager)
+    public DevPtsSuperBlock(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger,
+        DeviceNumberManager? devManager = null) : base(devManager)
     {
         _ptyManager = ptyManager;
         _broadcaster = broadcaster;
@@ -340,10 +342,11 @@ public class DevPtsFileSystem : FileSystem
     private readonly ILogger _logger;
     private readonly PtyManager _ptyManager;
 
-    public DevPtsFileSystem(DeviceNumberManager? devManager = null, PtyManager? ptyManager = null, ISignalBroadcaster? broadcaster = null, ILogger? logger = null) : base(devManager)
+    public DevPtsFileSystem(DeviceNumberManager? devManager = null, PtyManager? ptyManager = null,
+        ISignalBroadcaster? broadcaster = null, ILogger? logger = null) : base(devManager)
     {
         Name = "devpts";
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        _logger = logger ?? NullLogger.Instance;
         _ptyManager = ptyManager ?? new PtyManager(_logger);
         _broadcaster = broadcaster ?? NoopSignalBroadcaster.Instance;
     }

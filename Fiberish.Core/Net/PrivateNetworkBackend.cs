@@ -1,12 +1,10 @@
-using System.Net;
-
 namespace Fiberish.Core.Net;
 
 public sealed class PrivateNetworkBackend : INetworkBackend
 {
-    private readonly INetworkSwitch _switch;
-    private readonly object _ipLock = new();
     private readonly bool[] _allocatedIps = new bool[256];
+    private readonly object _ipLock = new();
+    private readonly INetworkSwitch _switch;
 
     public PrivateNetworkBackend(INetworkSwitch @switch)
     {
@@ -17,25 +15,24 @@ public sealed class PrivateNetworkBackend : INetworkBackend
 
     public ContainerNetworkContext CreateContainerNetwork(ContainerNetworkSpec spec)
     {
-        int octet = -1;
+        var octet = -1;
         lock (_ipLock)
         {
-            for (int i = 2; i <= 254; i++)
-            {
+            for (var i = 2; i <= 254; i++)
                 if (!_allocatedIps[i])
                 {
                     _allocatedIps[i] = true;
                     octet = i;
                     break;
                 }
-            }
         }
 
         if (octet == -1) throw new InvalidOperationException("Private network IP pool exhausted");
-        
-        uint ipBe = (uint)(0x0A580000 | octet);
+
+        var ipBe = (uint)(0x0A580000 | octet);
         var ns = LoopbackNetNamespace.Create(ipBe, 24);
-        var ctx = new ContainerNetworkContext(spec.ContainerId, NetworkMode.Private, ns.PrivateIpv4Address, ns, _switch);
+        var ctx = new ContainerNetworkContext(spec.ContainerId, NetworkMode.Private, ns.PrivateIpv4Address, ns,
+            _switch);
         _switch.Attach(ctx);
         return ctx;
     }
@@ -56,14 +53,14 @@ public sealed class PrivateNetworkBackend : INetworkBackend
         {
             int octet = ipBytes[3];
             if (octet >= 2 && octet <= 254)
-            {
                 lock (_ipLock)
                 {
                     _allocatedIps[octet] = false;
                 }
-            }
         }
     }
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+    }
 }

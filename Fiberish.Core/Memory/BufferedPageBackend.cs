@@ -1,7 +1,7 @@
 namespace Fiberish.Memory;
 
 /// <summary>
-/// No-op backend used when host memory-mapped files are unavailable (for example Wasm).
+///     No-op backend used when host memory-mapped files are unavailable (for example Wasm).
 /// </summary>
 internal sealed class BufferedPageBackend : IFilePageBackend
 {

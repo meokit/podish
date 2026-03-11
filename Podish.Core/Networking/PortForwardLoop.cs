@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
 using Fiberish.Core.Net;
 using Microsoft.Extensions.Logging;
 
@@ -10,18 +9,22 @@ namespace Podish.Core.Networking;
 
 public sealed class PortForwardLoop : IDisposable
 {
-    private readonly ILogger _logger;
-    private readonly ConcurrentQueue<LoopEvent> _eventQueue = new();
-    private readonly AutoResetEvent _wakeSignal = new(false);
-    private readonly List<RelaySession> _sessions = [];
-    private readonly Dictionary<string, (ContainerNetworkContext context, List<(PublishedPortSpec spec, Socket listener)> ports)> _activeContexts = [];
-    private readonly Dictionary<string, nint> _wakeTokens = [];
+    private readonly
+        Dictionary<string, (ContainerNetworkContext context, List<(PublishedPortSpec spec, Socket listener)> ports)>
+        _activeContexts = [];
+
     private readonly Lock _contextsLock = new();
+    private readonly ConcurrentQueue<LoopEvent> _eventQueue = new();
+    private readonly ILogger _logger;
     private readonly Thread _loopThread;
-    private volatile bool _running = true;
+    private readonly List<RelaySession> _sessions = [];
+    private readonly AutoResetEvent _wakeSignal = new(false);
+
+    private readonly Dictionary<string, nint> _wakeTokens = [];
     private volatile bool _disposed;
-    private volatile bool _wakeSignalDisposed;
     private long _nextSessionId = 1;
+    private volatile bool _running = true;
+    private volatile bool _wakeSignalDisposed;
 
     public PortForwardLoop(ILogger logger)
     {
@@ -30,17 +33,35 @@ public sealed class PortForwardLoop : IDisposable
         _loopThread.Start();
     }
 
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _running = false;
+        // Unblock wait-loop before joining.
+        try
+        {
+            _wakeSignal.Set();
+        }
+        catch
+        {
+        }
+
+        _loopThread.Join();
+        _wakeSignalDisposed = true;
+        _wakeSignal.Dispose();
+        _disposed = true;
+    }
+
     public void StartPublishedPorts(ContainerNetworkContext context, IReadOnlyList<PublishedPortSpec> ports)
     {
         foreach (var port in ports)
-        {
             _eventQueue.Enqueue(new LoopEvent
             {
                 Type = LoopEventType.CommandStartPort,
                 Context = context,
                 PortSpec = port
             });
-        }
+
         WakeLoop();
     }
 
@@ -60,13 +81,12 @@ public sealed class PortForwardLoop : IDisposable
         lock (_contextsLock)
         {
             if (_activeContexts.TryGetValue(containerId, out var tuple))
-            {
                 return tuple.ports
                     .Where(p => p.listener.LocalEndPoint != null)
                     .Select(p => ((IPEndPoint)p.listener.LocalEndPoint!).Port)
                     .ToArray();
-            }
         }
+
         return Enumerable.Empty<int>();
     }
 
@@ -78,13 +98,10 @@ public sealed class PortForwardLoop : IDisposable
         while (_running)
         {
             // 1. Drain events
-            while (_eventQueue.TryDequeue(out var ev))
-            {
-                ProcessEvent(ev);
-            }
+            while (_eventQueue.TryDequeue(out var ev)) ProcessEvent(ev);
 
             var now = sw.ElapsedMilliseconds;
-            long nextGlobalDeadline = long.MaxValue;
+            var nextGlobalDeadline = long.MaxValue;
 
             // 2. Poll Namespaces
             ContainerNetworkContext[] contextsToPoll;
@@ -94,7 +111,6 @@ public sealed class PortForwardLoop : IDisposable
             }
 
             foreach (var ctx in contextsToPoll)
-            {
                 try
                 {
                     var nextDeadline = ctx.Namespace.Poll(now);
@@ -106,23 +122,18 @@ public sealed class PortForwardLoop : IDisposable
                 {
                     _logger.LogError(ex, "Failed to poll namespace for container {Id}", ctx.ContainerId);
                 }
-            }
 
             // 3. Process Sessions (Relay logic)
             ProcessSessions();
 
             // 4. Wait
-            int timeout = Timeout.Infinite;
+            var timeout = Timeout.Infinite;
             var currentNow = sw.ElapsedMilliseconds;
-            if (nextGlobalDeadline != long.MaxValue)
-            {
-                timeout = (int)Math.Max(0, nextGlobalDeadline - currentNow);
-                // No need for arbitrary 100ms cap if we trust the signal
-            }
-
+            if (nextGlobalDeadline != long.MaxValue) timeout = (int)Math.Max(0, nextGlobalDeadline - currentNow);
+            // No need for arbitrary 100ms cap if we trust the signal
             _wakeSignal.WaitOne(timeout);
         }
-        
+
         _logger.LogInformation("PortForwardLoop exiting");
         CleanupAll();
     }
@@ -173,22 +184,24 @@ public sealed class PortForwardLoop : IDisposable
                 {
                     tuple = (context, []);
                     _activeContexts[context.ContainerId] = tuple;
-                    
+
                     var token = NetstackWakeRegistry.Register(_wakeSignal);
                     context.Namespace.BindWakeCallback(token);
                     _wakeTokens[context.ContainerId] = token;
                 }
+
                 tuple.ports.Add((spec, listener));
             }
 
-            _logger.LogInformation("Started port forward: host {HostPort} -> container {ContainerPort} (ID: {Id})", 
+            _logger.LogInformation("Started port forward: host {HostPort} -> container {ContainerPort} (ID: {Id})",
                 spec.HostPort, spec.ContainerPort, context.ContainerId);
 
             BeginAccept(listener, context, spec);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to start published port {Port} for container {Id}", spec.HostPort, context.ContainerId);
+            _logger.LogError(ex, "Failed to start published port {Port} for container {Id}", spec.HostPort,
+                context.ContainerId);
         }
     }
 
@@ -209,15 +222,17 @@ public sealed class PortForwardLoop : IDisposable
         }
 
         if (portsToClose != null)
-        {
             foreach (var p in portsToClose)
-            {
-                try { p.listener.Dispose(); } catch { }
-            }
-        }
+                try
+                {
+                    p.listener.Dispose();
+                }
+                catch
+                {
+                }
 
         // Close sessions related to this context
-        for (int i = _sessions.Count - 1; i >= 0; i--)
+        for (var i = _sessions.Count - 1; i >= 0; i--)
         {
             var session = _sessions[i];
             if (session.Context == context)
@@ -227,7 +242,7 @@ public sealed class PortForwardLoop : IDisposable
                 _sessions.RemoveAt(i);
             }
         }
-        
+
         completion?.TrySetResult();
     }
 
@@ -248,12 +263,11 @@ public sealed class PortForwardLoop : IDisposable
 
         try
         {
-            if (!listener.AcceptAsync(args))
-            {
-                HandleHostAccept(args, context, spec);
-            }
+            if (!listener.AcceptAsync(args)) HandleHostAccept(args, context, spec);
         }
-        catch (ObjectDisposedException) { }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private void HandleHostAccept(SocketAsyncEventArgs args, ContainerNetworkContext context, PublishedPortSpec spec)
@@ -264,23 +278,23 @@ public sealed class PortForwardLoop : IDisposable
         if (args.SocketError == SocketError.Success && accepted != null)
         {
             _logger.LogDebug("Accepted host connection for port {Port}", spec.HostPort);
-            
+
             try
             {
                 // Resolve target
                 var target = context.Switch.ResolvePublishedPortTarget(context, spec.ContainerPort, spec.Protocol);
-                
+
                 // Create guest stream
                 var guestSocket = context.Namespace.CreateTcpStream();
                 var guestStream = new PrivateNetstackStream(guestSocket);
-                
+
                 // Connect guest stream
                 var ipBytes = target.Address.GetAddressBytes();
                 if (ipBytes.Length != 4)
-                {
-                    throw new NotSupportedException($"Only IPv4 addresses are currently supported. Address {target.Address} has {ipBytes.Length} bytes.");
-                }
-                uint ipBe = (uint)ipBytes[0] << 24 | (uint)ipBytes[1] << 16 | (uint)ipBytes[2] << 8 | (uint)ipBytes[3];
+                    throw new NotSupportedException(
+                        $"Only IPv4 addresses are currently supported. Address {target.Address} has {ipBytes.Length} bytes.");
+
+                var ipBe = ((uint)ipBytes[0] << 24) | ((uint)ipBytes[1] << 16) | ((uint)ipBytes[2] << 8) | ipBytes[3];
                 guestSocket.Connect(ipBe, (ushort)target.Port);
 
                 var session = new RelaySession(_nextSessionId++, accepted, guestStream, context);
@@ -292,7 +306,13 @@ public sealed class PortForwardLoop : IDisposable
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to establish relay for port {Port}", spec.HostPort);
-                try { accepted.Dispose(); } catch { }
+                try
+                {
+                    accepted.Dispose();
+                }
+                catch
+                {
+                }
             }
         }
 
@@ -310,22 +330,27 @@ public sealed class PortForwardLoop : IDisposable
             session.HostReceiveArgs.Completed += OnHostReceiveCompleted;
             session.HostReceiveEventBound = true;
         }
+
         session.HostReceiveArgs.UserToken = session;
 
         session.HostReceivePending = true;
         try
         {
-            if (!session.HostSocket.ReceiveAsync(session.HostReceiveArgs))
-            {
-                HandleHostReceive(session);
-            }
+            if (!session.HostSocket.ReceiveAsync(session.HostReceiveArgs)) HandleHostReceive(session);
         }
         catch (Exception ex)
         {
             _logger.LogDebug("Host receive failed: {Message}", ex.Message);
             session.HostReadClosed = true;
             session.HostReceivePending = false;
-            try { session.GuestStream.CloseWrite(); } catch { }
+            try
+            {
+                session.GuestStream.CloseWrite();
+            }
+            catch
+            {
+            }
+
             WakeLoop();
         }
     }
@@ -345,16 +370,22 @@ public sealed class PortForwardLoop : IDisposable
         if (args.SocketError != SocketError.Success || args.BytesTransferred == 0)
         {
             session.HostReadClosed = true;
-            try { session.GuestStream.CloseWrite(); } catch { }
+            try
+            {
+                session.GuestStream.CloseWrite();
+            }
+            catch
+            {
+            }
+
             return;
         }
 
         // It's safe to reset offset to 0 and overwrite count because BeginHostReceive 
         // is ONLY ever called when HostToGuestCount is 0.
         if (session.HostToGuestCount > 0)
-        {
             _logger.LogWarning("Host receive completed but there was still unsent data in the buffer. Overwriting...");
-        }
+
         session.HostToGuestCount = args.BytesTransferred;
         session.HostToGuestOffset = 0;
         WakeLoop();
@@ -369,16 +400,14 @@ public sealed class PortForwardLoop : IDisposable
             session.HostSendArgs.Completed += OnHostSendCompleted;
             session.HostSendEventBound = true;
         }
+
         session.HostSendArgs.UserToken = session;
         session.HostSendArgs.SetBuffer(session.GuestToHostBuffer, session.GuestToHostOffset, session.GuestToHostCount);
 
         session.HostSendPending = true;
         try
         {
-            if (!session.HostSocket.SendAsync(session.HostSendArgs))
-            {
-                HandleHostSend(session);
-            }
+            if (!session.HostSocket.SendAsync(session.HostSendArgs)) HandleHostSend(session);
         }
         catch (Exception ex)
         {
@@ -409,17 +438,17 @@ public sealed class PortForwardLoop : IDisposable
 
         session.GuestToHostCount -= args.BytesTransferred;
         session.GuestToHostOffset += args.BytesTransferred;
-            WakeLoop();
+        WakeLoop();
     }
 
     private void ProcessSessions()
     {
-        for (int i = _sessions.Count - 1; i >= 0; i--)
+        for (var i = _sessions.Count - 1; i >= 0; i--)
         {
             var session = _sessions[i];
             try
             {
-                bool active = false;
+                var active = false;
 
                 // 0. Guest Handshake Check
                 if (!session.GuestConnected)
@@ -431,7 +460,8 @@ public sealed class PortForwardLoop : IDisposable
                         BeginHostReceive(session);
                         active = true;
                     }
-                    else if (session.GuestStream is PrivateNetstackStream ps && ps.IsClosed) // Assuming we add IsClosed or check MayRead/Write
+                    else if (session.GuestStream is PrivateNetstackStream ps &&
+                             ps.IsClosed) // Assuming we add IsClosed or check MayRead/Write
                     {
                         _logger.LogWarning("Guest connection failed for session {Id}", session.Id);
                         session.Dispose();
@@ -444,10 +474,10 @@ public sealed class PortForwardLoop : IDisposable
 
                 // 1. Host -> Guest
                 if (session.HostToGuestCount > 0)
-                {
                     if (session.GuestStream.CanWrite)
                     {
-                        int n = session.GuestStream.Write(session.HostToGuestBuffer.AsSpan(session.HostToGuestOffset, session.HostToGuestCount));
+                        var n = session.GuestStream.Write(
+                            session.HostToGuestBuffer.AsSpan(session.HostToGuestOffset, session.HostToGuestCount));
                         if (n > 0)
                         {
                             session.HostToGuestCount -= n;
@@ -455,7 +485,7 @@ public sealed class PortForwardLoop : IDisposable
                             active = true;
                         }
                     }
-                }
+
                 if (session.HostToGuestCount == 0 && !session.HostReadClosed && !session.HostReceivePending)
                 {
                     BeginHostReceive(session);
@@ -464,10 +494,9 @@ public sealed class PortForwardLoop : IDisposable
 
                 // 2. Guest -> Host
                 if (session.GuestToHostCount == 0 && !session.GuestReadClosed)
-                {
                     if (session.GuestStream.CanRead)
                     {
-                        int n = session.GuestStream.Read(session.GuestToHostBuffer);
+                        var n = session.GuestStream.Read(session.GuestToHostBuffer);
                         if (n > 0)
                         {
                             session.GuestToHostCount = n;
@@ -477,11 +506,18 @@ public sealed class PortForwardLoop : IDisposable
                         else if (!session.GuestStream.MayRead)
                         {
                             session.GuestReadClosed = true;
-                            try { session.HostSocket.Shutdown(SocketShutdown.Send); } catch { }
+                            try
+                            {
+                                session.HostSocket.Shutdown(SocketShutdown.Send);
+                            }
+                            catch
+                            {
+                            }
+
                             session.HostWriteClosed = true; // shutdown send side, so we can't write anymore
                         }
                     }
-                }
+
                 if (session.GuestToHostCount > 0 && !session.HostWriteClosed && !session.HostSendPending)
                 {
                     BeginHostSend(session);
@@ -489,7 +525,8 @@ public sealed class PortForwardLoop : IDisposable
                 }
 
                 // Check if session is finished
-                if (session.HostReadClosed && session.GuestReadClosed && session.HostToGuestCount == 0 && session.GuestToHostCount == 0)
+                if (session.HostReadClosed && session.GuestReadClosed && session.HostToGuestCount == 0 &&
+                    session.GuestToHostCount == 0)
                 {
                     _logger.LogDebug("Closing relay session {Id}", session.Id);
                     session.Dispose();
@@ -503,7 +540,14 @@ public sealed class PortForwardLoop : IDisposable
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Exception in relay session {Id}. Closing session.", session.Id);
-                try { session.Dispose(); } catch { }
+                try
+                {
+                    session.Dispose();
+                }
+                catch
+                {
+                }
+
                 _sessions.RemoveAt(i);
             }
         }
@@ -519,29 +563,30 @@ public sealed class PortForwardLoop : IDisposable
             {
                 if (_wakeTokens.Remove(ctx.context.ContainerId, out var token))
                 {
-                    try { ctx.context.Namespace.UnbindWakeCallback(); } catch { }
+                    try
+                    {
+                        ctx.context.Namespace.UnbindWakeCallback();
+                    }
+                    catch
+                    {
+                    }
+
                     NetstackWakeRegistry.Unregister(token);
                 }
+
                 foreach (var p in ctx.ports)
-                {
-                    try { p.listener.Dispose(); } catch { }
-                }
+                    try
+                    {
+                        p.listener.Dispose();
+                    }
+                    catch
+                    {
+                    }
             }
+
             _activeContexts.Clear();
             _wakeTokens.Clear();
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _running = false;
-        // Unblock wait-loop before joining.
-        try { _wakeSignal.Set(); } catch { }
-        _loopThread.Join();
-        _wakeSignalDisposed = true;
-        _wakeSignal.Dispose();
-        _disposed = true;
     }
 
     private void WakeLoop()

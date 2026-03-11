@@ -1,10 +1,10 @@
-using Fiberish.VFS;
-using Fiberish.Memory;
-using Fiberish.Core;
-using Fiberish.Native;
-using Fiberish.Syscalls;
 using System.Runtime.InteropServices;
 using System.Text;
+using Fiberish.Core;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -22,7 +22,7 @@ public class OverlayTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: true);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, true);
             var sm = runtime.Syscalls;
 
             var root = sm.Root.Dentry!;
@@ -120,12 +120,13 @@ public class OverlayTests
         var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var tempWork = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        
+
         Directory.CreateDirectory(tempLower);
         Directory.CreateDirectory(tempUpper);
         Directory.CreateDirectory(tempWork);
-        
-        try {
+
+        try
+        {
             var nestedDir = Path.Combine(tempLower, "a/b/c");
             Directory.CreateDirectory(nestedDir);
             var filePath = Path.Combine(nestedDir, "file");
@@ -135,13 +136,14 @@ public class OverlayTests
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
             lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
-            
+
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
             upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
 
             var overlayFs = new OverlayFileSystem();
             var options = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(new FileSystemType { Name = "overlay" }, 0, "overlay", options);
+            var overlaySb =
+                (OverlaySuperBlock)overlayFs.ReadSuper(new FileSystemType { Name = "overlay" }, 0, "overlay", options);
 
             // Lookup the file in overlay
             var root = overlaySb.Root;
@@ -165,14 +167,16 @@ public class OverlayTests
 
             Assert.NotNull(overlayInode.UpperDentry);
             Assert.NotEqual(initialHandle, linuxFile.PrivateData); // Handle should have been redirected
-            
+
             // Check if parents were created in upper FS host path
             Assert.True(Directory.Exists(Path.Combine(tempUpper, "a/b/c")));
             Assert.True(File.Exists(Path.Combine(tempUpper, "a/b/c/file")));
-            
+
             // Verify content in upper
             Assert.Equal("helloworld", File.ReadAllText(Path.Combine(tempUpper, "a/b/c/file")));
-        } finally {
+        }
+        finally
+        {
             if (Directory.Exists(tempLower)) Directory.Delete(tempLower, true);
             if (Directory.Exists(tempUpper)) Directory.Delete(tempUpper, true);
             if (Directory.Exists(tempWork)) Directory.Delete(tempWork, true);
@@ -253,8 +257,8 @@ public class OverlayTests
                 Marshal.Copy(lowerCache.GetPage(0), lowerBuf, 0, 5);
                 Marshal.Copy(upperCache.GetPage(0), upperBuf, 0, 5);
 
-                Assert.Equal("LOWER", System.Text.Encoding.ASCII.GetString(lowerBuf));
-                Assert.Equal("UPPER", System.Text.Encoding.ASCII.GetString(upperBuf));
+                Assert.Equal("LOWER", Encoding.ASCII.GetString(lowerBuf));
+                Assert.Equal("UPPER", Encoding.ASCII.GetString(upperBuf));
             }
             finally
             {
@@ -407,7 +411,7 @@ public class OverlayTests
             var buf = new byte[16];
             var n = d!.Inode!.Read(f, buf, 0);
             Assert.True(n > 0);
-            Assert.Equal("top", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            Assert.Equal("top", Encoding.UTF8.GetString(buf, 0, n));
             f.Close();
         }
         finally
@@ -676,7 +680,7 @@ public class OverlayTests
             var file = new LinuxFile(dst!, FileFlags.O_RDONLY, null!);
             var buf = new byte[8];
             var n = dst!.Inode!.Read(file, buf, 0);
-            Assert.Equal("src", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            Assert.Equal("src", Encoding.UTF8.GetString(buf, 0, n));
             file.Close();
         }
         finally

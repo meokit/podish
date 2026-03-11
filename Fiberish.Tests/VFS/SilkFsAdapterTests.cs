@@ -1,10 +1,10 @@
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 using Fiberish.SilkFS;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
-using Fiberish.Native;
-using System.Linq;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -118,7 +118,7 @@ public class SilkFsAdapterTests
                 var file = new Dentry("keep.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-                var payload = System.Text.Encoding.UTF8.GetBytes("hello-silk");
+                var payload = Encoding.UTF8.GetBytes("hello-silk");
                 var wrote = file.Inode!.Write(wf, payload, 0);
                 Assert.Equal(payload.Length, wrote);
                 wf.Close();
@@ -162,11 +162,11 @@ public class SilkFsAdapterTests
                 var n = fileLoc.Dentry!.Inode!.Read(rf, readBuf, 0);
                 rf.Close();
                 Assert.Equal(10, n);
-                Assert.Equal("hello-silk", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+                Assert.Equal("hello-silk", Encoding.UTF8.GetString(readBuf, 0, n));
                 var buf = new byte[16];
                 var xrc = fileLoc.Dentry!.Inode!.GetXAttr("user.test", buf);
                 Assert.Equal(5, xrc);
-                Assert.Equal("value", System.Text.Encoding.UTF8.GetString(buf, 0, xrc));
+                Assert.Equal("value", Encoding.UTF8.GetString(buf, 0, xrc));
 
                 var whLoc = sm.PathWalkWithFlags("/mnt/.wh.gone.txt", LookupFlags.FollowSymlink);
                 Assert.True(whLoc.IsValid);
@@ -510,7 +510,7 @@ public class SilkFsAdapterTests
             var readBuf = new byte[16];
             var n = rf.OpenedInode!.Read(rf, readBuf, 0);
             Assert.Equal(5, n);
-            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+            Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
 
             rf.Close();
 
@@ -633,7 +633,8 @@ public class SilkFsAdapterTests
                 var mappedFile = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDWR, fileLoc.Mount!);
                 const uint mapAddr = 0x4C000000;
                 mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
+                    engine);
                 Assert.True(mm.HandleFault(mapAddr, true, engine));
                 Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
                 var vma = mm.FindVMA(mapAddr);
@@ -672,7 +673,7 @@ public class SilkFsAdapterTests
                 var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
                 rf.Close();
                 Assert.Equal(5, n);
-                Assert.Equal("hZZlo", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+                Assert.Equal("hZZlo", Encoding.UTF8.GetString(buf, 0, n));
                 sm.Close();
             }
         }
@@ -721,7 +722,8 @@ public class SilkFsAdapterTests
                 var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
                 const uint mapAddr = 0x4D000000;
                 mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
+                    engine);
                 Assert.True(mm.HandleFault(mapAddr, false, engine));
 
                 Assert.Equal(2, mappedFile.Dentry.Inode!.Write(mappedFile, "XY"u8.ToArray(), 1));
@@ -759,7 +761,7 @@ public class SilkFsAdapterTests
                 var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
                 rf.Close();
                 Assert.Equal(5, n);
-                Assert.Equal("hXYlo", System.Text.Encoding.UTF8.GetString(buf, 0, n));
+                Assert.Equal("hXYlo", Encoding.UTF8.GetString(buf, 0, n));
                 sm.Close();
             }
         }
@@ -818,7 +820,7 @@ public class SilkFsAdapterTests
             var n = file.Inode.Read(rf, readBuf, 0);
             rf.Close();
             Assert.Equal(5, n);
-            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+            Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
             sm.Close();
         }
         finally
@@ -883,7 +885,7 @@ public class SilkFsAdapterTests
             var n = file.Inode.Read(rf, readBuf, 0);
             rf.Close();
             Assert.Equal(5, n);
-            Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(readBuf, 0, n));
+            Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
             sm.Close();
         }
         finally
@@ -930,7 +932,7 @@ public class SilkFsAdapterTests
 
             var payload = "hello-iget";
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(payload.Length, file.Inode!.Write(wf, System.Text.Encoding.UTF8.GetBytes(payload), 0));
+            Assert.Equal(payload.Length, file.Inode!.Write(wf, Encoding.UTF8.GetBytes(payload), 0));
             wf.Close();
 
             var before = sm.PathWalkWithFlags("/mnt/sub/data.txt", LookupFlags.FollowSymlink);
@@ -953,7 +955,7 @@ public class SilkFsAdapterTests
             rf.Close();
 
             Assert.Equal(payload.Length, n);
-            Assert.Equal(payload, System.Text.Encoding.UTF8.GetString(buffer, 0, n));
+            Assert.Equal(payload, Encoding.UTF8.GetString(buffer, 0, n));
             sm.Close();
         }
         finally
@@ -994,7 +996,7 @@ public class SilkFsAdapterTests
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var payload = "keep-open";
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(payload.Length, file.Inode!.Write(wf, System.Text.Encoding.UTF8.GetBytes(payload), 0));
+            Assert.Equal(payload.Length, file.Inode!.Write(wf, Encoding.UTF8.GetBytes(payload), 0));
             wf.Close();
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
@@ -1005,7 +1007,7 @@ public class SilkFsAdapterTests
             var buffer = new byte[32];
             var n = rf.OpenedInode!.Read(rf, buffer, 0);
             Assert.Equal(payload.Length, n);
-            Assert.Equal(payload, System.Text.Encoding.UTF8.GetString(buffer, 0, n));
+            Assert.Equal(payload, Encoding.UTF8.GetString(buffer, 0, n));
             rf.Close();
             sm.Close();
         }

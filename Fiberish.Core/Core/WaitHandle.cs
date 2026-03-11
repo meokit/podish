@@ -9,10 +9,6 @@ namespace Fiberish.Core;
 /// </summary>
 public class AsyncWaitQueue
 {
-    private KernelScheduler? _ownerScheduler;
-    private long _nextWaiterId;
-    private bool _isSignaled;
-
     // List of continuations to resume when Signaled.
     // Each entry stores the continuation Action, FiberTask context, and the KernelScheduler reference.
     // Signal/Reset/Register are scheduler-thread-only; callers must hop to the owner scheduler first.
@@ -20,31 +16,9 @@ public class AsyncWaitQueue
             Scheduler)>
         _waiters = new();
 
-    private sealed class NoopRegistration : IDisposable
-    {
-        public static readonly NoopRegistration Instance = new();
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class WaitRegistration : IDisposable
-    {
-        private AsyncWaitQueue? _owner;
-        private readonly long _id;
-
-        public WaitRegistration(AsyncWaitQueue owner, long id)
-        {
-            _owner = owner;
-            _id = id;
-        }
-
-        public void Dispose()
-        {
-            var owner = Interlocked.Exchange(ref _owner, null);
-            owner?.Unregister(_id);
-        }
-    }
+    private bool _isSignaled;
+    private long _nextWaiterId;
+    private KernelScheduler? _ownerScheduler;
 
     public bool IsSignaled
     {
@@ -66,16 +40,14 @@ public class AsyncWaitQueue
         if (_waiters.Count == 0) return;
         toWake =
             new List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
-                    Scheduler)>(
+                Scheduler)>(
                 _waiters);
         _waiters.Clear();
 
         // Resume all waiters after queue state has been updated.
         // Use the captured scheduler reference (not KernelScheduler.Current) for explicit ownership.
         foreach (var (_, continuation, context, token, scheduler) in toWake)
-        {
             ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
-        }
     }
 
     public void Reset()
@@ -109,7 +81,8 @@ public class AsyncWaitQueue
         RegisterCancelable(continuation, context, token, scheduler);
     }
 
-    public IDisposable? RegisterCancelable(Action continuation, FiberTask? context = null, FiberTask.WaitToken? token = null)
+    public IDisposable? RegisterCancelable(Action continuation, FiberTask? context = null,
+        FiberTask.WaitToken? token = null)
     {
         var scheduler = KernelScheduler.Current;
         return RegisterCancelable(continuation, context ?? scheduler?.CurrentTask, token, scheduler);
@@ -186,14 +159,10 @@ public class AsyncWaitQueue
             return;
 
         if (_ownerScheduler == null)
-        {
             _ownerScheduler = scheduler;
-        }
         else if (!ReferenceEquals(_ownerScheduler, scheduler))
-        {
             throw new InvalidOperationException(
                 $"AsyncWaitQueue.{caller ?? "<unknown>"} is bound to a different KernelScheduler instance.");
-        }
 
         scheduler.AssertSchedulerThread(caller);
     }
@@ -202,6 +171,33 @@ public class AsyncWaitQueue
     public WaitQueueAwaiter GetAwaiter()
     {
         return new WaitQueueAwaiter(this);
+    }
+
+    private sealed class NoopRegistration : IDisposable
+    {
+        public static readonly NoopRegistration Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class WaitRegistration : IDisposable
+    {
+        private readonly long _id;
+        private AsyncWaitQueue? _owner;
+
+        public WaitRegistration(AsyncWaitQueue owner, long id)
+        {
+            _owner = owner;
+            _id = id;
+        }
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref _owner, null);
+            owner?.Unregister(_id);
+        }
     }
 }
 
@@ -239,6 +235,7 @@ public struct WaitQueueAwaiter : INotifyCompletion
         {
             _token = currentTask.BeginWaitToken();
             var called = 0;
+
             void RunOnce()
             {
                 if (Interlocked.Exchange(ref called, 1) != 0) return;
@@ -461,10 +458,7 @@ public readonly struct ChildStateAwaitable
         {
             if (_token == null) return AwaitResult.Completed;
             var reason = _task.CompleteWaitToken(_token);
-            if (reason != WakeReason.Event && reason != WakeReason.None)
-            {
-                return AwaitResult.Interrupted;
-            }
+            if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
 
             return AwaitResult.Completed;
         }

@@ -23,14 +23,13 @@ public class Timer
 /// </summary>
 public class TimeWheel
 {
-    private static readonly ILogger Logger = Logging.CreateLogger<TimeWheel>();
-
     private const int TVR_BITS = 8;
     private const int TVN_BITS = 6;
     private const int TVR_SIZE = 1 << TVR_BITS;
     private const int TVN_SIZE = 1 << TVN_BITS;
     private const int TVR_MASK = TVR_SIZE - 1;
     private const int TVN_MASK = TVN_SIZE - 1;
+    private static readonly ILogger Logger = Logging.CreateLogger<TimeWheel>();
 
     private readonly Timer?[] _tv1 = new Timer?[TVR_SIZE];
     private readonly Timer?[] _tv2 = new Timer?[TVN_SIZE];

@@ -1,7 +1,6 @@
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
-using Fiberish.Native;
 using Fiberish.Syscalls;
 using Xunit;
 
@@ -46,7 +45,8 @@ public class WaitChildStateRegressionTests
         using var env = new WaitEnv();
         env.Child.StateChangeEvent.Set(); // stale signaled state from a previous transition
 
-        var pending = InvokeSys("SysWaitId", env.ParentEngine.State, (uint)IdType.P_PID, (uint)env.Child.TGID, 0, 4, 0, 0)
+        var pending = InvokeSys("SysWaitId", env.ParentEngine.State, (uint)IdType.P_PID, (uint)env.Child.TGID, 0, 4, 0,
+                0)
             .AsTask();
         Assert.False(pending.IsCompleted);
 
@@ -72,7 +72,8 @@ public class WaitChildStateRegressionTests
         Assert.Equal(0, await pending);
     }
 
-    private static ValueTask<int> InvokeSys(string methodName, IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private static ValueTask<int> InvokeSys(string methodName, IntPtr state, uint a1, uint a2, uint a3, uint a4,
+        uint a5,
         uint a6)
     {
         var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
@@ -128,15 +129,15 @@ public class WaitChildStateRegressionTests
         public SyscallManager ChildSys { get; }
         public Process Child { get; }
 
-        public bool DrainEvents()
-        {
-            return (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
-        }
-
         public void Dispose()
         {
             Scheduler.CurrentTask = null;
             KernelScheduler.Current = null;
+        }
+
+        public bool DrainEvents()
+        {
+            return (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
     }
 }

@@ -355,9 +355,7 @@ public partial class SyscallManager
         if ((flags & O_TMPFILE_MASK) != 0)
         {
             if (dentry == null || dentry.Inode == null || dentry.Inode.Type != InodeType.Directory)
-            {
                 return -(int)Errno.ENOTDIR;
-            }
 
             if (mount != null && mount.IsReadOnly) return -(int)Errno.EROFS;
 
@@ -451,7 +449,6 @@ public partial class SyscallManager
             if (!createdHere &&
                 (flags & (uint)FileFlags.O_TRUNC) != 0 &&
                 dentry?.Inode?.Type == InodeType.File)
-            {
                 try
                 {
                     var truncateRc = dentry.Inode.Truncate(0);
@@ -463,7 +460,6 @@ public partial class SyscallManager
                 {
                     return MapFsExceptionToErrno(ex, Errno.EACCES);
                 }
-            }
 
             // If we already created the inode above, opening with O_CREAT|O_EXCL can
             // retrigger create semantics in backend Open() and fail spuriously.
@@ -781,7 +777,8 @@ public partial class SyscallManager
         return FinalizeWriteResult(totalWritten);
     }
 
-    private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt, int flags)
+    private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt,
+        int flags)
     {
         var totalWritten = 0;
         for (var i = 0; i < iovCnt; i++)
@@ -796,7 +793,7 @@ public partial class SyscallManager
                     return -(int)Errno.EFAULT;
 
                 var payload = data.AsMemory(0, (int)iov.Len);
-                int n = file.OpenedInode switch
+                var n = file.OpenedInode switch
                 {
                     HostSocketInode host => await host.SendAsync(file, payload, flags),
                     NetstackSocketInode netstack => await netstack.SendAsync(file, payload, flags),
@@ -823,7 +820,8 @@ public partial class SyscallManager
         return totalWritten;
     }
 
-    private static async ValueTask<int> DoReadVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt, int flags)
+    private static async ValueTask<int> DoReadVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt,
+        int flags)
     {
         var totalRead = 0;
         for (var i = 0; i < iovCnt; i++)
@@ -834,7 +832,7 @@ public partial class SyscallManager
             var buffer = ArrayPool<byte>.Shared.Rent((int)iov.Len);
             try
             {
-                int n = file.OpenedInode switch
+                var n = file.OpenedInode switch
                 {
                     HostSocketInode host => await host.RecvAsync(file, buffer, flags, (int)iov.Len),
                     NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags, (int)iov.Len),

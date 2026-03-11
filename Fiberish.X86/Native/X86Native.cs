@@ -1,5 +1,5 @@
-using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.X86.Native;
 
@@ -35,6 +35,14 @@ public enum Seg
 
 public unsafe partial class X86Native
 {
+    [Flags]
+    public enum PageMappingFlags : byte
+    {
+        None = 0,
+        Dirty = 1 << 0,
+        External = 1 << 1
+    }
+
     private const string LibName = "fibercpu";
 
 #pragma warning disable CA2255
@@ -265,14 +273,6 @@ public unsafe partial class X86Native
         public IntPtr jit_func;
         // Padding to 32 bytes implied before ops
         // DecodedOp ops[1] follows at offset 32
-    }
-
-    [Flags]
-    public enum PageMappingFlags : byte
-    {
-        None = 0,
-        Dirty = 1 << 0,
-        External = 1 << 1
     }
 
     [StructLayout(LayoutKind.Sequential)]

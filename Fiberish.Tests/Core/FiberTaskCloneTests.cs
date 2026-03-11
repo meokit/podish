@@ -57,7 +57,7 @@ public class FiberTaskCloneTests
         Assert.True(env.Engine.CopyFromUser(addr, read));
         Assert.Equal((byte)'A', read[0]);
 
-        Assert.True(env.Engine.CopyToUser(addr, new byte[] { (byte)'Z' }));
+        Assert.True(env.Engine.CopyToUser(addr, new[] { (byte)'Z' }));
         Assert.True(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
 
         var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
@@ -129,6 +129,12 @@ public class FiberTaskCloneTests
         public KernelScheduler Scheduler { get; }
         public FiberTask Parent { get; }
 
+        public void Dispose()
+        {
+            foreach (var file in _files) file.Close();
+            GC.KeepAlive(Parent);
+        }
+
         public void MapUserPage(uint addr)
         {
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -147,15 +153,9 @@ public class FiberTaskCloneTests
             var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             _files.Add(file);
 
-            Assert.Equal(1, dentry.Inode!.Write(file, new byte[] { initialByte }, 0));
+            Assert.Equal(1, dentry.Inode!.Write(file, new[] { initialByte }, 0));
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed, file, 0, (long)dentry.Inode.Size, "[private-file]", Engine);
-        }
-
-        public void Dispose()
-        {
-            foreach (var file in _files) file.Close();
-            GC.KeepAlive(Parent);
         }
     }
 }

@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
@@ -13,31 +13,31 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private static readonly ConcurrentBag<SocketAsyncEventArgs> WriteProbeArgsPool = new();
     private static readonly ConcurrentBag<SocketAsyncEventArgs> AcceptProbeArgsPool = new();
     private static readonly EventHandler<SocketAsyncEventArgs> StaticProbeCompleted = OnProbeCompletedStatic;
+    private readonly Queue<Socket> _acceptedProbeQueue = new();
+    private readonly IReadyDispatcher _dispatcher;
+    private readonly ILogger _logger;
 
     private readonly HostSocketInode _owner;
+    private readonly List<WaiterRegistration> _readWaiters = [];
     private readonly Socket _socket;
-    private readonly ILogger _logger;
-    private readonly IReadyDispatcher _dispatcher;
-    private readonly Queue<Socket> _acceptedProbeQueue = new();
 
     private readonly object _waitersLock = new();
-    private readonly List<WaiterRegistration> _readWaiters = [];
     private readonly List<WaiterRegistration> _writeWaiters = [];
-
-    private SocketAsyncEventArgs? _readProbeArgs;
-    private SocketAsyncEventArgs? _writeProbeArgs;
     private SocketAsyncEventArgs? _acceptProbeArgs;
-
-    private int _readProbeInFlight;
-    private int _writeProbeInFlight;
     private int _acceptProbeInFlight;
     private int _disposed;
-    private int _readNotifyPending;
-    private int _writeNotifyPending;
     private int _notifyDispatchScheduled;
+    private int _readNotifyPending;
+
+    private SocketAsyncEventArgs? _readProbeArgs;
+
+    private int _readProbeInFlight;
 
     private short _readyCacheBits;
     private long _readyCacheExpireAtMs;
+    private int _writeNotifyPending;
+    private SocketAsyncEventArgs? _writeProbeArgs;
+    private int _writeProbeInFlight;
 
     public HostSocketProbeEngine(HostSocketInode owner, Socket socket, ILogger logger, IReadyDispatcher dispatcher)
     {
@@ -45,7 +45,48 @@ internal sealed class HostSocketProbeEngine : IDisposable
         _socket = socket;
         _logger = logger;
         _dispatcher = dispatcher;
+    }
 
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        ReturnOrDisposeProbeArgs(ref _readProbeArgs, ReadProbeArgsPool, Volatile.Read(ref _readProbeInFlight) != 0);
+        ReturnOrDisposeProbeArgs(ref _writeProbeArgs, WriteProbeArgsPool, Volatile.Read(ref _writeProbeInFlight) != 0);
+        ReturnOrDisposeProbeArgs(ref _acceptProbeArgs, AcceptProbeArgsPool,
+            Volatile.Read(ref _acceptProbeInFlight) != 0);
+
+        try
+        {
+            _socket.Dispose();
+        }
+        catch
+        {
+            // ignored
+        }
+
+        lock (_acceptedProbeQueue)
+        {
+            while (_acceptedProbeQueue.Count > 0)
+                try
+                {
+                    _acceptedProbeQueue.Dequeue().Dispose();
+                }
+                catch
+                {
+                    // ignored
+                }
+        }
+
+        lock (_waitersLock)
+        {
+            _readWaiters.Clear();
+            _writeWaiters.Clear();
+        }
+
+        _readyCacheBits = 0;
+        _readyCacheExpireAtMs = 0;
     }
 
     public short Poll(short events)
@@ -111,50 +152,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
     public bool HasBufferedAcceptedSocket()
     {
         lock (_acceptedProbeQueue)
+        {
             return _acceptedProbeQueue.Count > 0;
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-
-        ReturnOrDisposeProbeArgs(ref _readProbeArgs, ReadProbeArgsPool, Volatile.Read(ref _readProbeInFlight) != 0);
-        ReturnOrDisposeProbeArgs(ref _writeProbeArgs, WriteProbeArgsPool, Volatile.Read(ref _writeProbeInFlight) != 0);
-        ReturnOrDisposeProbeArgs(ref _acceptProbeArgs, AcceptProbeArgsPool, Volatile.Read(ref _acceptProbeInFlight) != 0);
-
-        try
-        {
-            _socket.Dispose();
         }
-        catch
-        {
-            // ignored
-        }
-
-        lock (_acceptedProbeQueue)
-        {
-            while (_acceptedProbeQueue.Count > 0)
-            {
-                try
-                {
-                    _acceptedProbeQueue.Dequeue().Dispose();
-                }
-                catch
-                {
-                    // ignored
-                }
-            }
-        }
-
-        lock (_waitersLock)
-        {
-            _readWaiters.Clear();
-            _writeWaiters.Clear();
-        }
-
-        _readyCacheBits = 0;
-        _readyCacheExpireAtMs = 0;
     }
 
     private bool TryProbeReady(short events, out short revents)
@@ -182,7 +182,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
             var needWrite = (events & PollEvents.POLLOUT) != 0;
             var canWrite = false;
             if (needWrite)
-            {
                 try
                 {
                     canWrite = _socket.Poll(0, SelectMode.SelectWrite);
@@ -191,13 +190,10 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 {
                     // keep false; error path below handles fault state.
                 }
-            }
 
             var canRead = false;
             if ((events & PollEvents.POLLIN) != 0)
-            {
                 if (!IsListeningSocket())
-                {
                     try
                     {
                         canRead = _socket.Available > 0;
@@ -206,8 +202,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
                     {
                         // keep false
                     }
-                }
-            }
 
             var hasError = false;
             try
@@ -218,11 +212,11 @@ internal sealed class HostSocketProbeEngine : IDisposable
             {
                 hasError = true;
             }
+
             if ((events & PollEvents.POLLOUT) != 0 &&
                 _socket.SocketType == SocketType.Stream &&
                 !_socket.Connected &&
                 (canWrite || hasError))
-            {
                 try
                 {
                     var soObj = _socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
@@ -253,7 +247,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 {
                     // fall back to poll bits
                 }
-            }
 
             if ((events & PollEvents.POLLIN) != 0 && canRead)
                 revents |= PollEvents.POLLIN;
@@ -263,7 +256,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 revents |= PollEvents.POLLERR;
 
             if (_socket.Connected && !canRead && !canWrite)
-            {
                 try
                 {
                     if (_socket.Poll(0, SelectMode.SelectRead) && _socket.Available == 0)
@@ -273,7 +265,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 {
                     revents |= PollEvents.POLLHUP;
                 }
-            }
 
             if (revents != 0)
                 PromoteReadyCache(revents);
@@ -357,7 +348,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         catch
         {
             Interlocked.Exchange(ref _readProbeInFlight, 0);
-            NotifyWaiters(PollEvents.POLLERR, notifyRead: true, notifyWrite: false);
+            NotifyWaiters(PollEvents.POLLERR, true, false);
         }
     }
 
@@ -380,7 +371,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         catch
         {
             Interlocked.Exchange(ref _writeProbeInFlight, 0);
-            NotifyWaiters(PollEvents.POLLERR, notifyRead: false, notifyWrite: true);
+            NotifyWaiters(PollEvents.POLLERR, false, true);
         }
     }
 
@@ -396,14 +387,15 @@ internal sealed class HostSocketProbeEngine : IDisposable
             if (!_socket.ConnectAsync(args))
                 HandleProbeCompleted(args, ProbeKind.Write);
         }
-        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending
+                                             or SocketError.InProgress or SocketError.AlreadyInProgress)
         {
             Interlocked.Exchange(ref _writeProbeInFlight, 0);
         }
         catch
         {
             Interlocked.Exchange(ref _writeProbeInFlight, 0);
-            NotifyWaiters(PollEvents.POLLERR, notifyRead: false, notifyWrite: true);
+            NotifyWaiters(PollEvents.POLLERR, false, true);
         }
     }
 
@@ -426,7 +418,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         catch
         {
             Interlocked.Exchange(ref _acceptProbeInFlight, 0);
-            NotifyWaiters(PollEvents.POLLERR, notifyRead: true, notifyWrite: false);
+            NotifyWaiters(PollEvents.POLLERR, true, false);
         }
     }
 
@@ -476,7 +468,10 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (kind == ProbeKind.Accept && e.AcceptSocket != null)
         {
             lock (_acceptedProbeQueue)
+            {
                 _acceptedProbeQueue.Enqueue(e.AcceptSocket);
+            }
+
             e.AcceptSocket = null;
             readyHint |= PollEvents.POLLIN;
         }
@@ -493,7 +488,8 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 readyHint |= PollEvents.POLLOUT | PollEvents.POLLERR;
         }
 
-        if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending and not SocketError.OperationAborted and not SocketError.Interrupted)
+        if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending
+            and not SocketError.OperationAborted and not SocketError.Interrupted)
             readyHint |= PollEvents.POLLERR;
 
         if (readyHint != 0)
@@ -503,8 +499,8 @@ internal sealed class HostSocketProbeEngine : IDisposable
             return;
 
         NotifyWaiters(readyHint,
-            notifyRead: kind is ProbeKind.Read or ProbeKind.Accept,
-            notifyWrite: kind == ProbeKind.Write);
+            kind is ProbeKind.Read or ProbeKind.Accept,
+            kind == ProbeKind.Write);
     }
 
     private void NotifyWaiters(short readyHint, bool notifyRead, bool notifyWrite)
@@ -581,10 +577,8 @@ internal sealed class HostSocketProbeEngine : IDisposable
         {
             Interlocked.Exchange(ref _notifyDispatchScheduled, 0);
             if (Volatile.Read(ref _readNotifyPending) != 0 || Volatile.Read(ref _writeNotifyPending) != 0)
-            {
                 if (Interlocked.Exchange(ref _notifyDispatchScheduled, 1) == 0)
                     _dispatcher.Post(FlushPendingWaiterNotifications);
-            }
         }
     }
 
@@ -674,7 +668,8 @@ internal sealed class HostSocketProbeEngine : IDisposable
         return saea;
     }
 
-    private static void ReturnOrDisposeProbeArgs(ref SocketAsyncEventArgs? args, ConcurrentBag<SocketAsyncEventArgs> pool,
+    private static void ReturnOrDisposeProbeArgs(ref SocketAsyncEventArgs? args,
+        ConcurrentBag<SocketAsyncEventArgs> pool,
         bool mayStillBeInFlight)
     {
         var saea = args;
@@ -686,11 +681,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
             tag.Owner = null;
 
         if (mayStillBeInFlight)
-        {
             // Do not dispose while I/O may still be in flight.
             // The owning socket teardown will abort operation and runtime will release references on completion.
             return;
-        }
 
         saea.SetBuffer(null, 0, 0);
         saea.SocketFlags = SocketFlags.None;
@@ -705,9 +698,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
     private sealed class WaiterRegistration : IDisposable
     {
-        private HostSocketProbeEngine? _owner;
         private readonly Action _callback;
         private int _disposed;
+        private HostSocketProbeEngine? _owner;
 
         public WaiterRegistration(HostSocketProbeEngine owner, Action callback, short eventMask)
         {
@@ -718,19 +711,19 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
         public short EventMask { get; }
 
-        public void TryInvoke()
-        {
-            if (Volatile.Read(ref _disposed) != 0)
-                return;
-            _callback();
-        }
-
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             var owner = Interlocked.Exchange(ref _owner, null);
             owner?.UnregisterWaiter(this);
+        }
+
+        public void TryInvoke()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
+            _callback();
         }
     }
 

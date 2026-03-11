@@ -16,8 +16,8 @@ public class MemoryPressureCoordinatorTests
         var cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
         try
         {
-            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
-            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            GlobalPageCacheManager.TrackPageCache(cache);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
 
@@ -42,8 +42,8 @@ public class MemoryPressureCoordinatorTests
         var cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
         try
         {
-            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
-            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            GlobalPageCacheManager.TrackPageCache(cache);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
 
@@ -67,7 +67,8 @@ public class MemoryPressureCoordinatorTests
         using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
-        engine.PageFaultResolver = (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 
         const uint addr = 0x74000000;
         Assert.Equal(addr, mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -95,7 +96,8 @@ public class MemoryPressureCoordinatorTests
         using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
-        engine.PageFaultResolver = (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 
         const uint addr = 0x74100000;
         Assert.Equal(addr, mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,

@@ -245,14 +245,14 @@ public class TtyDisciplineTests
         _tty.SetAttr(0, termios);
 
         // Input 1 byte (less than VMIN)
-        _tty.Input(new byte[] { (byte)'a' });
-        
+        _tty.Input(new[] { (byte)'a' });
+
         // Read without O_NONBLOCK should return EAGAIN because we need 2 bytes
         var read = _tty.Read(buffer, 0);
         Assert.Equal(-(int)Errno.EAGAIN, read);
 
         // Input 2nd byte
-        _tty.Input(new byte[] { (byte)'b' });
+        _tty.Input(new[] { (byte)'b' });
 
         // Now we have 2 bytes, read should succeed
         read = _tty.Read(buffer, 0);
@@ -281,8 +281,8 @@ public class TtyDisciplineTests
 
         // Input 2 bytes (less than VMIN). Since we don't have timer support yet in TtyDiscipline,
         // it returns what's available immediately after the first byte arrives.
-        _tty.Input(new byte[] { (byte)'a', (byte)'b' });
-        
+        _tty.Input(new[] { (byte)'a', (byte)'b' });
+
         read = _tty.Read(buffer, 0);
         Assert.Equal(2, read);
         Assert.Equal("ab", Encoding.ASCII.GetString(buffer, 0, read));
@@ -308,8 +308,8 @@ public class TtyDisciplineTests
         Assert.Equal(-(int)Errno.EAGAIN, read);
 
         // Input 1 byte
-        _tty.Input(new byte[] { (byte)'x' });
-        
+        _tty.Input(new[] { (byte)'x' });
+
         read = _tty.Read(buffer, 0);
         Assert.Equal(1, read);
         Assert.Equal("x", Encoding.ASCII.GetString(buffer, 0, read));
@@ -708,7 +708,7 @@ public class TtyDisciplineTests
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x200u; // IUCLC (0x200)
         BitConverter.GetBytes(iflag).CopyTo(termios, 0);
-        
+
         // Switch to raw mode to avoid canonical buffering
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag &= ~2u; // ICANON off
@@ -717,7 +717,7 @@ public class TtyDisciplineTests
 
         // Input uppercase and lowercase letters
         _tty.Input(Encoding.ASCII.GetBytes("Hello WORLD!"));
-        
+
         var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(12, read);
         Assert.Equal("hello world!", Encoding.ASCII.GetString(buffer, 0, read));
@@ -734,7 +734,7 @@ public class TtyDisciplineTests
         var iflag = BitConverter.ToUInt32(termios, 0);
         iflag |= 0x2000u; // IMAXBEL (0x2000)
         BitConverter.GetBytes(iflag).CopyTo(termios, 0);
-        
+
         // Ensure canonical mode is ON (to use _canonBuffer)
         var lflag = BitConverter.ToUInt32(termios, 12);
         lflag |= 2u; // ICANON on
@@ -754,7 +754,7 @@ public class TtyDisciplineTests
 
         // Buffer is now full, next char should trigger BEL
         _driver.Output.Clear();
-        _tty.Input(new byte[] { (byte)'b' });
+        _tty.Input(new[] { (byte)'b' });
         _tty.ProcessPendingInput();
 
         // Should output BEL (7) or ^G if ECHOCTL is on. 
@@ -762,16 +762,16 @@ public class TtyDisciplineTests
         // Let's just check that it outputs BEL or ^G
         var strOut = Encoding.ASCII.GetString(_driver.Output.ToArray());
         Assert.True(_driver.Output.Contains(7) || strOut.Contains("^G"));
-        
+
         // At this point, _canonBuffer has 4096 'a's.
         // The read without newline returns EAGAIN
         var read = _tty.Read(buffer, FileFlags.O_NONBLOCK);
         Assert.Equal(-(int)Errno.EAGAIN, read);
-        
+
         // Remove one character with backspace so we can add a newline
         _tty.Input(new byte[] { 127 }); // Backspace (VERASE)
         _tty.ProcessPendingInput();
-        
+
         // Input newline to flush the canonical buffer
         _tty.Input(new byte[] { 10 }); // Newline
         _tty.ProcessPendingInput();
@@ -1024,8 +1024,8 @@ public class TtyDisciplineTests
 
     private sealed class ControlledWriteTtyDriver : ITtyDriver
     {
-        private volatile bool _writable = true;
         private Action? _waiter;
+        private volatile bool _writable = true;
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
         {

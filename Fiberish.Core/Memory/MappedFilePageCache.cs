@@ -1,7 +1,7 @@
 namespace Fiberish.Memory;
 
 /// <summary>
-/// Unified file page cache facade that routes to a runtime-selected backend.
+///     Unified file page cache facade that routes to a runtime-selected backend.
 /// </summary>
 internal sealed class MappedFilePageCache : IDisposable
 {
@@ -10,6 +10,11 @@ internal sealed class MappedFilePageCache : IDisposable
     public MappedFilePageCache(string path)
     {
         _backend = FilePageBackendSelector.Create(path);
+    }
+
+    public void Dispose()
+    {
+        _backend.Dispose();
     }
 
     public void UpdatePath(string path)
@@ -35,10 +40,5 @@ internal sealed class MappedFilePageCache : IDisposable
     public FilePageBackendDiagnostics GetDiagnostics()
     {
         return _backend.GetDiagnostics();
-    }
-
-    public void Dispose()
-    {
-        _backend.Dispose();
     }
 }

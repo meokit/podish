@@ -9,7 +9,7 @@ public static class DacPolicy
 {
     public static int ApplyUmask(int requestedMode, int umask)
     {
-        return (requestedMode & 0xFFF) & ~umask;
+        return requestedMode & 0xFFF & ~umask;
     }
 
     public static int CheckPathAccess(Process process, Inode inode, AccessMode mode, bool useEffectiveIds)
@@ -94,6 +94,6 @@ public static class DacPolicy
                           process.SupplementaryGroups.Contains(inode.Gid);
         }
 
-        return inGroup ? ((inode.Mode >> 3) & 0x7) : (inode.Mode & 0x7);
+        return inGroup ? (inode.Mode >> 3) & 0x7 : inode.Mode & 0x7;
     }
 }

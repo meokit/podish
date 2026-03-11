@@ -1,4 +1,4 @@
-using Xunit;
+using System.Text;
 
 namespace Fiberish.SilkFS.Tests;
 
@@ -45,7 +45,7 @@ public class SilkRepositoryTests
             repo.Metadata.SetXAttr(inode, "user.mime_type", "text/plain"u8.ToArray());
             var v = repo.Metadata.GetXAttr(inode, "user.mime_type");
             Assert.NotNull(v);
-            Assert.Equal("text/plain", System.Text.Encoding.UTF8.GetString(v!));
+            Assert.Equal("text/plain", Encoding.UTF8.GetString(v!));
 
             var list = repo.Metadata.ListXAttrs(inode);
             Assert.True(list.ContainsKey("user.mime_type"));
@@ -120,10 +120,10 @@ public class SilkRepositoryTests
 
             var ino = repo.Metadata.CreateInode(SilkInodeKind.File, 0x1A4);
             repo.WriteLiveInodeData(ino, "object-a"u8.ToArray());
-            Assert.Equal("object-a", System.Text.Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
+            Assert.Equal("object-a", Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
 
             repo.TruncateLiveInodeData(ino, 3);
-            Assert.Equal("obj", System.Text.Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
+            Assert.Equal("obj", Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
 
             repo.DeleteLiveInodeData(ino);
             Assert.Null(repo.ReadLiveInodeData(ino));
@@ -151,7 +151,7 @@ public class SilkRepositoryTests
             var path = repo.GetLiveInodePath(ino);
             Assert.True(File.Exists(path));
             Assert.Equal(2, new FileInfo(path).Length);
-            Assert.Equal("xy", System.Text.Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
+            Assert.Equal("xy", Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
         }
         finally
         {

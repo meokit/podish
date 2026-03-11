@@ -88,5 +88,5 @@ public enum LookupFlags
     ///     Do not follow symlinks at all.
     ///     Equivalent to Linux LOOKUP_NO_SYMLINKS.
     /// </summary>
-    NoSymlinks = 1 << 12,
+    NoSymlinks = 1 << 12
 }

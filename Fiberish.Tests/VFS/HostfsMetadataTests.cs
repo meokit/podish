@@ -1,6 +1,6 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -163,7 +163,7 @@ public class HostfsMetadataTests
 
         try
         {
-            sm.MountHostfs(hostDir, "/mnt", readOnly: true);
+            sm.MountHostfs(hostDir, "/mnt", true);
 
             var loc = sm.PathWalkWithFlags("/mnt/data.txt", LookupFlags.FollowSymlink);
             Assert.True(loc.IsValid);
@@ -278,7 +278,8 @@ public class HostfsMetadataTests
             Assert.NotNull(renamedDir);
             Assert.Equal(Path.Combine(tempRoot, "dir2"), Assert.IsType<HostInode>(renamedDir!.Inode).HostPath);
             Assert.Equal(Path.Combine(tempRoot, "dir2", "sub"), Assert.IsType<HostInode>(sub.Inode).HostPath);
-            Assert.Equal(Path.Combine(tempRoot, "dir2", "sub", "file.txt"), Assert.IsType<HostInode>(file!.Inode).HostPath);
+            Assert.Equal(Path.Combine(tempRoot, "dir2", "sub", "file.txt"),
+                Assert.IsType<HostInode>(file!.Inode).HostPath);
         }
         finally
         {

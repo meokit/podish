@@ -1,11 +1,11 @@
+using System.Text;
 using Fiberish.Memory;
 using Fiberish.Native;
-using System.Text;
 
 namespace Fiberish.VFS;
 
 /// <summary>
-/// Shared superblock implementation for in-memory directory index based filesystems.
+///     Shared superblock implementation for in-memory directory index based filesystems.
 /// </summary>
 public abstract class IndexedMemorySuperBlock : SuperBlock
 {
@@ -40,24 +40,23 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
         base.Shutdown();
         Dentries.Clear();
     }
-
 }
 
 /// <summary>
-/// Shared inode implementation for indexed in-memory filesystems.
+///     Shared inode implementation for indexed in-memory filesystems.
 /// </summary>
 public abstract class IndexedMemoryInode : Inode
 {
+    private readonly HashSet<LinuxFile> _sharedHolders = [];
     protected readonly HashSet<string> ChildNames = [];
-    protected readonly Dictionary<string, byte[]> XAttrs = new(StringComparer.Ordinal);
     protected readonly HashSet<long> DirtyPageIndexes = [];
-    protected byte[]? SymlinkData;
-    protected bool OwnsPageCache;
+    protected readonly Dictionary<string, byte[]> XAttrs = new(StringComparer.Ordinal);
+    private LinuxFile? _exclusiveHolder;
 
     // Flock state
     private int _lockType; // 0: None, 1: Shared, 2: Exclusive
-    private readonly HashSet<LinuxFile> _sharedHolders = [];
-    private LinuxFile? _exclusiveHolder;
+    protected bool OwnsPageCache;
+    protected byte[]? SymlinkData;
 
     protected IndexedMemoryInode(ulong ino, IndexedMemorySuperBlock sb)
     {
@@ -76,7 +75,8 @@ public abstract class IndexedMemoryInode : Inode
     private void AttachNamespaceChild(Dentry parentDentry, Dentry childDentry, string reason)
     {
         var alreadyCached =
-            parentDentry.TryGetCachedChild(childDentry.Name, out var existing) && ReferenceEquals(existing, childDentry);
+            parentDentry.TryGetCachedChild(childDentry.Name, out var existing) &&
+            ReferenceEquals(existing, childDentry);
         parentDentry.CacheChild(childDentry, reason);
         if (!PinNamespaceDentries || alreadyCached) return;
         childDentry.Get($"{reason}.namespace-pin");
@@ -92,7 +92,7 @@ public abstract class IndexedMemoryInode : Inode
     }
 
     /// <summary>
-    /// Register an externally-created dentry as a child of this directory inode.
+    ///     Register an externally-created dentry as a child of this directory inode.
     /// </summary>
     public void RegisterChild(Dentry parentDentry, string name, Dentry childDentry)
     {
@@ -214,6 +214,7 @@ public abstract class IndexedMemoryInode : Inode
                 NamespaceOps.OnEntryRemoved(unlinkedInode, "IndexedMemoryInode.Unlink");
                 dentry.UnbindInode("IndexedMemoryInode.Unlink");
             }
+
             ChildNames.Remove(name);
         }
     }
@@ -246,6 +247,7 @@ public abstract class IndexedMemoryInode : Inode
                 NamespaceOps.OnDirectoryRemoved(this, removedInode, "IndexedMemoryInode.Rmdir");
                 dentry.UnbindInode("IndexedMemoryInode.Rmdir");
             }
+
             ChildNames.Remove(name);
         }
     }
@@ -289,9 +291,8 @@ public abstract class IndexedMemoryInode : Inode
             if (!oldPrimary.Children.TryGetValue(oldName, out var dentry))
             {
                 foreach (var parentDentry in Dentries)
-                {
-                    if (parentDentry.Children.TryGetValue(oldName, out dentry)) break;
-                }
+                    if (parentDentry.Children.TryGetValue(oldName, out dentry))
+                        break;
 
                 if (dentry == null)
                 {
@@ -575,19 +576,28 @@ public abstract class IndexedMemoryInode : Inode
         return 0;
     }
 
-    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
         if (request.Length == 0)
         {
-            lock (Lock) DirtyPageIndexes.Remove(request.PageIndex);
+            lock (Lock)
+            {
+                DirtyPageIndexes.Remove(request.PageIndex);
+            }
+
             return 0;
         }
 
         var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         if (rc < 0) return rc;
-        lock (Lock) DirtyPageIndexes.Remove(request.PageIndex);
+        lock (Lock)
+        {
+            DirtyPageIndexes.Remove(request.PageIndex);
+        }
+
         return 0;
     }
 
@@ -637,6 +647,7 @@ public abstract class IndexedMemoryInode : Inode
             Size = (ulong)size;
             MTime = DateTime.Now;
         }
+
         return 0;
     }
 
@@ -761,11 +772,8 @@ public abstract class IndexedMemoryInode : Inode
             var chunk = Math.Min(destination.Length - copied, LinuxConstants.PageSize - pageOffset);
             var pagePtr = pageCache.GetPage(pageIndex);
             if (pagePtr == IntPtr.Zero)
-            {
                 destination.Slice(copied, chunk).Clear();
-            }
             else
-            {
                 unsafe
                 {
                     var src = (byte*)pagePtr + pageOffset;
@@ -774,7 +782,6 @@ public abstract class IndexedMemoryInode : Inode
                         Buffer.MemoryCopy(src, dst, chunk, chunk);
                     }
                 }
-            }
 
             copied += chunk;
         }
@@ -797,7 +804,7 @@ public abstract class IndexedMemoryInode : Inode
                 }
 
                 return true;
-            }, out _, strictQuota: true, AllocationClass.PageCache);
+            }, out _, true, AllocationClass.PageCache);
 
             if (pagePtr == IntPtr.Zero)
                 throw new OutOfMemoryException("Failed to allocate indexed page cache page");

@@ -14,10 +14,10 @@ public struct SigInfo
     public int Status;
     public long Utime;
     public long Stime;
-    
+
     // sigval payload (often a ptr or an int)
-    public ulong Value; 
-    
+    public ulong Value;
+
     // POSIX timers
     public int TimerId;
     public int Overrun;

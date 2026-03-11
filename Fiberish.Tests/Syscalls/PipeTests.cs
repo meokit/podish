@@ -127,7 +127,7 @@ public class PipeTests
     [Fact]
     public async Task Pipe2_Efault_WithTaskOwner_DoesNotRecurseAndRollsBack()
     {
-        using var env = new TestEnv(attachTaskOwner: true);
+        using var env = new TestEnv(true);
         const uint invalidFdsAddr = 0xDEAD0000;
         var before = env.SyscallManager.FDs.Count;
 
@@ -181,7 +181,7 @@ public class PipeTests
     [Fact(Timeout = 1000)]
     public async Task Pipe_Poll_ReadEndWithBufferedDataAndClosedWriter_HasPollhup()
     {
-        using var env = new TestEnv(attachTaskOwner: true);
+        using var env = new TestEnv(true);
         const uint fdsAddr = 0x16000;
         const uint dataAddr = 0x17000;
         env.MapUserPage(fdsAddr);
@@ -202,7 +202,7 @@ public class PipeTests
     [Fact(Timeout = 1000)]
     public async Task Splice_PipeWithNonNullOffsets_ReturnsEspipe()
     {
-        using var env = new TestEnv(attachTaskOwner: true);
+        using var env = new TestEnv(true);
         const uint inPipeAddr = 0x18000;
         const uint outPipeAddr = 0x19000;
         const uint offPtr = 0x1A000;
@@ -241,6 +241,7 @@ public class PipeTests
                 Engine.Owner = Task;
                 KernelScheduler.Current = Scheduler;
             }
+
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             SyscallManager.MountRootHostfs(".");
         }

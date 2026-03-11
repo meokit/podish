@@ -8,34 +8,6 @@ namespace Fiberish.Tests.Auth;
 
 public class CredentialServiceTests
 {
-    private class TestProcess : Process
-    {
-        public TestProcess(int uid, int gid) : base(1, null!, null!)
-        {
-            UID = uid;
-            GID = gid;
-            EUID = uid;
-            EGID = gid;
-            SUID = uid;
-            SGID = gid;
-            FSUID = uid;
-            FSGID = gid;
-        }
-    }
-
-    private class TestInode : Inode
-    {
-        public TestInode(int uid, int gid, int mode)
-        {
-            Uid = uid;
-            Gid = gid;
-            Mode = mode;
-            Type = InodeType.File;
-        }
-
-        public override Dentry? Lookup(string name) => null;
-    }
-
     [Fact]
     public void SetUid_Root_Success()
     {
@@ -79,7 +51,7 @@ public class CredentialServiceTests
     {
         var p = new TestProcess(1000, 1000);
         p.EUID = 2000; // Simulate previous setreuid
-        
+
         // Swap RUID and EUID
         Assert.Equal(0, CredentialService.SetReUid(p, 2000, 1000));
         Assert.Equal(2000, p.UID);
@@ -119,13 +91,13 @@ public class CredentialServiceTests
     {
         var p = new TestProcess(1000, 1000);
         // Mode 04755 (S_ISUID | rwxr-xr-x) owned by root (0)
-        var inode = new TestInode(0, 0, 0x9ED); 
-        
+        var inode = new TestInode(0, 0, 0x9ED);
+
         CredentialService.ApplyExecSetIdOnExec(p, inode);
-        
+
         Assert.Equal(1000, p.UID); // RUID unchanged
-        Assert.Equal(0, p.EUID);   // EUID becomes owner (0)
-        Assert.Equal(0, p.SUID);   // SUID becomes new EUID
+        Assert.Equal(0, p.EUID); // EUID becomes owner (0)
+        Assert.Equal(0, p.SUID); // SUID becomes new EUID
         Assert.Equal(0, p.FSUID);
     }
 
@@ -139,5 +111,36 @@ public class CredentialServiceTests
         CredentialService.ApplyExecSetIdOnExec(p, inode);
 
         Assert.Equal(1000, p.EUID);
+    }
+
+    private class TestProcess : Process
+    {
+        public TestProcess(int uid, int gid) : base(1, null!, null!)
+        {
+            UID = uid;
+            GID = gid;
+            EUID = uid;
+            EGID = gid;
+            SUID = uid;
+            SGID = gid;
+            FSUID = uid;
+            FSGID = gid;
+        }
+    }
+
+    private class TestInode : Inode
+    {
+        public TestInode(int uid, int gid, int mode)
+        {
+            Uid = uid;
+            Gid = gid;
+            Mode = mode;
+            Type = InodeType.File;
+        }
+
+        public override Dentry? Lookup(string name)
+        {
+            return null;
+        }
     }
 }

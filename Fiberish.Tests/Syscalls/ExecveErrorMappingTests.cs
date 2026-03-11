@@ -39,7 +39,7 @@ public class ExecveErrorMappingTests
             // Force subsequent strict anonymous page allocation to fail inside exec path.
             ExternalPageManager.MemoryQuotaBytes = ExternalPageManager.GetAllocatedBytes();
 
-            var rc = await Call(sm, "SysExecve", filenameAddr, 0, 0);
+            var rc = await Call(sm, "SysExecve", filenameAddr);
             Assert.Equal(-(int)Errno.ENOMEM, rc);
         }
         finally

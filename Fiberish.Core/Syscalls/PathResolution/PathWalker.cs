@@ -158,9 +158,7 @@ public class PathWalker
             // Skip leading/consecutive slashes
             while (nd.PathPosition < nd.PathString.Length &&
                    nd.PathString[nd.PathPosition] == '/')
-            {
                 nd.PathPosition++;
-            }
 
             if (nd.PathPosition >= nd.PathString.Length)
                 break;
@@ -169,22 +167,18 @@ public class PathWalker
             var start = nd.PathPosition;
             while (nd.PathPosition < nd.PathString.Length &&
                    nd.PathString[nd.PathPosition] != '/')
-            {
                 nd.PathPosition++;
-            }
 
             var component = nd.PathString[start..nd.PathPosition];
-            
+
             // A component is the last one if everything after it is just slashes
             var isLast = true;
             for (var i = nd.PathPosition; i < nd.PathString.Length; i++)
-            {
                 if (nd.PathString[i] != '/')
                 {
                     isLast = false;
                     break;
                 }
-            }
 
             // Handle the component
             if (component == "." || component == "")
@@ -207,10 +201,8 @@ public class PathWalker
 
         // Handle trailing slash or LOOKUP_DIRECTORY flag
         if ((nd.PathString.Length > 0 && nd.PathString[^1] == '/') || (nd.Flags & LookupFlags.Directory) != 0)
-        {
             if (nd.Dentry?.Inode?.Type != InodeType.Directory)
                 return nd.SetError(-(int)Errno.ENOTDIR);
-        }
 
         return true;
     }
@@ -298,10 +290,8 @@ public class PathWalker
             var mustFollow = !isLast; // Must follow if not last component
 
             if ((nd.Flags & LookupFlags.NoFollow) != 0 && isLast)
-            {
                 // AT_SYMLINK_NOFOLLOW - don't follow final component
                 shouldFollow = false;
-            }
 
             // Handle magic links first
             if (next.Inode is IMagicSymlinkInode magicLink)
@@ -318,6 +308,7 @@ public class PathWalker
                         nd.LastType = LastType.Normal;
                         nd.Path = new PathLocation(next, mount);
                     }
+
                     return true;
                 }
 
@@ -388,10 +379,7 @@ public class PathWalker
         }
 
         // Go to parent directory
-        if (current?.Parent != null)
-        {
-            nd.Path = new PathLocation(current.Parent, mount);
-        }
+        if (current?.Parent != null) nd.Path = new PathLocation(current.Parent, mount);
 
         nd.LastType = LastType.DotDot;
         return true;

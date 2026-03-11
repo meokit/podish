@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
@@ -32,7 +31,8 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger, new SchedulerReadyDispatcher(KernelScheduler.Current));
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger,
+            new SchedulerReadyDispatcher(KernelScheduler.Current));
     }
 
     // Wrap an accepted socket
@@ -45,7 +45,8 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger, new SchedulerReadyDispatcher(KernelScheduler.Current));
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger,
+            new SchedulerReadyDispatcher(KernelScheduler.Current));
     }
 
     public Socket NativeSocket { get; }
@@ -54,13 +55,20 @@ public sealed class HostSocketInode : Inode
     public ProtocolType HostProtocolType => NativeSocket.ProtocolType;
     public SocketType HostSocketType => NativeSocket.SocketType;
 
-    public override short Poll(LinuxFile file, short events) => _readiness.Poll(file, events);
+    public override short Poll(LinuxFile file, short events)
+    {
+        return _readiness.Poll(file, events);
+    }
 
-    public override bool RegisterWait(LinuxFile file, Action callback, short events) =>
-        _readiness.RegisterWait(file, callback, events);
+    public override bool RegisterWait(LinuxFile file, Action callback, short events)
+    {
+        return _readiness.RegisterWait(file, callback, events);
+    }
 
-    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events) =>
-        _readiness.RegisterWaitHandle(file, callback, events);
+    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        return _readiness.RegisterWaitHandle(file, callback, events);
+    }
 
     protected override void OnEvictCache()
     {
@@ -68,14 +76,25 @@ public sealed class HostSocketInode : Inode
         base.OnEvictCache();
     }
 
-    private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events) =>
-        _readiness.WaitForSocketEventAsync(file, events);
+    private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
+    {
+        return _readiness.WaitForSocketEventAsync(file, events);
+    }
 
-    private void ClearReadyBits(short bits) => _readiness.ClearReadyBits(bits);
+    private void ClearReadyBits(short bits)
+    {
+        _readiness.ClearReadyBits(bits);
+    }
 
-    private bool TryDequeueAcceptedSocket(out Socket socket) => _readiness.TryDequeueAcceptedSocket(out socket);
+    private bool TryDequeueAcceptedSocket(out Socket socket)
+    {
+        return _readiness.TryDequeueAcceptedSocket(out socket);
+    }
 
-    private bool HasBufferedAcceptedSocket() => _readiness.HasBufferedAcceptedSocket();
+    private bool HasBufferedAcceptedSocket()
+    {
+        return _readiness.HasBufferedAcceptedSocket();
+    }
 
     public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
     {
@@ -191,6 +210,7 @@ public sealed class HostSocketInode : Inode
             buffer.Span.CopyTo(rented);
             segment = new ArraySegment<byte>(rented, 0, buffer.Length);
         }
+
         Logger.LogTrace(
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
             Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
@@ -212,7 +232,8 @@ public sealed class HostSocketInode : Inode
                     ClearReadyBits(PollEvents.POLLOUT);
                     if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                     {
-                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
+                            (int)file.Flags);
                         return -(int)Errno.EAGAIN;
                     }
 
@@ -252,7 +273,8 @@ public sealed class HostSocketInode : Inode
             while (true)
                 try
                 {
-                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags, remoteEp);
+                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags,
+                        remoteEp);
                     if (n > 0)
                         ClearReadyBits(PollEvents.POLLOUT);
                     return n;
@@ -303,7 +325,8 @@ public sealed class HostSocketInode : Inode
             {
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 {
-                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})", Ino,
+                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
+                        Ino,
                         (int)file.Flags, endpoint);
                     return -(int)Errno.EINPROGRESS;
                 }
@@ -318,7 +341,8 @@ public sealed class HostSocketInode : Inode
                 var err = (SocketError)soInt;
                 if (err == SocketError.Success || err == SocketError.IsConnected)
                     return 0;
-                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
+                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                    or SocketError.AlreadyInProgress)
                     continue;
                 return MapSocketError(err);
             }
@@ -456,7 +480,8 @@ public sealed class HostSocketInode : Inode
 
     internal void CachePendingSocketError(SocketError err)
     {
-        if (err is SocketError.Success or SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress or SocketError.AlreadyInProgress)
+        if (err is SocketError.Success or SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+            or SocketError.AlreadyInProgress)
             return;
 
         var mapped = MapSocketError(err);

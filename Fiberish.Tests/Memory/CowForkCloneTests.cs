@@ -16,7 +16,7 @@ public class CowForkCloneTests
         env.MapPrivate(mapAddr);
 
         // Parent creates the first private page overlay.
-        Assert.True(env.ParentEngine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
+        Assert.True(env.ParentEngine.CopyToUser(mapAddr, new[] { (byte)'P' }));
         var parentVma = Assert.Single(env.ParentMm.VMAs);
         Assert.NotNull(parentVma.PrivateObject);
         var pageIndex = parentVma.ViewPageOffset;
@@ -40,7 +40,7 @@ public class CowForkCloneTests
         Assert.Equal((byte)'P', initialChild[0]);
 
         // Child write must split page from parent, preserving isolation.
-        Assert.True(childEngine.CopyToUser(mapAddr, new byte[] { (byte)'C' }));
+        Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)'C' }));
 
         var parentRead = new byte[1];
         var childRead = new byte[1];
@@ -70,7 +70,7 @@ public class CowForkCloneTests
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-cow", parentEngine));
 
         var parentVma = Assert.Single(parentMm.VMAs);
-        Assert.Equal(FaultResult.Handled, parentMm.HandleFaultDetailed(mapAddr, isWrite: false, parentEngine));
+        Assert.Equal(FaultResult.Handled, parentMm.HandleFaultDetailed(mapAddr, false, parentEngine));
         Assert.Equal(IntPtr.Zero, parentVma.PrivateObject!.GetPage(parentVma.ViewPageOffset));
         Assert.Equal(IntPtr.Zero, parentVma.SharedObject.GetPage(parentVma.ViewPageOffset));
 
@@ -84,7 +84,7 @@ public class CowForkCloneTests
         Assert.NotSame(parentVma.PrivateObject, childVma.PrivateObject);
         Assert.Equal(IntPtr.Zero, childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
 
-        Assert.True(childEngine.CopyToUser(mapAddr, new byte[] { (byte)'C' }));
+        Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)'C' }));
 
         var parentRead = new byte[1];
         var childRead = new byte[1];
@@ -130,7 +130,7 @@ public class CowForkCloneTests
         Assert.Equal(IntPtr.Zero, vmas[0].SharedObject.GetPage(vmas[0].ViewPageOffset));
         Assert.Equal(IntPtr.Zero, vmas[1].SharedObject.GetPage(vmas[1].ViewPageOffset));
 
-        Assert.True(engine.CopyToUser(map1, new byte[] { (byte)'Z' }));
+        Assert.True(engine.CopyToUser(map1, new[] { (byte)'Z' }));
         Assert.True(engine.CopyFromUser(map1, buf));
         Assert.Equal((byte)'Z', buf[0]);
         Assert.True(engine.CopyFromUser(map2, buf));
@@ -150,7 +150,7 @@ public class CowForkCloneTests
         Assert.Equal(mapAddr, mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-materialize", engine));
 
-        Assert.True(mm.PrefaultRange(mapAddr, LinuxConstants.PageSize, engine, writeIntent: true));
+        Assert.True(mm.PrefaultRange(mapAddr, LinuxConstants.PageSize, engine, true));
         var vma = Assert.Single(mm.VMAs);
         var pageIndex = vma.ViewPageOffset;
         var privatePage = vma.PrivateObject!.GetPage(pageIndex);
@@ -161,7 +161,7 @@ public class CowForkCloneTests
         Assert.True(engine.CopyFromUser(mapAddr, probe));
         Assert.Equal(0, probe[0]);
 
-        Assert.True(engine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
+        Assert.True(engine.CopyToUser(mapAddr, new[] { (byte)'P' }));
         Assert.True(engine.CopyFromUser(mapAddr, probe));
         Assert.Equal((byte)'P', probe[0]);
     }
@@ -179,7 +179,7 @@ public class CowForkCloneTests
         Assert.Equal(mapAddr, parentMm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-cow-private", parentEngine));
 
-        Assert.True(parentEngine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
+        Assert.True(parentEngine.CopyToUser(mapAddr, new[] { (byte)'P' }));
         var parentVma = Assert.Single(parentMm.VMAs);
         var pageIndex = parentVma.ViewPageOffset;
         var parentPrivatePage = parentVma.PrivateObject!.GetPage(pageIndex);
@@ -203,13 +203,14 @@ public class CowForkCloneTests
         Assert.Equal((byte)'P', parentRead[0]);
         Assert.Equal((byte)'P', childRead[0]);
 
-        Assert.True(childEngine.CopyToUser(mapAddr, new byte[] { (byte)'C' }));
+        Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)'C' }));
 
         Assert.True(parentEngine.CopyFromUser(mapAddr, parentRead));
         Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
         Assert.Equal((byte)'P', parentRead[0]);
         Assert.Equal((byte)'C', childRead[0]);
-        Assert.NotEqual(parentVma.PrivateObject!.GetPage(pageIndex), childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
+        Assert.NotEqual(parentVma.PrivateObject!.GetPage(pageIndex),
+            childVma.PrivateObject!.GetPage(childVma.ViewPageOffset));
     }
 
     private sealed class TestEnv : IDisposable
@@ -229,7 +230,7 @@ public class CowForkCloneTests
 
             File = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             Inode = dentry.Inode!;
-            Assert.Equal(1, Inode.Write(File, new byte[] { (byte)'A' }, 0));
+            Assert.Equal(1, Inode.Write(File, new[] { (byte)'A' }, 0));
         }
 
         public Engine ParentEngine { get; }
@@ -237,17 +238,17 @@ public class CowForkCloneTests
         public LinuxFile File { get; }
         public Inode Inode { get; }
 
+        public void Dispose()
+        {
+            File.Close();
+            ParentEngine.Dispose();
+        }
+
         public void MapPrivate(uint addr)
         {
             var mapped = ParentMm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed, File, 0, (long)Inode.Size, "fork-cow", ParentEngine);
             Assert.Equal(addr, mapped);
-        }
-
-        public void Dispose()
-        {
-            File.Close();
-            ParentEngine.Dispose();
         }
     }
 }

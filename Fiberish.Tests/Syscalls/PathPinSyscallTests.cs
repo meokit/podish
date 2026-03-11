@@ -54,7 +54,7 @@ public class PathPinSyscallTests
 
         env.MapUserPage(0x11000);
         env.WriteCString(0x11000, "/fdcwd");
-        var fd = await env.Call("SysOpen", 0x11000, (uint)(FileFlags.O_RDONLY | FileFlags.O_DIRECTORY), 0);
+        var fd = await env.Call("SysOpen", 0x11000, (uint)(FileFlags.O_RDONLY | FileFlags.O_DIRECTORY));
         Assert.True(fd >= 0);
 
         var rootBefore = rootInode.RefCount;
@@ -102,7 +102,7 @@ public class PathPinSyscallTests
         var dir = new Dentry("isolated", null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = env.SyscallManager.Clone(new VMAManager(), shareFiles: false, shareFs: false);
+        var child = env.SyscallManager.Clone(new VMAManager(), false, false);
         try
         {
             child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneNoFs");
@@ -124,7 +124,7 @@ public class PathPinSyscallTests
         var dir = new Dentry("shared", null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = env.SyscallManager.Clone(new VMAManager(), shareFiles: false, shareFs: true);
+        var child = env.SyscallManager.Clone(new VMAManager(), false, true);
         child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneFs");
         Assert.Same(dir, child.CurrentWorkingDirectory.Dentry);
         Assert.Same(dir, env.SyscallManager.CurrentWorkingDirectory.Dentry);

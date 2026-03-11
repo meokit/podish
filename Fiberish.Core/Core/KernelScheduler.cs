@@ -1,11 +1,10 @@
 using System.Diagnostics;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
-using Fiberish.Memory;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -36,10 +35,10 @@ public class KernelScheduler
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
-    private int _ownerThreadId;
-    private int _nextTaskId;
-    private int _initPid;
     private int _engineInitReaperEnabled;
+    private int _initPid;
+    private int _nextTaskId;
+    private int _ownerThreadId;
 
     private TtyDiscipline? _tty;
     private int _wakePending;
@@ -257,14 +256,12 @@ public class KernelScheduler
         if (adoptedPids.Count == 0) return 0;
 
         if (fromProc != null)
-        {
-            foreach (var pid in adoptedPids) fromProc.Children.Remove(pid);
-        }
+            foreach (var pid in adoptedPids)
+                fromProc.Children.Remove(pid);
 
         foreach (var pid in adoptedPids)
-        {
-            if (!toProc!.Children.Contains(pid)) toProc.Children.Add(pid);
-        }
+            if (!toProc!.Children.Contains(pid))
+                toProc.Children.Add(pid);
 
         var initTask = GetTask(toPid);
         if (initTask != null)
@@ -541,7 +538,7 @@ public class KernelScheduler
         var oldTask = CurrentTask;
         CurrentTask = ctx;
         var previousSyncContext = SynchronizationContext.Current;
-        if (KernelScheduler.Current == this)
+        if (Current == this)
             SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this, ctx));
         try
         {
@@ -655,13 +652,9 @@ public class KernelScheduler
     public void SignalProcessGroup(int pgid, int signal)
     {
         if (IsSchedulerThread)
-        {
             _ = SignalProcessGroupWithCount(pgid, signal);
-        }
         else
-        {
             ScheduleFromAnyThread(() => { _ = SignalProcessGroupWithCount(pgid, signal); });
-        }
     }
 
     public int SignalProcessGroupWithCount(int pgid, int signal)
@@ -694,10 +687,7 @@ public class KernelScheduler
 
         // Engine-managed init has no FiberTask. In --init mode, forward init's signals
         // to its direct children so kill(1, sig) semantics remain usable.
-        if (EngineInitReaperEnabled && pid == InitPid)
-        {
-            return ForwardSignalFromEngineInit(signal) > 0;
-        }
+        if (EngineInitReaperEnabled && pid == InitPid) return ForwardSignalFromEngineInit(signal) > 0;
 
         return false;
     }
@@ -714,10 +704,7 @@ public class KernelScheduler
             return true;
         }
 
-        if (EngineInitReaperEnabled && pid == InitPid)
-        {
-            return ForwardSignalFromEngineInit(signal) > 0;
-        }
+        if (EngineInitReaperEnabled && pid == InitPid) return ForwardSignalFromEngineInit(signal) > 0;
 
         return false;
     }

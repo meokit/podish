@@ -1,5 +1,5 @@
-using Fiberish.VFS;
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
@@ -20,15 +20,9 @@ public enum MemoryObjectRole
 
 public sealed class MemoryObject
 {
-    private sealed class PageEntry
-    {
-        public required IntPtr Ptr { get; set; }
-        public bool Dirty { get; set; }
-        public long LastAccessTicks { get; set; }
-    }
+    private readonly object _lock = new();
 
     private readonly Dictionary<uint, PageEntry> _pages = new();
-    private readonly object _lock = new();
     private int _refCount = 1;
 
     public MemoryObject(MemoryObjectKind kind, LinuxFile? file, long fileBaseOffset, long fileSize, bool shared,
@@ -48,8 +42,22 @@ public sealed class MemoryObject
     public long FileBaseOffset { get; }
     public long FileSize { get; }
     public bool IsShared { get; }
-    public bool IsRecoverableWithoutSwap => Role is MemoryObjectRole.FileSharedSource or MemoryObjectRole.AnonSharedSourceZeroFill;
+
+    public bool IsRecoverableWithoutSwap =>
+        Role is MemoryObjectRole.FileSharedSource or MemoryObjectRole.AnonSharedSourceZeroFill;
+
     public bool IsPrivateOverlay => Role == MemoryObjectRole.PrivateOverlay;
+
+    public int PageCount
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _pages.Count;
+            }
+        }
+    }
 
     private static MemoryObjectRole InferRole(MemoryObjectKind kind, bool shared)
     {
@@ -71,7 +79,7 @@ public sealed class MemoryObject
     }
 
     /// <summary>
-    /// Try to get an existing page without creating it.
+    ///     Try to get an existing page without creating it.
     /// </summary>
     public IntPtr GetPage(uint pageIndex)
     {
@@ -96,7 +104,7 @@ public sealed class MemoryObject
     }
 
     /// <summary>
-    /// Used by COW: store a private page that was just allocated.
+    ///     Used by COW: store a private page that was just allocated.
     /// </summary>
     internal void SetPage(uint pageIndex, IntPtr ptr)
     {
@@ -147,8 +155,7 @@ public sealed class MemoryObject
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
     {
-        return GetOrCreatePage(pageIndex, onFirstCreate, out isNew, strictQuota: false, AllocationClass.PageCache,
-            AllocationSource.Unknown);
+        return GetOrCreatePage(pageIndex, onFirstCreate, out isNew, false, AllocationClass.PageCache);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew,
@@ -250,13 +257,11 @@ public sealed class MemoryObject
             var tailBytes = (int)(size % LinuxConstants.PageSize);
 
             if (tailBytes > 0 && _pages.TryGetValue(keepPageIndex, out var tailPage))
-            {
                 unsafe
                 {
                     var span = new Span<byte>((void*)tailPage.Ptr, LinuxConstants.PageSize);
                     span[tailBytes..].Clear();
                 }
-            }
 
             var removeFrom = tailBytes == 0 ? keepPageIndex : keepPageIndex + 1;
             if (_pages.Count == 0) return;
@@ -277,9 +282,9 @@ public sealed class MemoryObject
     }
 
     /// <summary>
-        /// Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
-    /// Used for fork-time cloning of private-page containers so each process gets its own
-    /// metadata object while still deferring physical copy until the next write fault.
+    ///     Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
+    ///     Used for fork-time cloning of private-page containers so each process gets its own
+    ///     metadata object while still deferring physical copy until the next write fault.
     /// </summary>
     public MemoryObject ForkCloneSharingPages()
     {
@@ -301,19 +306,6 @@ public sealed class MemoryObject
         return clone;
     }
 
-    public int PageCount
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _pages.Count;
-            }
-        }
-    }
-
-    public readonly record struct PageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks);
-
     public IReadOnlyList<PageState> SnapshotPageStates()
     {
         lock (_lock)
@@ -321,9 +313,7 @@ public sealed class MemoryObject
             if (_pages.Count == 0) return Array.Empty<PageState>();
             var states = new List<PageState>(_pages.Count);
             foreach (var (pageIndex, entry) in _pages)
-            {
                 states.Add(new PageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
-            }
 
             return states;
         }
@@ -364,4 +354,13 @@ public sealed class MemoryObject
         ExternalPageManager.ReleasePtr(ptr);
         return true;
     }
+
+    private sealed class PageEntry
+    {
+        public required IntPtr Ptr { get; set; }
+        public bool Dirty { get; set; }
+        public long LastAccessTicks { get; set; }
+    }
+
+    public readonly record struct PageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks);
 }

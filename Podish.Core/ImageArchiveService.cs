@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Fiberish.VFS;
@@ -9,9 +10,15 @@ namespace Podish.Core;
 
 public sealed class ImageArchiveService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly string _eventsPath;
     private readonly string _fiberpodDir;
     private readonly string _ociImagesDir;
-    private readonly string _eventsPath;
 
     public ImageArchiveService(string projectRoot)
     {
@@ -35,7 +42,7 @@ public sealed class ImageArchiveService
         if (File.Exists(tmp))
             File.Delete(tmp);
         SaveOciArchive(tmp, imageReferences);
-        File.Move(tmp, outputArchive, overwrite: true);
+        File.Move(tmp, outputArchive, true);
     }
 
     public IReadOnlyList<string> Load(string inputArchive)
@@ -58,7 +65,7 @@ public sealed class ImageArchiveService
         {
             try
             {
-                Directory.Delete(extractedRoot, recursive: true);
+                Directory.Delete(extractedRoot, true);
             }
             catch
             {
@@ -99,7 +106,7 @@ public sealed class ImageArchiveService
                     var layerDigest = "sha256:" + layerHex;
                     var dstBlob = Path.Combine(blobsRoot, layerHex);
                     if (writtenBlobs.Add(layerHex))
-                        File.Copy(blobPath, dstBlob, overwrite: true);
+                        File.Copy(blobPath, dstBlob, true);
 
                     var size = new FileInfo(blobPath).Length;
                     layerDescriptors.Add(new OciDescriptor(
@@ -110,10 +117,10 @@ public sealed class ImageArchiveService
                 }
 
                 var config = new OciImageConfig(
-                    Architecture: "386",
-                    Os: "linux",
-                    Rootfs: new OciRootFs("layers", diffIds),
-                    History: diffIds.Select(_ => new OciHistory("fiberpod save")).ToList());
+                    "386",
+                    "linux",
+                    new OciRootFs("layers", diffIds),
+                    diffIds.Select(_ => new OciHistory("fiberpod save")).ToList());
                 var configBytes = JsonSerializer.SerializeToUtf8Bytes(config, PodishJsonContext.Default.OciImageConfig);
                 var configHex = Sha256Hex(configBytes);
                 var configDigest = "sha256:" + configHex;
@@ -122,11 +129,11 @@ public sealed class ImageArchiveService
                     File.WriteAllBytes(configPath, configBytes);
 
                 var manifest = new OciManifest(
-                    SchemaVersion: 2,
-                    MediaType: "application/vnd.oci.image.manifest.v1+json",
-                    Config: new OciDescriptor("application/vnd.oci.image.config.v1+json", configDigest,
+                    2,
+                    "application/vnd.oci.image.manifest.v1+json",
+                    new OciDescriptor("application/vnd.oci.image.config.v1+json", configDigest,
                         configBytes.LongLength),
-                    Layers: layerDescriptors);
+                    layerDescriptors);
                 var manifestBytes =
                     JsonSerializer.SerializeToUtf8Bytes(manifest, PodishJsonContext.Default.OciManifest);
                 var manifestHex = Sha256Hex(manifestBytes);
@@ -158,7 +165,7 @@ public sealed class ImageArchiveService
         {
             try
             {
-                Directory.Delete(layoutRoot, recursive: true);
+                Directory.Delete(layoutRoot, true);
             }
             catch
             {
@@ -204,7 +211,7 @@ public sealed class ImageArchiveService
                     var tarHex = Sha256HexOfFile(tarPath);
                     var tarDigest = "sha256:" + tarHex;
                     var dstBlob = Path.Combine(blobsDir, $"{tarHex}.tar");
-                    File.Copy(tarPath, dstBlob, overwrite: true);
+                    File.Copy(tarPath, dstBlob, true);
 
                     var indexFile = Path.Combine(indexesDir, $"{tarHex}.json");
                     using (var tarStream = File.OpenRead(dstBlob))
@@ -227,7 +234,6 @@ public sealed class ImageArchiveService
                 finally
                 {
                     if (tarPath != srcLayerBlob && File.Exists(tarPath))
-                    {
                         try
                         {
                             File.Delete(tarPath);
@@ -235,7 +241,6 @@ public sealed class ImageArchiveService
                         catch
                         {
                         }
-                    }
                 }
             }
 
@@ -276,11 +281,14 @@ public sealed class ImageArchiveService
             var digestHex = Sha256HexOfFile(normalizedTar);
             var digest = "sha256:" + digestHex;
             var blobPath = Path.Combine(blobsDir, $"{digestHex}.tar");
-            File.Copy(normalizedTar, blobPath, overwrite: true);
+            File.Copy(normalizedTar, blobPath, true);
 
             LayerIndex index;
             using (var tarStream = File.OpenRead(blobPath))
+            {
                 index = OciLayerIndexBuilder.BuildFromTar(tarStream, digest);
+            }
+
             var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
             File.WriteAllText(indexPath,
                 JsonSerializer.Serialize(index.Entries.Values.ToList(), PodishJsonContext.Default.ListLayerIndexEntry));
@@ -311,7 +319,6 @@ public sealed class ImageArchiveService
         finally
         {
             foreach (var file in tempFiles)
-            {
                 try
                 {
                     if (File.Exists(file))
@@ -320,7 +327,6 @@ public sealed class ImageArchiveService
                 catch
                 {
                 }
-            }
         }
     }
 
@@ -347,7 +353,7 @@ public sealed class ImageArchiveService
             ExportInternal(containerId, imageRef, upperStore, fs);
         }
 
-        File.Move(tmp, outputArchive, overwrite: true);
+        File.Move(tmp, outputArchive, true);
     }
 
     public void ExportToStream(string containerId, Stream output)
@@ -371,7 +377,7 @@ public sealed class ImageArchiveService
         var (rootDentry, exportMount, disposer) = OpenExportView(imageRef, upperStore);
         try
         {
-            using var writer = new TarWriter(output, TarEntryFormat.Pax, leaveOpen: true);
+            using var writer = new TarWriter(output, TarEntryFormat.Pax, true);
             WriteDentryTreeToTar(writer, rootDentry, exportMount, "");
         }
         finally
@@ -403,11 +409,12 @@ public sealed class ImageArchiveService
                           ?? throw new InvalidOperationException("overlay is not registered");
 
         var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, upperStore, null);
-        var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "export-overlay", new OverlayMountOptions
-        {
-            Lower = lowerSb,
-            Upper = upperSb
-        });
+        var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "export-overlay",
+            new OverlayMountOptions
+            {
+                Lower = lowerSb,
+                Upper = upperSb
+            });
         var mountOverlay = new Mount(overlaySb, overlaySb.Root);
         return (overlaySb.Root, mountOverlay, new CompositeDisposable(lowerProvider));
     }
@@ -430,6 +437,7 @@ public sealed class ImageArchiveService
                 throw new InvalidOperationException(
                     $"invalid layer stored path for digest {layer.Digest}: blob='{layer.BlobPath}', index='{layer.IndexPath}', store='{storeDir}', error='{ex.Message}'");
             }
+
             if (!File.Exists(indexPath))
                 throw new InvalidOperationException(
                     $"missing layer index file: stored='{layer.IndexPath}', resolved='{indexPath}'");
@@ -479,7 +487,7 @@ public sealed class ImageArchiveService
                 var bytes = ReadAllInodeBytes(root, mount);
                 var file = new PaxTarEntry(TarEntryType.RegularFile, relPath)
                 {
-                    DataStream = new MemoryStream(bytes, writable: false)
+                    DataStream = new MemoryStream(bytes, false)
                 };
                 writer.WriteEntry(file);
                 return;
@@ -606,7 +614,10 @@ public sealed class ImageArchiveService
                     if (entry.DataStream == null)
                         break;
                     using (var outStream = File.Create(target))
+                    {
                         entry.DataStream.CopyTo(outStream);
+                    }
+
                     break;
             }
         }
@@ -681,7 +692,7 @@ public sealed class ImageArchiveService
         {
             fs.Position = 0;
             var tmpTar = Path.Combine(Path.GetTempPath(), $"fiberpod-layer-{Guid.NewGuid():N}.tar");
-            using var gzip = new GZipStream(fs, CompressionMode.Decompress, leaveOpen: true);
+            using var gzip = new GZipStream(fs, CompressionMode.Decompress, true);
             using var outFile = File.Create(tmpTar);
             gzip.CopyTo(outFile);
             return tmpTar;
@@ -735,7 +746,7 @@ public sealed class ImageArchiveService
         var allZero = header.All(b => b == 0);
         if (allZero)
             throw new InvalidOperationException("import source tar archive is empty");
-        var magic = System.Text.Encoding.ASCII.GetString(header, 257, 5);
+        var magic = Encoding.ASCII.GetString(header, 257, 5);
         if (magic != "ustar")
             throw new InvalidOperationException(
                 "unsupported import archive format: expected tar or tar.gz");
@@ -744,19 +755,14 @@ public sealed class ImageArchiveService
     private static void CreateTarFromDirectory(string sourceDir, string tarPath)
     {
         using var fs = File.Create(tarPath);
-        using var writer = new TarWriter(fs, TarEntryFormat.Pax, leaveOpen: false);
+        using var writer = new TarWriter(fs, TarEntryFormat.Pax, false);
         foreach (var path in Directory.EnumerateFileSystemEntries(sourceDir, "*", SearchOption.AllDirectories)
                      .OrderBy(p => p, StringComparer.Ordinal))
         {
             var rel = Path.GetRelativePath(sourceDir, path).Replace('\\', '/');
             if (Directory.Exists(path))
-            {
                 writer.WriteEntry(new PaxTarEntry(TarEntryType.Directory, rel.TrimEnd('/') + "/"));
-            }
-            else if (File.Exists(path))
-            {
-                writer.WriteEntry(path, rel);
-            }
+            else if (File.Exists(path)) writer.WriteEntry(path, rel);
         }
     }
 
@@ -784,34 +790,32 @@ public sealed class ImageArchiveService
     {
         var merged = new Dictionary<string, LayerIndexEntry>(StringComparer.Ordinal)
         {
-            ["/"] = new LayerIndexEntry("/", InodeType.Directory, 0x1ED)
+            ["/"] = new("/", InodeType.Directory, 0x1ED)
         };
 
         foreach (var layer in layers)
+        foreach (var entry in layer)
         {
-            foreach (var entry in layer)
+            var path = NormalizeAbsolutePath(entry.Path);
+            if (path == "/") continue;
+
+            var parent = ParentPath(path);
+            var name = BaseName(path);
+            if (name == ".wh..wh..opq")
             {
-                var path = NormalizeAbsolutePath(entry.Path);
-                if (path == "/") continue;
-
-                var parent = ParentPath(path);
-                var name = BaseName(path);
-                if (name == ".wh..wh..opq")
-                {
-                    RemoveAllChildren(merged, parent);
-                    continue;
-                }
-
-                if (name.StartsWith(".wh.", StringComparison.Ordinal) && name.Length > 4)
-                {
-                    var hiddenName = name[4..];
-                    var hiddenPath = parent == "/" ? "/" + hiddenName : parent + "/" + hiddenName;
-                    RemovePathWithDescendants(merged, hiddenPath);
-                    continue;
-                }
-
-                merged[path] = entry with { Path = path };
+                RemoveAllChildren(merged, parent);
+                continue;
             }
+
+            if (name.StartsWith(".wh.", StringComparison.Ordinal) && name.Length > 4)
+            {
+                var hiddenName = name[4..];
+                var hiddenPath = parent == "/" ? "/" + hiddenName : parent + "/" + hiddenName;
+                RemovePathWithDescendants(merged, hiddenPath);
+                continue;
+            }
+
+            merged[path] = entry with { Path = path };
         }
 
         var index = new LayerIndex();
@@ -867,22 +871,22 @@ public sealed class ImageArchiveService
         return lastSlash < 0 ? normalized : normalized[(lastSlash + 1)..];
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
-    };
-
     private static void EnsureFileSystemsRegistered()
     {
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = static devMgr => new Hostfs(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "proc", Factory = static devMgr => new ProcFileSystem(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "hostfs", Factory = static devMgr => new Hostfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "tmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "devtmpfs", Factory = static devMgr => new Tmpfs(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "proc", Factory = static devMgr => new ProcFileSystem(devMgr) });
         FileSystemRegistry.TryRegister(new FileSystemType
             { Name = "overlay", Factory = static devMgr => new OverlayFileSystem(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "layerfs", Factory = static devMgr => new LayerFileSystem(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "silkfs", Factory = static devMgr => new SilkFileSystem(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "layerfs", Factory = static devMgr => new LayerFileSystem(devMgr) });
+        FileSystemRegistry.TryRegister(new FileSystemType
+            { Name = "silkfs", Factory = static devMgr => new SilkFileSystem(devMgr) });
     }
 }
 
@@ -893,7 +897,6 @@ internal sealed class CompositeDisposable(params IDisposable[] disposables) : ID
     public void Dispose()
     {
         foreach (var d in _disposables)
-        {
             try
             {
                 d.Dispose();
@@ -901,19 +904,28 @@ internal sealed class CompositeDisposable(params IDisposable[] disposables) : ID
             catch
             {
             }
-        }
     }
 }
 
 internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
 {
     private readonly Dictionary<string, string> _digestToBlobPath;
-    private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
     private readonly object _lock = new();
+    private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
 
     public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)
     {
         _digestToBlobPath = digestToBlobPath;
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            foreach (var s in _streams.Values)
+                s.Dispose();
+            _streams.Clear();
+        }
     }
 
     public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
@@ -959,16 +971,6 @@ internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisp
             stream.Seek(start, SeekOrigin.Begin);
             bytesRead = stream.Read(buffer[..maxReadable]);
             return true;
-        }
-    }
-
-    public void Dispose()
-    {
-        lock (_lock)
-        {
-            foreach (var s in _streams.Values)
-                s.Dispose();
-            _streams.Clear();
         }
     }
 }

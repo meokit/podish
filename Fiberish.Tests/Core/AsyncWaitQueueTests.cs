@@ -1,8 +1,6 @@
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
-using System.Threading;
-using System.Threading.Tasks;
 using Xunit;
 
 namespace Fiberish.Tests.Core;

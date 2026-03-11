@@ -15,7 +15,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysClone_UsesX86RawOrder_TlsFromA4_CtidFromA5()
     {
-        using var env = new TestEnv(tgid: 100, tid: 100);
+        using var env = new TestEnv(100, 100);
 
         const uint ctidPtr = 0x00400000;
         const uint tlsPtr = 0x00500000;
@@ -50,33 +50,33 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysClone_ThreadWithoutVm_ReturnsEinval()
     {
-        using var env = new TestEnv(tgid: 110, tid: 110);
+        using var env = new TestEnv(110, 110);
 
-        var rc = await CallSys("SysClone", env.Engine.State, LinuxConstants.CLONE_THREAD, 0, 0, 0, 0);
+        var rc = await CallSys("SysClone", env.Engine.State, LinuxConstants.CLONE_THREAD);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
     [Fact]
     public async Task SysClone_ThreadWithoutSighand_ReturnsEinval()
     {
-        using var env = new TestEnv(tgid: 111, tid: 111);
+        using var env = new TestEnv(111, 111);
 
         var flags = LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD;
-        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, 0, 0);
+        var rc = await CallSys("SysClone", env.Engine.State, flags);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
     [Fact]
     public async Task SysClone_SetTlsReadFailure_RollsBackThreadChild()
     {
-        using var env = new TestEnv(tgid: 112, tid: 112);
+        using var env = new TestEnv(112, 112);
         const uint invalidTlsPtr = 0x00D00000;
         var flags = LinuxConstants.CLONE_VM |
                     LinuxConstants.CLONE_SIGHAND |
                     LinuxConstants.CLONE_THREAD |
                     LinuxConstants.CLONE_SETTLS;
 
-        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, invalidTlsPtr, 0);
+        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, invalidTlsPtr);
         Assert.Equal(-(int)Errno.EFAULT, rc);
         Assert.Single(env.Process.Threads);
         Assert.Same(env.Task, env.Process.Threads[0]);
@@ -85,11 +85,11 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysClone_ParentSetTidWriteFailure_RollsBackProcessChild()
     {
-        using var env = new TestEnv(tgid: 113, tid: 113);
+        using var env = new TestEnv(113, 113);
         const uint invalidPtidPtr = 0x00E00000;
         var flags = LinuxConstants.CLONE_PARENT_SETTID;
 
-        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, invalidPtidPtr, 0, 0);
+        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, invalidPtidPtr);
         Assert.Equal(-(int)Errno.EFAULT, rc);
         Assert.Empty(env.Process.Children);
         Assert.Single(env.Process.Threads);
@@ -100,7 +100,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysExit_ClearsChildTidAndWakesFutexWaiters()
     {
-        using var env = new TestEnv(tgid: 200, tid: 201);
+        using var env = new TestEnv(200, 201);
         var sibling = new FiberTask(202, env.Process, new Engine(), env.Scheduler);
         env.SyscallManager.RegisterEngine(sibling.CPU);
 
@@ -113,9 +113,9 @@ public class CloneThreadLifecycleTests
         Assert.NotEqual(IntPtr.Zero, hostPtr);
 
         var privateWaiter = env.SyscallManager.Futex.PrepareWait(clearTidPtr);
-        var sharedWaiter = env.SyscallManager.Futex.PrepareWaitShared((nint)hostPtr);
+        var sharedWaiter = env.SyscallManager.Futex.PrepareWaitShared(hostPtr);
 
-        var rc = await CallSys("SysExit", env.Engine.State, 0);
+        var rc = await CallSys("SysExit", env.Engine.State);
         Assert.Equal(0, rc);
 
         var valueBuf = new byte[4];
@@ -129,7 +129,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysExit_LeaderWithAliveThreads_MustNotFinalizeProcessOrCloseFds()
     {
-        using var env = new TestEnv(tgid: 240, tid: 240);
+        using var env = new TestEnv(240, 240);
         var peer = await env.Task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
 
         var eventFd = new EventFdInode(77, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
@@ -137,7 +137,7 @@ public class CloneThreadLifecycleTests
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
-        var rc = await CallSys("SysExit", env.Engine.State, 0);
+        var rc = await CallSys("SysExit", env.Engine.State);
         Assert.Equal(0, rc);
 
         Assert.Null(env.Scheduler.GetTask(env.Task.TID));
@@ -149,11 +149,11 @@ public class CloneThreadLifecycleTests
     [Fact]
     public void ExitRobustList_SharedWaiter_MustBeWokenOnOwnerDeath()
     {
-        using var env = new TestEnv(tgid: 250, tid: 251);
+        using var env = new TestEnv(250, 251);
         const uint headAddr = 0x00610000;
         const uint nodeAddr = 0x00611000;
         const int futexOffset = 4;
-        var futexAddr = nodeAddr + (uint)futexOffset;
+        var futexAddr = nodeAddr + futexOffset;
 
         env.MapUserPage(headAddr);
         env.MapUserPage(nodeAddr);
@@ -174,7 +174,7 @@ public class CloneThreadLifecycleTests
 
         var hostPtr = env.Engine.GetPhysicalAddressSafe(futexAddr, false);
         Assert.NotEqual(IntPtr.Zero, hostPtr);
-        var waiter = env.SyscallManager.Futex.PrepareWaitShared((nint)hostPtr);
+        var waiter = env.SyscallManager.Futex.PrepareWaitShared(hostPtr);
 
         env.Task.ExitRobustList();
 
@@ -189,7 +189,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysMunmap_FromOneThread_UnmapsPeerEngineMappings()
     {
-        using var env = new TestEnv(tgid: 300, tid: 301);
+        using var env = new TestEnv(300, 301);
         const uint addr = 0x00700000;
         env.MapUserPage(addr);
 
@@ -223,7 +223,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysMmap2_MapFixed_ReplacesPeerThreadStaleMappings()
     {
-        using var env = new TestEnv(tgid: 310, tid: 311);
+        using var env = new TestEnv(310, 311);
         const uint addr = 0x00800000;
         env.MapUserPage(addr);
 
@@ -237,7 +237,7 @@ public class CloneThreadLifecycleTests
 
         var rc = await CallSys("SysMmap2", env.Engine.State, addr, LinuxConstants.PageSize,
             (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal((int)addr, rc);
 
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
@@ -254,7 +254,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysMremap_Shrink_UnmapsTailInPeerEngines()
     {
-        using var env = new TestEnv(tgid: 320, tid: 321);
+        using var env = new TestEnv(320, 321);
         const uint addr = 0x00900000;
         const uint twoPages = LinuxConstants.PageSize * 2;
 
@@ -269,7 +269,7 @@ public class CloneThreadLifecycleTests
         Assert.True(peer.CPU.CopyFromUser(addr + LinuxConstants.PageSize, valueBuf));
         Assert.Equal(0xDEADBEEFu, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 
-        var rc = await CallSys("SysMremap", peer.CPU.State, addr, twoPages, LinuxConstants.PageSize, 0, 0);
+        var rc = await CallSys("SysMremap", peer.CPU.State, addr, twoPages, LinuxConstants.PageSize);
         Assert.Equal((int)addr, rc);
 
         Assert.Equal(IntPtr.Zero, env.Engine.GetPhysicalAddressSafe(addr + LinuxConstants.PageSize, false));
@@ -281,7 +281,7 @@ public class CloneThreadLifecycleTests
     [Fact]
     public async Task SysVShm_ShmatRemap_ReplacesPeerThreadStaleMappings()
     {
-        using var env = new TestEnv(tgid: 330, tid: 331);
+        using var env = new TestEnv(330, 331);
         const uint addr = 0x00A00000;
         env.MapUserPage(addr);
 
@@ -299,7 +299,7 @@ public class CloneThreadLifecycleTests
 
         var attachRc = env.SyscallManager.SysVShm.ShmAt(shmid, addr, LinuxConstants.SHM_REMAP, env.Process.TGID,
             env.Vma, env.Engine, env.Process);
-        Assert.Equal((long)addr, attachRc);
+        Assert.Equal(addr, attachRc);
 
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
@@ -337,18 +337,18 @@ public class CloneThreadLifecycleTests
         public KernelScheduler Scheduler { get; }
         public FiberTask Task { get; }
 
+        public void Dispose()
+        {
+            KernelScheduler.Current = null;
+            GC.KeepAlive(Task);
+        }
+
         public void MapUserPage(uint addr)
         {
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
                 Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
-        }
-
-        public void Dispose()
-        {
-            KernelScheduler.Current = null;
-            GC.KeepAlive(Task);
         }
     }
 }

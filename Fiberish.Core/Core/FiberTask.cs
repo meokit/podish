@@ -1,12 +1,11 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using Fiberish.Core.Utils;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
-using Fiberish.Core.Utils;
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
-using System.Runtime.CompilerServices;
 
 namespace Fiberish.Core;
 
@@ -45,27 +44,13 @@ public enum WakeReason
 
 public class FiberTask
 {
-    public sealed class WaitToken
-    {
-        internal WaitToken(long id)
-        {
-            Id = id;
-        }
+    private static int _tidCounter;
+    private Action? _activeWaitContinuation;
+    private WaitToken? _activeWaitToken;
+    private long _nextWaitTokenId;
+    private int _pageFaultDepth;
 
-        public long Id { get; }
-        internal WakeReason Reason { get; set; } = WakeReason.None;
-    }
-
-    private enum DefaultSignalAction
-    {
-        Ignore,
-        Terminate,
-        Core,
-        Stop,
-        Continue
-    }
-
-    private static int _tidCounter = 0;
+    private bool _pendingFaultFromInterrupt;
 
     public uint SyscallArg1;
     public uint SyscallArg2;
@@ -97,9 +82,6 @@ public class FiberTask
         CPU.FaultHandler = HandleNativeFault;
     }
 
-    private bool _pendingFaultFromInterrupt;
-    private int _pageFaultDepth;
-
     public int TID { get; }
     public int PID { get; }
     public Engine CPU { get; }
@@ -113,8 +95,7 @@ public class FiberTask
     // Signal System
     public ulong SignalMask { get; set; }
     public ulong PendingSignals { get; set; } // Bitmask - Access should be synchronized
-    public event Action<int>? SignalPosted;
-    public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new());
+    public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new List<SigInfo>());
     public uint AltStackSp { get; set; }
     public uint AltStackSize { get; set; }
     public int AltStackFlags { get; set; }
@@ -135,24 +116,6 @@ public class FiberTask
     public FiberTask? VforkParent { get; set; }
 
     public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
-    private long _nextWaitTokenId;
-    private WaitToken? _activeWaitToken;
-    private Action? _activeWaitContinuation;
-
-    // Single-thread scheduling model: keep using-scope syntax so future locking
-    // can be introduced centrally without changing call sites.
-    private readonly struct TaskStateScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
-
-    private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
-    {
-        CommonKernel.AssertSchedulerThread(caller);
-        return default;
-    }
 
     // Compatibility shim: now backed by current active wait token only.
     public WakeReason WakeReason
@@ -182,6 +145,13 @@ public class FiberTask
     // Blocking Syscall Support
     public Func<ValueTask<int>>? PendingSyscall { get; set; }
     public Timer? BlockingTimer { get; set; }
+    public event Action<int>? SignalPosted;
+
+    private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
+    {
+        CommonKernel.AssertSchedulerThread(caller);
+        return default;
+    }
 
     public WaitToken BeginWaitToken()
     {
@@ -204,10 +174,9 @@ public class FiberTask
             continuationToRun = _activeWaitContinuation;
             _activeWaitContinuation = null;
         }
-        if (continuationToRun != null)
-        {
-            CommonKernel?.Schedule(continuationToRun, this);
-        }
+
+        if (continuationToRun != null) CommonKernel?.Schedule(continuationToRun, this);
+
         return true;
     }
 
@@ -224,10 +193,9 @@ public class FiberTask
             continuationToRun = _activeWaitContinuation;
             _activeWaitContinuation = null;
         }
-        if (continuationToRun != null)
-        {
-            CommonKernel?.Schedule(continuationToRun, this);
-        }
+
+        if (continuationToRun != null) CommonKernel?.Schedule(continuationToRun, this);
+
         return true;
     }
 
@@ -238,15 +206,11 @@ public class FiberTask
         if (ReferenceEquals(_activeWaitToken, token))
         {
             if (token.Reason != WakeReason.None)
-            {
                 // Already completed or interrupted, run immediately
                 runNow = continuation;
-            }
             else
-            {
                 // Still waiting
                 _activeWaitContinuation = continuation;
-            }
         }
         else
         {
@@ -254,23 +218,18 @@ public class FiberTask
             runNow = continuation;
         }
 
-        if (runNow != null)
-        {
-            CommonKernel?.Schedule(runNow, this);
-        }
+        if (runNow != null) CommonKernel?.Schedule(runNow, this);
     }
 
     /// <summary>
-    /// Call this at the END of every awaiter's OnCompleted(), AFTER all wait registrations
-    /// (RegisterWait, timer, TCS ContinueWith, etc.) are in place.
-    ///
-    /// It atomically registers <paramref name="wakeAction"/> as the signal-interruptible
-    /// continuation for this token, then re-checks whether a signal arrived in the window
-    /// between the start of the syscall and the registration. If a signal is already pending,
-    /// it immediately sets the WakeReason and schedules the action — no race possible.
-    ///
-    /// This replaces the ad-hoc "HasUnblockedPendingSignal pre-check" pattern that every
-    /// awaiter previously duplicated with a TOCTOU vulnerability.
+    ///     Call this at the END of every awaiter's OnCompleted(), AFTER all wait registrations
+    ///     (RegisterWait, timer, TCS ContinueWith, etc.) are in place.
+    ///     It atomically registers <paramref name="wakeAction" /> as the signal-interruptible
+    ///     continuation for this token, then re-checks whether a signal arrived in the window
+    ///     between the start of the syscall and the registration. If a signal is already pending,
+    ///     it immediately sets the WakeReason and schedules the action — no race possible.
+    ///     This replaces the ad-hoc "HasUnblockedPendingSignal pre-check" pattern that every
+    ///     awaiter previously duplicated with a TOCTOU vulnerability.
     /// </summary>
     public void ArmSignalSafetyNet(WaitToken token, Action wakeAction)
     {
@@ -334,7 +293,7 @@ public class FiberTask
                 Logger.LogError(
                     "Page Fault at 0x{Addr:X} ({Mode}) failed due to OOM. Simulating OOM killer with SIGKILL.",
                     addr, isWrite ? "Write" : "Read");
-                TerminateBySignal((int)Signal.SIGKILL, coreDumped: false);
+                TerminateBySignal((int)Signal.SIGKILL, false);
                 _pendingFaultFromInterrupt = true;
                 CPU.Yield();
                 return true;
@@ -438,14 +397,14 @@ public class FiberTask
     {
         var kernel = CommonKernel;
         kernel?.AssertSchedulerThread();
-        int sig = info.Signo;
+        var sig = info.Signo;
         if (sig < 1 || sig > 64) return;
 
         Logger.LogInformation("[PostSignalInfo] Posting signal {Sig}", sig);
 
         var mask = 1UL << (sig - 1);
-        bool isIgnored = false;
-        bool isBlocked = false;
+        var isIgnored = false;
+        var isBlocked = false;
         using (EnterTaskStateScope())
         {
             if (sig != 9 && sig != 19)
@@ -475,15 +434,13 @@ public class FiberTask
             {
                 if (sig < 32)
                 {
-                    bool found = false;
+                    var found = false;
                     foreach (var s in q)
-                    {
                         if (s.Signo == sig)
                         {
                             found = true;
                             break;
                         }
-                    }
 
                     if (!found) q.Add(info);
                 }
@@ -498,31 +455,22 @@ public class FiberTask
             if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
 
             if (!isBlocked)
-            {
                 InterruptingSignal = sig;
-            }
             else
-            {
                 Logger.LogDebug(
                     "[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.",
                     sig, SignalMask);
-            }
         }
 
         SignalPosted?.Invoke(sig);
 
         var wokeActiveWait = false;
-        if (!isBlocked && !isIgnored)
-        {
-            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
-        }
+        if (!isBlocked && !isIgnored) wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
 
         if (!wokeActiveWait &&
             kernel != null &&
             (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
-        {
             kernel.Schedule(this);
-        }
     }
 
     private void ProcessPendingSignals()
@@ -534,7 +482,7 @@ public class FiberTask
         {
             var mask = 1UL << (i - 1);
             SigAction action = default;
-            bool hasAction = false;
+            var hasAction = false;
             ulong oldMask = 0;
 
             SigInfo dequeuedInfo = default;
@@ -573,10 +521,7 @@ public class FiberTask
                 if (hasAction && action.Handler > 1) // Not SIG_IGN (1) or SIG_DFL (0)
                 {
                     var handlerMask = action.Mask;
-                    if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
-                    {
-                        handlerMask |= mask;
-                    }
+                    if ((action.Flags & LinuxConstants.SA_NODEFER) == 0) handlerMask |= mask;
 
                     Logger.LogDebug("[ProcessPendingSignals] Setting SignalMask to {Mask} from {SignalMask}",
                         SignalMask, SignalMask | handlerMask);
@@ -624,14 +569,13 @@ public class FiberTask
     }
 
     /// <summary>
-    /// Must be called within task state scope to maintain atomic mask sync.
+    ///     Must be called within task state scope to maintain atomic mask sync.
     /// </summary>
     public SigInfo? DequeueSignalUnsafe(int sig)
     {
         return PendingSignalQueue.Lock(list =>
         {
-            for (int i = 0; i < list.Count; i++)
-            {
+            for (var i = 0; i < list.Count; i++)
                 if (list[i].Signo == sig)
                 {
                     var info = list[i];
@@ -640,7 +584,7 @@ public class FiberTask
                     // Update PendingSignals mask if no more RT signals of this type
                     if (sig >= 32)
                     {
-                        bool stillPending = false;
+                        var stillPending = false;
                         foreach (var s in list)
                             if (s.Signo == sig)
                             {
@@ -657,7 +601,6 @@ public class FiberTask
 
                     return (SigInfo?)info;
                 }
-            }
 
             return null;
         });
@@ -702,9 +645,7 @@ public class FiberTask
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
             if ((action.Flags & 0x04000000) != 0) // SA_RESTORER
-            {
                 retAddr = action.Restorer;
-            }
 
             var frameEsp = sp;
 
@@ -737,10 +678,10 @@ public class FiberTask
     }
 
     /// <summary>
-    /// Consume a pending signal and deliver it. Used by HandleAsyncSyscall to
-    /// deliver signals atomically with -ERESTARTSYS processing, mirroring Linux's
-    /// do_signal(). Registers should already be adjusted (EIP rewound, EAX set)
-    /// BEFORE calling this method, so the sigcontext captures the restart-ready state.
+    ///     Consume a pending signal and deliver it. Used by HandleAsyncSyscall to
+    ///     deliver signals atomically with -ERESTARTSYS processing, mirroring Linux's
+    ///     do_signal(). Registers should already be adjusted (EIP rewound, EAX set)
+    ///     BEFORE calling this method, so the sigcontext captures the restart-ready state.
     /// </summary>
     private void DeliverSignalForRestart(int sig, SigAction action)
     {
@@ -766,7 +707,7 @@ public class FiberTask
             }
         }
 
-        DeliverSignal(sig, action, hasAction: true, oldMask, info);
+        DeliverSignal(sig, action, true, oldMask, info);
     }
 
     // Kept for compatibility if called externally (removed HandleSignal method name to avoid confusion, 
@@ -799,11 +740,11 @@ public class FiberTask
                 break;
             case DefaultSignalAction.Terminate:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: terminate", sig);
-                TerminateBySignal(sig, coreDumped: false);
+                TerminateBySignal(sig, false);
                 break;
             case DefaultSignalAction.Core:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: core/terminate", sig);
-                TerminateBySignal(sig, coreDumped: true);
+                TerminateBySignal(sig, true);
                 break;
             case DefaultSignalAction.Stop:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: stop", sig);
@@ -827,7 +768,7 @@ public class FiberTask
         ExitStatus = 128 + sig;
         Status = FiberTaskStatus.Terminated;
         ExecutionMode = TaskExecutionMode.Terminated;
-        SyscallManager.FinalizeProcessExit(this, ExitStatus, exitedBySignal: true, termSignal: sig, coreDumped);
+        SyscallManager.FinalizeProcessExit(this, ExitStatus, true, sig, coreDumped);
     }
 
     private void StopBySignal(int sig)
@@ -859,7 +800,10 @@ public class FiberTask
         // Even if not fully stopped, we might need to clear pending stop signals
         // Clear pending stop signals (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU)
         var stopMask = (1UL << 18) | (1UL << 19) | (1UL << 20) | (1UL << 21);
-        using (EnterTaskStateScope()) PendingSignals &= ~stopMask;
+        using (EnterTaskStateScope())
+        {
+            PendingSignals &= ~stopMask;
+        }
 
         if (Process.State != ProcessState.Stopped) return;
 
@@ -1088,10 +1032,7 @@ public class FiberTask
             // and then HandleAsyncSyscall will deliver it AGAIN with the POST-SYSCALL EAX (-EINTR)
             // creating a nested sigreturn that restores SyscallNr and causes userspace to read the 
             // wrong return value (like returning 240 instead of -4).
-            if (PendingSyscall == null && Continuation == null)
-            {
-                ProcessPendingSignals();
-            }
+            if (PendingSyscall == null && Continuation == null) ProcessPendingSignals();
 
             // ── Phase 1: Resume a stored continuation ────────────────────────────────
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
@@ -1116,7 +1057,7 @@ public class FiberTask
                     Logger.LogError(ex,
                         "[RunSlice] Continuation crashed. Terminating task TID={Tid} PID={Pid} mode={Mode}",
                         TID, PID, ExecutionMode);
-                    TerminateBySignal((int)Signal.SIGSEGV, coreDumped: false);
+                    TerminateBySignal((int)Signal.SIGSEGV, false);
                     Status = FiberTaskStatus.Terminated;
                     ExecutionMode = TaskExecutionMode.Terminated;
                     return;
@@ -1339,6 +1280,35 @@ public class FiberTask
         return false;
     }
 
+    public sealed class WaitToken
+    {
+        internal WaitToken(long id)
+        {
+            Id = id;
+        }
+
+        public long Id { get; }
+        internal WakeReason Reason { get; set; } = WakeReason.None;
+    }
+
+    private enum DefaultSignalAction
+    {
+        Ignore,
+        Terminate,
+        Core,
+        Stop,
+        Continue
+    }
+
+    // Single-thread scheduling model: keep using-scope syntax so future locking
+    // can be introduced centrally without changing call sites.
+    private readonly struct TaskStateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
 #pragma warning disable CS1998 // Async method lacks await operators
     public async ValueTask<FiberTask> Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
     {
@@ -1384,10 +1354,7 @@ public class FiberTask
             else
             {
                 var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
-                if (cloneVm)
-                {
-                    newMem.AddSharedRef();
-                }
+                if (cloneVm) newMem.AddSharedRef();
 
                 if (!cloneVm)
                 {
@@ -1398,9 +1365,9 @@ public class FiberTask
                         if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
                         var reprotectPerms = vma.Perms & ~Protection.Write;
                         Process.Mem.ReprotectNativeMappings(CPU, vma.Start, vma.Length, reprotectPerms,
-                            resetCodeCacheRange: false);
+                            false);
                         ProcessAddressSpaceSync.PublishProtectionChange(Process.Mem, CPU, vma.Start, vma.Length,
-                            resetCodeCacheRange: false);
+                            false);
                     }
 
                     foreach (var vma in newMem.VMAs)
@@ -1408,7 +1375,7 @@ public class FiberTask
                         if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
                         var reprotectPerms = vma.Perms & ~Protection.Write;
                         newMem.ReprotectNativeMappings(newCpu, vma.Start, vma.Length, reprotectPerms,
-                            resetCodeCacheRange: false);
+                            false);
                     }
                 }
 
@@ -1425,10 +1392,7 @@ public class FiberTask
                 newProc.CopyImageFrom(Process);
 
                 // Inherit signal dispositions
-                foreach (var kv in Process.SignalActions)
-                {
-                    newProc.SignalActions[kv.Key] = kv.Value;
-                }
+                foreach (var kv in Process.SignalActions) newProc.SignalActions[kv.Key] = kv.Value;
 
                 CommonKernel.RegisterProcess(newProc);
             }
@@ -1441,14 +1405,10 @@ public class FiberTask
 
             // Register engine with SyscallManager
             if (!cloneThread)
-            {
                 child.Process.Syscalls.RegisterEngine(newCpu);
-            }
             else
-            {
                 // Thread shares SyscallManager
                 Process.Syscalls.RegisterEngine(newCpu);
-            }
 
             // 3. Setup Child State
             if (stackPtr != 0) child.CPU.RegWrite(Reg.ESP, stackPtr);
@@ -1510,7 +1470,6 @@ public class FiberTask
         catch
         {
             if (child != null)
-            {
                 try
                 {
                     CommonKernel.DetachTask(child);
@@ -1519,7 +1478,6 @@ public class FiberTask
                 {
                     // best-effort rollback
                 }
-            }
 
             if (!cloneThread && createdProcess != null)
             {
@@ -1545,7 +1503,6 @@ public class FiberTask
                 }
 
                 if (newCpu != null)
-                {
                     try
                     {
                         CommonKernel.TryReleaseProcessMemory(createdProcess, newCpu);
@@ -1554,11 +1511,9 @@ public class FiberTask
                     {
                         // best-effort rollback
                     }
-                }
             }
 
             if (newCpu != null)
-            {
                 try
                 {
                     newCpu.Dispose();
@@ -1567,7 +1522,6 @@ public class FiberTask
                 {
                     // best-effort rollback
                 }
-            }
 
             throw;
         }
@@ -1614,7 +1568,7 @@ public class FiberTask
 
     private async ValueTask HandleAsyncSyscallBackgroundAsync(Func<ValueTask<int>> pending)
     {
-        int result = 0;
+        var result = 0;
         Exception? error = null;
         try
         {
@@ -1650,6 +1604,7 @@ public class FiberTask
                     Status = FiberTaskStatus.Ready;
                     CommonKernel.Schedule(this);
                 }
+
                 return;
             }
 
@@ -1665,25 +1620,19 @@ public class FiberTask
                 // Fallback: if InterruptingSignal was overwritten by a second signal or
                 // not set due to timing, find the first unblocked pending signal.
                 if (!sig.HasValue)
-                {
                     using (EnterTaskStateScope())
                     {
                         var unblocked = PendingSignals & ~SignalMask;
                         // SIGKILL/SIGSTOP are never blocked
                         unblocked |= PendingSignals & ((1UL << 8) | (1UL << 18));
                         if (unblocked != 0)
-                        {
-                            for (int i = 0; i < 64; i++)
-                            {
+                            for (var i = 0; i < 64; i++)
                                 if ((unblocked & (1UL << i)) != 0)
                                 {
                                     sig = i + 1;
                                     break;
                                 }
-                            }
-                        }
                     }
-                }
 
                 Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
 
@@ -1711,7 +1660,7 @@ public class FiberTask
                         {
                             // SA_RESTART: rewind so sigreturn will re-execute syscall
                             CPU.Eip = SyscallEip;
-                            CPU.RegWrite(Reg.EAX, (uint)SyscallNr);
+                            CPU.RegWrite(Reg.EAX, SyscallNr);
                             Logger.LogInformation(
                                 "[HandleAsyncSyscall] SA_RESTART: set EIP=0x{Eip:X}, EAX={Nr} for restart after handler",
                                 SyscallEip, SyscallNr);
@@ -1819,10 +1768,7 @@ public class FiberTask
             if (!rc) break; // Error reading next pointer
             var nextEntry = BinaryPrimitives.ReadUInt32LittleEndian(nextBuf);
 
-            if (entry != pendingObj)
-            {
-                HandleFutexDeath(sm, (uint)(entry + futexOffset), false);
-            }
+            if (entry != pendingObj) HandleFutexDeath(sm, (uint)(entry + futexOffset), false);
 
             entry = nextEntry;
             if (--limit == 0) break;
@@ -1849,7 +1795,7 @@ public class FiberTask
             sm.Futex.Wake(uaddr, 1);
             var pendingHostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
             if (pendingHostPtr != IntPtr.Zero)
-                sm.Futex.WakeShared((nint)pendingHostPtr, 1);
+                sm.Futex.WakeShared(pendingHostPtr, 1);
             return;
         }
 
@@ -1865,7 +1811,7 @@ public class FiberTask
             sm.Futex.Wake(uaddr, 1);
             var hostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
             if (hostPtr != IntPtr.Zero)
-                sm.Futex.WakeShared((nint)hostPtr, 1);
+                sm.Futex.WakeShared(hostPtr, 1);
         }
     }
 
@@ -1886,6 +1832,6 @@ public class FiberTask
         // Also wake shared-key waiters used by non-private futex operations.
         var hostPtr = CPU.GetPhysicalAddressSafe(clearTidPtr, false);
         if (hostPtr != IntPtr.Zero)
-            Process.Syscalls.Futex.WakeShared((nint)hostPtr, 1);
+            Process.Syscalls.Futex.WakeShared(hostPtr, 1);
     }
 }

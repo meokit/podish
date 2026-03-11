@@ -189,7 +189,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.setdomainname, SysSetdomainname);
         Register(X86SyscallNumbers.sched_yield, SysSchedYield);
         Register(X86SyscallNumbers.pause, SysPause);
-        
+
         // Network Syscalls
         Register(X86SyscallNumbers.socketcall, SysSocketCall);
         Register(X86SyscallNumbers.socket, SysSocket);
@@ -232,15 +232,15 @@ public partial class SyscallManager
         Register(409, SysTimerSetTime64);
         Register(410, SysTimerFdGetTime64);
         Register(411, SysTimerFdSetTime64);
-        
+
         // FDs / Virtual
         Register(X86SyscallNumbers.timerfd_create, SysTimerFdCreate); // timerfd_create
         Register(X86SyscallNumbers.timerfd_settime, SysTimerFdSetTime); // timerfd_settime
         Register(X86SyscallNumbers.timerfd_gettime, SysTimerFdGetTime); // timerfd_gettime
-        
+
         Register(X86SyscallNumbers.eventfd, SysEventFd); // eventfd
         Register(X86SyscallNumbers.eventfd2, SysEventFd2); // eventfd2
-        
+
         Register(X86SyscallNumbers.signalfd, SysSignalFd); // signalfd
         Register(X86SyscallNumbers.signalfd4, SysSignalFd4); // signalfd4
 

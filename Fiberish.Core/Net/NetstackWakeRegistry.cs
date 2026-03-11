@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Threading;
 
 namespace Fiberish.Core.Net;
 
@@ -24,10 +23,7 @@ public static class NetstackWakeRegistry
     {
         try
         {
-            if (_events.TryGetValue(token, out var ev))
-            {
-                ev.Set();
-            }
+            if (_events.TryGetValue(token, out var ev)) ev.Set();
         }
         catch
         {

@@ -51,8 +51,8 @@ public sealed class NoneContainerLogSink : IContainerLogSink
 public sealed class JsonFileContainerLogSink : IContainerLogSink
 {
     private readonly object _gate = new();
-    private readonly StreamWriter _writer;
     private readonly ILogger? _logger;
+    private readonly StreamWriter _writer;
 
     public JsonFileContainerLogSink(string logPath, ILogger? logger = null)
     {
@@ -72,6 +72,7 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
         {
             _writer.Dispose();
         }
+
         _logger?.LogDebug("Disposed json-file container log sink");
     }
 

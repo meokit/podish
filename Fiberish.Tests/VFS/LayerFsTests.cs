@@ -1,5 +1,6 @@
-using System.Text;
+using System.Collections;
 using System.Reflection;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -11,28 +12,6 @@ namespace Fiberish.Tests.VFS;
 
 public class LayerFsTests
 {
-    private sealed class OffsetContentProvider(byte[] blob) : ILayerContentProvider
-    {
-        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
-        {
-            bytesRead = 0;
-            if (entry.Type != InodeType.File) return true;
-            if (entry.DataOffset < 0) return false;
-
-            var start = (int)(entry.DataOffset + offset);
-            if (start >= blob.Length) return true;
-
-            var maxByBlob = blob.Length - start;
-            var maxBySize = (int)Math.Max(0, (long)entry.Size - offset);
-            var toCopy = Math.Min(buffer.Length, Math.Min(maxByBlob, maxBySize));
-            if (toCopy <= 0) return true;
-
-            blob.AsSpan(start, toCopy).CopyTo(buffer);
-            bytesRead = toCopy;
-            return true;
-        }
-    }
-
     [Fact]
     public void Lookup_IsCaseSensitive()
     {
@@ -118,16 +97,16 @@ public class LayerFsTests
         index.AddEntry(new LayerIndexEntry(
             "/bin",
             InodeType.Directory,
-            Mode: 0x1ED,
-            Uid: 1000,
-            Gid: 1001));
+            0x1ED,
+            1000,
+            1001));
         index.AddEntry(new LayerIndexEntry(
             "/bin/app",
             InodeType.File,
-            Mode: 0x1ED,
-            Uid: 2000,
-            Gid: 2001,
-            Size: 3,
+            0x1ED,
+            2000,
+            2001,
+            3,
             InlineData: "abc"u8.ToArray()));
 
         var fs = new LayerFileSystem();
@@ -158,7 +137,7 @@ public class LayerFsTests
         index.AddEntry(new LayerIndexEntry(
             "/f",
             InodeType.File,
-            Mode: 0x1A4,
+            0x1A4,
             Size: 7,
             DataOffset: 2));
 
@@ -278,7 +257,7 @@ public class LayerFsTests
     {
         var field = typeof(LayerSuperBlock).GetField("_inodeByPath", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
-        var map = Assert.IsAssignableFrom<System.Collections.IDictionary>(field!.GetValue(sb));
+        var map = Assert.IsAssignableFrom<IDictionary>(field!.GetValue(sb));
         return map.Count;
     }
 
@@ -444,14 +423,16 @@ public class LayerFsTests
         var firstCache = Assert.IsType<MemoryObject>(firstInode.PageCache);
         Assert.True(firstCache.PageCount > 0);
 
-        var firstShrink = VfsShrinker.Shrink(sm, VfsShrinkMode.PageCache | VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
+        var firstShrink = VfsShrinker.Shrink(sm,
+            VfsShrinkMode.PageCache | VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
         Assert.True(firstShrink.DentriesDropped >= 0);
         Assert.False(firstInode.IsCacheEvicted);
         Assert.True(firstCache.PageCount > 0);
 
         mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-        var secondShrink = VfsShrinker.Shrink(sm, VfsShrinkMode.PageCache | VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
+        var secondShrink = VfsShrinker.Shrink(sm,
+            VfsShrinkMode.PageCache | VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
         Assert.True(secondShrink.DentriesDropped > 0);
         Assert.True(secondShrink.InodesEvicted > 0);
         Assert.True(secondShrink.PageCacheBytesReclaimed >= LinuxConstants.PageSize);
@@ -487,5 +468,27 @@ public class LayerFsTests
             engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
         mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+    }
+
+    private sealed class OffsetContentProvider(byte[] blob) : ILayerContentProvider
+    {
+        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+        {
+            bytesRead = 0;
+            if (entry.Type != InodeType.File) return true;
+            if (entry.DataOffset < 0) return false;
+
+            var start = (int)(entry.DataOffset + offset);
+            if (start >= blob.Length) return true;
+
+            var maxByBlob = blob.Length - start;
+            var maxBySize = (int)Math.Max(0, (long)entry.Size - offset);
+            var toCopy = Math.Min(buffer.Length, Math.Min(maxByBlob, maxBySize));
+            if (toCopy <= 0) return true;
+
+            blob.AsSpan(start, toCopy).CopyTo(buffer);
+            bytesRead = toCopy;
+            return true;
+        }
     }
 }

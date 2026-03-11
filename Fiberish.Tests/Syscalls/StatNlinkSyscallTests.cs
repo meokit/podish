@@ -24,7 +24,7 @@ public class StatNlinkSyscallTests
         env.WriteCString(0x10000, "/a");
         env.WriteCString(0x11000, "/b");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4));
         Assert.Equal(1u, await ReadStatxNlink(env, 0x10000, 0x12000));
 
         Assert.Equal(0, await env.Call("SysLink", 0x10000, 0x11000));
@@ -105,12 +105,12 @@ public class StatNlinkSyscallTests
         env.WriteCString(0x20000, "/src");
         env.WriteCString(0x21000, "/dst");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x20000, 0x8000 | 0x1A4, 0));
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x21000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x20000, 0x8000 | 0x1A4));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x21000, 0x8000 | 0x1A4));
         Assert.Equal(1u, await ReadStatxNlink(env, 0x20000, 0x22000));
         Assert.Equal(1u, await ReadStatxNlink(env, 0x21000, 0x23000));
 
-        var oldDstFd = await env.Call("SysOpen", 0x21000, (uint)FileFlags.O_RDONLY, 0);
+        var oldDstFd = await env.Call("SysOpen", 0x21000);
         Assert.True(oldDstFd >= 0);
 
         Assert.Equal(0, await env.Call("SysRename", 0x20000, 0x21000));
@@ -136,7 +136,7 @@ public class StatNlinkSyscallTests
         env.WriteCString(0x24000, "/src");
         env.WriteCString(0x25000, "/alias");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x24000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x24000, 0x8000 | 0x1A4));
         Assert.Equal(0, await env.Call("SysLink", 0x24000, 0x25000));
         Assert.Equal(2u, await ReadStatxNlink(env, 0x24000, 0x26000));
         Assert.Equal(2u, await ReadStatxNlink(env, 0x25000, 0x27000));
@@ -158,8 +158,8 @@ public class StatNlinkSyscallTests
         env.WriteCString(0x28000, "/left");
         env.WriteCString(0x29000, "/right");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x28000, 0x8000 | 0x1A4, 0));
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x29000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x28000, 0x8000 | 0x1A4));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x29000, 0x8000 | 0x1A4));
         Assert.Equal(1u, await ReadStatxNlink(env, 0x28000, 0x2A000));
         Assert.Equal(1u, await ReadStatxNlink(env, 0x29000, 0x2B000));
 

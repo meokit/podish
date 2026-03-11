@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using System.Threading;
 
 namespace Fiberish.Diagnostics;
 
@@ -8,10 +7,7 @@ public static class Logging
 {
     private static readonly AsyncLocal<ILoggerFactory?> ScopedLoggerFactory = new();
 
-    public static ILoggerFactory CurrentLoggerFactory
-    {
-        get => ScopedLoggerFactory.Value ?? NullLoggerFactory.Instance;
-    }
+    public static ILoggerFactory CurrentLoggerFactory => ScopedLoggerFactory.Value ?? NullLoggerFactory.Instance;
 
     public static ILogger CreateLogger<T>()
     {

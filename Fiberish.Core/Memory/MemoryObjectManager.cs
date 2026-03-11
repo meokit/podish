@@ -5,8 +5,8 @@ namespace Fiberish.Memory;
 
 public sealed class MemoryObjectManager
 {
-    private readonly Dictionary<string, MemoryObject> _namedObjects = new(StringComparer.Ordinal);
     private readonly object _lock = new();
+    private readonly Dictionary<string, MemoryObject> _namedObjects = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     Get or create the inode's global page cache MemoryObject.
@@ -81,7 +81,7 @@ public sealed class MemoryObjectManager
             MemoryObjectRole.PrivateOverlay);
     }
 
-    public MemoryObject CreateFile(Fiberish.VFS.LinuxFile fileHandle, long fileBaseOffset, long fileSize, bool shared)
+    public MemoryObject CreateFile(LinuxFile fileHandle, long fileBaseOffset, long fileSize, bool shared)
     {
         return new MemoryObject(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, shared,
             shared ? MemoryObjectRole.FileSharedSource : MemoryObjectRole.PrivateOverlay);

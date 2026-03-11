@@ -4,8 +4,8 @@ namespace Fiberish.Diagnostics;
 
 public class SimpleFileLoggerProvider : ILoggerProvider
 {
-    private readonly StreamWriter _writer;
     private readonly object _lock = new();
+    private readonly StreamWriter _writer;
 
     public SimpleFileLoggerProvider(string filePath)
     {
@@ -25,18 +25,22 @@ public class SimpleFileLoggerProvider : ILoggerProvider
 
     private class SimpleFileLogger(string categoryName, StreamWriter writer, object lockObj) : ILogger
     {
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+        {
+            return null;
+        }
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            return true;
+        }
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             var message = formatter(state, exception);
             var logLine = $"[{DateTime.Now:HH:mm:ss.fff}] [{logLevel}] [{categoryName}] {message}";
-            if (exception != null)
-            {
-                logLine += Environment.NewLine + exception;
-            }
+            if (exception != null) logLine += Environment.NewLine + exception;
 
             lock (lockObj)
             {

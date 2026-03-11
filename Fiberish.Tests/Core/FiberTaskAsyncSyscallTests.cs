@@ -42,14 +42,16 @@ public class FiberTaskAsyncSyscallTests
 
     private static async Task InvokeAndDrainAsyncSyscall(FiberTask task, KernelScheduler scheduler)
     {
-        var method = typeof(FiberTask).GetMethod("HandleAsyncSyscallAsync", BindingFlags.Instance | BindingFlags.NonPublic)
-                     ?? typeof(FiberTask).GetMethod("HandleAsyncSyscall", BindingFlags.Instance | BindingFlags.NonPublic);
+        var method =
+            typeof(FiberTask).GetMethod("HandleAsyncSyscallAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? typeof(FiberTask).GetMethod("HandleAsyncSyscall", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
         var result = method!.Invoke(task, null);
         if (result is ValueTask vt)
             await vt;
 
-        var drainEvents = typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic);
+        var drainEvents =
+            typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(drainEvents);
 
         for (var i = 0; i < 100 && task.PendingSyscall != null; i++)

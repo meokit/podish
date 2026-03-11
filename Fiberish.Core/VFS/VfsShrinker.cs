@@ -1,10 +1,10 @@
-using Fiberish.Syscalls;
 using Fiberish.Memory;
+using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
 /// <summary>
-/// Filesystems can implement this to provide best-effort dentry cache reclaim.
+///     Filesystems can implement this to provide best-effort dentry cache reclaim.
 /// </summary>
 public interface IDentryCacheDropper
 {
@@ -35,9 +35,8 @@ public static class VfsShrinker
 
         var superblocks = new HashSet<SuperBlock>();
         foreach (var mount in syscallManager.Mounts)
-        {
-            if (mount?.SB != null) superblocks.Add(mount.SB);
-        }
+            if (mount?.SB != null)
+                superblocks.Add(mount.SB);
 
         long pageCacheBytesReclaimed = 0;
         if ((mode & VfsShrinkMode.PageCache) != 0)
@@ -45,21 +44,17 @@ public static class VfsShrinker
 
         long dentriesDropped = 0;
         if ((mode & VfsShrinkMode.DentryCache) != 0)
-        {
             foreach (var sb in superblocks)
             {
                 dentriesDropped += DropDentryCache(sb);
                 if (sb is IDentryCacheDropper dropper)
                     dentriesDropped += dropper.DropDentryCache();
             }
-        }
 
         long inodesEvicted = 0;
         if ((mode & VfsShrinkMode.InodeCache) != 0)
-        {
             foreach (var sb in superblocks)
                 inodesEvicted += EvictUnusedInodes(sb);
-        }
 
         return new VfsShrinkStats(pageCacheBytesReclaimed, dentriesDropped, inodesEvicted, superblocks.Count);
     }
@@ -115,13 +110,11 @@ public static class VfsShrinker
 
             var protectsMountPath = false;
             foreach (var child in current.Children.Values)
-            {
                 if (child.IsMounted || mountProtected.Contains(child))
                 {
                     protectsMountPath = true;
                     break;
                 }
-            }
 
             if (protectsMountPath)
             {
@@ -133,23 +126,17 @@ public static class VfsShrinker
 
             var detachedFromParent = true;
             if (current.Parent != null && !ReferenceEquals(current.Parent, current))
-            {
                 if (current.Parent.TryGetCachedChild(current.Name, out var cachedByParent) &&
                     ReferenceEquals(cachedByParent, current))
-                {
                     detachedFromParent = current.Parent.TryUncacheChild(
                         current.Name,
                         "VfsShrinker.DetachCachedSubtree",
                         out _);
-                }
-            }
+
             if (!detachedFromParent) continue;
 
             var inode = current.Inode;
-            if (inode != null)
-            {
-                current.UnbindInode("VfsShrinker.DetachCachedSubtree");
-            }
+            if (inode != null) current.UnbindInode("VfsShrinker.DetachCachedSubtree");
 
             current.UntrackFromSuperBlock("VfsShrinker.DetachCachedSubtree");
             dropped++;
@@ -175,10 +162,8 @@ public static class VfsShrinker
 
         long evicted = 0;
         foreach (var inode in candidates)
-        {
             if (inode.TryEvictCache("VfsShrinker.EvictUnusedInodes"))
                 evicted++;
-        }
 
         return evicted;
     }

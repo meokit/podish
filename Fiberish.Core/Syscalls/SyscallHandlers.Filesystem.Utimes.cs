@@ -1,7 +1,5 @@
 using System.Buffers.Binary;
-using Fiberish.Core;
 using Fiberish.Native;
-using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 

@@ -17,7 +17,7 @@ public class DummySwitchTests
             new IPAddress([10, 88, 0, 1]), // 10.88.0.1
             (LoopbackNetNamespace)null!,
             sw);
-        
+
         var spec = new PublishedPortSpec
         {
             HostPort = 8080,

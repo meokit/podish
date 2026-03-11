@@ -7,16 +7,15 @@ public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     /// <summary>
-    /// sys_ipc multiplexer for i386 Linux.
-    /// This syscall multiplexes various IPC operations including:
-    /// - SHMGET (23): Create/get shared memory segment
-    /// - SHMAT (21): Attach shared memory segment
-    /// - SHMDT (22): Detach shared memory segment
-    /// - SHMCTL (24): Control shared memory segment
-    /// 
-    /// On i386, the call parameter encodes:
-    /// - Low 16 bits: the IPC operation (op)
-    /// - High 16 bits: version/flags (usually 0 or IPC_64)
+    ///     sys_ipc multiplexer for i386 Linux.
+    ///     This syscall multiplexes various IPC operations including:
+    ///     - SHMGET (23): Create/get shared memory segment
+    ///     - SHMAT (21): Attach shared memory segment
+    ///     - SHMDT (22): Detach shared memory segment
+    ///     - SHMCTL (24): Control shared memory segment
+    ///     On i386, the call parameter encodes:
+    ///     - Low 16 bits: the IPC operation (op)
+    ///     - High 16 bits: version/flags (usually 0 or IPC_64)
     /// </summary>
     private static async ValueTask<int> SysIpc(
         IntPtr state,
@@ -40,7 +39,7 @@ public partial class SyscallManager
         var op = (int)(call & 0xFFFF);
         var version = (int)(call >> 16);
 
-        int ret = op switch
+        var ret = op switch
         {
             LinuxConstants.SHMGET => DoShmGet(sm, (int)first, second, (int)third, uid, gid, pid),
             LinuxConstants.SHMAT => DoShmAt(sm, (int)first, ptr, (int)second, third, pid),
@@ -65,9 +64,9 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// SHMGET: Create or get a shared memory segment.
-    /// args: key, size, shmflg
-    /// returns: shmid or negative errno
+    ///     SHMGET: Create or get a shared memory segment.
+    ///     args: key, size, shmflg
+    ///     returns: shmid or negative errno
     /// </summary>
     private static int DoShmGet(SyscallManager sm, int key, uint size, int shmflg, int uid, int gid, int pid)
     {
@@ -75,10 +74,10 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// SHMAT: Attach shared memory segment to process address space.
-    /// args: shmid, shmaddr, shmflg
-    /// returns: 0 on success (address written to *ptr), negative errno on failure
-    /// Note: The actual return address is written to the pointer in 'ptr' on i386.
+    ///     SHMAT: Attach shared memory segment to process address space.
+    ///     args: shmid, shmaddr, shmflg
+    ///     returns: 0 on success (address written to *ptr), negative errno on failure
+    ///     Note: The actual return address is written to the pointer in 'ptr' on i386.
     /// </summary>
     private static int DoShmAt(SyscallManager sm, int shmid, uint shmaddr, int shmflg, uint ptr, int pid)
     {
@@ -108,9 +107,9 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// SHMDT: Detach shared memory segment from process address space.
-    /// args: shmaddr
-    /// returns: 0 on success, negative errno on failure
+    ///     SHMDT: Detach shared memory segment from process address space.
+    ///     args: shmaddr
+    ///     returns: 0 on success, negative errno on failure
     /// </summary>
     private static int DoShmDt(SyscallManager sm, uint shmaddr, int pid)
     {
@@ -119,10 +118,10 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// SHMCTL: Control operations on shared memory segment.
-    /// args: shmid, cmd, buf
-    /// returns: 0 on success, negative errno on failure
-    /// Note: cmd may have IPC_64 flag set (0x0100) on i386 glibc.
+    ///     SHMCTL: Control operations on shared memory segment.
+    ///     args: shmid, cmd, buf
+    ///     returns: 0 on success, negative errno on failure
+    ///     Note: cmd may have IPC_64 flag set (0x0100) on i386 glibc.
     /// </summary>
     private static int DoShmCtl(SyscallManager sm, int shmid, int cmd, uint buf, int uid, int gid, int pid, int version)
     {
@@ -130,9 +129,7 @@ public partial class SyscallManager
         // Modern glibc on i386 always sets IPC_64 in the version field
         var actualCmd = cmd;
         if ((version & (LinuxConstants.IPC_64 >> 8)) != 0 || (cmd & LinuxConstants.IPC_64) != 0)
-        {
             actualCmd = cmd & ~LinuxConstants.IPC_64;
-        }
 
         return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, sm.Engine, uid, gid, pid);
     }
@@ -145,10 +142,7 @@ public partial class SyscallManager
         if (ptr != 0)
         {
             Span<byte> buf = stackalloc byte[4];
-            if (sm.Engine.CopyFromUser(ptr, buf))
-            {
-                argVal = BitConverter.ToUInt32(buf);
-            }
+            if (sm.Engine.CopyFromUser(ptr, buf)) argVal = BitConverter.ToUInt32(buf);
         }
 
         return sm.SysVSem.SemCtl(first, second, (int)third, argVal, sm.Engine, uid, gid);
@@ -180,7 +174,7 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
 
-        int actualCmd = (int)cmd;
+        var actualCmd = (int)cmd;
         if ((cmd & LinuxConstants.IPC_64) != 0)
             actualCmd = (int)(cmd & ~LinuxConstants.IPC_64);
 

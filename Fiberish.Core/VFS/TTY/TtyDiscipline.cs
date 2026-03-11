@@ -199,6 +199,7 @@ public class TtyDiscipline
                         var readCount = _inq.Read(buffer, flags);
                         return readCount;
                     }
+
                     _inq.DataAvailable.Reset();
                     return -(int)Errno.EAGAIN; // Will wait on IOAwaiter
                 }
@@ -209,20 +210,19 @@ public class TtyDiscipline
                 // Since this is a synchronous Read method, if we just return -EAGAIN, it waits INDEFINITELY.
                 // To support VTIME without changing SyscallHandlers, we might have to block the thread
                 // or have the input loop inject a dummy timeout signal.
-                
+
                 // For now, if we have enough bytes (VMIN), or if VMIN==0 and we just check what's there:
                 if (vmin > 0 && vtime > 0)
                 {
-                    if (count >= vmin || count >= buffer.Length)
-                    {
-                        return _inq.Read(buffer, flags);
-                    }
+                    if (count >= vmin || count >= buffer.Length) return _inq.Read(buffer, flags);
+
                     // Wait for at least one byte
                     if (count == 0)
                     {
                         _inq.DataAvailable.Reset();
                         return -(int)Errno.EAGAIN;
                     }
+
                     // We have SOME bytes (count > 0) but less than VMIN.
                     // The inter-byte timer should be ticking. If we don't have timer support yet in this layer,
                     // we'll return what we have (violating VMIN slightly but preventing deadlocks), OR 
@@ -233,15 +233,13 @@ public class TtyDiscipline
 
                 if (vmin == 0 && vtime > 0)
                 {
-                    if (count > 0)
-                    {
-                        return _inq.Read(buffer, flags);
-                    }
+                    if (count > 0) return _inq.Read(buffer, flags);
+
                     // Pure timeout read. We need a way to return 0 after VTIME.
                     // Right now we can't easily wait with timeout.
                     // fallback to blocking for first byte like vmin=1, vtime=0.
                     _inq.DataAvailable.Reset();
-                    return -(int)Errno.EAGAIN; 
+                    return -(int)Errno.EAGAIN;
                 }
             }
         }
@@ -671,10 +669,7 @@ public class TtyDiscipline
         if ((_iflag & ISTRIP) != 0) b = (byte)(b & 0x7F);
 
         // IUCLC - map uppercase to lowercase
-        if ((_iflag & IUCLC) != 0 && b >= 'A' && b <= 'Z')
-        {
-            b = (byte)(b + 32);
-        }
+        if ((_iflag & IUCLC) != 0 && b >= 'A' && b <= 'Z') b = (byte)(b + 32);
 
         // IGNCR - ignore CR (must be checked before ICRNL)
         if ((_iflag & IGNCR) != 0 && b == 13) return null; // Return null to signal character was consumed
@@ -1012,13 +1007,9 @@ public class TtyDiscipline
             {
                 // OLCUC - map lowercase to uppercase
                 if ((_oflag & OLCUC) != 0 && b >= 'a' && b <= 'z')
-                {
                     expanded.Add((byte)(b - 32));
-                }
                 else
-                {
                     expanded.Add(b);
-                }
             }
 
         var expandedArray = expanded.ToArray();

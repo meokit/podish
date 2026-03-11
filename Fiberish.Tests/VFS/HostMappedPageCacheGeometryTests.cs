@@ -2,7 +2,6 @@ using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
-using Fiberish.SilkFS;
 using Fiberish.VFS;
 using Xunit;
 
@@ -11,8 +10,8 @@ namespace Fiberish.Tests.VFS;
 public class HostMappedPageCacheGeometryTests
 {
     private static readonly HostMemoryMapGeometry Geometry16K =
-        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true,
-            SupportsDirectMappedTailPage: true);
+        new(LinuxConstants.PageSize, 16384, 16384, true,
+            true);
 
     [Fact]
     public void Hostfs_16KGeometry_CoalescesFourGuestPagesIntoSingleWindow()
@@ -37,7 +36,7 @@ public class HostMappedPageCacheGeometryTests
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
             loc.Dentry!.Inode!.Open(file);
             const uint mapAddr = 0x47000000;
-            mm.Mmap(mapAddr, (uint)(LinuxConstants.PageSize * 4), Protection.Read | Protection.Write,
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 4, Protection.Read | Protection.Write,
                 MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
 
             for (var i = 0; i < 4; i++)
@@ -50,10 +49,10 @@ public class HostMappedPageCacheGeometryTests
             Assert.Equal(4, diagnostics.GuestPageCount);
 
             Assert.True(engine.CopyToUser(mapAddr + 1, "XY"u8.ToArray()));
-            Assert.True(engine.CopyToUser(mapAddr + (uint)(3 * LinuxConstants.PageSize) + 2, "ZZ"u8.ToArray()));
+            Assert.True(engine.CopyToUser(mapAddr + 3 * LinuxConstants.PageSize + 2, "ZZ"u8.ToArray()));
 
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-            VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + (uint)(LinuxConstants.PageSize * 4));
+            VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
 
             var updated = File.ReadAllBytes(hostFile);
             Assert.Equal((byte)'X', updated[1]);
@@ -140,7 +139,7 @@ public class HostMappedPageCacheGeometryTests
                 var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, fileLoc.Mount!);
                 file.Inode!.Open(mappedFile);
                 const uint mapAddr = 0x47200000;
-                mm.Mmap(mapAddr, (uint)(LinuxConstants.PageSize * 4), Protection.Read | Protection.Write,
+                mm.Mmap(mapAddr, LinuxConstants.PageSize * 4, Protection.Read | Protection.Write,
                     MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
                     engine);
 
@@ -154,9 +153,9 @@ public class HostMappedPageCacheGeometryTests
                 Assert.Equal(4, diagnostics.GuestPageCount);
 
                 Assert.True(engine.CopyToUser(mapAddr + 1, "UV"u8.ToArray()));
-                Assert.True(engine.CopyToUser(mapAddr + (uint)(3 * LinuxConstants.PageSize) + 2, "WX"u8.ToArray()));
+                Assert.True(engine.CopyToUser(mapAddr + 3 * LinuxConstants.PageSize + 2, "WX"u8.ToArray()));
                 var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-                VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + (uint)(LinuxConstants.PageSize * 4));
+                VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
                 mappedFile.Close();
                 sm.Close();
             }
@@ -210,10 +209,10 @@ public class HostMappedPageCacheGeometryTests
 
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
             const uint mapAddr = 0x47300000;
-            mm.Mmap(mapAddr, (uint)(LinuxConstants.PageSize * 2), Protection.Read | Protection.Write,
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
                 MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED_TAIL", engine);
 
-            var tailPageAddr = mapAddr + (uint)LinuxConstants.PageSize;
+            var tailPageAddr = mapAddr + LinuxConstants.PageSize;
             Assert.True(mm.HandleFault(tailPageAddr, true, engine));
 
             var probe = new byte[24];
@@ -227,7 +226,7 @@ public class HostMappedPageCacheGeometryTests
 
             Assert.True(engine.CopyToUser(tailPageAddr + 123 + 16, "TAIL!"u8.ToArray()));
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-            VMAManager.SyncVMA(vma, engine, tailPageAddr, tailPageAddr + (uint)LinuxConstants.PageSize);
+            VMAManager.SyncVMA(vma, engine, tailPageAddr, tailPageAddr + LinuxConstants.PageSize);
 
             var refreshed = File.ReadAllBytes(hostFile);
             Assert.Equal(bytes.Length, refreshed.Length);

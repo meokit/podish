@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using System.Threading;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Syscalls;
@@ -19,46 +15,29 @@ public class UnixMessage
 
 public class UnixSocketInode : Inode
 {
+    // Backpressure: track queued bytes to limit memory usage
+    private const int MaxSendBuffer = 262144; // 256KB
+    private readonly Queue<UnixSocketInode> _pendingConnections = new();
     private readonly AsyncWaitQueue _readWaitQueue = new();
-    private readonly AsyncWaitQueue _writeWaitQueue = new();
-    
+
     // For AF_UNIX
     private readonly Queue<UnixMessage> _receiveQueue = new();
-    private readonly Queue<UnixSocketInode> _pendingConnections = new();
-    private UnixSocketInode? _peer;
-    private bool _shutDownRead;
-    private bool _shutDownWrite;
-    private bool _peerWriteClosed;
-    private bool _listening;
-    private int _listenBacklog = 1;
-    private byte[]? _localSunPathRaw;
-    private byte[]? _peerSunPathRaw;
-    private Action<UnixSocketInode>? _releaseUnbindCallback;
+    private readonly AsyncWaitQueue _writeWaitQueue = new();
     private bool _lifecycleClosed;
-    private readonly SocketType _socketType;
+    private int _listenBacklog = 1;
+    private bool _listening;
+    private byte[]? _localSunPathRaw;
 
     // Buffer for stream mode partial reads
     private byte[]? _partialBuffer;
     private int _partialOffset;
-
-    // Backpressure: track queued bytes to limit memory usage
-    private const int MaxSendBuffer = 262144; // 256KB
+    private UnixSocketInode? _peer;
+    private byte[]? _peerSunPathRaw;
+    private bool _peerWriteClosed;
     private int _queuedBytes;
-
-    // Single-thread scheduling model: keep a using-scope shape so lock semantics
-    // can be introduced centrally later without changing call sites.
-    private readonly struct StateScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
-
-    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
-    {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
-        return default;
-    }
+    private Action<UnixSocketInode>? _releaseUnbindCallback;
+    private bool _shutDownRead;
+    private bool _shutDownWrite;
 
     public UnixSocketInode(ulong ino, SuperBlock sb, SocketType type)
     {
@@ -66,11 +45,11 @@ public class UnixSocketInode : Inode
         SuperBlock = sb;
         Type = InodeType.Socket;
         Mode = 0x1ED;
-        _socketType = type;
+        UnixSocketType = type;
         _writeWaitQueue.Set(); // Initially writable
     }
 
-    public SocketType UnixSocketType => _socketType;
+    public SocketType UnixSocketType { get; }
 
     public bool IsListening
     {
@@ -105,6 +84,12 @@ public class UnixSocketInode : Inode
         }
     }
 
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
+    }
+
     public void ConnectPair(UnixSocketInode peer)
     {
         using (EnterStateScope())
@@ -123,12 +108,13 @@ public class UnixSocketInode : Inode
             _peerWriteClosed = false;
             _peerSunPathRaw = null;
         }
+
         _writeWaitQueue.Set();
     }
 
     public int Listen(int backlog)
     {
-        if (_socketType == SocketType.Dgram) return -(int)Errno.EOPNOTSUPP;
+        if (UnixSocketType == SocketType.Dgram) return -(int)Errno.EOPNOTSUPP;
 
         using (EnterStateScope())
         {
@@ -201,6 +187,7 @@ public class UnixSocketInode : Inode
                     _queuedBytes = 0;
                     UpdateWriteWaitQueueState();
                 }
+
                 _readWaitQueue.Set();
                 _writeWaitQueue.Set();
                 return 0;
@@ -212,6 +199,7 @@ public class UnixSocketInode : Inode
                     _shutDownWrite = true;
                     peerToNotifyWriteClosed = _peer;
                 }
+
                 peerToNotifyWriteClosed?.NotifyPeerWriteClosed();
                 return 0;
 
@@ -229,6 +217,7 @@ public class UnixSocketInode : Inode
                     peerToNotifyWriteClosed = _peer;
                     UpdateWriteWaitQueueState();
                 }
+
                 peerToNotifyWriteClosed?.NotifyPeerWriteClosed();
                 _readWaitQueue.Set();
                 _writeWaitQueue.Set();
@@ -245,6 +234,7 @@ public class UnixSocketInode : Inode
         {
             _peerWriteClosed = true;
         }
+
         _readWaitQueue.Set();
         _writeWaitQueue.Set();
     }
@@ -323,17 +313,15 @@ public class UnixSocketInode : Inode
                 }
             }
 
-            if (_shutDownRead && _shutDownWrite)
-            {
-                revents |= PollEvents.POLLHUP;
-            }
+            if (_shutDownRead && _shutDownWrite) revents |= PollEvents.POLLHUP;
         }
+
         return revents;
     }
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
-        bool registered = false;
+        var registered = false;
         if ((events & PollEvents.POLLIN) != 0)
         {
             _readWaitQueue.Register(callback);
@@ -372,23 +360,6 @@ public class UnixSocketInode : Inode
         };
     }
 
-    private sealed class CompositeDisposable : IDisposable
-    {
-        private List<IDisposable>? _items;
-
-        public CompositeDisposable(List<IDisposable> items)
-        {
-            _items = items;
-        }
-
-        public void Dispose()
-        {
-            var items = Interlocked.Exchange(ref _items, null);
-            if (items == null) return;
-            foreach (var item in items) item.Dispose();
-        }
-    }
-
     public void EnqueueMessage(UnixMessage msg)
     {
         using (EnterStateScope())
@@ -398,10 +369,12 @@ public class UnixSocketInode : Inode
                 ReleaseQueuedFds(msg.Fds);
                 return; // Dropped
             }
+
             _receiveQueue.Enqueue(msg);
             _queuedBytes += msg.Data.Length;
             UpdateWriteWaitQueueState();
         }
+
         _readWaitQueue.Set(); // Signal that data is available (like PipeInode)
     }
 
@@ -415,11 +388,13 @@ public class UnixSocketInode : Inode
             _peer = null;
             UpdateWriteWaitQueueState();
         }
+
         _readWaitQueue.Signal();
         _writeWaitQueue.Signal();
     }
 
-    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw)> RecvMessageAsync(LinuxFile file,
+    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw)> RecvMessageAsync(
+        LinuxFile file,
         byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
@@ -432,7 +407,7 @@ public class UnixSocketInode : Inode
             {
                 if (_partialBuffer != null)
                 {
-                    int toCopy = Math.Min(recvLen, _partialBuffer.Length - _partialOffset);
+                    var toCopy = Math.Min(recvLen, _partialBuffer.Length - _partialOffset);
                     Array.Copy(_partialBuffer, _partialOffset, buffer, 0, toCopy);
                     _partialOffset += toCopy;
                     if (_partialOffset >= _partialBuffer.Length)
@@ -440,6 +415,7 @@ public class UnixSocketInode : Inode
                         _partialBuffer = null;
                         _partialOffset = 0;
                     }
+
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
                     _queuedBytes -= toCopy;
@@ -450,18 +426,19 @@ public class UnixSocketInode : Inode
 
                 if (_receiveQueue.TryDequeue(out var msg))
                 {
-                    int toCopy = Math.Min(recvLen, msg.Data.Length);
+                    var toCopy = Math.Min(recvLen, msg.Data.Length);
                     Array.Copy(msg.Data, 0, buffer, 0, toCopy);
-                    
-                    if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
+
+                    if (UnixSocketType == SocketType.Stream && toCopy < msg.Data.Length)
                     {
                         _partialBuffer = msg.Data;
                         _partialOffset = toCopy;
                     }
+
                     // For Datagram, truncated bytes are discarded.
                     _queuedBytes -= toCopy;
-                    if (_socketType != SocketType.Stream || toCopy >= msg.Data.Length)
-                        _queuedBytes -= (msg.Data.Length - toCopy); // discard remainder for dgram
+                    if (UnixSocketType != SocketType.Stream || toCopy >= msg.Data.Length)
+                        _queuedBytes -= msg.Data.Length - toCopy; // discard remainder for dgram
                     UpdateWriteWaitQueueState();
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
@@ -472,6 +449,7 @@ public class UnixSocketInode : Inode
                 if (_shutDownRead || _peer == null || _peerWriteClosed)
                     return (0, null, null); // EOF
             }
+
             _writeWaitQueue.Set(); // backpressure relief
 
             if (nonBlocking) return (-(int)Errno.EAGAIN, null, null);
@@ -490,7 +468,8 @@ public class UnixSocketInode : Inode
         return await SendMessageAsync(file, data, fds, flags, null);
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags, UnixSocketInode? explicitPeer)
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags,
+        UnixSocketInode? explicitPeer)
     {
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||
                           (flags & LinuxConstants.MSG_DONTWAIT) != 0;
@@ -503,7 +482,7 @@ public class UnixSocketInode : Inode
         }
 
         if (peer == null)
-            return _socketType == SocketType.Dgram ? -(int)Errno.EDESTADDRREQ : -(int)Errno.ENOTCONN;
+            return UnixSocketType == SocketType.Dgram ? -(int)Errno.EDESTADDRREQ : -(int)Errno.ENOTCONN;
 
         // Backpressure: check peer's queued bytes
         while (true)
@@ -562,10 +541,8 @@ public class UnixSocketInode : Inode
             _peerWriteClosed = true;
             _partialBuffer = null;
             _partialOffset = 0;
-            while (_receiveQueue.TryDequeue(out var msg))
-            {
-                ReleaseQueuedFds(msg.Fds);
-            }
+            while (_receiveQueue.TryDequeue(out var msg)) ReleaseQueuedFds(msg.Fds);
+
             _queuedBytes = 0;
             UpdateWriteWaitQueueState();
         }
@@ -593,7 +570,7 @@ public class UnixSocketInode : Inode
         {
             if (_partialBuffer != null)
             {
-                int toCopy = Math.Min(buffer.Length, _partialBuffer.Length - _partialOffset);
+                var toCopy = Math.Min(buffer.Length, _partialBuffer.Length - _partialOffset);
                 new ReadOnlySpan<byte>(_partialBuffer, _partialOffset, toCopy).CopyTo(buffer.Slice(0, toCopy));
                 _partialOffset += toCopy;
                 if (_partialOffset >= _partialBuffer.Length)
@@ -601,38 +578,38 @@ public class UnixSocketInode : Inode
                     _partialBuffer = null;
                     _partialOffset = 0;
                 }
-                    // Reset read wait queue if no more data
-                    if (_receiveQueue.Count == 0 && _partialBuffer == null)
-                        _readWaitQueue.Reset();
-                    _queuedBytes -= toCopy;
-                    UpdateWriteWaitQueueState();
-                    _writeWaitQueue.Set(); // backpressure relief 
-                    return toCopy;
-                }
 
-                if (_receiveQueue.TryDequeue(out var msg))
+                // Reset read wait queue if no more data
+                if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                    _readWaitQueue.Reset();
+                _queuedBytes -= toCopy;
+                UpdateWriteWaitQueueState();
+                _writeWaitQueue.Set(); // backpressure relief 
+                return toCopy;
+            }
+
+            if (_receiveQueue.TryDequeue(out var msg))
             {
-                int toCopy = Math.Min(buffer.Length, msg.Data.Length);
+                var toCopy = Math.Min(buffer.Length, msg.Data.Length);
                 new ReadOnlySpan<byte>(msg.Data, 0, toCopy).CopyTo(buffer.Slice(0, toCopy));
-                
-                if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
+
+                if (UnixSocketType == SocketType.Stream && toCopy < msg.Data.Length)
                 {
                     _partialBuffer = msg.Data;
                     _partialOffset = toCopy;
                 }
 
                 if (msg.Fds != null)
-                {
-                    foreach (var f in msg.Fds) f.Close();
-                }
+                    foreach (var f in msg.Fds)
+                        f.Close();
 
                 // Reset read wait queue if no more data
                 if (_receiveQueue.Count == 0 && _partialBuffer == null)
                     _readWaitQueue.Reset();
 
                 _queuedBytes -= msg.Data.Length;
-                if (_socketType == SocketType.Stream && toCopy < msg.Data.Length)
-                    _queuedBytes += (msg.Data.Length - toCopy); // partial still queued
+                if (UnixSocketType == SocketType.Stream && toCopy < msg.Data.Length)
+                    _queuedBytes += msg.Data.Length - toCopy; // partial still queued
                 UpdateWriteWaitQueueState();
                 _writeWaitQueue.Set(); // backpressure relief
 
@@ -654,7 +631,7 @@ public class UnixSocketInode : Inode
             if (_shutDownWrite) return -(int)Errno.EPIPE;
             if (_listening) return -(int)Errno.EINVAL;
             if (_peer == null)
-                return _socketType == SocketType.Dgram ? -(int)Errno.EDESTADDRREQ : -(int)Errno.ENOTCONN;
+                return UnixSocketType == SocketType.Dgram ? -(int)Errno.EDESTADDRREQ : -(int)Errno.ENOTCONN;
             peer = _peer;
         }
 
@@ -685,5 +662,31 @@ public class UnixSocketInode : Inode
             _writeWaitQueue.Reset();
         else
             _writeWaitQueue.Set();
+    }
+
+    // Single-thread scheduling model: keep a using-scope shape so lock semantics
+    // can be introduced centrally later without changing call sites.
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class CompositeDisposable : IDisposable
+    {
+        private List<IDisposable>? _items;
+
+        public CompositeDisposable(List<IDisposable> items)
+        {
+            _items = items;
+        }
+
+        public void Dispose()
+        {
+            var items = Interlocked.Exchange(ref _items, null);
+            if (items == null) return;
+            foreach (var item in items) item.Dispose();
+        }
     }
 }

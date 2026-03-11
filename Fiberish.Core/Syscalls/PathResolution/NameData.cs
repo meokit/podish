@@ -15,6 +15,19 @@ public class NameData
     public const int MaxSymlinkDepth = 40;
 
     /// <summary>
+    ///     Creates a new NameData with the specified starting location.
+    /// </summary>
+    /// <param name="start">Starting path location</param>
+    /// <param name="flags">Lookup flags</param>
+    public NameData(PathLocation start, LookupFlags flags = LookupFlags.FollowSymlink)
+    {
+        Path = start;
+        Flags = flags;
+        LastType = LastType.None;
+        ErrorCode = 0;
+    }
+
+    /// <summary>
     ///     Current path location (dentry + mount).
     /// </summary>
     public PathLocation Path { get; set; }
@@ -89,19 +102,6 @@ public class NameData
     ///     Whether we're at the final component of the path.
     /// </summary>
     public bool IsAtEnd => PathPosition >= PathString.Length;
-
-    /// <summary>
-    ///     Creates a new NameData with the specified starting location.
-    /// </summary>
-    /// <param name="start">Starting path location</param>
-    /// <param name="flags">Lookup flags</param>
-    public NameData(PathLocation start, LookupFlags flags = LookupFlags.FollowSymlink)
-    {
-        Path = start;
-        Flags = flags;
-        LastType = LastType.None;
-        ErrorCode = 0;
-    }
 
     /// <summary>
     ///     Creates a NameData for create operations.

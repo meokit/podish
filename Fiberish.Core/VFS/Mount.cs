@@ -1,5 +1,4 @@
 using Fiberish.Native;
-using System.Threading;
 
 namespace Fiberish.VFS;
 
@@ -10,8 +9,8 @@ namespace Fiberish.VFS;
 public class Mount
 {
     private static long _nextId;
-    private int _refCount;
     private bool _mountPointPinned;
+    private int _refCount;
 
     public Mount(SuperBlock sb, Dentry root, Dentry? mountPoint = null, Mount? parent = null)
     {
@@ -81,6 +80,7 @@ public class Mount
     ///     Whether this mount is currently attached to the directory tree.
     /// </summary>
     public bool IsAttached => MountPoint != null;
+
     public int RefCount => Volatile.Read(ref _refCount);
 
     /// <summary>

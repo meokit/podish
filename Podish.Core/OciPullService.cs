@@ -1,8 +1,10 @@
-using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Formats.Tar;
 using System.IO.Compression;
-using Fiberish.VFS;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
@@ -35,23 +37,16 @@ public class OciPullService
             // 1. Get Auth Token
             var token = await GetAuthTokenAsync(registry, repository);
             if (token != null)
-            {
                 _logger.LogDebug("Successfully obtained auth token.");
-            }
             else
-            {
                 _logger.LogDebug("No auth token needed, or anonymous access granted immediately.");
-            }
 
             // 2. Get Manifest
             var manifestStr = await GetManifestAsync(registry, repository, tag, token);
             var manifestDoc = JsonDocument.Parse(manifestStr);
 
             var schemaVersion = manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32();
-            if (schemaVersion != 2)
-            {
-                throw new NotSupportedException($"Unsupported schema version: {schemaVersion}");
-            }
+            if (schemaVersion != 2) throw new NotSupportedException($"Unsupported schema version: {schemaVersion}");
 
             var (layers, _) = await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
 
@@ -83,7 +78,8 @@ public class OciPullService
 
     public async Task<OciStoredImage> PullAndStoreImageAsync(string imageReference, string storeDirectory)
     {
-        var storeName = Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var storeName =
+            Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         if (string.IsNullOrEmpty(storeName))
             storeName = "oci-store";
         var lockDir = Path.GetDirectoryName(storeDirectory) ?? storeDirectory;
@@ -163,12 +159,10 @@ public class OciPullService
         var pingResponse = await _httpClient.GetAsync(pingUrl);
 
         if (pingResponse.IsSuccessStatusCode)
-        {
             // No auth required
             return null;
-        }
 
-        if (pingResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        if (pingResponse.StatusCode == HttpStatusCode.Unauthorized)
         {
             var wwwAuth = pingResponse.Headers.WwwAuthenticate.FirstOrDefault()?.Parameter;
             if (wwwAuth != null)
@@ -213,9 +207,7 @@ public class OciPullService
         var manifestUrl = $"https://{registry}/v2/{repository}/manifests/{tag}";
         var request = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
         if (!string.IsNullOrEmpty(token))
-        {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
 
         // Request OCI or Docker V2 manifest and manifest list
         request.Headers.Accept.Add(
@@ -235,9 +227,7 @@ public class OciPullService
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
         var request = new HttpRequestMessage(HttpMethod.Get, blobUrl);
         if (!string.IsNullOrEmpty(token))
-        {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
 
         using var response = await _httpClient.SendAsync(request);
         response.EnsureSuccessStatusCode();
@@ -249,10 +239,8 @@ public class OciPullService
         {
             var arch = archProp.GetString();
             if (arch != null && arch != "386")
-            {
                 throw new NotSupportedException(
                     $"Image architecture is '{arch}', but Podish.Cli emulator requires '386' (32-bit x86).");
-            }
         }
     }
 
@@ -262,9 +250,7 @@ public class OciPullService
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
         var request = new HttpRequestMessage(HttpMethod.Get, blobUrl);
         if (!string.IsNullOrEmpty(token))
-        {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
@@ -281,10 +267,7 @@ public class OciPullService
             var targetPath = Path.Combine(outputDirectory, entryName);
             var dir = Path.GetDirectoryName(targetPath);
 
-            if (dir != null && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
+            if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
             switch (entry.EntryType)
             {
@@ -294,7 +277,7 @@ public class OciPullService
                 case TarEntryType.RegularFile:
                 case TarEntryType.V7RegularFile:
                     if (File.Exists(targetPath)) File.Delete(targetPath);
-                    entry.ExtractToFile(targetPath, overwrite: true);
+                    entry.ExtractToFile(targetPath, true);
                     break;
                 case TarEntryType.SymbolicLink:
                 case TarEntryType.HardLink:
@@ -348,7 +331,7 @@ public class OciPullService
         if (manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32() != 2)
             throw new NotSupportedException("Only OCI/Docker schema v2 is supported");
 
-        JsonElement manifest = manifestDoc.RootElement;
+        var manifest = manifestDoc.RootElement;
         var manifestDigest = Sha256Digest(manifestStr);
 
         if (manifest.TryGetProperty("manifests", out var manifestsArray))
@@ -356,7 +339,6 @@ public class OciPullService
             _logger.LogInformation("Received a manifest list. Looking for architecture '386'...");
             string? targetDigest = null;
             foreach (var m in manifestsArray.EnumerateArray())
-            {
                 if (m.TryGetProperty("platform", out var platform) &&
                     platform.TryGetProperty("architecture", out var arch) &&
                     arch.GetString() == "386")
@@ -364,7 +346,6 @@ public class OciPullService
                     targetDigest = m.GetProperty("digest").GetString();
                     break;
                 }
-            }
 
             if (targetDigest == null)
                 throw new NotSupportedException(
@@ -386,12 +367,10 @@ public class OciPullService
                 .ToList();
             return (resolvedLayers, manifestDigest);
         }
-        else
-        {
-            var configDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
-            if (!string.IsNullOrEmpty(configDigest))
-                await VerifyArchitectureAsync(registry, repository, configDigest, token);
-        }
+
+        var configDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
+        if (!string.IsNullOrEmpty(configDigest))
+            await VerifyArchitectureAsync(registry, repository, configDigest, token);
 
         var layers = manifest
             .GetProperty("layers")
@@ -430,8 +409,8 @@ public class OciPullService
 
     private static string Sha256Digest(string content)
     {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
-        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var hash = SHA256.HashData(bytes);
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
 

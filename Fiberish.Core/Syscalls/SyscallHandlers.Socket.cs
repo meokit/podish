@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using Fiberish.Auth.Permission;
 using Fiberish.Core;
+using Fiberish.Core.Net;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -38,7 +39,8 @@ public partial class SyscallManager
                 return -(int)Errno.EPROTONOSUPPORT;
 
             var inode = new NetlinkRouteSocketInode(0, sm.MemfdSuperBlock,
-                () => Fiberish.Core.Net.NetDeviceSnapshotProvider.Capture(sm.NetworkMode, sm.TryGetPrivateNetNamespace()));
+                () => NetDeviceSnapshotProvider.Capture(sm.NetworkMode,
+                    sm.TryGetPrivateNetNamespace()));
             var fileFlags = FileFlags.O_RDWR;
             if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
@@ -77,7 +79,7 @@ public partial class SyscallManager
         else if (realType == LinuxConstants.SOCK_RAW) sockType = SocketType.Raw;
         else return -(int)Errno.EINVAL;
 
-        if (sm.NetworkMode == Fiberish.Core.Net.NetworkMode.Private)
+        if (sm.NetworkMode == NetworkMode.Private)
         {
             if (af != AddressFamily.InterNetwork) return -(int)Errno.EAFNOSUPPORT;
             if (sockType != SocketType.Stream && sockType != SocketType.Dgram) return -(int)Errno.ESOCKTNOSUPPORT;
@@ -104,28 +106,40 @@ public partial class SyscallManager
             else if (sockType == SocketType.Dgram) proto = ProtocolType.Udp;
             else return -(int)Errno.EPROTONOSUPPORT;
         }
-        else if (protocol == LinuxConstants.IPPROTO_TCP && sockType == SocketType.Stream) proto = ProtocolType.Tcp;
-        else if (protocol == LinuxConstants.IPPROTO_UDP && sockType == SocketType.Dgram) proto = ProtocolType.Udp;
+        else if (protocol == LinuxConstants.IPPROTO_TCP && sockType == SocketType.Stream)
+        {
+            proto = ProtocolType.Tcp;
+        }
+        else if (protocol == LinuxConstants.IPPROTO_UDP && sockType == SocketType.Dgram)
+        {
+            proto = ProtocolType.Udp;
+        }
         else if (protocol == LinuxConstants.IPPROTO_ICMP &&
                  (sockType == SocketType.Raw || sockType == SocketType.Dgram) &&
-                 af == AddressFamily.InterNetwork) proto = ProtocolType.Icmp;
+                 af == AddressFamily.InterNetwork)
+        {
+            proto = ProtocolType.Icmp;
+        }
         else if (protocol == LinuxConstants.IPPROTO_ICMPV6 &&
                  (sockType == SocketType.Raw || sockType == SocketType.Dgram) &&
-                 af == AddressFamily.InterNetworkV6) proto = ProtocolType.IcmpV6;
-        else return -(int)Errno.EPROTONOSUPPORT;
+                 af == AddressFamily.InterNetworkV6)
+        {
+            proto = ProtocolType.IcmpV6;
+        }
+        else
+        {
+            return -(int)Errno.EPROTONOSUPPORT;
+        }
 
         try
         {
             HostSocketInode inode;
             if ((sockType == SocketType.Dgram || sockType == SocketType.Raw) &&
                 (protocol == LinuxConstants.IPPROTO_ICMP || protocol == LinuxConstants.IPPROTO_ICMPV6))
-            {
                 inode = CreateHostSocketForLinuxPingSemantics(sm, af, proto, sockType);
-            }
             else
-            {
                 inode = new HostSocketInode(0, sm.MemfdSuperBlock, af, sockType, proto);
-            }
+
             var fileFlags = FileFlags.O_RDWR;
 
             if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
@@ -148,21 +162,19 @@ public partial class SyscallManager
     ///     to host datagram sockets, while HostSocketInode keeps Linux-visible SO_TYPE semantics via
     ///     LinuxSocketType. Keep this policy here, not in HostSocketInode, so the data path stays uniform.
     /// </summary>
-    private static HostSocketInode CreateHostSocketForLinuxPingSemantics(SyscallManager sm, AddressFamily af, ProtocolType proto,
+    private static HostSocketInode CreateHostSocketForLinuxPingSemantics(SyscallManager sm, AddressFamily af,
+        ProtocolType proto,
         SocketType linuxSocketType)
     {
         if (OperatingSystem.IsMacOS())
-        {
             return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
-                linuxSocketType: linuxSocketType);
-        }
+                linuxSocketType);
 
         if (linuxSocketType == SocketType.Dgram)
-        {
             try
             {
                 return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
-                    linuxSocketType: SocketType.Dgram);
+                    SocketType.Dgram);
             }
             catch (SocketException ex) when (
                 ex.SocketErrorCode is SocketError.ProtocolNotSupported or SocketError.OperationNotSupported)
@@ -170,12 +182,12 @@ public partial class SyscallManager
                 // Some hosts do not expose Linux-style ping sockets but still allow raw ICMP.
                 // Keep guest-visible SO_TYPE as SOCK_DGRAM to preserve Linux ABI.
                 return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto,
-                    linuxSocketType: SocketType.Dgram);
+                    SocketType.Dgram);
             }
-        }
 
-        return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto, linuxSocketType: linuxSocketType);
+        return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto, linuxSocketType);
     }
+
     private static async ValueTask<int> SysConnect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var sm = Get(state);
@@ -203,7 +215,7 @@ public partial class SyscallManager
             }
             else
             {
-                var loc = sm.PathWalk(unixAddr.Path, null, true);
+                var loc = sm.PathWalk(unixAddr.Path);
                 if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
                 if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
                 target = sm.LookupUnixPathSocket(loc.Dentry.Inode);
@@ -300,7 +312,7 @@ public partial class SyscallManager
             if (!parent.IsValid || string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
             if (parent.Mount != null && parent.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
-            var existing = sm.PathWalk(unixAddr.Path, null, true);
+            var existing = sm.PathWalk(unixAddr.Path);
             if (existing.IsValid) return -(int)Errno.EADDRINUSE;
 
             var currentTask = sm.Engine.Owner as FiberTask;
@@ -329,6 +341,7 @@ public partial class SyscallManager
                 {
                     // Best effort rollback.
                 }
+
                 return -(int)Errno.EIO;
             }
 
@@ -343,6 +356,7 @@ public partial class SyscallManager
                 {
                     // Best effort rollback.
                 }
+
                 return -(int)Errno.EADDRINUSE;
             }
 
@@ -379,11 +393,9 @@ public partial class SyscallManager
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode)
-        {
             // Userspace (iproute2/busybox ip) binds AF_NETLINK sockets before dump requests.
             // For our in-process route socket, bind has no side effects.
             return 0;
-        }
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -404,7 +416,6 @@ public partial class SyscallManager
             return unixSock.Listen(backlog);
 
         if (file.OpenedInode is HostSocketInode sockInode)
-        {
             try
             {
                 sockInode.NativeSocket!.Listen(backlog);
@@ -414,7 +425,6 @@ public partial class SyscallManager
             {
                 return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
-        }
 
         if (file.OpenedInode is NetstackSocketInode netInode)
             return netInode.Listen(backlog);
@@ -569,7 +579,6 @@ public partial class SyscallManager
         }
 
         if (file.OpenedInode is HostSocketInode sockInode)
-        {
             try
             {
                 var newSock = await sockInode.AcceptAsync(file, flags);
@@ -582,7 +591,8 @@ public partial class SyscallManager
                 var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, sm.MemfdSuperBlock);
                 var newFile = new LinuxFile(dentry, fileFlags, sm.AnonMount);
 
-                if (addrPtr != 0 && addrLenPtr != 0) WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
+                if (addrPtr != 0 && addrLenPtr != 0)
+                    WriteSockaddr(sm.Engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
 
                 return sm.AllocFD(newFile);
             }
@@ -592,7 +602,6 @@ public partial class SyscallManager
                     return -(int)Errno.ERESTARTSYS;
                 return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
-        }
 
         if (file.OpenedInode is NetstackSocketInode netInode)
         {
@@ -640,7 +649,6 @@ public partial class SyscallManager
             return unixInode.Shutdown(how);
 
         if (file.OpenedInode is HostSocketInode sockInode)
-        {
             try
             {
                 var mode = how switch
@@ -665,7 +673,6 @@ public partial class SyscallManager
             {
                 return -(int)Errno.ENOTCONN;
             }
-        }
 
         if (file.OpenedInode is NetstackSocketInode netInode)
             return netInode.Shutdown(how);
@@ -711,7 +718,7 @@ public partial class SyscallManager
                 }
                 else
                 {
-                    var loc = sm.PathWalk(unixAddr.Path, null, true);
+                    var loc = sm.PathWalk(unixAddr.Path);
                     if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
                     if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
                     explicitPeer = sm.LookupUnixPathSocket(loc.Dentry.Inode);
@@ -727,7 +734,6 @@ public partial class SyscallManager
         }
 
         if (file.OpenedInode is HostSocketInode sockInode)
-        {
             try
             {
                 var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
@@ -752,7 +758,6 @@ public partial class SyscallManager
             {
                 return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
-        }
 
         if (file.OpenedInode is NetstackSocketInode netInode)
         {
@@ -797,13 +802,11 @@ public partial class SyscallManager
             if (bytes < 0) return bytes;
 
             if (bytes > 0)
-            {
                 if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
                 {
                     ReleaseReceivedRights(res.Fds);
                     return -(int)Errno.EFAULT;
                 }
-            }
 
             if (srcAddrPtr != 0 && addrLenPtr != 0)
                 WriteSockaddrUnix(sm.Engine, srcAddrPtr, addrLenPtr, res.SourceSunPathRaw);
@@ -814,7 +817,6 @@ public partial class SyscallManager
         }
 
         if (file.OpenedInode is HostSocketInode sockInode)
-        {
             try
             {
                 var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
@@ -846,7 +848,6 @@ public partial class SyscallManager
             {
                 return -LinuxToWindowsSocketError(ex.SocketErrorCode);
             }
-        }
 
         if (file.OpenedInode is NetstackSocketInode netInode)
         {
@@ -870,6 +871,7 @@ public partial class SyscallManager
                 if (srcAddrPtr != 0 && addrLenPtr != 0 && remoteEp != null)
                     WriteSockaddr(sm.Engine, srcAddrPtr, addrLenPtr, remoteEp);
             }
+
             return bytes;
         }
 
@@ -913,9 +915,11 @@ public partial class SyscallManager
         var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
         if (iovLen < 0 || iovLen > 1024)
         {
-            Logger.LogWarning("[Socket] sendmsg invalid iovLen fd={Fd} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}", fd, iovLen, msgPtr);
+            Logger.LogWarning("[Socket] sendmsg invalid iovLen fd={Fd} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}", fd,
+                iovLen, msgPtr);
             return -(int)Errno.EINVAL;
         }
+
         if (controlLen < 0 || controlLen > 1 << 20) return -(int)Errno.EINVAL;
 
         long totalBytes = 0;
@@ -925,10 +929,12 @@ public partial class SyscallManager
             var iovRaw = new byte[8];
             if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw))
             {
-                Logger.LogWarning("[Socket] recvmsg failed to read iov fd={Fd} iovPtr=0x{IovPtr:X8} i={I} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}",
+                Logger.LogWarning(
+                    "[Socket] recvmsg failed to read iov fd={Fd} iovPtr=0x{IovPtr:X8} i={I} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}",
                     fd, iovPtr, i, iovLen, msgPtr);
                 return -(int)Errno.EFAULT;
             }
+
             iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
                 BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
             if (iovs[i].Len < 0) return -(int)Errno.EINVAL;
@@ -1036,7 +1042,7 @@ public partial class SyscallManager
         var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
         var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
         if (iovLen < 0 || iovLen > 1024) return -(int)Errno.EINVAL;
-        if (controlLen < 0 || controlLen > (1 << 20)) return -(int)Errno.EINVAL;
+        if (controlLen < 0 || controlLen > 1 << 20) return -(int)Errno.EINVAL;
 
         long totalBytes = 0;
         var iovs = new (uint Base, int Len)[iovLen];
@@ -1112,6 +1118,7 @@ public partial class SyscallManager
                     ReleaseReceivedRights(receivedFds);
                     return -(int)Errno.EFAULT;
                 }
+
                 offset += toCopy;
             }
 
@@ -1254,10 +1261,12 @@ public partial class SyscallManager
             var argsRaw = new byte[argCount * 4];
             if (!sm.Engine.CopyFromUser(argsPtr, argsRaw))
             {
-                Logger.LogWarning("[Socket] socketcall failed to read args call={Call} argsPtr=0x{ArgsPtr:X8} argCount={ArgCount}",
+                Logger.LogWarning(
+                    "[Socket] socketcall failed to read args call={Call} argsPtr=0x{ArgsPtr:X8} argCount={ArgCount}",
                     call, argsPtr, argCount);
                 return -(int)Errno.EFAULT;
             }
+
             for (var i = 0; i < argCount; i++)
                 args[i] = BinaryPrimitives.ReadUInt32LittleEndian(argsRaw.AsSpan(i * 4, 4));
         }

@@ -34,5 +34,5 @@ public enum LastType
     /// <summary>
     ///     No component (empty path or trailing slash).
     /// </summary>
-    None,
+    None
 }

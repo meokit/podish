@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using Fiberish.Core;
-
 namespace Fiberish.Syscalls;
 
 public class PosixTimerManager

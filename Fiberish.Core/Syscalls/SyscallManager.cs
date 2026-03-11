@@ -1,235 +1,44 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
+using Fiberish.Core.Net;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
-using Fiberish.Core.Net;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-    public sealed class RootMountOptions
-    {
-        public string Source { get; init; } = "none";
-        public string FsType { get; init; } = "none";
-        public string Options { get; init; } = "rw";
-        public uint? Flags { get; init; }
-        public Dentry? Root { get; init; }
-    }
+    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
 
     public const uint MountFlagMask = LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID |
                                       LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
-
-    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
 
     private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly ConcurrentDictionary<IntPtr, SyscallManager> _registry = new();
     private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
-    private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
     private readonly List<Mount> _containerOwnedMounts = [];
-    private readonly SharedFdTable _sharedFdTable;
-    private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
     private readonly FileSystemType _devptsFsType;
-    private readonly DeviceNumberManager _devNumberManager = new();
+
+    /// <summary>
+    ///     Mount namespace containing all mounts and lookup hash.
+    /// </summary>
+    private readonly MountNamespace _mountNamespace;
+
+    private readonly SharedFdTable _sharedFdTable;
+
+    private readonly SharedFsState _sharedFsState;
+    private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
+    private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
+
+    private int _closed;
     private SharedLoopbackNetNamespace? _privateNetNamespace;
-
-    internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
-    internal DeviceNumberManager DeviceNumbers => _devNumberManager;
-
-    private sealed class SharedFdTable
-    {
-        private int _refCount = 1;
-
-        public Dictionary<int, LinuxFile> Fds { get; } = [];
-        public HashSet<int> CloseOnExec { get; } = [];
-
-        public SharedFdTable AddRef()
-        {
-            Interlocked.Increment(ref _refCount);
-            return this;
-        }
-
-        public bool ReleaseRef()
-        {
-            return Interlocked.Decrement(ref _refCount) == 0;
-        }
-    }
-
-    private sealed class SharedUnixSocketNamespace
-    {
-        private int _refCount = 1;
-        private readonly Dictionary<Inode, UnixSocketInode> _pathSocketsByInode = [];
-        private readonly Dictionary<UnixSocketInode, Inode> _pathInodesBySocket = [];
-        private readonly Dictionary<string, UnixSocketInode> _abstractSockets = new(StringComparer.Ordinal);
-        private readonly Dictionary<UnixSocketInode, string> _abstractKeysBySocket = [];
-
-        private readonly struct NamespaceScope : IDisposable
-        {
-            public void Dispose()
-            {
-            }
-        }
-
-        private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
-        {
-            KernelScheduler.Current?.AssertSchedulerThread(caller);
-            return default;
-        }
-
-        public SharedUnixSocketNamespace AddRef()
-        {
-            Interlocked.Increment(ref _refCount);
-            return this;
-        }
-
-        public bool ReleaseRef()
-        {
-            return Interlocked.Decrement(ref _refCount) == 0;
-        }
-
-        public bool TryBindPath(Inode pathInode, UnixSocketInode socketInode)
-        {
-            using (EnterNamespaceScope())
-            {
-                if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
-                if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
-                _pathSocketsByInode[pathInode] = socketInode;
-                _pathInodesBySocket[socketInode] = pathInode;
-                return true;
-            }
-        }
-
-        public bool TryBindAbstract(string key, UnixSocketInode socketInode)
-        {
-            using (EnterNamespaceScope())
-            {
-                if (_abstractSockets.ContainsKey(key)) return false;
-                if (_abstractKeysBySocket.ContainsKey(socketInode)) return false;
-                _abstractSockets[key] = socketInode;
-                _abstractKeysBySocket[socketInode] = key;
-                return true;
-            }
-        }
-
-        public UnixSocketInode? LookupPath(Inode pathInode)
-        {
-            using (EnterNamespaceScope())
-            {
-                return _pathSocketsByInode.GetValueOrDefault(pathInode);
-            }
-        }
-
-        public UnixSocketInode? LookupAbstract(string key)
-        {
-            using (EnterNamespaceScope())
-            {
-                return _abstractSockets.GetValueOrDefault(key);
-            }
-        }
-
-        public void Unbind(UnixSocketInode inode)
-        {
-            using (EnterNamespaceScope())
-            {
-                if (_pathInodesBySocket.Remove(inode, out var pathInode))
-                    _pathSocketsByInode.Remove(pathInode);
-
-                if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
-                    _abstractSockets.Remove(abstractKey);
-            }
-        }
-
-        public void Clear()
-        {
-            using (EnterNamespaceScope())
-            {
-                _pathSocketsByInode.Clear();
-                _pathInodesBySocket.Clear();
-                _abstractSockets.Clear();
-                _abstractKeysBySocket.Clear();
-            }
-        }
-    }
-
-    private sealed class SharedFsState
-    {
-        private int _refCount = 1;
-
-        public PathLocation Root { get; private set; } = PathLocation.None;
-        public PathLocation CurrentWorkingDirectory { get; private set; } = PathLocation.None;
-        public PathLocation ProcessRoot { get; private set; } = PathLocation.None;
-
-        public SharedFsState AddRef()
-        {
-            Interlocked.Increment(ref _refCount);
-            return this;
-        }
-
-        public void Release(string reason)
-        {
-            if (Interlocked.Decrement(ref _refCount) > 0)
-                return;
-
-            UnpinPathLocation(Root, $"root:{reason}");
-            UnpinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
-            UnpinPathLocation(ProcessRoot, $"procroot:{reason}");
-            Root = PathLocation.None;
-            CurrentWorkingDirectory = PathLocation.None;
-            ProcessRoot = PathLocation.None;
-        }
-
-        public SharedFsState CloneIsolated(string reason)
-        {
-            var clone = new SharedFsState();
-            clone.ReplaceAll(Root, CurrentWorkingDirectory, ProcessRoot, reason);
-            return clone;
-        }
-
-        public void ReplaceAll(PathLocation root, PathLocation cwd, PathLocation procRoot, string reason)
-        {
-            var oldRoot = Root;
-            var oldCwd = CurrentWorkingDirectory;
-            var oldProcRoot = ProcessRoot;
-
-            Root = root;
-            CurrentWorkingDirectory = cwd;
-            ProcessRoot = procRoot;
-
-            PinPathLocation(Root, $"root:{reason}");
-            PinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
-            PinPathLocation(ProcessRoot, $"procroot:{reason}");
-
-            UnpinPathLocation(oldRoot, $"root:{reason}-old");
-            UnpinPathLocation(oldCwd, $"cwd:{reason}-old");
-            UnpinPathLocation(oldProcRoot, $"procroot:{reason}-old");
-        }
-
-        public void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
-        {
-            var old = CurrentWorkingDirectory;
-            CurrentWorkingDirectory = next;
-            PinPathLocation(next, $"cwd:{reason}");
-            UnpinPathLocation(old, $"cwd:{reason}");
-        }
-
-        public void UpdateProcessRoot(PathLocation next, string reason)
-        {
-            var old = ProcessRoot;
-            ProcessRoot = next;
-            PinPathLocation(next, $"procroot:{reason}");
-            UnpinPathLocation(old, $"procroot:{reason}");
-        }
-    }
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
     {
@@ -268,7 +77,7 @@ public partial class SyscallManager
 
         // Default memfd superblock
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        MemfdSuperBlock = tmpFsType.CreateFileSystem(_devNumberManager).ReadSuper(tmpFsType, 0, "memfd", null);
+        MemfdSuperBlock = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "memfd", null);
 
         // Anonymous inode mount (like Linux's anon_inodefs)
         // Used for timerfd, eventfd, epoll, socket, etc.
@@ -320,6 +129,9 @@ public partial class SyscallManager
         _privateNetNamespace = privateNetNamespace;
     }
 
+    internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
+    internal DeviceNumberManager DeviceNumbers { get; } = new();
+
     public TtyDiscipline? Tty { get; }
 
     // PTY Manager for /dev/ptmx and /dev/pts/N
@@ -344,7 +156,7 @@ public partial class SyscallManager
     ///     Mount for anonymous inode files (timerfd, eventfd, epoll, socket, etc.).
     ///     Similar to Linux's anon_inodefs.
     /// </summary>
-    public Mount AnonMount { get; private set; } = null!;
+    public Mount AnonMount { get; } = null!;
 
     // System V Shared Memory (Global IPC namespace)
     public SysVShmManager SysVShm { get; }
@@ -359,54 +171,6 @@ public partial class SyscallManager
     public uint BrkBase { get; }
     public bool Strace { get; set; }
     public NetworkMode NetworkMode { get; set; } = NetworkMode.Host;
-
-    public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()
-    {
-        return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24))).Namespace;
-    }
-
-    public LoopbackNetNamespace? TryGetPrivateNetNamespace()
-    {
-        return _privateNetNamespace?.Namespace;
-    }
-
-    public void SetPrivateNetNamespace(SharedLoopbackNetNamespace sharedNamespace)
-    {
-        _privateNetNamespace?.Release();
-        _privateNetNamespace = sharedNamespace.AddRef();
-    }
-
-    /// <summary>
-    ///     Mount namespace containing all mounts and lookup hash.
-    /// </summary>
-    private readonly MountNamespace _mountNamespace;
-    private readonly SharedFsState _sharedFsState;
-
-    private int _closed;
-
-    private static void PinPathLocation(PathLocation loc, string reason)
-    {
-        loc.Mount?.Get();
-        loc.Dentry?.Get(reason);
-        loc.Dentry?.Inode?.AcquireRef(InodeRefKind.PathPin, reason);
-    }
-
-    private static void UnpinPathLocation(PathLocation loc, string reason)
-    {
-        loc.Dentry?.Inode?.ReleaseRef(InodeRefKind.PathPin, reason);
-        loc.Dentry?.Put(reason);
-        loc.Mount?.Put();
-    }
-
-    internal void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
-    {
-        _sharedFsState.UpdateCurrentWorkingDirectory(next, reason);
-    }
-
-    internal void UpdateProcessRoot(PathLocation next, string reason)
-    {
-        _sharedFsState.UpdateProcessRoot(next, reason);
-    }
 
     /// <summary>
     ///     Gets mount information for /proc/mounts.
@@ -433,6 +197,47 @@ public partial class SyscallManager
     public uint RtSigReturnAddr { get; private set; }
 
     private HashSet<int> FdCloseOnExecSet => _sharedFdTable.CloseOnExec;
+
+    public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()
+    {
+        return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24)))
+            .Namespace;
+    }
+
+    public LoopbackNetNamespace? TryGetPrivateNetNamespace()
+    {
+        return _privateNetNamespace?.Namespace;
+    }
+
+    public void SetPrivateNetNamespace(SharedLoopbackNetNamespace sharedNamespace)
+    {
+        _privateNetNamespace?.Release();
+        _privateNetNamespace = sharedNamespace.AddRef();
+    }
+
+    private static void PinPathLocation(PathLocation loc, string reason)
+    {
+        loc.Mount?.Get();
+        loc.Dentry?.Get(reason);
+        loc.Dentry?.Inode?.AcquireRef(InodeRefKind.PathPin, reason);
+    }
+
+    private static void UnpinPathLocation(PathLocation loc, string reason)
+    {
+        loc.Dentry?.Inode?.ReleaseRef(InodeRefKind.PathPin, reason);
+        loc.Dentry?.Put(reason);
+        loc.Mount?.Put();
+    }
+
+    internal void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
+    {
+        _sharedFsState.UpdateCurrentWorkingDirectory(next, reason);
+    }
+
+    internal void UpdateProcessRoot(PathLocation next, string reason)
+    {
+        _sharedFsState.UpdateProcessRoot(next, reason);
+    }
 
     public void InitializeRoot(Dentry root, Mount rootMount)
     {
@@ -472,7 +277,7 @@ public partial class SyscallManager
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var sb = hostFsType.CreateFileSystem(_devNumberManager).ReadSuper(hostFsType, 0, hostPath, options);
+        var sb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostPath, options);
         MountRoot(sb, new RootMountOptions
         {
             Source = hostPath,
@@ -491,7 +296,7 @@ public partial class SyscallManager
         string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var lowerSb = hostFsType.CreateFileSystem(_devNumberManager).ReadSuper(hostFsType, 0, hostRoot, null);
+        var lowerSb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostRoot, null);
         MountRootOverlayWithLower(lowerSb, upperFsType, upperSource, options);
     }
 
@@ -501,10 +306,11 @@ public partial class SyscallManager
         var upperType = FileSystemRegistry.Get(upperFsType) ??
                         throw new Exception($"Upper filesystem not registered: {upperFsType}");
         var overlayFsType = FileSystemRegistry.Get("overlay")!;
-        var upperSb = upperType.CreateFileSystem(_devNumberManager).ReadSuper(upperType, 0, upperSource, null);
+        var upperSb = upperType.CreateFileSystem(DeviceNumbers).ReadSuper(upperType, 0, upperSource, null);
 
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-        var overlaySb = overlayFsType.CreateFileSystem(_devNumberManager).ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
+        var overlaySb = overlayFsType.CreateFileSystem(DeviceNumbers)
+            .ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
 
         MountRoot(overlaySb, new RootMountOptions
         {
@@ -518,7 +324,7 @@ public partial class SyscallManager
     {
         var devLoc = ensureMountPoint ? EnsureDirectory(Root, "dev") : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
-        var devSb = devFsType.CreateFileSystem(_devNumberManager).ReadSuper(devFsType, 0, "dev", null);
+        var devSb = devFsType.CreateFileSystem(DeviceNumbers).ReadSuper(devFsType, 0, "dev", null);
 
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
@@ -540,7 +346,8 @@ public partial class SyscallManager
         if (mountedDevLoc.IsValid && mountedDevLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var ptsLoc = EnsureDirectory(mountedDevLoc, "pts");
-            var devptsSb = _devptsFsType.CreateFileSystem(_devNumberManager).ReadSuper(_devptsFsType, 0, "devpts", null);
+            var devptsSb = _devptsFsType.CreateFileSystem(DeviceNumbers)
+                .ReadSuper(_devptsFsType, 0, "devpts", null);
             var devptsMount = CreateDetachedMount(devptsSb, "devpts", "devpts", 0, "gid=5,mode=620");
             var attachRc = AttachDetachedMount(devptsMount, ptsLoc);
             if (attachRc != 0)
@@ -567,7 +374,7 @@ public partial class SyscallManager
         if (procLoc.IsValid && procLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
-            var procSb = procFsType.CreateFileSystem(_devNumberManager).ReadSuper(procFsType, 0, "proc", this);
+            var procSb = procFsType.CreateFileSystem(DeviceNumbers).ReadSuper(procFsType, 0, "proc", this);
             var procMount = CreateDetachedMount(procSb, "proc", "proc", 0);
             var attachRc = AttachDetachedMount(procMount, procLoc);
             if (attachRc != 0)
@@ -582,7 +389,7 @@ public partial class SyscallManager
     public void MountStandardShm()
     {
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        var shmSb = tmpFsType.CreateFileSystem(_devNumberManager).ReadSuper(tmpFsType, 0, "shm", null);
+        var shmSb = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "shm", null);
 
         // Resolve through the mounted /dev to avoid creating shm under a detached devtmpfs root.
         var devLoc = PathWalk("/dev");
@@ -616,7 +423,7 @@ public partial class SyscallManager
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]");
 
         // Prefault a writable private page for initial setup.
-        if (!Mem.PrefaultRange(vdsoAddr, 4096, Engine, writeIntent: true))
+        if (!Mem.PrefaultRange(vdsoAddr, 4096, Engine, true))
             throw new OutOfMemoryException("Failed to allocate vDSO page");
 
         // Write trampolines
@@ -707,10 +514,7 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++)
-        {
-            current = EnsureDirectory(current, parts[i]);
-        }
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
 
         var name = parts[^1];
         var isFile = File.Exists(hostPath);
@@ -718,28 +522,18 @@ public partial class SyscallManager
 
         // Create the mount point if it doesn't exist
         if (isDir)
-        {
             EnsureDirectory(current, name);
-        }
         else if (isFile)
-        {
             EnsureFileMountPoint(current, name);
-        }
         else
-        {
             throw new FileNotFoundException("Host path not found", hostPath);
-        }
 
         var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, "hostfs");
         fsCtx.SetString("source", hostPath);
         if (readOnly)
-        {
             fsCtx.SetFlag("ro");
-        }
         else
-        {
             fsCtx.SetFlag("rw");
-        }
 
         fsCtx.State = FsContextState.Created;
 
@@ -770,10 +564,7 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++)
-        {
-            current = EnsureDirectory(current, parts[i]);
-        }
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
 
         var name = parts[^1];
         EnsureFileMountPoint(current, name);
@@ -897,7 +688,6 @@ public partial class SyscallManager
         uint flags = 0;
         var tokens = options.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         foreach (var token in tokens)
-        {
             switch (token)
             {
                 case "ro":
@@ -916,7 +706,6 @@ public partial class SyscallManager
                     flags |= LinuxConstants.MS_NOEXEC;
                     break;
             }
-        }
 
         return flags;
     }
@@ -953,7 +742,7 @@ public partial class SyscallManager
 
         try
         {
-            sb = fsType.CreateFileSystem(_devNumberManager).ReadSuper(fsType, readSuperFlags, source!, readSuperData);
+            sb = fsType.CreateFileSystem(DeviceNumbers).ReadSuper(fsType, readSuperFlags, source!, readSuperData);
         }
         catch
         {
@@ -1225,7 +1014,8 @@ public partial class SyscallManager
         var sharedNamespace = _mountNamespace.Share();
         var sharedFsState = shareFs ? _sharedFsState.AddRef() : _sharedFsState.CloneIsolated("clone");
 
-        var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), sharedFsState, Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
+        var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), sharedFsState,
+            Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
             Strace, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
             sharedNamespace, _privateNetNamespace?.AddRef())
         {
@@ -1302,7 +1092,6 @@ public partial class SyscallManager
             ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
 
             if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
-            {
                 try
                 {
                     retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
@@ -1317,13 +1106,11 @@ public partial class SyscallManager
                         SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
                     return true;
                 }
-            }
             else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
 
             // --- Handling Async Syscalls ---
             int completedRet;
             if (retTask.IsCompleted)
-            {
                 try
                 {
                     completedRet = retTask.Result;
@@ -1338,11 +1125,8 @@ public partial class SyscallManager
                         SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
                     return true;
                 }
-            }
             else
-            {
                 completedRet = 0;
-            }
 
             if (retTask.IsCompleted && completedRet != -(int)Errno.ERESTARTSYS)
             {
@@ -1494,6 +1278,200 @@ public partial class SyscallManager
     internal void UnbindUnixSocket(UnixSocketInode inode)
     {
         _sharedUnixSocketNamespace.Unbind(inode);
+    }
+
+    public sealed class RootMountOptions
+    {
+        public string Source { get; init; } = "none";
+        public string FsType { get; init; } = "none";
+        public string Options { get; init; } = "rw";
+        public uint? Flags { get; init; }
+        public Dentry? Root { get; init; }
+    }
+
+    private sealed class SharedFdTable
+    {
+        private int _refCount = 1;
+
+        public Dictionary<int, LinuxFile> Fds { get; } = [];
+        public HashSet<int> CloseOnExec { get; } = [];
+
+        public SharedFdTable AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public bool ReleaseRef()
+        {
+            return Interlocked.Decrement(ref _refCount) == 0;
+        }
+    }
+
+    private sealed class SharedUnixSocketNamespace
+    {
+        private readonly Dictionary<UnixSocketInode, string> _abstractKeysBySocket = [];
+        private readonly Dictionary<string, UnixSocketInode> _abstractSockets = new(StringComparer.Ordinal);
+        private readonly Dictionary<UnixSocketInode, Inode> _pathInodesBySocket = [];
+        private readonly Dictionary<Inode, UnixSocketInode> _pathSocketsByInode = [];
+        private int _refCount = 1;
+
+        private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
+        {
+            KernelScheduler.Current?.AssertSchedulerThread(caller);
+            return default;
+        }
+
+        public SharedUnixSocketNamespace AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public bool ReleaseRef()
+        {
+            return Interlocked.Decrement(ref _refCount) == 0;
+        }
+
+        public bool TryBindPath(Inode pathInode, UnixSocketInode socketInode)
+        {
+            using (EnterNamespaceScope())
+            {
+                if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
+                if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
+                _pathSocketsByInode[pathInode] = socketInode;
+                _pathInodesBySocket[socketInode] = pathInode;
+                return true;
+            }
+        }
+
+        public bool TryBindAbstract(string key, UnixSocketInode socketInode)
+        {
+            using (EnterNamespaceScope())
+            {
+                if (_abstractSockets.ContainsKey(key)) return false;
+                if (_abstractKeysBySocket.ContainsKey(socketInode)) return false;
+                _abstractSockets[key] = socketInode;
+                _abstractKeysBySocket[socketInode] = key;
+                return true;
+            }
+        }
+
+        public UnixSocketInode? LookupPath(Inode pathInode)
+        {
+            using (EnterNamespaceScope())
+            {
+                return _pathSocketsByInode.GetValueOrDefault(pathInode);
+            }
+        }
+
+        public UnixSocketInode? LookupAbstract(string key)
+        {
+            using (EnterNamespaceScope())
+            {
+                return _abstractSockets.GetValueOrDefault(key);
+            }
+        }
+
+        public void Unbind(UnixSocketInode inode)
+        {
+            using (EnterNamespaceScope())
+            {
+                if (_pathInodesBySocket.Remove(inode, out var pathInode))
+                    _pathSocketsByInode.Remove(pathInode);
+
+                if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
+                    _abstractSockets.Remove(abstractKey);
+            }
+        }
+
+        public void Clear()
+        {
+            using (EnterNamespaceScope())
+            {
+                _pathSocketsByInode.Clear();
+                _pathInodesBySocket.Clear();
+                _abstractSockets.Clear();
+                _abstractKeysBySocket.Clear();
+            }
+        }
+
+        private readonly struct NamespaceScope : IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private sealed class SharedFsState
+    {
+        private int _refCount = 1;
+
+        public PathLocation Root { get; private set; } = PathLocation.None;
+        public PathLocation CurrentWorkingDirectory { get; private set; } = PathLocation.None;
+        public PathLocation ProcessRoot { get; private set; } = PathLocation.None;
+
+        public SharedFsState AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+            return this;
+        }
+
+        public void Release(string reason)
+        {
+            if (Interlocked.Decrement(ref _refCount) > 0)
+                return;
+
+            UnpinPathLocation(Root, $"root:{reason}");
+            UnpinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
+            UnpinPathLocation(ProcessRoot, $"procroot:{reason}");
+            Root = PathLocation.None;
+            CurrentWorkingDirectory = PathLocation.None;
+            ProcessRoot = PathLocation.None;
+        }
+
+        public SharedFsState CloneIsolated(string reason)
+        {
+            var clone = new SharedFsState();
+            clone.ReplaceAll(Root, CurrentWorkingDirectory, ProcessRoot, reason);
+            return clone;
+        }
+
+        public void ReplaceAll(PathLocation root, PathLocation cwd, PathLocation procRoot, string reason)
+        {
+            var oldRoot = Root;
+            var oldCwd = CurrentWorkingDirectory;
+            var oldProcRoot = ProcessRoot;
+
+            Root = root;
+            CurrentWorkingDirectory = cwd;
+            ProcessRoot = procRoot;
+
+            PinPathLocation(Root, $"root:{reason}");
+            PinPathLocation(CurrentWorkingDirectory, $"cwd:{reason}");
+            PinPathLocation(ProcessRoot, $"procroot:{reason}");
+
+            UnpinPathLocation(oldRoot, $"root:{reason}-old");
+            UnpinPathLocation(oldCwd, $"cwd:{reason}-old");
+            UnpinPathLocation(oldProcRoot, $"procroot:{reason}-old");
+        }
+
+        public void UpdateCurrentWorkingDirectory(PathLocation next, string reason)
+        {
+            var old = CurrentWorkingDirectory;
+            CurrentWorkingDirectory = next;
+            PinPathLocation(next, $"cwd:{reason}");
+            UnpinPathLocation(old, $"cwd:{reason}");
+        }
+
+        public void UpdateProcessRoot(PathLocation next, string reason)
+        {
+            var old = ProcessRoot;
+            ProcessRoot = next;
+            PinPathLocation(next, $"procroot:{reason}");
+            UnpinPathLocation(old, $"procroot:{reason}");
+        }
     }
 
     private class PlaceholderInode : Inode

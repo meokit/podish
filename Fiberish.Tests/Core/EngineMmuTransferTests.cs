@@ -89,7 +89,7 @@ public class EngineMmuTransferTests
             Assert.NotEqual(IntPtr.Zero, owned);
             Marshal.WriteByte(owned, 0x66);
 
-            using var child = parent.Clone(shareMem: false);
+            using var child = parent.Clone(false);
             Assert.NotEqual(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
 
             var read = new byte[1];
@@ -124,7 +124,7 @@ public class EngineMmuTransferTests
             Assert.NotEqual(IntPtr.Zero, owned);
             Marshal.WriteByte(owned, 0x3C);
 
-            using var child = parent.Clone(shareMem: false, memoryMode: EngineCloneMemoryMode.SkipMmu);
+            using var child = parent.Clone(false, EngineCloneMemoryMode.SkipMmu);
             var read = new byte[1];
             Assert.False(child.CopyFromUser(externalAddr, read));
             Assert.False(child.CopyFromUser(ownedAddr, read));

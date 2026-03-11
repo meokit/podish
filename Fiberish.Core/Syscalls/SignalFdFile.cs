@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -10,26 +9,19 @@ namespace Fiberish.Syscalls;
 public class SignalFdInode : TmpfsInode
 {
     private readonly List<Action> _waiters = [];
-    private ulong _sigMask;
-    private FiberTask? _hookedTask;
     private int _activeHandleCount;
+    private FiberTask? _hookedTask;
+    private ulong _sigMask;
 
-    private readonly struct StateScope : IDisposable
+    public SignalFdInode(ulong ino, SuperBlock superBlock, ulong sigMask) : base(ino, superBlock)
     {
-        public void Dispose()
-        {
-        }
+        _sigMask = sigMask;
     }
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
         KernelScheduler.Current?.AssertSchedulerThread(caller);
         return default;
-    }
-
-    public SignalFdInode(ulong ino, SuperBlock superBlock, ulong sigMask) : base(ino, superBlock)
-    {
-        _sigMask = sigMask;
     }
 
     public void SetMask(ulong sigMask)
@@ -40,15 +32,14 @@ public class SignalFdInode : TmpfsInode
         }
     }
 
-    public override void Open(Fiberish.VFS.LinuxFile file)
+    public override void Open(LinuxFile file)
     {
         Interlocked.Increment(ref _activeHandleCount);
     }
 
-    public override void Release(Fiberish.VFS.LinuxFile file)
+    public override void Release(LinuxFile file)
     {
         if (Interlocked.Decrement(ref _activeHandleCount) == 0)
-        {
             using (EnterStateScope())
             {
                 if (_hookedTask != null)
@@ -56,14 +47,14 @@ public class SignalFdInode : TmpfsInode
                     _hookedTask.SignalPosted -= OnTaskSignalPosted;
                     _hookedTask = null;
                 }
+
                 _waiters.Clear();
             }
-        }
 
         base.Release(file);
     }
 
-    public override int Read(Fiberish.VFS.LinuxFile file, Span<byte> buffer, long offset)
+    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
     {
         // struct signalfd_siginfo is 128 bytes
         if (buffer.Length < 128) return -(int)Errno.EINVAL;
@@ -74,21 +65,15 @@ public class SignalFdInode : TmpfsInode
             if (task == null) return -(int)Errno.EINVAL;
 
             SigInfo? sigInfo = null;
-            int pendingMatched = 0;
+            var pendingMatched = 0;
             if (task.PendingSignals > 0)
-            {
-                for (int i = 1; i <= 64; i++)
-                {
+                for (var i = 1; i <= 64; i++)
                     if ((task.PendingSignals & (1UL << (i - 1))) != 0)
-                    {
                         if (IsSignalInMask((ulong)i, _sigMask))
                         {
                             pendingMatched = i;
                             break;
                         }
-                    }
-                }
-            }
 
             if (pendingMatched == 0)
             {
@@ -124,36 +109,31 @@ public class SignalFdInode : TmpfsInode
         }
     }
 
-    public override int Write(Fiberish.VFS.LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         return -(int)Errno.EINVAL; // Invalid argument to write to signalfd
     }
 
-    public override short Poll(Fiberish.VFS.LinuxFile file, short events)
+    public override short Poll(LinuxFile file, short events)
     {
         short revents = 0;
         using (EnterStateScope())
         {
             var task = KernelScheduler.Current?.CurrentTask;
             if (task != null && (events & LinuxConstants.POLLIN) != 0)
-            {
-                for (int i = 1; i <= 64; i++)
-                {
+                for (var i = 1; i <= 64; i++)
                     if ((task.PendingSignals & (1UL << (i - 1))) != 0)
-                    {
                         if (IsSignalInMask((ulong)i, _sigMask))
                         {
-                            revents |= (short)LinuxConstants.POLLIN;
+                            revents |= LinuxConstants.POLLIN;
                             break;
                         }
-                    }
-                }
-            }
         }
+
         return revents;
     }
 
-    public override bool RegisterWait(Fiberish.VFS.LinuxFile file, Action callback, short events)
+    public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
         var task = KernelScheduler.Current?.CurrentTask;
         using (EnterStateScope())
@@ -163,10 +143,11 @@ public class SignalFdInode : TmpfsInode
                 return false;
             _waiters.Add(callback);
         }
+
         return true;
     }
 
-    public override IDisposable? RegisterWaitHandle(Fiberish.VFS.LinuxFile file, Action callback, short events)
+    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         var task = KernelScheduler.Current?.CurrentTask;
         using (EnterStateScope())
@@ -177,6 +158,7 @@ public class SignalFdInode : TmpfsInode
                 callback();
                 return NoopWaitRegistration.Instance;
             }
+
             _waiters.Add(callback);
         }
 
@@ -190,10 +172,8 @@ public class SignalFdInode : TmpfsInode
         {
             mask = _sigMask;
         }
-        if (IsSignalInMask((ulong)sig, mask))
-        {
-            NotifyWaiters();
-        }
+
+        if (IsSignalInMask((ulong)sig, mask)) NotifyWaiters();
     }
 
     private void NotifyWaiters()
@@ -204,20 +184,16 @@ public class SignalFdInode : TmpfsInode
             toWake = [.._waiters];
             _waiters.Clear();
         }
-        foreach (var action in toWake)
-        {
-            action();
-        }
+
+        foreach (var action in toWake) action();
     }
 
     private void EnsureTaskHooked(FiberTask? task)
     {
         if (task == null || ReferenceEquals(_hookedTask, task))
             return;
-        if (_hookedTask != null)
-        {
-            _hookedTask.SignalPosted -= OnTaskSignalPosted;
-        }
+        if (_hookedTask != null) _hookedTask.SignalPosted -= OnTaskSignalPosted;
+
         _hookedTask = task;
         _hookedTask.SignalPosted += OnTaskSignalPosted;
     }
@@ -233,6 +209,7 @@ public class SignalFdInode : TmpfsInode
             if (IsSignalInMask((ulong)i, _sigMask))
                 return true;
         }
+
         return false;
     }
 
@@ -242,11 +219,18 @@ public class SignalFdInode : TmpfsInode
         return (mask & (1UL << (int)(sig - 1))) != 0;
     }
 
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
     private sealed class CallbackRegistration : IDisposable
     {
+        private readonly Action _callback;
         private readonly SignalFdInode _owner;
         private List<Action>? _waiters;
-        private readonly Action _callback;
 
         public CallbackRegistration(SignalFdInode owner, List<Action> waiters, Action callback)
         {

@@ -1,7 +1,6 @@
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
-using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace Fiberish.Memory;
 
@@ -11,40 +10,12 @@ namespace Fiberish.Memory;
 /// </summary>
 public static class GlobalPageCacheManager
 {
-    private sealed class State
-    {
-        public readonly object Gate = new();
-        public readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
-        public long NextMaintenanceTicks;
-        public long WritebackPagesInFlight;
-        public TimeSpan WritebackInterval = TimeSpan.FromSeconds(5);
-        public long HighWatermarkBytes = 256L * 1024 * 1024;
-        public long LowWatermarkBytes = 192L * 1024 * 1024;
-    }
-
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly State? _previous;
-
-        public ScopeRestore(State? previous)
-        {
-            _previous = previous;
-        }
-
-        public void Dispose()
-        {
-            ScopedState.Value = _previous;
-        }
-    }
-
     public enum PageCacheClass
     {
         File,
         Shmem,
         AnonSharedSource
     }
-
-    private readonly record struct TrackedEntry(WeakReference<MemoryObject> Cache, PageCacheClass Class);
 
     private static readonly AsyncLocal<State?> ScopedState = new();
     private static readonly State DefaultState = new();
@@ -117,10 +88,6 @@ public static class GlobalPageCacheManager
         }
     }
 
-    public readonly record struct CacheStats(long TotalPages, long CleanPages, long DirtyPages, long ShmemPages,
-        long AnonSharedSourcePages, long WritebackPages);
-    public readonly record struct CachePageState(PageCacheClass Class, bool Dirty, long LastAccessTicks);
-
     public static CacheStats GetCacheStats()
     {
         var state = CurrentState;
@@ -136,9 +103,8 @@ public static class GlobalPageCacheManager
             if (cacheClass == PageCacheClass.Shmem) shmem += states.Count;
             if (cacheClass == PageCacheClass.AnonSharedSource) anonSharedSource += states.Count;
             foreach (var pageState in states)
-            {
-                if (pageState.Dirty) dirty++;
-            }
+                if (pageState.Dirty)
+                    dirty++;
         }
 
         return new CacheStats(
@@ -160,9 +126,7 @@ public static class GlobalPageCacheManager
         {
             var cacheStates = cache.SnapshotPageStates();
             foreach (var state in cacheStates)
-            {
                 states.Add(new CachePageState(cacheClass, state.Dirty, state.LastAccessTicks));
-            }
         }
 
         return states;
@@ -214,12 +178,10 @@ public static class GlobalPageCacheManager
             var caches = new List<(MemoryObject Cache, PageCacheClass Class)>(state.TrackedCaches.Count);
             var deadKeys = new List<int>();
             foreach (var (key, entry) in state.TrackedCaches)
-            {
                 if (entry.Cache.TryGetTarget(out var cache))
                     caches.Add((cache, entry.Class));
                 else
                     deadKeys.Add(key);
-            }
 
             foreach (var dead in deadKeys) state.TrackedCaches.Remove(dead);
             return caches;
@@ -246,14 +208,50 @@ public static class GlobalPageCacheManager
 
         long freed = 0;
         foreach (var candidate in candidates)
-        {
             if (candidate.Cache.TryEvictCleanPage(candidate.PageIndex))
             {
                 freed += LinuxConstants.PageSize;
                 if (freed >= targetFreeBytes) break;
             }
-        }
 
         return freed;
     }
+
+    private sealed class State
+    {
+        public readonly object Gate = new();
+        public readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
+        public long HighWatermarkBytes = 256L * 1024 * 1024;
+        public long LowWatermarkBytes = 192L * 1024 * 1024;
+        public long NextMaintenanceTicks;
+        public TimeSpan WritebackInterval = TimeSpan.FromSeconds(5);
+        public long WritebackPagesInFlight;
+    }
+
+    private sealed class ScopeRestore : IDisposable
+    {
+        private readonly State? _previous;
+
+        public ScopeRestore(State? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            ScopedState.Value = _previous;
+        }
+    }
+
+    private readonly record struct TrackedEntry(WeakReference<MemoryObject> Cache, PageCacheClass Class);
+
+    public readonly record struct CacheStats(
+        long TotalPages,
+        long CleanPages,
+        long DirtyPages,
+        long ShmemPages,
+        long AnonSharedSourcePages,
+        long WritebackPages);
+
+    public readonly record struct CachePageState(PageCacheClass Class, bool Dirty, long LastAccessTicks);
 }

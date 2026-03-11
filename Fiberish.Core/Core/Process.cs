@@ -1,10 +1,11 @@
+using System.Text;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
-using System.Text;
 
 namespace Fiberish.Core;
 
@@ -50,8 +51,8 @@ public struct SigAction
 
 public class Process
 {
-    private static readonly byte[] EmptyCmdline = [];
     public const int CapabilitySysAdmin = 21;
+    private static readonly byte[] EmptyCmdline = [];
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
@@ -63,7 +64,7 @@ public class Process
         // Default to root
         UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
         // Minimal capability model: root starts with CAP_SYS_ADMIN effective+permitted.
-        SetCapability(CapabilitySysAdmin, effective: true, permitted: true, inheritable: false);
+        SetCapability(CapabilitySysAdmin, true, true, false);
     }
 
     public int TGID { get; set; }
@@ -89,49 +90,15 @@ public class Process
     public uint[] CapPermitted { get; } = [0U, 0U];
     public uint[] CapInheritable { get; } = [0U, 0U];
 
-    public void SetCapability(int capability, bool effective, bool permitted, bool inheritable)
-    {
-        SetCapabilityBit(CapEffective, capability, effective);
-        SetCapabilityBit(CapPermitted, capability, permitted);
-        SetCapabilityBit(CapInheritable, capability, inheritable);
-    }
-
-    public bool HasEffectiveCapability(int capability)
-    {
-        if (capability < 0) return false;
-        var word = capability / 32;
-        if ((uint)word >= (uint)CapEffective.Length) return false;
-        var bit = capability % 32;
-        return (CapEffective[word] & (1u << bit)) != 0;
-    }
-
-    public bool HasEffectiveCapabilityOrRoot(int capability)
-    {
-        return EUID == 0 || HasEffectiveCapability(capability);
-    }
-
-    private static void SetCapabilityBit(uint[] target, int capability, bool enabled)
-    {
-        if (capability < 0) return;
-        var word = capability / 32;
-        if ((uint)word >= (uint)target.Length) return;
-        var bit = capability % 32;
-        var mask = 1u << bit;
-        if (enabled)
-            target[word] |= mask;
-        else
-            target[word] &= ~mask;
-    }
-
     // Namespaces
     public UTSNamespace UTS { get; set; }
 
     // Controlling terminal (set by TIOCSCTTY)
-    public VFS.TTY.TtyDiscipline? ControllingTty { get; set; }
+    public TtyDiscipline? ControllingTty { get; set; }
 
     // Other process state
     public int Umask { get; set; } = 18; // Default 022 octal is 18 decimal
-    public Fiberish.Core.Timer? AlarmTimer { get; set; }
+    public Timer? AlarmTimer { get; set; }
     public long ItimerRealIntervalMs { get; set; }
 
     // POSIX Timers
@@ -168,6 +135,40 @@ public class Process
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 
+    public void SetCapability(int capability, bool effective, bool permitted, bool inheritable)
+    {
+        SetCapabilityBit(CapEffective, capability, effective);
+        SetCapabilityBit(CapPermitted, capability, permitted);
+        SetCapabilityBit(CapInheritable, capability, inheritable);
+    }
+
+    public bool HasEffectiveCapability(int capability)
+    {
+        if (capability < 0) return false;
+        var word = capability / 32;
+        if ((uint)word >= (uint)CapEffective.Length) return false;
+        var bit = capability % 32;
+        return (CapEffective[word] & (1u << bit)) != 0;
+    }
+
+    public bool HasEffectiveCapabilityOrRoot(int capability)
+    {
+        return EUID == 0 || HasEffectiveCapability(capability);
+    }
+
+    private static void SetCapabilityBit(uint[] target, int capability, bool enabled)
+    {
+        if (capability < 0) return;
+        var word = capability / 32;
+        if ((uint)word >= (uint)target.Length) return;
+        var bit = capability % 32;
+        var mask = 1u << bit;
+        if (enabled)
+            target[word] |= mask;
+        else
+            target[word] &= ~mask;
+    }
+
     public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
         UpdateProcessImage(guestPath, args);
@@ -185,8 +186,9 @@ public class Process
         var spBase = res.SP;
         var stackData = res.InitialStack;
         var stackStart = spBase & LinuxConstants.PageMask;
-        var stackLength = ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask) - stackStart;
-        if (!Syscalls.Mem.PrefaultRange(stackStart, stackLength, engine, writeIntent: true))
+        var stackLength = ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask) -
+                          stackStart;
+        if (!Syscalls.Mem.PrefaultRange(stackStart, stackLength, engine, true))
             throw new OutOfMemoryException($"Failed to allocate initial stack pages at 0x{stackStart:x}");
 
         if (!engine.CopyToUser(spBase, stackData))
@@ -246,15 +248,11 @@ public class Process
 
         var reset = new List<int>();
         foreach (var (sig, action) in SignalActions)
-        {
             // Keep SIG_IGN; reset user handlers to default.
-            if (action.Handler > 1) reset.Add(sig);
-        }
+            if (action.Handler > 1)
+                reset.Add(sig);
 
-        foreach (var sig in reset)
-        {
-            SignalActions.Remove(sig);
-        }
+        foreach (var sig in reset) SignalActions.Remove(sig);
     }
 
     public void CopyImageFrom(Process src)

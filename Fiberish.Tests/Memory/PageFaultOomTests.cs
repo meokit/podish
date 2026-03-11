@@ -24,7 +24,7 @@ public class PageFaultOomTests
                 MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "oom-anon", engine);
             Assert.Equal((uint)0x72000000, mapped);
 
-            Assert.Equal(FaultResult.Oom, mm.HandleFaultDetailed(mapped, isWrite: true, engine));
+            Assert.Equal(FaultResult.Oom, mm.HandleFaultDetailed(mapped, true, engine));
         }
         finally
         {

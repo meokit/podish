@@ -1,5 +1,5 @@
 using Microsoft.Data.Sqlite;
-using System.Threading;
+using SQLitePCL;
 
 namespace Fiberish.SilkFS;
 
@@ -33,6 +33,8 @@ public sealed class SilkMetadataStore
 {
     public const long RootInode = 1;
     public const string OpaqueMarkerName = ".wh..wh..opq";
+
+    private static int _sqliteInit;
     private readonly string _connectionString;
 
     public SilkMetadataStore(string dbPath)
@@ -43,49 +45,6 @@ public sealed class SilkMetadataStore
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate
         }.ToString();
-    }
-
-    public sealed class SilkMetadataTransaction
-    {
-        private readonly SqliteConnection _conn;
-        private readonly SqliteTransaction _tx;
-
-        internal SilkMetadataTransaction(SqliteConnection conn, SqliteTransaction tx)
-        {
-            _conn = conn;
-            _tx = tx;
-        }
-
-        public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
-            long size = 0)
-        {
-            UpsertInodeCore(_conn, _tx, ino, kind, mode, uid, gid, nlink, rdev, size);
-        }
-
-        public void UpsertDentry(long parentIno, string name, long ino)
-        {
-            UpsertDentryCore(_conn, _tx, parentIno, name, ino);
-        }
-
-        public void RemoveDentry(long parentIno, string name)
-        {
-            RemoveDentryCore(_conn, _tx, parentIno, name);
-        }
-
-        public void MarkWhiteout(long parentIno, string name)
-        {
-            MarkWhiteoutCore(_conn, _tx, parentIno, name);
-        }
-
-        public void ClearWhiteout(long parentIno, string name)
-        {
-            ClearWhiteoutCore(_conn, _tx, parentIno, name);
-        }
-
-        public void MarkOpaque(long parentIno)
-        {
-            MarkOpaqueCore(_conn, _tx, parentIno);
-        }
     }
 
     public void ExecuteTransaction(Action<SilkMetadataTransaction> action)
@@ -105,6 +64,7 @@ public sealed class SilkMetadataStore
             pragma.CommandText = "PRAGMA journal_mode=WAL;";
             pragma.ExecuteNonQuery();
         }
+
         using (var pragma = conn.CreateCommand())
         {
             pragma.CommandText = "PRAGMA foreign_keys=ON;";
@@ -242,7 +202,6 @@ public sealed class SilkMetadataStore
         using var reader = cmd.ExecuteReader();
         var result = new List<SilkInodeRecord>();
         while (reader.Read())
-        {
             result.Add(new SilkInodeRecord(
                 reader.GetInt64(0),
                 (SilkInodeKind)reader.GetInt32(1),
@@ -252,7 +211,6 @@ public sealed class SilkMetadataStore
                 reader.GetInt64(5),
                 reader.GetInt64(6),
                 reader.GetInt64(7)));
-        }
 
         return result;
     }
@@ -427,13 +385,11 @@ public sealed class SilkMetadataStore
         return conn;
     }
 
-    private static int _sqliteInit;
-
     private static void EnsureSqliteProviderInitialized()
     {
         if (Interlocked.Exchange(ref _sqliteInit, 1) != 0)
             return;
-        SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
+        raw.SetProvider(new SQLite3Provider_sqlite3());
     }
 
     private static void Exec(SqliteConnection conn, SqliteTransaction tx, string sql)
@@ -452,7 +408,8 @@ public sealed class SilkMetadataStore
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
-    private static void UpsertInodeCore(SqliteConnection conn, SqliteTransaction tx, long ino, SilkInodeKind kind, int mode,
+    private static void UpsertInodeCore(SqliteConnection conn, SqliteTransaction tx, long ino, SilkInodeKind kind,
+        int mode,
         int uid, int gid, int nlink, uint rdev, long size)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
@@ -484,7 +441,8 @@ public sealed class SilkMetadataStore
         cmd.ExecuteNonQuery();
     }
 
-    private static void UpsertDentryCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name, long ino)
+    private static void UpsertDentryCore(SqliteConnection conn, SqliteTransaction tx, long parentIno, string name,
+        long ino)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -536,5 +494,48 @@ public sealed class SilkMetadataStore
         cmd.Parameters.AddWithValue("@p", parentIno);
         cmd.Parameters.AddWithValue("@n", OpaqueMarkerName);
         cmd.ExecuteNonQuery();
+    }
+
+    public sealed class SilkMetadataTransaction
+    {
+        private readonly SqliteConnection _conn;
+        private readonly SqliteTransaction _tx;
+
+        internal SilkMetadataTransaction(SqliteConnection conn, SqliteTransaction tx)
+        {
+            _conn = conn;
+            _tx = tx;
+        }
+
+        public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
+            long size = 0)
+        {
+            UpsertInodeCore(_conn, _tx, ino, kind, mode, uid, gid, nlink, rdev, size);
+        }
+
+        public void UpsertDentry(long parentIno, string name, long ino)
+        {
+            UpsertDentryCore(_conn, _tx, parentIno, name, ino);
+        }
+
+        public void RemoveDentry(long parentIno, string name)
+        {
+            RemoveDentryCore(_conn, _tx, parentIno, name);
+        }
+
+        public void MarkWhiteout(long parentIno, string name)
+        {
+            MarkWhiteoutCore(_conn, _tx, parentIno, name);
+        }
+
+        public void ClearWhiteout(long parentIno, string name)
+        {
+            ClearWhiteoutCore(_conn, _tx, parentIno, name);
+        }
+
+        public void MarkOpaque(long parentIno)
+        {
+            MarkOpaqueCore(_conn, _tx, parentIno);
+        }
     }
 }

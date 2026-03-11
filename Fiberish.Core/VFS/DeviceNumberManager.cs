@@ -3,9 +3,9 @@ using System.Numerics;
 namespace Fiberish.VFS;
 
 /// <summary>
-/// Manages device number (dev_t) allocation in Linux style.
-/// Encodes device numbers as (major << 8) | minor.
-/// Per-SyscallManager instance to isolate device number spaces.
+///     Manages device number (dev_t) allocation in Linux style.
+///     Encodes device numbers as (major << 8) | minor.
+///                                           Per-SyscallManager instance to isolate device number spaces.
 /// </summary>
 public sealed class DeviceNumberManager
 {
@@ -13,15 +13,15 @@ public sealed class DeviceNumberManager
     public const int DefaultMajor = 8;
     public const int MaxMinorPerMajor = 256;
     public const int MinorsPerUlong = 64; // 64 bits per ulong
+    private readonly Lock _lock = new();
 
     // major -> bitmap of allocated minors
     // Each ulong holds 64 minors, so we need 4 ulongs per major (256/64)
     private readonly Dictionary<int, ulong[]> _minorMaps = [];
-    private readonly Lock _lock = new();
 
     /// <summary>
-    /// Allocates a new device number with the default major.
-    /// If the default major is exhausted, automatically allocates from next available major.
+    ///     Allocates a new device number with the default major.
+    ///     If the default major is exhausted, automatically allocates from next available major.
     /// </summary>
     public uint Allocate(int preferredMajor = DefaultMajor)
     {
@@ -32,19 +32,17 @@ public sealed class DeviceNumberManager
                 return Encode(preferredMajor, minor);
 
             // Fall back to any available major
-            for (int major = 1; major < 256; major++)
-            {
+            for (var major = 1; major < 256; major++)
                 if (TryAllocateFromMajor(major, out minor))
                     return Encode(major, minor);
-            }
 
             throw new InvalidOperationException("No available device numbers (all majors exhausted)");
         }
     }
 
     /// <summary>
-    /// Frees a previously allocated device number.
-    /// Idempotent: freeing unallocated or already-freed dev is a no-op.
+    ///     Frees a previously allocated device number.
+    ///     Idempotent: freeing unallocated or already-freed dev is a no-op.
     /// </summary>
     public void Free(uint dev)
     {
@@ -56,8 +54,8 @@ public sealed class DeviceNumberManager
         {
             if (_minorMaps.TryGetValue(major, out var bitmap))
             {
-                int ulongIndex = minor / MinorsPerUlong;
-                int bitIndex = minor % MinorsPerUlong;
+                var ulongIndex = minor / MinorsPerUlong;
+                var bitIndex = minor % MinorsPerUlong;
 
                 if (ulongIndex < bitmap.Length)
                     bitmap[ulongIndex] &= ~(1UL << bitIndex);
@@ -66,19 +64,30 @@ public sealed class DeviceNumberManager
     }
 
     /// <summary>
-    /// Encodes major:minor into device number.
+    ///     Encodes major:minor into device number.
     /// </summary>
-    public static uint Encode(int major, int minor) =>
-        (uint)((major & 0xFF) << 8) | (uint)(minor & 0xFF);
+    public static uint Encode(int major, int minor)
+    {
+        return (uint)((major & 0xFF) << 8) | (uint)(minor & 0xFF);
+    }
 
     /// <summary>
-    /// Decodes device number into (major, minor).
+    ///     Decodes device number into (major, minor).
     /// </summary>
-    public static (int major, int minor) Decode(uint dev) =>
-        ((int)(dev >> 8) & 0xFF, (int)(dev & 0xFF));
+    public static (int major, int minor) Decode(uint dev)
+    {
+        return ((int)(dev >> 8) & 0xFF, (int)(dev & 0xFF));
+    }
 
-    public static int Major(uint dev) => (int)(dev >> 8) & 0xFF;
-    public static int Minor(uint dev) => (int)(dev & 0xFF);
+    public static int Major(uint dev)
+    {
+        return (int)(dev >> 8) & 0xFF;
+    }
+
+    public static int Minor(uint dev)
+    {
+        return (int)(dev & 0xFF);
+    }
 
     private bool TryAllocateFromMajor(int major, out int minor)
     {
@@ -88,13 +97,13 @@ public sealed class DeviceNumberManager
             _minorMaps[major] = bitmap;
         }
 
-        for (int i = 0; i < bitmap.Length; i++)
+        for (var i = 0; i < bitmap.Length; i++)
         {
-            ulong word = bitmap[i];
+            var word = bitmap[i];
             if (word == ~0UL) continue; // All 64 bits set, fully allocated
 
             // Find first zero bit using hardware instruction if available
-            int firstZero = BitOperations.TrailingZeroCount(~word);
+            var firstZero = BitOperations.TrailingZeroCount(~word);
             if (firstZero < MinorsPerUlong)
             {
                 bitmap[i] |= 1UL << firstZero;

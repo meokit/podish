@@ -11,26 +11,27 @@ internal static class ZeroPageProvider
     public static IntPtr GetPointer()
     {
         if (_sharedZeroPagePtr != 0)
-            return (IntPtr)_sharedZeroPagePtr;
+            return _sharedZeroPagePtr;
 
         lock (Gate)
         {
             if (_sharedZeroPagePtr != 0)
-                return (IntPtr)_sharedZeroPagePtr;
+                return _sharedZeroPagePtr;
 
             unsafe
             {
-                var ptr = (nint)NativeMemory.AlignedAlloc((nuint)LinuxConstants.PageSize, (nuint)LinuxConstants.PageSize);
+                var ptr = (nint)NativeMemory.AlignedAlloc(LinuxConstants.PageSize,
+                    LinuxConstants.PageSize);
                 if (ptr == 0) return IntPtr.Zero;
                 new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
                 _sharedZeroPagePtr = ptr;
-                return (IntPtr)ptr;
+                return ptr;
             }
         }
     }
 
     public static bool IsZeroPage(IntPtr ptr)
     {
-        return ptr != IntPtr.Zero && (nint)ptr == _sharedZeroPagePtr;
+        return ptr != IntPtr.Zero && ptr == _sharedZeroPagePtr;
     }
 }

@@ -61,18 +61,32 @@ public class ConcurrencyIsolationTests
             var t1 = Task.Run(() =>
             {
                 using var _ = CooperativeFileLock.Acquire(lockPath);
-                lock (gate) trace.Add("t1-enter");
+                lock (gate)
+                {
+                    trace.Add("t1-enter");
+                }
+
                 Thread.Sleep(200);
-                lock (gate) trace.Add("t1-exit");
+                lock (gate)
+                {
+                    trace.Add("t1-exit");
+                }
             });
 
             Thread.Sleep(20);
             var t2 = Task.Run(() =>
             {
                 using var _ = CooperativeFileLock.Acquire(lockPath);
-                lock (gate) trace.Add("t2-enter");
+                lock (gate)
+                {
+                    trace.Add("t2-enter");
+                }
+
                 Thread.Sleep(20);
-                lock (gate) trace.Add("t2-exit");
+                lock (gate)
+                {
+                    trace.Add("t2-exit");
+                }
             });
 
             Task.WaitAll(t1, t2);
@@ -155,10 +169,7 @@ public class ConcurrencyIsolationTests
             var spec = new PodishRunSpec { Name = "dup-name" };
             var results = new (NativeContainer? Container, string? Error, int Code)[8];
 
-            Parallel.For(0, results.Length, i =>
-            {
-                results[i] = ctx.CreateContainer(spec);
-            });
+            Parallel.For(0, results.Length, i => { results[i] = ctx.CreateContainer(spec); });
 
             var succeeded = results.Count(r => r.Container != null && r.Code == PodishNativeApi.PodOk);
             var busy = results.Count(r => r.Container == null && r.Code == PodishNativeApi.PodEbusy);
@@ -247,7 +258,7 @@ public class ConcurrencyIsolationTests
             Assert.NotNull(created.Container);
             Assert.Equal(PodishNativeApi.PodOk, created.Code);
 
-            Assert.True(created.Container!.Remove(force: true, timeoutMs: 0));
+            Assert.True(created.Container!.Remove(true, 0));
             await Assert.ThrowsAsync<InvalidOperationException>(() => created.Container.StartAsync());
         }
         finally

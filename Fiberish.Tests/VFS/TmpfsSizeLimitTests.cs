@@ -1,6 +1,5 @@
-using Fiberish.VFS;
-using Fiberish.Syscalls;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;

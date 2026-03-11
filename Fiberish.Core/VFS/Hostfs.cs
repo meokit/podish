@@ -1,8 +1,8 @@
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Win32.SafeHandles;
@@ -40,14 +40,15 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     private readonly Dictionary<string, Dentry> _dentryCache = new(PathComparer);
     private readonly Dictionary<long, string> _dentryPathById = [];
-    private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
     private readonly Dictionary<HostInode, HostInodeKey> _identityByInode = [];
+    private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
     private readonly IMountBoundaryPolicy _mountBoundaryPolicy;
-    private readonly ISpecialNodePolicy _specialNodePolicy;
     private readonly ulong? _rootMountDomainId;
+    private readonly ISpecialNodePolicy _specialNodePolicy;
     private ulong _nextIno = 1;
 
-    public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options, DeviceNumberManager? devManager = null) : base(devManager)
+    public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options,
+        DeviceNumberManager? devManager = null) : base(devManager)
     {
         Type = type;
         HostRoot = NormalizeHostPath(hostRoot);
@@ -63,6 +64,42 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     public string HostRoot { get; }
     public HostfsMountOptions Options { get; }
     internal HostfsMetadataStore MetadataStore { get; }
+
+    public long DropDentryCache()
+    {
+        List<Dentry> candidates;
+        lock (Lock)
+        {
+            candidates = _dentryCache.Values
+                .Distinct()
+                .Where(IsPathMappingReclaimableNoLock)
+                .ToList();
+        }
+
+        var candidateSet = new HashSet<Dentry>(candidates);
+        var roots = candidates
+            .Where(dentry =>
+                dentry.Parent == null ||
+                ReferenceEquals(dentry.Parent, dentry) ||
+                !candidateSet.Contains(dentry.Parent))
+            .ToList();
+
+        long dropped = 0;
+        foreach (var root in roots)
+            dropped += VfsShrinker.DetachCachedSubtree(root);
+
+        lock (Lock)
+        {
+            var staleKeys = _dentryCache
+                .Where(kv => IsPathMappingReclaimableNoLock(kv.Value))
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var key in staleKeys)
+                RemovePathNoLock(key, false);
+        }
+
+        return dropped;
+    }
 
     public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
     {
@@ -87,7 +124,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
                     return true;
                 }
 
-                RemoveDentryNoLock(normalizedPath, recursive: true);
+                RemoveDentryNoLock(normalizedPath, true);
             }
         }
 
@@ -127,6 +164,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         {
             IndexPathNoLock(normalizedPath, dentry);
         }
+
         error = 0;
         return true;
     }
@@ -151,7 +189,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
                 var movedPath = string.Equals(hit.Key, normalizedOld, PathComparison)
                     ? normalizedNew
                     : normalizedNew + hit.Key[normalizedOld.Length..];
-                RemovePathNoLock(hit.Key, recursive: false);
+                RemovePathNoLock(hit.Key, false);
                 IndexPathNoLock(movedPath, hit.Value);
             }
 
@@ -174,7 +212,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (Lock)
         {
-            RemoveDentryNoLock(normalizedPath, recursive: true);
+            RemoveDentryNoLock(normalizedPath, true);
         }
     }
 
@@ -200,9 +238,15 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
     }
 
-    private bool PathExistsOnHost(string hostPath) => TryResolveVisibleNode(hostPath, out _, out _);
+    private bool PathExistsOnHost(string hostPath)
+    {
+        return TryResolveVisibleNode(hostPath, out _, out _);
+    }
 
-    internal bool PathExistsOnHostRaw(string hostPath) => TryResolveRawNode(hostPath, out _);
+    internal bool PathExistsOnHostRaw(string hostPath)
+    {
+        return TryResolveRawNode(hostPath, out _);
+    }
 
     internal bool TryGetRawNodeType(string hostPath, out InodeType rawType)
     {
@@ -233,6 +277,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             error = -(int)Errno.ENOENT;
             return false;
         }
+
         if (!_mountBoundaryPolicy.Allows(HostRoot, normalizedPath, _rootMountDomainId, node.MountDomainId))
         {
             error = -(int)Errno.EXDEV;
@@ -261,14 +306,11 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         HostInode inode;
         lock (Lock)
         {
-            if (_inodeByIdentity.TryGetValue(identity, out var existing) && !existing.IsCacheEvicted && !existing.IsFinalized)
-            {
+            if (_inodeByIdentity.TryGetValue(identity, out var existing) && !existing.IsCacheEvicted &&
+                !existing.IsFinalized)
                 inode = existing;
-            }
             else
-            {
                 inode = CreateHostInodeLocked(normalizedPath, type, identity, effectiveNlink);
-            }
         }
 
         if (mode != 0) inode.Mode = Options.ApplyModeMask(isDir, mode);
@@ -284,42 +326,6 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
 
         dentry.Parent?.CacheChild(dentry, "HostSuperBlock.InstantiateDentry");
-    }
-
-    public long DropDentryCache()
-    {
-        List<Dentry> candidates;
-        lock (Lock)
-        {
-            candidates = _dentryCache.Values
-                .Distinct()
-                .Where(IsPathMappingReclaimableNoLock)
-                .ToList();
-        }
-
-        var candidateSet = new HashSet<Dentry>(candidates);
-        var roots = candidates
-            .Where(dentry =>
-                dentry.Parent == null ||
-                ReferenceEquals(dentry.Parent, dentry) ||
-                !candidateSet.Contains(dentry.Parent))
-            .ToList();
-
-        long dropped = 0;
-        foreach (var root in roots)
-            dropped += VfsShrinker.DetachCachedSubtree(root);
-
-        lock (Lock)
-        {
-            var staleKeys = _dentryCache
-                .Where(kv => IsPathMappingReclaimableNoLock(kv.Value))
-                .Select(kv => kv.Key)
-                .ToList();
-            foreach (var key in staleKeys)
-                RemovePathNoLock(key, recursive: false);
-        }
-
-        return dropped;
     }
 
     protected override void Shutdown()
@@ -339,7 +345,8 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         return Path.GetFullPath(hostPath);
     }
 
-    private HostInode CreateHostInodeLocked(string normalizedPath, InodeType type, HostInodeKey identity, int? hostNlink)
+    private HostInode CreateHostInodeLocked(string normalizedPath, InodeType type, HostInodeKey identity,
+        int? hostNlink)
     {
         var inode = new HostInode(_nextIno++, this, normalizedPath, type, hostNlink);
         TrackInode(inode);
@@ -359,7 +366,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private void IndexPathNoLock(string path, Dentry dentry)
     {
         if (_dentryCache.TryGetValue(path, out var existing) && !ReferenceEquals(existing, dentry))
-            RemovePathNoLock(path, recursive: false);
+            RemovePathNoLock(path, false);
 
         _dentryCache[path] = dentry;
         _dentryPathById[dentry.Id] = path;
@@ -379,14 +386,14 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
                 .ToList();
 
         foreach (var path in stale)
-            RemovePathNoLock(path, recursive: false);
+            RemovePathNoLock(path, false);
     }
 
     private void RemovePathNoLock(string hostPath, bool recursive)
     {
         if (recursive)
         {
-            RemoveDentryNoLock(hostPath, recursive: true);
+            RemoveDentryNoLock(hostPath, true);
             return;
         }
 
@@ -412,8 +419,16 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
 internal readonly record struct HostInodeKey(string Scheme, ulong Value0, ulong Value1, string? FallbackPath)
 {
-    public static HostInodeKey Unix(ulong dev, ulong ino) => new("unix", dev, ino, null);
-    public static HostInodeKey Windows(ulong volumeSerial, ulong fileId) => new("windows", volumeSerial, fileId, null);
+    public static HostInodeKey Unix(ulong dev, ulong ino)
+    {
+        return new HostInodeKey("unix", dev, ino, null);
+    }
+
+    public static HostInodeKey Windows(ulong volumeSerial, ulong fileId)
+    {
+        return new HostInodeKey("windows", volumeSerial, fileId, null);
+    }
+
     public static HostInodeKey Fallback(string path)
     {
         var normalized = Path.GetFullPath(path);
@@ -425,6 +440,25 @@ internal readonly record struct HostInodeKey(string Scheme, ulong Value0, ulong 
 
 internal static partial class HostInodeIdentityResolver
 {
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandle(
+        SafeFileHandle hFile,
+        out BY_HANDLE_FILE_INFORMATION lpFileInformation);
+
+    public static HostInodeKey Resolve(string hostPath, out int? hostLinkCount)
+    {
+        var normalizedPath = Path.GetFullPath(hostPath);
+        if (TryProbe(normalizedPath, out var node))
+        {
+            hostLinkCount = node.HostLinkCount;
+            return node.Identity;
+        }
+
+        hostLinkCount = null;
+        return HostInodeKey.Fallback(normalizedPath);
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct FILETIME
     {
@@ -445,25 +479,6 @@ internal static partial class HostInodeIdentityResolver
         public uint NNumberOfLinks;
         public uint NFileIndexHigh;
         public uint NFileIndexLow;
-    }
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool GetFileInformationByHandle(
-        SafeFileHandle hFile,
-        out BY_HANDLE_FILE_INFORMATION lpFileInformation);
-
-    public static HostInodeKey Resolve(string hostPath, out int? hostLinkCount)
-    {
-        var normalizedPath = Path.GetFullPath(hostPath);
-        if (TryProbe(normalizedPath, out var node))
-        {
-            hostLinkCount = node.HostLinkCount;
-            return node.Identity;
-        }
-
-        hostLinkCount = null;
-        return HostInodeKey.Fallback(normalizedPath);
     }
 }
 
@@ -608,13 +623,9 @@ public sealed class HostfsMountOptions
         try
         {
             if (value.StartsWith("0", StringComparison.Ordinal) && value.Length > 1)
-            {
                 parsed = Convert.ToInt32(value, 8);
-            }
             else
-            {
                 parsed = int.Parse(value);
-            }
 
             parsed &= 0x1FF;
             return true;
@@ -638,17 +649,20 @@ public sealed class HostfsMountOptions
 internal sealed class HostfsMetadataStore
 {
     private const int CurrentSchemaVersion = 2;
+
+    public const string MetaDirName = ".fiberish_meta";
+
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
-    public const string MetaDirName = ".fiberish_meta";
+
     private readonly bool _enabled;
-    private readonly string _metaDir;
-    private readonly string _pathsDir;
-    private readonly string _objectsDir;
     private readonly string _identitiesDir;
-    private readonly string _manifestPath;
     private readonly object _lock = new();
+    private readonly string _manifestPath;
+    private readonly string _metaDir;
+    private readonly string _objectsDir;
+    private readonly string _pathsDir;
 
     public HostfsMetadataStore(string hostRoot, bool enabled = true)
     {
@@ -658,7 +672,7 @@ internal sealed class HostfsMetadataStore
         // For file mounts, place sidecar metadata under the parent directory.
         var metaBase = Directory.Exists(normalizedRoot)
             ? normalizedRoot
-            : (Path.GetDirectoryName(normalizedRoot) ?? normalizedRoot);
+            : Path.GetDirectoryName(normalizedRoot) ?? normalizedRoot;
         _metaDir = Path.Combine(metaBase, MetaDirName);
         _pathsDir = Path.Combine(_metaDir, "paths");
         _objectsDir = Path.Combine(_metaDir, "objects");
@@ -708,7 +722,6 @@ internal sealed class HostfsMetadataStore
 
             var dict = new Dictionary<string, byte[]>(StringComparer.Ordinal);
             foreach (var kv in meta.XAttrs)
-            {
                 try
                 {
                     dict[kv.Key] = Convert.FromBase64String(kv.Value);
@@ -716,7 +729,6 @@ internal sealed class HostfsMetadataStore
                 catch
                 {
                 }
-            }
 
             return dict;
         }
@@ -837,7 +849,7 @@ internal sealed class HostfsMetadataStore
             foreach (var file in Directory.GetFiles(_metaDir))
                 File.Delete(file);
             foreach (var dir in Directory.GetDirectories(_metaDir))
-                Directory.Delete(dir, recursive: true);
+                Directory.Delete(dir, true);
         }
         else
         {
@@ -855,7 +867,8 @@ internal sealed class HostfsMetadataStore
         if (!File.Exists(_manifestPath)) return false;
         try
         {
-            var parsed = JsonSerializer.Deserialize(File.ReadAllText(_manifestPath), HostfsJsonContext.Default.HostfsMetaManifest);
+            var parsed = JsonSerializer.Deserialize(File.ReadAllText(_manifestPath),
+                HostfsJsonContext.Default.HostfsMetaManifest);
             if (parsed == null) return false;
             manifest = parsed;
             return true;
@@ -906,7 +919,8 @@ internal sealed class HostfsMetadataStore
         if (!File.Exists(path)) return false;
         try
         {
-            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsPathBinding);
+            var parsed =
+                JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsPathBinding);
             if (parsed == null) return false;
             binding = parsed;
             return true;
@@ -924,7 +938,8 @@ internal sealed class HostfsMetadataStore
         if (!File.Exists(path)) return false;
         try
         {
-            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsIdentityBinding);
+            var parsed =
+                JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsIdentityBinding);
             if (parsed == null) return false;
             binding = parsed;
             return true;
@@ -942,7 +957,8 @@ internal sealed class HostfsMetadataStore
         if (!File.Exists(path)) return false;
         try
         {
-            var parsed = JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsObjectRecord);
+            var parsed =
+                JsonSerializer.Deserialize(File.ReadAllText(path), HostfsJsonContext.Default.HostfsObjectRecord);
             if (parsed == null) return false;
             record = parsed;
             return true;
@@ -958,16 +974,15 @@ internal sealed class HostfsMetadataStore
         var result = new List<HostfsPathBinding>();
         if (!Directory.Exists(_pathsDir)) return result;
         foreach (var file in Directory.GetFiles(_pathsDir, "*.json"))
-        {
             try
             {
-                var parsed = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsPathBinding);
+                var parsed = JsonSerializer.Deserialize(File.ReadAllText(file),
+                    HostfsJsonContext.Default.HostfsPathBinding);
                 if (parsed != null) result.Add(parsed);
             }
             catch
             {
             }
-        }
 
         return result;
     }
@@ -980,7 +995,8 @@ internal sealed class HostfsMetadataStore
             HostfsIdentityBinding? parsed = null;
             try
             {
-                parsed = JsonSerializer.Deserialize(File.ReadAllText(file), HostfsJsonContext.Default.HostfsIdentityBinding);
+                parsed = JsonSerializer.Deserialize(File.ReadAllText(file),
+                    HostfsJsonContext.Default.HostfsIdentityBinding);
             }
             catch
             {
@@ -998,7 +1014,8 @@ internal sealed class HostfsMetadataStore
 
     private void SaveIdentityBindingNoLock(HostfsIdentityBinding binding)
     {
-        WriteJsonAtomic(GetIdentityBindingPath(binding.Identity), binding, HostfsJsonContext.Default.HostfsIdentityBinding);
+        WriteJsonAtomic(GetIdentityBindingPath(binding.Identity), binding,
+            HostfsJsonContext.Default.HostfsIdentityBinding);
     }
 
     private void SaveObjectNoLock(HostfsObjectRecord record)
@@ -1045,17 +1062,20 @@ internal sealed class HostfsMetadataStore
 
     private string GetIdentityBindingPath(HostInodeKey identity)
     {
-        var fallback = string.IsNullOrEmpty(identity.FallbackPath) ? string.Empty : CanonicalizePathKey(identity.FallbackPath);
+        var fallback = string.IsNullOrEmpty(identity.FallbackPath)
+            ? string.Empty
+            : CanonicalizePathKey(identity.FallbackPath);
         var key = $"{identity.Scheme}|{identity.Value0}|{identity.Value1}|{fallback}";
         return Path.Combine(_identitiesDir, $"{ComputeHashKey(key)}.json");
     }
 
-    private static void WriteJsonAtomic<T>(string path, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> jsonType)
+    private static void WriteJsonAtomic<T>(string path, T value,
+        JsonTypeInfo<T> jsonType)
     {
         var tempPath = $"{path}.tmp-{Guid.NewGuid():N}";
         var payload = JsonSerializer.Serialize(value, jsonType);
         File.WriteAllText(tempPath, payload);
-        File.Move(tempPath, path, overwrite: true);
+        File.Move(tempPath, path, true);
     }
 
     private static void DeleteIfExists(string path)
@@ -1089,11 +1109,11 @@ internal static partial class HostfsOwnershipMapper
     private static readonly bool IsUnixLike = true;
 #else
     private static readonly bool IsUnixLike = OperatingSystem.IsLinux() ||
-                                             OperatingSystem.IsMacOS() ||
-                                             OperatingSystem.IsIOS() ||
-                                             OperatingSystem.IsTvOS() ||
-                                             OperatingSystem.IsWatchOS() ||
-                                             OperatingSystem.IsMacCatalyst();
+                                              OperatingSystem.IsMacOS() ||
+                                              OperatingSystem.IsIOS() ||
+                                              OperatingSystem.IsTvOS() ||
+                                              OperatingSystem.IsWatchOS() ||
+                                              OperatingSystem.IsMacCatalyst();
 #endif
     private static readonly int CurrentHostUid = IsUnixLike ? geteuid() : 0;
     private static readonly int CurrentHostGid = IsUnixLike ? getegid() : 0;
@@ -1125,8 +1145,8 @@ internal static partial class HostfsOwnershipMapper
         if (!TryReadHostStat(inode.HostPath, out var hostUid, out var hostGid, out var modeBits)) return;
 
         inode.Mode = options.ApplyModeMask(inode.Type == InodeType.Directory, modeBits);
-        var mappedUid = (hostUid == 0 || hostUid == CurrentHostUid) ? 0 : hostUid;
-        var mappedGid = (hostGid == 0 || hostGid == CurrentHostGid) ? 0 : hostGid;
+        var mappedUid = hostUid == 0 || hostUid == CurrentHostUid ? 0 : hostUid;
+        var mappedGid = hostGid == 0 || hostGid == CurrentHostGid ? 0 : hostGid;
         inode.Uid = options.MountUid ?? mappedUid;
         inode.Gid = options.MountGid ?? mappedGid;
     }
@@ -1195,16 +1215,17 @@ internal static partial class HostfsOwnershipMapper
 
 public partial class HostInode : Inode
 {
-    private readonly object _xattrLock = new();
-    private readonly object _dirtyPageLock = new();
-    private readonly HashSet<long> _dirtyPageIndexes = [];
-    private readonly object _mappedCacheLock = new();
-    private MappedFilePageCache? _mappedPageCache;
-    private string _hostPath;
-    private string? _metadataObjectId;
     private readonly HashSet<string> _aliasPaths = new(OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal);
+
+    private readonly HashSet<long> _dirtyPageIndexes = [];
+    private readonly object _dirtyPageLock = new();
+    private readonly object _mappedCacheLock = new();
+    private readonly object _xattrLock = new();
+    private string _hostPath;
+    private MappedFilePageCache? _mappedPageCache;
+
     private Dictionary<string, byte[]>? _xattrs;
 
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, int? initialLinkCount = null)
@@ -1251,13 +1272,10 @@ public partial class HostInode : Inode
             }
         }
     }
+
     public override bool SupportsMmap => Type == InodeType.File;
 
-    internal string? MetadataObjectId
-    {
-        get => _metadataObjectId;
-        set => _metadataObjectId = value;
-    }
+    internal string? MetadataObjectId { get; set; }
 
     public override ulong Size
     {
@@ -1452,6 +1470,7 @@ public partial class HostInode : Inode
             NamespaceOps.OnDirectoryRemoved(this, dentry.Inode, "HostInode.Rmdir");
             dentry.UnbindInode("HostInode.Rmdir");
         }
+
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(name, "HostInode.Rmdir", out _);
         sb.RemoveDentry(subPath);
@@ -1502,6 +1521,7 @@ public partial class HostInode : Inode
                 File.Delete(newFullPath);
                 NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
             }
+
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 _ = targetParent.Dentries[0].TryUncacheChild(newName, "HostInode.Rename.overwrite-target", out _);
@@ -1523,6 +1543,7 @@ public partial class HostInode : Inode
             movedInode.ForgetPath(oldFullPath);
             movedInode.ObservePath(newFullPath);
         }
+
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(oldName, "HostInode.Rename.old-parent", out _);
         dentry.Name = newName;
@@ -1546,11 +1567,8 @@ public partial class HostInode : Inode
     {
         if (linuxFile.PrivateData is SafeFileHandle handle)
         {
-            int fd = handle.DangerousGetHandle().ToInt32();
-            if (flock(fd, operation) != 0)
-            {
-                return -Marshal.GetLastPInvokeError();
-            }
+            var fd = handle.DangerousGetHandle().ToInt32();
+            if (flock(fd, operation) != 0) return -Marshal.GetLastPInvokeError();
 
             return 0;
         }
@@ -1664,14 +1682,13 @@ public partial class HostInode : Inode
         if (Type == InodeType.Directory) return 0;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)
-        {
             // RandomAccess.Read is thread-safe and doesn't require locking
             // It uses the offset parameter directly instead of shared Position state
             return RandomAccess.Read(handle, buffer, offset);
-        }
 
         // Fallback for unopened files
-        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite);
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
@@ -1691,7 +1708,7 @@ public partial class HostInode : Inode
             {
                 lock (handle)
                 {
-                    long writeOffset = RandomAccess.GetLength(handle);
+                    var writeOffset = RandomAccess.GetLength(handle);
                     RandomAccess.Write(handle, buffer, writeOffset);
                     Size = (ulong)RandomAccess.GetLength(handle);
                 }
@@ -1706,7 +1723,8 @@ public partial class HostInode : Inode
         }
 
         // Fallback for unopened files
-        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Write,
+            FileShare.ReadWrite);
         if (append)
         {
             lock
@@ -1761,7 +1779,7 @@ public partial class HostInode : Inode
                 }
 
                 return n >= 0;
-            }, out _, strictQuota: true, Fiberish.Memory.AllocationClass.Readahead);
+            }, out _, true, AllocationClass.Readahead);
 
             if (ptr == IntPtr.Zero) return 0;
         }
@@ -1769,7 +1787,8 @@ public partial class HostInode : Inode
         return 0;
     }
 
-    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
             return -(int)Errno.EINVAL;
@@ -1786,8 +1805,13 @@ public partial class HostInode : Inode
         {
             GlobalPageCacheManager.EndWritebackPages();
         }
+
         if (rc < 0) return rc;
-        lock (_dirtyPageLock) _dirtyPageIndexes.Remove(request.PageIndex);
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(request.PageIndex);
+        }
+
         if (request.PageIndex >= 0 && request.PageIndex <= uint.MaxValue)
             PageCache?.ClearDirty((uint)request.PageIndex);
         if (linuxFile != null) Sync(linuxFile);
@@ -1812,7 +1836,11 @@ public partial class HostInode : Inode
             var pagePtr = PageCache.PeekPage((uint)pageIndex);
             if (pagePtr == IntPtr.Zero)
             {
-                lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+                lock (_dirtyPageLock)
+                {
+                    _dirtyPageIndexes.Remove(pageIndex);
+                }
+
                 if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
                     PageCache.ClearDirty((uint)pageIndex);
                 continue;
@@ -1822,13 +1850,17 @@ public partial class HostInode : Inode
             var remaining = (long)Size - fileOffset;
             if (remaining <= 0)
             {
-                lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+                lock (_dirtyPageLock)
+                {
+                    _dirtyPageIndexes.Remove(pageIndex);
+                }
+
                 if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
                     PageCache.ClearDirty((uint)pageIndex);
                 continue;
             }
 
-            var writeLen = (int)Math.Min((long)LinuxConstants.PageSize, remaining);
+            var writeLen = (int)Math.Min(LinuxConstants.PageSize, remaining);
             unsafe
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
@@ -1842,10 +1874,15 @@ public partial class HostInode : Inode
                 {
                     GlobalPageCacheManager.EndWritebackPages();
                 }
+
                 if (rc < 0) return rc;
             }
 
-            lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+            lock (_dirtyPageLock)
+            {
+                _dirtyPageIndexes.Remove(pageIndex);
+            }
+
             if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
                 PageCache.ClearDirty((uint)pageIndex);
         }
@@ -1873,6 +1910,7 @@ public partial class HostInode : Inode
         {
             _mappedPageCache?.Truncate(size);
         }
+
         if (PageCache != null)
         {
             PageCache.TruncateToSize(size);
@@ -1915,7 +1953,11 @@ public partial class HostInode : Inode
                 return false;
         }
 
-        lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(pageIndex);
+        }
+
         if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
             PageCache?.ClearDirty((uint)pageIndex);
         if (linuxFile != null) Sync(linuxFile);

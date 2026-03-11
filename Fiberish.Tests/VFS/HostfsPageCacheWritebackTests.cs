@@ -1,9 +1,9 @@
+using System.Reflection;
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
-using Fiberish.Core;
-using System.Reflection;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -520,8 +520,7 @@ public class HostfsPageCacheWritebackTests
                 LinuxConstants.PageSize,
                 (uint)(Protection.Read | Protection.Write),
                 (uint)(MapFlags.Shared | MapFlags.Fixed),
-                (uint)fd,
-                0);
+                (uint)fd);
             Assert.Equal((int)mapAddr, mmapRc);
             Assert.Equal(refBeforeMmap + 1, inode.RefCount);
 

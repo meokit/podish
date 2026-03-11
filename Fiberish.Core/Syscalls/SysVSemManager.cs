@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
 
@@ -24,12 +22,6 @@ public class SemaphoreSet
 
 public sealed class SemWaitState
 {
-    public FiberTask Task { get; }
-    public FiberTask.WaitToken Token { get; }
-    public int SemNum { get; }
-    public short Op { get; }
-    public Action? Continuation { get; set; }
-
     public SemWaitState(FiberTask task, int semNum, short op)
     {
         Task = task;
@@ -37,6 +29,12 @@ public sealed class SemWaitState
         SemNum = semNum;
         Op = op;
     }
+
+    public FiberTask Task { get; }
+    public FiberTask.WaitToken Token { get; }
+    public int SemNum { get; }
+    public short Op { get; }
+    public Action? Continuation { get; set; }
 }
 
 public readonly struct SemWaitAwaitable
@@ -48,7 +46,10 @@ public readonly struct SemWaitAwaitable
         _state = state;
     }
 
-    public SemWaitAwaiter GetAwaiter() => new(_state);
+    public SemWaitAwaiter GetAwaiter()
+    {
+        return new SemWaitAwaiter(_state);
+    }
 }
 
 public readonly struct SemWaitAwaiter : INotifyCompletion
@@ -66,10 +67,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
     {
         var state = _state;
         state.Continuation = continuation;
-        state.Task.ArmSignalSafetyNet(state.Token, () =>
-        {
-            state.Continuation?.Invoke();
-        });
+        state.Task.ArmSignalSafetyNet(state.Token, () => { state.Continuation?.Invoke(); });
     }
 
     public AwaitResult GetResult()
@@ -82,8 +80,8 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
 
 public class SysVSemManager
 {
-    private readonly Dictionary<int, SemaphoreSet> _setsBySemid = new();
     private readonly Dictionary<int, SemaphoreSet> _setsByKey = new();
+    private readonly Dictionary<int, SemaphoreSet> _setsBySemid = new();
     private int _nextSemid = 1;
 
     public int SemGet(int key, int nsems, int semflg, int uid, int gid)
@@ -149,17 +147,14 @@ public class SysVSemManager
             if (!_setsBySemid.ContainsKey(semid)) return -(int)Errno.EIDRM; // Removed while waiting
 
             // Try atomic operations
-            for (int i = 0; i < nsops; i++)
+            for (var i = 0; i < nsops; i++)
             {
                 var offset = i * 6;
                 var semNum = BitConverter.ToInt16(bytes, offset);
                 var semOp = BitConverter.ToInt16(bytes, offset + 2);
                 var semFlg = BitConverter.ToInt16(bytes, offset + 4);
 
-                if (semNum >= set.Values.Length || semNum < 0)
-                {
-                    return -(int)Errno.EFBIG;
-                }
+                if (semNum >= set.Values.Length || semNum < 0) return -(int)Errno.EFBIG;
 
                 if (semOp > 0)
                 {
@@ -190,7 +185,7 @@ public class SysVSemManager
             if (canProceed)
             {
                 // Success! Commit state.
-                for (int i = 0; i < nsops; i++)
+                for (var i = 0; i < nsops; i++)
                 {
                     var offset = i * 6;
                     var semNum = BitConverter.ToInt16(bytes, offset);
@@ -271,7 +266,7 @@ public class SysVSemManager
                 if (semnum < 0 || semnum >= set.Values.Length) return -(int)Errno.EINVAL;
                 // For SETVAL in sys_ipc(SEMCTL), the 4th argument (ptr) IS the union value.
                 // So `arg` contains the 32-bit integer `val` directly.
-                int setval = (int)arg;
+                var setval = (int)arg;
 
                 // Clamp to short
                 if (setval < 0 || setval > 32767) return -(int)Errno.ERANGE;

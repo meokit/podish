@@ -1,5 +1,4 @@
 using Fiberish.VFS;
-using System.Threading;
 
 namespace Fiberish.Memory;
 
@@ -54,7 +53,7 @@ public class VMA
         var shared = (Flags & MapFlags.Shared) != 0;
         SharedObject.AddRef();
         // Private pages are shared page-for-page across fork and split lazily on the next write.
-        MemoryObject? privateObj = PrivateObject?.ForkCloneSharingPages();
+        var privateObj = PrivateObject?.ForkCloneSharingPages();
         var clonedFileMapping = FileMapping?.AddRef();
 
         return new VMA

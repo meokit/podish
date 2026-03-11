@@ -4,12 +4,12 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 
-using System;
-
 namespace Fiberish.VFS;
 
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
+
 public readonly record struct ReadaheadRequest(long StartPageIndex, int PageCount);
+
 public readonly record struct WritePagesRequest(long StartPageIndex, long EndPageIndex, bool Sync);
 
 public interface IPageCacheOps
@@ -74,6 +74,7 @@ public abstract class FileSystem
 public class FileSystemType
 {
     public string Name { get; init; } = "";
+
     public Func<DeviceNumberManager, FileSystem> Factory { get; init; } = _ =>
         throw new InvalidOperationException("FileSystem factory is not configured.");
 
@@ -85,31 +86,31 @@ public class FileSystemType
 
 public abstract class SuperBlock
 {
+    private readonly LinkedList<Dentry> _dentryLru = new();
+    private readonly Dictionary<long, LinkedListNode<Dentry>> _dentryLruNodes = [];
     private readonly DeviceNumberManager? _devManager;
-    private readonly uint _dev;
+    private readonly HashSet<Dentry> _trackedDentries = [];
+
+    protected HashSet<Inode> AllInodes = [];
 
     protected SuperBlock(DeviceNumberManager? devManager = null)
     {
         _devManager = devManager;
         // 0 means anonymous (no real device)
-        _dev = devManager?.Allocate() ?? 0;
+        Dev = devManager?.Allocate() ?? 0;
     }
 
-    protected HashSet<Inode> AllInodes = [];
     public FileSystemType Type { get; set; } = null!;
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
-    private readonly HashSet<Dentry> _trackedDentries = [];
-    private readonly LinkedList<Dentry> _dentryLru = new();
-    private readonly Dictionary<long, LinkedListNode<Dentry>> _dentryLruNodes = [];
     public object Lock { get; } = new();
 
     /// <summary>
     ///     Device ID for this superblock, encoded as (major &lt;&lt; 8) | minor.
     ///     Allocated from DeviceNumberManager. 0 for anonymous superblocks.
     /// </summary>
-    public uint Dev => _dev;
+    public uint Dev { get; }
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
@@ -132,7 +133,7 @@ public abstract class SuperBlock
     protected virtual void Shutdown()
     {
         // Release device number back to the pool
-        _devManager?.Free(_dev);
+        _devManager?.Free(Dev);
         // Subclasses can override to clean up resources
         AllInodes.Clear();
         Inodes.Clear();
@@ -248,22 +249,18 @@ public abstract class SuperBlock
 
 public abstract class Inode : IPageCacheOps
 {
-    protected sealed class NoopWaitRegistration : IDisposable
-    {
-        public static readonly NoopWaitRegistration Instance = new();
-        public void Dispose()
-        {
-        }
-    }
-
-    protected delegate int ReadBackendDelegate(LinuxFile? linuxFile, Span<byte> buffer, long offset);
-    protected delegate int WriteBackendDelegate(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset);
+    // All dentries pointing to this inode (hard links / aliases).
+    // Exposed as read-only; callers must go through BindInode/UnbindInode.
+    private readonly List<Dentry> _dentries = [];
+    private int _lookupFailureError = -(int)Errno.ENOENT;
+    private VMAManager[] _mappedAddressSpaces = [];
 
     /// <summary>
     ///     Per-inode page cache. Lazily created on first file mmap.
     ///     Analogous to Linux inode.i_mapping / address_space.
     /// </summary>
     public MemoryObject? PageCache { get; set; }
+
     public MemoryObjectManager? PageCacheManager { get; set; }
 
     public virtual ulong Ino { get; set; }
@@ -288,11 +285,6 @@ public abstract class Inode : IPageCacheOps
     public virtual uint Rdev { get; set; }
 
     public SuperBlock SuperBlock { get; set; } = null!;
-
-    // All dentries pointing to this inode (hard links / aliases).
-    // Exposed as read-only; callers must go through BindInode/UnbindInode.
-    private readonly List<Dentry> _dentries = [];
-    private VMAManager[] _mappedAddressSpaces = [];
     public IReadOnlyList<Dentry> Dentries => _dentries;
     public object Lock { get; } = new();
 
@@ -307,7 +299,37 @@ public abstract class Inode : IPageCacheOps
     public bool HasExplicitLinkCount { get; private set; }
     public bool IsCacheEvicted { get; private set; }
     public bool IsFinalized { get; private set; }
-    private int _lookupFailureError = -(int)Errno.ENOENT;
+
+    /// <summary>
+    ///     Whether this inode supports file-backed mmap.
+    ///     Most inodes (devices, sockets, proc dynamic files, anon inodes) do not.
+    /// </summary>
+    public virtual bool SupportsMmap => false;
+
+    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        return AopsReadPage(linuxFile, request, pageBuffer);
+    }
+
+    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        return AopsReadahead(linuxFile, request);
+    }
+
+    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        return AopsWritePage(linuxFile, request, pageBuffer, sync);
+    }
+
+    public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        return AopsWritePages(linuxFile, request);
+    }
+
+    public virtual int SetPageDirty(long pageIndex)
+    {
+        return AopsSetPageDirty(pageIndex);
+    }
 
     public void AcquireRef(InodeRefKind kind, string? reason = null)
     {
@@ -539,12 +561,14 @@ public abstract class Inode : IPageCacheOps
                 index = i;
                 break;
             }
+
         if (index < 0) return;
         if (_mappedAddressSpaces.Length == 1)
         {
             _mappedAddressSpaces = [];
             return;
         }
+
         var next = new VMAManager[_mappedAddressSpaces.Length - 1];
         if (index > 0)
             Array.Copy(_mappedAddressSpaces, 0, next, 0, index);
@@ -709,7 +733,7 @@ public abstract class Inode : IPageCacheOps
 
             tempPage.AsSpan().Clear();
             var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-            var pageReadLen = (int)Math.Min((long)LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+            var pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
             var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
             if (rc < 0) return total > 0 ? total : rc;
 
@@ -723,7 +747,7 @@ public abstract class Inode : IPageCacheOps
                 }
 
                 return true;
-            }, out _, strictQuota: true, AllocationClass.PageCache);
+            }, out _, true, AllocationClass.PageCache);
 
             if (pagePtr == IntPtr.Zero)
             {
@@ -779,7 +803,7 @@ public abstract class Inode : IPageCacheOps
                 if (!fullPageWrite && pageFileOffset < (long)Size)
                 {
                     tempPage.AsSpan().Clear();
-                    pageReadLen = (int)Math.Min((long)LinuxConstants.PageSize, (long)Size - pageFileOffset);
+                    pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
                     var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
                     if (rc < 0) return consumed > 0 ? consumed : rc;
                 }
@@ -794,7 +818,7 @@ public abstract class Inode : IPageCacheOps
                     }
 
                     return true;
-                }, out _, strictQuota: true, AllocationClass.PageCache);
+                }, out _, true, AllocationClass.PageCache);
                 if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
             }
 
@@ -812,7 +836,8 @@ public abstract class Inode : IPageCacheOps
             pageCache.MarkDirty(pageIndex);
 
             // Route through page-level op for filesystem-specific bookkeeping.
-            var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk), buffer.Slice(consumed, chunk), false);
+            var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk),
+                buffer.Slice(consumed, chunk), false);
             if (writeRc < 0) return consumed > 0 ? consumed : writeRc;
 
             consumed += chunk;
@@ -837,7 +862,8 @@ public abstract class Inode : IPageCacheOps
         return 0;
     }
 
-    protected virtual int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected virtual int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
     {
         // Explicitly unsupported by default: filesystems must opt in.
         return -(int)Errno.EOPNOTSUPP;
@@ -853,31 +879,6 @@ public abstract class Inode : IPageCacheOps
     {
         // Optional dirty accounting hook for filesystems.
         return 0;
-    }
-
-    public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
-    {
-        return AopsReadPage(linuxFile, request, pageBuffer);
-    }
-
-    public virtual int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
-    {
-        return AopsReadahead(linuxFile, request);
-    }
-
-    public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
-    {
-        return AopsWritePage(linuxFile, request, pageBuffer, sync);
-    }
-
-    public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
-    {
-        return AopsWritePages(linuxFile, request);
-    }
-
-    public virtual int SetPageDirty(long pageIndex)
-    {
-        return AopsSetPageDirty(pageIndex);
     }
 
     /// <summary>
@@ -967,12 +968,6 @@ public abstract class Inode : IPageCacheOps
         return -(int)Errno.ENOSYS;
     }
 
-    /// <summary>
-    ///     Whether this inode supports file-backed mmap.
-    ///     Most inodes (devices, sockets, proc dynamic files, anon inodes) do not.
-    /// </summary>
-    public virtual bool SupportsMmap => false;
-
     public virtual int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
     {
         return -(int)Errno.EOPNOTSUPP;
@@ -1011,6 +1006,19 @@ public abstract class Inode : IPageCacheOps
     {
         return new List<DirectoryEntry>();
     }
+
+    protected sealed class NoopWaitRegistration : IDisposable
+    {
+        public static readonly NoopWaitRegistration Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+
+    protected delegate int ReadBackendDelegate(LinuxFile? linuxFile, Span<byte> buffer, long offset);
+
+    protected delegate int WriteBackendDelegate(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset);
 }
 
 public struct DirectoryEntry
@@ -1028,7 +1036,6 @@ public interface IMagicSymlinkInode
 public class Dentry
 {
     private static long _nextId;
-    private bool _isNegative;
     private bool _isMounted;
 
     public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
@@ -1037,7 +1044,7 @@ public class Dentry
         Parent = parent;
         SuperBlock = sb;
         IsOnLru = true;
-        _isNegative = inode == null;
+        IsNegative = inode == null;
         EnsureTrackedBySuperBlock("Dentry.ctor");
         // Root dentry is always considered hashed in this model.
         if (parent == null)
@@ -1056,7 +1063,7 @@ public class Dentry
     public bool IsOnLru { get; private set; }
     public bool IsTrackedBySuperBlock { get; private set; }
     public bool IsHashed { get; private set; }
-    public bool IsNegative => _isNegative;
+    public bool IsNegative { get; private set; }
 
     // Mount point support
     public bool IsMounted
@@ -1135,8 +1142,10 @@ public class Dentry
                     $"Dentry.CacheChild replacing mounted child parent={Name} child={child.Name} reason={reason}");
                 return;
             }
+
             replaced.SetHashedState(false);
         }
+
         Children[child.Name] = child;
         child.SetHashedState(true);
         child.AssertMountedCacheInvariant($"{reason}.cache-child");
@@ -1212,10 +1221,11 @@ public class Dentry
                 $"Dentry.BindInode superblock mismatch dentry={Name} dentrySb={SuperBlock.Type?.Name} inodeSb={inode.SuperBlock?.Type?.Name} reason={reason}");
             return;
         }
+
         EnsureTrackedBySuperBlock("Dentry.BindInode");
         SuperBlock.EnsureInodeTracked(inode);
         Inode = inode;
-        _isNegative = false;
+        IsNegative = false;
         Inode.AttachAliasDentry(this, reason);
         Inode.AcquireRef(InodeRefKind.KernelInternal, reason);
         VfsDebugTrace.AssertDentryMembership(this, reason);
@@ -1227,7 +1237,7 @@ public class Dentry
         if (inode == null) return false;
         var detached = inode.DetachAliasDentry(this, reason);
         Inode = null;
-        _isNegative = true;
+        IsNegative = true;
         if (detached)
             inode.ReleaseRef(InodeRefKind.KernelInternal, reason);
         return detached;
@@ -1250,6 +1260,7 @@ public class Dentry
                 $"Dentry.UntrackFromSuperBlock mounted dentry={Name} dentryId={Id} reason={reason}");
             return;
         }
+
         SuperBlock.UnregisterDentry(this);
         if (IsTrackedBySuperBlock)
             VfsDebugTrace.FailInvariant($"Dentry untrack failed dentry={Name} dentryId={Id} reason={reason}");
@@ -1273,6 +1284,7 @@ public class Dentry
                 $"Dentry.MarkUntrackedBySuperBlock mounted dentry={Name} dentryId={Id}");
             return;
         }
+
         IsTrackedBySuperBlock = false;
         SetHashedState(false);
     }
@@ -1312,10 +1324,8 @@ public class Dentry
         }
 
         if (!parent.TryGetCachedChild(Name, out var cached) || !ReferenceEquals(cached, this))
-        {
             VfsDebugTrace.FailInvariant(
                 $"Dentry mount invariant parent-cache-miss source={source} parent={parent.Name} child={Name} dentryId={Id}");
-        }
     }
 }
 
@@ -1395,7 +1405,8 @@ public static class VfsDebugTrace
         if (!Enabled) return;
         Logger.LogDebug(
             "[VFS-Dentry] op={Operation} reason={Reason} ino={Ino} dentry={Name} dentryId={DentryId} parent={Parent} dentries={DentryCount}",
-            operation, reason, inode.Ino, dentry.Name, dentry.Id, dentry.Parent?.Name ?? "<null>", inode.Dentries.Count);
+            operation, reason, inode.Ino, dentry.Name, dentry.Id, dentry.Parent?.Name ?? "<null>",
+            inode.Dentries.Count);
     }
 
     public static void RecordDentryRefChange(Dentry dentry, string operation, int before, int after, string? reason)
@@ -1465,13 +1476,13 @@ public static class VfsDebugTrace
 
 public class LinuxFile
 {
-    private int _refCount = 1;
-
     public enum ReferenceKind
     {
         Normal = 0,
         MmapHold = 1
     }
+
+    private int _refCount = 1;
 
     public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal)
     {
@@ -1527,7 +1538,6 @@ public class LinuxFile
         if (Interlocked.Decrement(ref _refCount) > 0) return;
 
         if (IsTmpFile && Dentry.Parent?.Inode != null)
-        {
             try
             {
                 Dentry.Parent.Inode.Unlink(Dentry.Name);
@@ -1536,7 +1546,6 @@ public class LinuxFile
             {
                 // Ignore cleanup errors
             }
-        }
 
         OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;

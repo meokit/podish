@@ -4,7 +4,8 @@ namespace Fiberish.Core.Net;
 
 public sealed class ContainerNetworkContext : IDisposable
 {
-    public ContainerNetworkContext(string containerId, NetworkMode mode, IPAddress privateIpv4, SharedLoopbackNetNamespace sharedNamespace, INetworkSwitch @switch)
+    public ContainerNetworkContext(string containerId, NetworkMode mode, IPAddress privateIpv4,
+        SharedLoopbackNetNamespace sharedNamespace, INetworkSwitch @switch)
     {
         ContainerId = containerId;
         Mode = mode;
@@ -13,7 +14,8 @@ public sealed class ContainerNetworkContext : IDisposable
         Switch = @switch;
     }
 
-    public ContainerNetworkContext(string containerId, NetworkMode mode, IPAddress privateIpv4, LoopbackNetNamespace ns, INetworkSwitch @switch)
+    public ContainerNetworkContext(string containerId, NetworkMode mode, IPAddress privateIpv4, LoopbackNetNamespace ns,
+        INetworkSwitch @switch)
         : this(containerId, mode, privateIpv4, new SharedLoopbackNetNamespace(ns), @switch)
     {
     }

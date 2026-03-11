@@ -29,17 +29,18 @@ public class NewMountApiTests
         env.WriteCString(0x12000, "tmpfs-test");
         env.WriteCString(0x13000, "/mnt");
 
-        var fsfd = await env.Call("SysFsopen", 0x10000, 0);
+        var fsfd = await env.Call("SysFsopen", 0x10000);
         Assert.True(fsfd >= 0);
         Assert.IsType<FsContextFile>(env.SyscallManager.GetFD(fsfd)!);
 
-        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000, 0));
-        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_FLAG, 0x12000, 0, 0)); // key=tmpfs-test (arbitrary flag)
-        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE, 0, 0, 0));
+        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000));
+        Assert.Equal(0,
+            await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_FLAG, 0x12000)); // key=tmpfs-test (arbitrary flag)
+        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE));
         Assert.Equal(-(int)Errno.EBUSY,
-            await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000, 0));
+            await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_SET_STRING, 0x11000, 0x12000));
 
-        var mntfd = await env.Call("SysFsmount", (uint)fsfd, 0, 0);
+        var mntfd = await env.Call("SysFsmount", (uint)fsfd);
         Assert.True(mntfd >= 0);
         var mountFile = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!);
         Assert.False(mountFile.Mount.IsAttached);
@@ -53,7 +54,7 @@ public class NewMountApiTests
             root.Children["mnt"] = mntDentry;
         }
 
-        Assert.Equal(0, await env.Call("SysMoveMount", (uint)mntfd, 0, LinuxConstants.AT_FDCWD, 0x13000, 0));
+        Assert.Equal(0, await env.Call("SysMoveMount", (uint)mntfd, 0, LinuxConstants.AT_FDCWD, 0x13000));
 
         var loc = env.SyscallManager.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
         Assert.True(loc.IsValid);
@@ -67,7 +68,7 @@ public class NewMountApiTests
         using var env = new TestEnv();
         env.MapUserPage(0x20000);
         env.WriteCString(0x20000, "no-such-fs");
-        var rc = await env.Call("SysFsopen", 0x20000, 0);
+        var rc = await env.Call("SysFsopen", 0x20000);
         Assert.Equal(-(int)Errno.ENODEV, rc);
     }
 
@@ -78,11 +79,11 @@ public class NewMountApiTests
         env.MapUserPage(0x30000);
         env.WriteCString(0x30000, "tmpfs");
 
-        var fsfd = await env.Call("SysFsopen", 0x30000, 0);
+        var fsfd = await env.Call("SysFsopen", 0x30000);
         Assert.True(fsfd >= 0);
-        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE, 0, 0, 0));
+        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE));
 
-        var mntfd = await env.Call("SysFsmount", (uint)fsfd, 0, 0);
+        var mntfd = await env.Call("SysFsmount", (uint)fsfd);
         var mountFile = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!);
         var mount = mountFile.Mount;
         Assert.NotNull(mount);
@@ -100,9 +101,9 @@ public class NewMountApiTests
         env.MapUserPage(0x31000);
         env.WriteCString(0x31000, "tmpfs");
 
-        var fsfd = await env.Call("SysFsopen", 0x31000, 0);
-        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE, 0, 0, 0));
-        var mntfd = await env.Call("SysFsmount", (uint)fsfd, 0, 0);
+        var fsfd = await env.Call("SysFsopen", 0x31000);
+        Assert.Equal(0, await env.Call("SysFsconfig", (uint)fsfd, FSCONFIG_CMD_CREATE));
+        var mntfd = await env.Call("SysFsmount", (uint)fsfd);
         var mount = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!).Mount;
 
         env.SyscallManager.PinContainerMount(mount);
@@ -160,6 +161,7 @@ public class NewMountApiTests
             root.Inode.Mkdir(srcDentry, 0x1FF, 0, 0);
             root.Children["src"] = srcDentry;
         }
+
         if (root.Inode.Lookup("dst") == null)
         {
             var dstDentry = new Dentry("dst", null, root, root.SuperBlock);
@@ -170,7 +172,7 @@ public class NewMountApiTests
         env.WriteCString(0x44000, "/src");
         env.WriteCString(0x45000, "/dst");
 
-        var rc = await env.Call("SysMount", 0x44000, 0x45000, 0, LinuxConstants.MS_BIND | LinuxConstants.MS_RDONLY, 0);
+        var rc = await env.Call("SysMount", 0x44000, 0x45000, 0, LinuxConstants.MS_BIND | LinuxConstants.MS_RDONLY);
         Assert.Equal(0, rc);
 
         var loc = env.SyscallManager.PathWalkWithFlags("/dst", LookupFlags.FollowSymlink);
@@ -238,7 +240,7 @@ public class NewMountApiTests
         Assert.False(loc1.Mount!.IsReadOnly);
 
         var remountFlags = LinuxConstants.MS_REMOUNT | LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID;
-        Assert.Equal(0, await env.Call("SysMount", 0, 0x4b000, 0, remountFlags, 0));
+        Assert.Equal(0, await env.Call("SysMount", 0, 0x4b000, 0, remountFlags));
 
         var loc2 = env.SyscallManager.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
         Assert.True(loc2.IsValid);
@@ -278,7 +280,8 @@ public class NewMountApiTests
         Array.Copy(attrClr, 0, raw, 8, 8);
         Assert.True(env.Engine.CopyToUser(0x52000, raw));
 
-        Assert.Equal(0, await env.Call("SysMountSetattr", unchecked((uint)LinuxConstants.AT_FDCWD), 0x4f000, 0, 0x52000, 32));
+        Assert.Equal(0,
+            await env.Call("SysMountSetattr", unchecked(LinuxConstants.AT_FDCWD), 0x4f000, 0, 0x52000, 32));
 
         var loc = env.SyscallManager.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
         Assert.True(loc.IsValid);
@@ -318,7 +321,7 @@ public class NewMountApiTests
             Assert.Equal(0, await env.Call("SysMount", 0x60000, 0x61000, 0x62000, 0, 0x63000));
 
             env.WriteCString(0x64000, "/mnt/x.txt");
-            var fd = await env.Call("SysOpen", 0x64000, (uint)FileFlags.O_RDONLY, 0);
+            var fd = await env.Call("SysOpen", 0x64000);
             Assert.True(fd >= 0);
 
             Assert.Equal(-(int)Errno.EBUSY, await env.Call("SysUmount", 0x61000));

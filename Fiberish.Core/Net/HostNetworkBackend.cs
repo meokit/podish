@@ -1,5 +1,3 @@
-using System.Net;
-
 namespace Fiberish.Core.Net;
 
 public sealed class HostNetworkBackend : INetworkBackend
@@ -15,8 +13,15 @@ public sealed class HostNetworkBackend : INetworkBackend
         throw new NotSupportedException("Published ports are not supported in Host network mode.");
     }
 
-    public void StartPublishedPorts(ContainerNetworkContext context, IReadOnlyList<PublishedPortSpec> ports) { }
-    public void DestroyContainerNetwork(ContainerNetworkContext context) { }
+    public void StartPublishedPorts(ContainerNetworkContext context, IReadOnlyList<PublishedPortSpec> ports)
+    {
+    }
 
-    public void Dispose() { }
+    public void DestroyContainerNetwork(ContainerNetworkContext context)
+    {
+    }
+
+    public void Dispose()
+    {
+    }
 }

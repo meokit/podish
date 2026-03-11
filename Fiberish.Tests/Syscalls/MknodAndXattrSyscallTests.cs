@@ -50,23 +50,23 @@ public class MknodAndXattrSyscallTests
         env.WriteCString(0x15000, "user.fd");
         env.WriteBytes(0x16000, Encoding.UTF8.GetBytes("xyz"));
 
-        var mkRc = await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4, 0); // S_IFREG|0644
+        var mkRc = await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4); // S_IFREG|0644
         Assert.Equal(0, mkRc);
 
-        var setRc = await env.Call("SysSetXAttr", 0x10000, 0x11000, 0x12000, 3, 0);
+        var setRc = await env.Call("SysSetXAttr", 0x10000, 0x11000, 0x12000, 3);
         Assert.Equal(0, setRc);
 
-        var lenRc = await env.Call("SysGetXAttr", 0x10000, 0x11000, 0, 0);
+        var lenRc = await env.Call("SysGetXAttr", 0x10000, 0x11000);
         Assert.Equal(3, lenRc);
 
         var getRc = await env.Call("SysGetXAttr", 0x10000, 0x11000, 0x13000, 16);
         Assert.Equal(3, getRc);
         Assert.Equal("abc", Encoding.UTF8.GetString(env.ReadBytes(0x13000, 3)));
 
-        var fd = await env.Call("SysOpen", 0x10000, 0, 0);
+        var fd = await env.Call("SysOpen", 0x10000);
         Assert.True(fd >= 0);
 
-        var fsetRc = await env.Call("SysFSetXAttr", (uint)fd, 0x15000, 0x16000, 3, 0);
+        var fsetRc = await env.Call("SysFSetXAttr", (uint)fd, 0x15000, 0x16000, 3);
         Assert.Equal(0, fsetRc);
 
         var fgetRc = await env.Call("SysFGetXAttr", (uint)fd, 0x15000, 0x17000, 16);
@@ -93,13 +93,13 @@ public class MknodAndXattrSyscallTests
         env.WriteBytes(0x13000, Encoding.UTF8.GetBytes("1"));
         env.WriteBytes(0x14000, Encoding.UTF8.GetBytes("2"));
 
-        var mkRc = await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x180, 0); // S_IFREG|0600
+        var mkRc = await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x180); // S_IFREG|0600
         Assert.Equal(0, mkRc);
 
-        Assert.Equal(0, await env.Call("SysSetXAttr", 0x10000, 0x11000, 0x13000, 1, 0));
-        Assert.Equal(0, await env.Call("SysSetXAttr", 0x10000, 0x12000, 0x14000, 1, 0));
+        Assert.Equal(0, await env.Call("SysSetXAttr", 0x10000, 0x11000, 0x13000, 1));
+        Assert.Equal(0, await env.Call("SysSetXAttr", 0x10000, 0x12000, 0x14000, 1));
 
-        var needed = await env.Call("SysListXAttr", 0x10000, 0, 0);
+        var needed = await env.Call("SysListXAttr", 0x10000);
         Assert.True(needed > 0);
 
         var listRc = await env.Call("SysListXAttr", 0x10000, 0x15000, (uint)needed);
@@ -118,7 +118,7 @@ public class MknodAndXattrSyscallTests
     [Fact]
     public async Task Mknodat_On_OverlayRoot_Creates_Node()
     {
-        using var env = new TestEnv(useOverlayRoot: true);
+        using var env = new TestEnv(true);
         env.MapUserPage(0x18000);
         env.WriteCString(0x18000, "/tmp/devzero");
 
@@ -138,8 +138,7 @@ public class MknodAndXattrSyscallTests
         env.SyscallManager.MountDetachedTmpfsFile(
             "/etc/resolv.conf",
             "resolv.conf",
-            Encoding.UTF8.GetBytes("nameserver 8.8.8.8\n"),
-            readOnly: true);
+            Encoding.UTF8.GetBytes("nameserver 8.8.8.8\n"));
 
         var loc = env.SyscallManager.PathWalkWithFlags("/etc/resolv.conf", LookupFlags.FollowSymlink);
         Assert.True(loc.IsValid);
@@ -214,9 +213,7 @@ public class MknodAndXattrSyscallTests
         public void Dispose()
         {
             if (!string.IsNullOrEmpty(_tempLowerDir) && Directory.Exists(_tempLowerDir))
-            {
                 Directory.Delete(_tempLowerDir, true);
-            }
         }
 
         public void MapUserPage(uint addr)

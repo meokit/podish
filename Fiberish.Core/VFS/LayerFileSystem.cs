@@ -1,3 +1,4 @@
+using Fiberish.Memory;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -18,7 +19,8 @@ public class LayerFileSystem : FileSystem
         if (index == null)
         {
             if (options.Root == null)
-                throw new ArgumentException("LayerFS requires either LayerMountOptions.Index or LayerMountOptions.Root");
+                throw new ArgumentException(
+                    "LayerFS requires either LayerMountOptions.Index or LayerMountOptions.Root");
             index = LayerIndex.FromNodeTree(options.Root);
         }
 
@@ -61,8 +63,8 @@ public sealed class InMemoryLayerContentProvider : ILayerContentProvider
 
 public sealed class LayerIndex
 {
-    private readonly Dictionary<string, LayerIndexEntry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _children = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LayerIndexEntry> _entries = new(StringComparer.Ordinal);
 
     public LayerIndex()
     {
@@ -128,7 +130,7 @@ public sealed class LayerIndex
             node.ATime,
             node.CTime,
             node.Content,
-            DataOffset: -1);
+            -1);
         AddEntry(entry);
 
         if (node.Type != InodeType.Directory || node.Children == null) return;
@@ -196,7 +198,8 @@ public class LayerSuperBlock : SuperBlock
     private readonly Dictionary<string, ulong> _inoByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LayerInode> _inodeByPath = new(StringComparer.Ordinal);
 
-    public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider, DeviceNumberManager? devManager = null) : base(devManager)
+    public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider,
+        DeviceNumberManager? devManager = null) : base(devManager)
     {
         Type = fsType;
         Index = index;
@@ -294,8 +297,8 @@ public sealed class LayerNode
 
 public class LayerInode : Inode
 {
-    private readonly string _path;
     private readonly LayerIndexEntry _entry;
+    private readonly string _path;
 
     public LayerInode(LayerSuperBlock sb, string path, LayerIndexEntry entry, ulong ino)
     {
@@ -397,7 +400,7 @@ public class LayerInode : Inode
                 }
 
                 return true;
-            }, out _, strictQuota: true, Fiberish.Memory.AllocationClass.Readahead);
+            }, out _, true, AllocationClass.Readahead);
 
             if (ptr == IntPtr.Zero) return 0;
         }
@@ -405,7 +408,8 @@ public class LayerInode : Inode
         return 0;
     }
 
-    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
     {
         return -(int)Errno.EROFS;
     }

@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Threading;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
@@ -13,21 +12,6 @@ internal readonly record struct HostMemoryMapGeometry(
 
 internal static partial class HostMemoryMapGeometryProvider
 {
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly HostMemoryMapGeometry? _previous;
-
-        public ScopeRestore(HostMemoryMapGeometry? previous)
-        {
-            _previous = previous;
-        }
-
-        public void Dispose()
-        {
-            Override.Value = _previous;
-        }
-    }
-
     private static readonly AsyncLocal<HostMemoryMapGeometry?> Override = new();
     private static readonly Lazy<HostMemoryMapGeometry> Cached = new(CreateCurrent);
 
@@ -62,8 +46,8 @@ internal static partial class HostMemoryMapGeometryProvider
                 guestPageSize,
                 hostPageSize > 0 ? hostPageSize : guestPageSize,
                 granularity > 0 ? granularity : guestPageSize,
-                SupportsMappedFileBackend: true,
-                SupportsDirectMappedTailPage: false);
+                true,
+                false);
         }
 
         var unixPageSize = Environment.SystemPageSize;
@@ -74,8 +58,8 @@ internal static partial class HostMemoryMapGeometryProvider
             guestPageSize,
             unixPageSize,
             unixPageSize,
-            SupportsMappedFileBackend: true,
-            SupportsDirectMappedTailPage: true);
+            true,
+            true);
     }
 
     private static HostMemoryMapGeometry Unsupported()
@@ -84,8 +68,26 @@ internal static partial class HostMemoryMapGeometryProvider
             LinuxConstants.PageSize,
             LinuxConstants.PageSize,
             LinuxConstants.PageSize,
-            SupportsMappedFileBackend: false,
-            SupportsDirectMappedTailPage: false);
+            false,
+            false);
+    }
+
+    [LibraryImport("kernel32.dll")]
+    private static partial void GetSystemInfo(out SYSTEM_INFO lpSystemInfo);
+
+    private sealed class ScopeRestore : IDisposable
+    {
+        private readonly HostMemoryMapGeometry? _previous;
+
+        public ScopeRestore(HostMemoryMapGeometry? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            Override.Value = _previous;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -103,7 +105,4 @@ internal static partial class HostMemoryMapGeometryProvider
         public ushort wProcessorLevel;
         public ushort wProcessorRevision;
     }
-
-    [LibraryImport("kernel32.dll")]
-    private static partial void GetSystemInfo(out SYSTEM_INFO lpSystemInfo);
 }

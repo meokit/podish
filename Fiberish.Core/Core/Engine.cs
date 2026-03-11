@@ -1,9 +1,8 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Collections.Generic;
-using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
-using System.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.X86.Native;
 using X86Native = Fiberish.X86.Native.X86Native;
@@ -18,11 +17,10 @@ public enum EngineCloneMemoryMode
 
 public class Engine : IDisposable
 {
+    private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
+    private MmuHandle _currentMmu = null!;
     private bool _disposed;
     private GCHandle _gcHandle;
-    private MmuHandle _currentMmu = null!;
-    private readonly List<VMAManager.NativeRange> _addressSpaceInvalidationScratch = [];
-    private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
 
     public unsafe Engine()
     {
@@ -80,6 +78,34 @@ public class Engine : IDisposable
     // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
     public object? Owner { get; set; }
 
+    public int CurrentMmuAttachmentCount => GetAttachmentCount(_currentMmu.Identity);
+
+    internal List<VMAManager.NativeRange> AddressSpaceInvalidationScratch { get; } = [];
+
+    public virtual uint Eip
+    {
+        get => X86Native.GetEIP(State);
+        set => X86Native.SetEIP(State, value);
+    }
+
+    public virtual uint Eflags
+    {
+        get => X86Native.GetEFLAGS(State);
+        set => X86Native.SetEFLAGS(State, value);
+    }
+
+    public virtual EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
+
+    public virtual int FaultVector => X86Native.GetFaultVector(State);
+
+    public void Dispose()
+    {
+        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
+        Dispose(true);
+        Console.WriteLine("[Engine] Disposed.");
+        GC.SuppressFinalize(this);
+    }
+
     private void AssertSchedulerThread([CallerMemberName] string? caller = null)
     {
         if (Owner is FiberTask task)
@@ -106,7 +132,7 @@ public class Engine : IDisposable
     private bool TryRegisterAttachment(MmuHandle mmu)
     {
         var id = mmu.Identity;
-        var engineKey = (nint)State;
+        var engineKey = State;
         var engines = MmuAttachmentRegistry.GetOrAdd(id, _ => new ConcurrentDictionary<nint, byte>());
         return engines.TryAdd(engineKey, 0);
     }
@@ -114,7 +140,7 @@ public class Engine : IDisposable
     private bool TryUnregisterAttachment(MmuHandle mmu)
     {
         var id = mmu.Identity;
-        var engineKey = (nint)State;
+        var engineKey = State;
         if (!MmuAttachmentRegistry.TryGetValue(id, out var engines))
             return false;
         if (!engines.TryRemove(engineKey, out _))
@@ -142,10 +168,6 @@ public class Engine : IDisposable
     {
         return MmuAttachmentRegistry.TryGetValue(mmuId, out var engines) ? engines.Count : 0;
     }
-
-    public int CurrentMmuAttachmentCount => GetAttachmentCount(_currentMmu.Identity);
-
-    internal List<VMAManager.NativeRange> AddressSpaceInvalidationScratch => _addressSpaceInvalidationScratch;
 
     private bool TrySwapCurrentMmu(MmuHandle next, out string? error)
     {
@@ -176,30 +198,6 @@ public class Engine : IDisposable
         Debug.Assert(GetAttachmentCount(_currentMmu.Identity) > 0);
         error = null;
         return true;
-    }
-
-    public virtual uint Eip
-    {
-        get => X86Native.GetEIP(State);
-        set => X86Native.SetEIP(State, value);
-    }
-
-    public virtual uint Eflags
-    {
-        get => X86Native.GetEFLAGS(State);
-        set => X86Native.SetEFLAGS(State, value);
-    }
-
-    public virtual EmuStatus Status => (EmuStatus)X86Native.GetStatus(State);
-
-    public virtual int FaultVector => X86Native.GetFaultVector(State);
-
-    public void Dispose()
-    {
-        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
-        Dispose(true);
-        Console.WriteLine("[Engine] Disposed.");
-        GC.SuppressFinalize(this);
     }
 
     [UnmanagedCallersOnly]
@@ -253,6 +251,7 @@ public class Engine : IDisposable
                     engine.InterruptHandler(engine, vector);
                     return 1; // Always return 1 (handled) as requested
                 }
+
                 return 1; // Default to 1 to avoid native fault
             }
         }
@@ -271,7 +270,7 @@ public class Engine : IDisposable
 
     /// <summary>
     ///     Clone engine execution state.
-    ///     If <paramref name="shareMem"/> is false, MMU cloning copies owned pages and preserves External mappings.
+    ///     If <paramref name="shareMem" /> is false, MMU cloning copies owned pages and preserves External mappings.
     ///     External pages are never converted into owned pages.
     /// </summary>
     public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode)
@@ -658,8 +657,8 @@ public class Engine : IDisposable
     }
 
     /// <summary>
-    /// Reset entire native MMU page directory + JIT cache.
-    /// Used during execve to clear all stale native pages before loading new binary.
+    ///     Reset entire native MMU page directory + JIT cache.
+    ///     Used during execve to clear all stale native pages before loading new binary.
     /// </summary>
     public void ResetMemory()
     {

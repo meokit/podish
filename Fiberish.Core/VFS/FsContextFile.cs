@@ -48,14 +48,12 @@ public sealed class FsContextFile : LinuxFile
         }
 
         foreach (var flag in FlagOptions)
-        {
             // flags are also represented in mount options for compatibility with existing parsers
             if (string.Equals(flag, "ro", StringComparison.Ordinal) ||
                 string.Equals(flag, "rw", StringComparison.Ordinal))
                 parts.Add(flag);
             else
                 parts.Add(flag);
-        }
 
         return parts.Count == 0 ? null : string.Join(",", parts);
     }

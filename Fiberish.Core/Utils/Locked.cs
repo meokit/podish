@@ -1,15 +1,13 @@
-using System;
-
 namespace Fiberish.Core.Utils;
 
 /// <summary>
-/// A Rust-style Mutex wrapper that encapsulates a value and ensures it can only be accessed 
-/// while explicitly holding the lock via closures.
+///     A Rust-style Mutex wrapper that encapsulates a value and ensures it can only be accessed
+///     while explicitly holding the lock via closures.
 /// </summary>
 public class Locked<T>
 {
-    private readonly T _value;
     private readonly object _lock = new();
+    private readonly T _value;
 
     public Locked(T value)
     {
@@ -17,7 +15,7 @@ public class Locked<T>
     }
 
     /// <summary>
-    /// Executes the given action while holding the lock on the encapsulated value.
+    ///     Executes the given action while holding the lock on the encapsulated value.
     /// </summary>
     public void Lock(Action<T> action)
     {
@@ -28,8 +26,8 @@ public class Locked<T>
     }
 
     /// <summary>
-    /// Executes the given function while holding the lock on the encapsulated value, 
-    /// and returns the result.
+    ///     Executes the given function while holding the lock on the encapsulated value,
+    ///     and returns the result.
     /// </summary>
     public TResult Lock<TResult>(Func<T, TResult> func)
     {

@@ -51,8 +51,6 @@ public static class OciLayerIndexBuilder
                     index.AddEntry(new LayerIndexEntry(path, InodeType.File, mode, uid, gid, size, "",
                         mtime, mtime, mtime, null, dataOffset, blobDigest));
                     break;
-                default:
-                    break;
             }
 
             SkipAligned(tarStream, size);
@@ -127,7 +125,7 @@ public static class OciLayerIndexBuilder
         }
 
         Span<byte> buffer = stackalloc byte[4096];
-        long remaining = aligned;
+        var remaining = aligned;
         while (remaining > 0)
         {
             var n = stream.Read(buffer[..(int)Math.Min(buffer.Length, remaining)]);

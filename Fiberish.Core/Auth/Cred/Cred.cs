@@ -2,12 +2,12 @@ namespace Fiberish.Auth.Cred;
 
 public sealed class GroupInfo
 {
-    public List<int> Groups { get; }
-
     public GroupInfo(IEnumerable<int>? groups = null)
     {
         Groups = groups?.Distinct().ToList() ?? [];
     }
+
+    public List<int> Groups { get; }
 
     public bool Contains(int gid)
     {

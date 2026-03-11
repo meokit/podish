@@ -17,18 +17,19 @@ public partial class SyscallManager
     // Returning success for unsupported options makes socket behavior impossible
     // to reason about, especially for raw sockets.
 
-    private static async ValueTask<int> SysSetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysSetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd      = (int)a1;
-        int level   = (int)a2;
-        int optname = (int)a3;
-        uint optval = a4;
-        int optlen  = (int)a5;
+        var fd = (int)a1;
+        var level = (int)a2;
+        var optname = (int)a3;
+        var optval = a4;
+        var optlen = (int)a5;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -44,7 +45,6 @@ public partial class SyscallManager
             try
             {
                 if (level == LinuxConstants.SOL_SOCKET)
-                {
                     switch (optname)
                     {
                         case LinuxConstants.SO_REUSEADDR:
@@ -80,26 +80,26 @@ public partial class SyscallManager
                         case LinuxConstants.SO_RCVTIMEO:
                             if (optlen >= 8)
                             {
-                                long sec  = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+                                long sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
                                 long usec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
                                 sock.ReceiveTimeout = (int)(sec * 1000 + usec / 1000);
                             }
+
                             return 0;
                         case LinuxConstants.SO_SNDTIMEO:
                             if (optlen >= 8)
                             {
-                                long sec  = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+                                long sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
                                 long usec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
                                 sock.SendTimeout = (int)(sec * 1000 + usec / 1000);
                             }
+
                             return 0;
                         default:
                             return -(int)Errno.ENOPROTOOPT;
                     }
-                }
 
                 if (level == LinuxConstants.IPPROTO_TCP)
-                {
                     switch (optname)
                     {
                         case LinuxConstants.TCP_NODELAY:
@@ -112,7 +112,6 @@ public partial class SyscallManager
                         default:
                             return -(int)Errno.ENOPROTOOPT;
                     }
-                }
 
                 if (level == LinuxConstants.IPPROTO_IPV6)
                 {
@@ -122,6 +121,7 @@ public partial class SyscallManager
                             BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
                         return 0;
                     }
+
                     return -(int)Errno.ENOPROTOOPT;
                 }
 
@@ -141,25 +141,24 @@ public partial class SyscallManager
         }
 
         if (file.OpenedInode is NetstackSocketInode netSock)
-        {
             return netSock.SetSocketOption(level, optname, buf.AsSpan(0, optlen));
-        }
 
         return -(int)Errno.ENOPROTOOPT;
     }
 
-    private static async ValueTask<int> SysGetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysGetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd      = (int)a1;
-        int level   = (int)a2;
-        int optname = (int)a3;
-        uint optval = a4;
-        uint optlenPtr = a5;
+        var fd = (int)a1;
+        var level = (int)a2;
+        var optname = (int)a3;
+        var optval = a4;
+        var optlenPtr = a5;
 
         var file = sm.GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -167,27 +166,30 @@ public partial class SyscallManager
         // Read user-supplied optlen
         var lenBuf = new byte[4];
         if (!task.CPU.CopyFromUser(optlenPtr, lenBuf)) return -(int)Errno.EFAULT;
-        int optlen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+        var optlen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
 
         var outBuf = new byte[Math.Max(optlen, 8)];
-        int written = 4; // default: return a single int
+        var written = 4; // default: return a single int
 
         if (file.OpenedInode is HostSocketInode hostSock)
         {
             var sock = hostSock.NativeSocket!;
             try
             {
-                    if (level == LinuxConstants.SOL_SOCKET)
+                if (level == LinuxConstants.SOL_SOCKET)
+                    switch (optname)
                     {
-                        switch (optname)
-                        {
                         case LinuxConstants.SO_REUSEADDR:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) is int v1 ? v1 : 0);
+                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) is int v1
+                                    ? v1
+                                    : 0);
                             break;
                         case LinuxConstants.SO_KEEPALIVE:
                             BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2 ? v2 : 0);
+                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2
+                                    ? v2
+                                    : 0);
                             break;
                         case LinuxConstants.SO_ERROR:
                             var cachedSoError = hostSock.ConsumeCachedSocketError();
@@ -196,6 +198,7 @@ public partial class SyscallManager
                                 BinaryPrimitives.WriteInt32LittleEndian(outBuf, cachedSoError);
                                 break;
                             }
+
                             var soErrorObj = sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                             var soError = soErrorObj switch
                             {
@@ -232,9 +235,7 @@ public partial class SyscallManager
                         default:
                             return -(int)Errno.ENOPROTOOPT;
                     }
-                }
                 else if (level == LinuxConstants.IPPROTO_TCP)
-                {
                     switch (optname)
                     {
                         case LinuxConstants.TCP_NODELAY:
@@ -243,11 +244,8 @@ public partial class SyscallManager
                         default:
                             return -(int)Errno.ENOPROTOOPT;
                     }
-                }
                 else
-                {
                     return -(int)Errno.ENOPROTOOPT;
-                }
             }
             catch (SocketException ex)
             {
@@ -289,23 +287,23 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd       = (int)a1;
-        uint msgvec  = a2;
-        int vlen     = (int)a3;
-        int flags    = (int)a4;
+        var fd = (int)a1;
+        var msgvec = a2;
+        var vlen = (int)a3;
+        var flags = (int)a4;
 
         if (vlen <= 0) return 0;
 
         // struct mmsghdr is 28+4 = 32 bytes on i386 (msghdr=28 + msg_len u32)
         const int mmsgHdrSize = 32;
 
-        int sent = 0;
-        for (int i = 0; i < vlen; i++)
+        var sent = 0;
+        for (var i = 0; i < vlen; i++)
         {
-            uint mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
+            var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
             // SysSendMsg reads a struct msghdr at msgPtr.
             // We pass mmsgPtr directly — it starts with struct msghdr (28 bytes).
-            int result = await SysSendMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
+            var result = await SysSendMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
                 if (sent == 0) return result; // no messages sent yet → propagate error
@@ -337,21 +335,21 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fd       = (int)a1;
-        uint msgvec  = a2;
-        int vlen     = (int)a3;
-        int flags    = (int)a4;
+        var fd = (int)a1;
+        var msgvec = a2;
+        var vlen = (int)a3;
+        var flags = (int)a4;
         // a5 = timeout ptr — we ignore it for now and treat as non-blocking batch
 
         if (vlen <= 0) return 0;
 
         const int mmsgHdrSize = 32;
 
-        int received = 0;
-        for (int i = 0; i < vlen; i++)
+        var received = 0;
+        for (var i = 0; i < vlen; i++)
         {
-            uint mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
-            int result = await SysRecvMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
+            var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
+            var result = await SysRecvMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
                 // EAGAIN on the first message with MSG_DONTWAIT or non-blocking → return 0 messages
@@ -392,28 +390,28 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fdIn    = (int)a1;
-        uint offIn  = a2; // loff_t* — pointer to guest offset, or 0 for current position
-        int fdOut   = (int)a3;
-        uint offOut = a4;
-        int len     = (int)a5;
-        int flags   = (int)a6; // SPLICE_F_NONBLOCK=0x2, SPLICE_F_MORE=0x4, etc.
+        var fdIn = (int)a1;
+        var offIn = a2; // loff_t* — pointer to guest offset, or 0 for current position
+        var fdOut = (int)a3;
+        var offOut = a4;
+        var len = (int)a5;
+        var flags = (int)a6; // SPLICE_F_NONBLOCK=0x2, SPLICE_F_MORE=0x4, etc.
 
         if (len <= 0) return 0;
 
-        var fileIn  = sm.GetFD(fdIn);
+        var fileIn = sm.GetFD(fdIn);
         var fileOut = sm.GetFD(fdOut);
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
         // At least one FD must be a pipe (enforced by Linux; we relax here for compatibility)
-        bool inIsPipe  = fileIn.OpenedInode  is PipeInode;
-        bool outIsPipe = fileOut.OpenedInode is PipeInode;
+        var inIsPipe = fileIn.OpenedInode is PipeInode;
+        var outIsPipe = fileOut.OpenedInode is PipeInode;
         if (!inIsPipe && !outIsPipe) return -(int)Errno.EINVAL;
         if (inIsPipe && offIn != 0) return -(int)Errno.ESPIPE;
         if (outIsPipe && offOut != 0) return -(int)Errno.ESPIPE;
 
         // Resolve read offset
-        long readOffset = fileIn.Position;
+        var readOffset = fileIn.Position;
         if (offIn != 0)
         {
             var offBytes = new byte[8];
@@ -422,7 +420,7 @@ public partial class SyscallManager
         }
 
         // Resolve write offset
-        long writeOffset = fileOut.Position;
+        var writeOffset = fileOut.Position;
         if (offOut != 0)
         {
             var offBytes = new byte[8];
@@ -430,17 +428,17 @@ public partial class SyscallManager
             writeOffset = BitConverter.ToInt64(offBytes);
         }
 
-        int bufSize = Math.Min(len, 65536);
+        var bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);
-        int totalTransferred = 0;
+        var totalTransferred = 0;
 
         try
         {
-            int remaining = len;
+            var remaining = len;
             while (remaining > 0)
             {
-                int toRead = Math.Min(remaining, bufSize);
-                int bytesRead = fileIn.OpenedInode!.Read(fileIn, buf.AsSpan(0, toRead), readOffset);
+                var toRead = Math.Min(remaining, bufSize);
+                var bytesRead = fileIn.OpenedInode!.Read(fileIn, buf.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead == 0) break; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
@@ -453,12 +451,13 @@ public partial class SyscallManager
                     await fileIn.OpenedInode.WaitForRead(fileIn);
                     continue;
                 }
+
                 if (bytesRead < 0) return bytesRead;
 
-                int writeConsumed = 0;
+                var writeConsumed = 0;
                 while (writeConsumed < bytesRead)
                 {
-                    int bytesWritten = fileOut.OpenedInode!.Write(fileOut,
+                    var bytesWritten = fileOut.OpenedInode!.Write(fileOut,
                         buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
 
                     if (bytesWritten == -(int)Errno.EPIPE)
@@ -489,7 +488,7 @@ public partial class SyscallManager
                     remaining -= bytesWritten;
                 }
 
-                readOffset   += bytesRead;
+                readOffset += bytesRead;
             }
 
             // Update guest offsets if ptrs were provided
@@ -525,22 +524,22 @@ public partial class SyscallManager
         var task = sm.Engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        int fdIn  = (int)a1;
-        int fdOut = (int)a2;
-        int len   = (int)a3;
-        int flags = (int)a4;
+        var fdIn = (int)a1;
+        var fdOut = (int)a2;
+        var len = (int)a3;
+        var flags = (int)a4;
 
         if (len <= 0) return 0;
 
-        var fileIn  = sm.GetFD(fdIn);
+        var fileIn = sm.GetFD(fdIn);
         var fileOut = sm.GetFD(fdOut);
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
-        if (fileIn.OpenedInode  is not PipeInode pipeIn) return -(int)Errno.EINVAL;
+        if (fileIn.OpenedInode is not PipeInode pipeIn) return -(int)Errno.EINVAL;
         if (fileOut.OpenedInode is not PipeInode) return -(int)Errno.EINVAL;
         if (fdIn == fdOut) return -(int)Errno.EINVAL;
 
-        int bufSize = Math.Min(len, 65536);
+        var bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);
 
         try
@@ -549,7 +548,7 @@ public partial class SyscallManager
             // from fd_in without consuming, write it to fd_out, return count.
             while (true)
             {
-                int bytesRead = pipeIn.Peek(buf.AsSpan(0, bufSize));
+                var bytesRead = pipeIn.Peek(buf.AsSpan(0, bufSize));
                 if (bytesRead == 0) return 0; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
                 {
@@ -558,9 +557,10 @@ public partial class SyscallManager
                     await fileIn.OpenedInode.WaitForRead(fileIn);
                     continue; // retry after data arrives
                 }
+
                 if (bytesRead < 0) return bytesRead;
 
-                int bytesWritten = fileOut.OpenedInode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
+                var bytesWritten = fileOut.OpenedInode!.Write(fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
                 if (bytesWritten == -(int)Errno.EAGAIN)
                 {
                     if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)

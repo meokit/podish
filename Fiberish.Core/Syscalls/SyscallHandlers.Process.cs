@@ -30,7 +30,7 @@ public partial class SyscallManager
             sm.UnregisterEngine(task.CPU);
             var remainingThreads = task.CommonKernel.DetachTask(task);
             if (remainingThreads == 0)
-                FinalizeProcessExit(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
+                FinalizeProcessExit(task, exitCode, false, 0, false);
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, false);
@@ -54,7 +54,7 @@ public partial class SyscallManager
 
             task.Exited = true;
             task.ExitStatus = exitCode;
-            FinalizeProcessExit(task, exitCode, exitedBySignal: false, termSignal: 0, coreDumped: false);
+            FinalizeProcessExit(task, exitCode, false, 0, false);
         }
 
         sm.ExitHandler?.Invoke(sm.Engine, exitCode, true);
@@ -479,19 +479,15 @@ public partial class SyscallManager
 
         var reparented = task.CommonKernel.ReparentChildrenToInit(task.Process.TGID);
         if (reparented > 0)
-        {
             Logger.LogDebug("[Exit] Reparented {Count} orphaned children from PID {Pid} to init PID {InitPid}",
                 reparented, task.Process.TGID, task.CommonKernel.InitPid);
-        }
 
         task.Process.StateChangeEvent.Set();
         task.CommonKernel.TryReleaseProcessMemory(task.Process, task.CPU);
         task.CommonKernel.DetachProcessTasks(task.Process.TGID);
 
         if (task.CommonKernel.TryAutoReapZombie(task.Process))
-        {
             Logger.LogDebug("[Exit] Auto-reaped zombie PID {Pid} by engine init reaper", task.Process.TGID);
-        }
     }
 
     private static async ValueTask<int> SysExecve(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -509,7 +505,7 @@ public partial class SyscallManager
         if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
 
         // Resolve path via VFS/Host
-        var (loc, guestPath) = sm.ResolvePath(filename, false);
+        var (loc, guestPath) = sm.ResolvePath(filename);
 
         if (!loc.IsValid)
         {

@@ -18,11 +18,12 @@ public class MmapSupportTests
         env.MapUserPage(0x10000);
         env.WriteCString(0x10000, "/file");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x10000);
         Assert.True(fd >= 0);
 
-        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private, (uint)fd, 0);
+        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private,
+            (uint)fd);
         Assert.True(rc > 0);
     }
 
@@ -33,11 +34,12 @@ public class MmapSupportTests
         env.MapUserPage(0x11000);
         env.WriteCString(0x11000, "/devchar");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x11000, 0x2000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x11000, (uint)FileFlags.O_RDONLY, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x11000, 0x2000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x11000);
         Assert.True(fd >= 0);
 
-        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private, (uint)fd, 0);
+        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private,
+            (uint)fd);
         Assert.Equal(-(int)Errno.ENODEV, rc);
     }
 
@@ -45,10 +47,11 @@ public class MmapSupportTests
     public async Task Mmap_EventFd_Returns_ENODEV()
     {
         using var env = new TestEnv();
-        var fd = await env.Call("SysEventFd2", 0, 0);
+        var fd = await env.Call("SysEventFd2");
         Assert.True(fd >= 0);
 
-        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private, (uint)fd, 0);
+        var rc = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read, (uint)MapFlags.Private,
+            (uint)fd);
         Assert.Equal(-(int)Errno.ENODEV, rc);
     }
 
@@ -57,12 +60,12 @@ public class MmapSupportTests
     {
         using var env = new TestEnv();
         var mapped = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous));
         Assert.True(mapped > 0);
         var addr = (uint)mapped;
 
         // Fault in as readable (clean page, not dirty).
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, false, env.Engine));
 
         var oneByte = new byte[1];
 
@@ -76,20 +79,20 @@ public class MmapSupportTests
     public async Task Mmap_FixedHighAddress_FitWithinTaskSize_Succeeds()
     {
         using var env = new TestEnv();
-        var addr = LinuxConstants.TaskSize32 - (uint)(LinuxConstants.PageSize * 2);
+        var addr = LinuxConstants.TaskSize32 - LinuxConstants.PageSize * 2;
         var rc = await env.Call("SysMmap2", addr, LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal((int)addr, rc);
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, isWrite: true, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, true, env.Engine));
     }
 
     [Fact]
     public async Task Mmap_FixedHighAddress_OverrunTaskSize_ReturnsEnomem()
     {
         using var env = new TestEnv();
-        var addr = LinuxConstants.TaskSize32 - (uint)LinuxConstants.PageSize;
-        var rc = await env.Call("SysMmap2", addr, (uint)(LinuxConstants.PageSize * 2), (uint)Protection.Read,
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+        var addr = LinuxConstants.TaskSize32 - LinuxConstants.PageSize;
+        var rc = await env.Call("SysMmap2", addr, LinuxConstants.PageSize * 2, (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal(-(int)Errno.ENOMEM, rc);
     }
 
@@ -99,14 +102,14 @@ public class MmapSupportTests
         using var env = new TestEnv();
         const uint baseAddr = 0x50000000;
 
-        var first = await env.Call("SysMmap2", baseAddr, (uint)(LinuxConstants.PageSize * 2),
+        var first = await env.Call("SysMmap2", baseAddr, LinuxConstants.PageSize * 2,
             (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal((int)baseAddr, first);
 
-        var overlap = await env.Call("SysMmap2", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+        var overlap = await env.Call("SysMmap2", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
             (uint)Protection.Read,
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.FixedNoReplace), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.FixedNoReplace));
         Assert.Equal(-(int)Errno.EEXIST, overlap);
     }
 
@@ -118,22 +121,22 @@ public class MmapSupportTests
         var mapLen = (uint)(LinuxConstants.PageSize * 3);
 
         var mapped = await env.Call("SysMmap2", baseAddr, mapLen, (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0);
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal((int)baseAddr, mapped);
 
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, false, env.Engine));
         Assert.Equal(FaultResult.Handled,
-            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
         Assert.Equal(FaultResult.Handled,
-            env.Vma.HandleFaultDetailed(baseAddr + (uint)(LinuxConstants.PageSize * 2), isWrite: false, env.Engine));
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize * 2, false, env.Engine));
 
-        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize));
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
 
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, false, env.Engine));
         Assert.Equal(FaultResult.Segv,
-            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
         Assert.Equal(FaultResult.Handled,
-            env.Vma.HandleFaultDetailed(baseAddr + (uint)(LinuxConstants.PageSize * 2), isWrite: false, env.Engine));
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize * 2, false, env.Engine));
     }
 
     [Fact]
@@ -143,14 +146,14 @@ public class MmapSupportTests
         const uint baseAddr = 0x52000000;
 
         Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, LinuxConstants.PageSize,
-            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed),
-            0, 0));
-        Assert.Equal((int)(baseAddr + (uint)(LinuxConstants.PageSize * 2)),
-            await env.Call("SysMmap2", baseAddr + (uint)(LinuxConstants.PageSize * 2), LinuxConstants.PageSize,
-                (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed),
-                0, 0));
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)(baseAddr + LinuxConstants.PageSize * 2),
+            await env.Call("SysMmap2", baseAddr + LinuxConstants.PageSize * 2, LinuxConstants.PageSize,
+                (uint)(Protection.Read | Protection.Write),
+                (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
 
-        var rc = await env.Call("SysMprotect", baseAddr, (uint)(LinuxConstants.PageSize * 3), (uint)Protection.Read);
+        var rc = await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize * 3, (uint)Protection.Read);
         Assert.Equal(-(int)Errno.ENOMEM, rc);
     }
 
@@ -161,19 +164,20 @@ public class MmapSupportTests
         const uint baseAddr = 0x53000000;
         var len = (uint)(LinuxConstants.PageSize * 2);
 
-        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len, (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0));
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
 
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, false, env.Engine));
         Assert.Equal(FaultResult.Handled,
-            env.Vma.HandleFaultDetailed(baseAddr + (uint)LinuxConstants.PageSize, isWrite: false, env.Engine));
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
 
-        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
             (uint)Protection.Read));
 
         var oneByte = new byte[1] { 0x11 };
         Assert.True(env.Engine.CopyToUser(baseAddr, oneByte));
-        Assert.False(env.Engine.CopyToUser(baseAddr + (uint)LinuxConstants.PageSize, oneByte));
+        Assert.False(env.Engine.CopyToUser(baseAddr + LinuxConstants.PageSize, oneByte));
     }
 
     [Fact]
@@ -183,19 +187,19 @@ public class MmapSupportTests
         env.MapUserPage(0x12000);
         env.WriteCString(0x12000, "/shared");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x12000, 0x8000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x12000, (uint)FileFlags.O_RDWR, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x12000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x12000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
-        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 2)));
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, LinuxConstants.PageSize * 2));
 
-        var mapped = await env.Call("SysMmap2", 0, (uint)(LinuxConstants.PageSize * 2),
-            (uint)(Protection.Read | Protection.Write), (uint)MapFlags.Shared, (uint)fd, 0);
+        var mapped = await env.Call("SysMmap2", 0, LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write), (uint)MapFlags.Shared, (uint)fd);
         Assert.True(mapped > 0);
         var baseAddr = (uint)mapped;
-        var secondPage = baseAddr + (uint)LinuxConstants.PageSize;
+        var secondPage = baseAddr + LinuxConstants.PageSize;
 
         var payload = new byte[1] { 0x42 };
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(secondPage, isWrite: true, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(secondPage, true, env.Engine));
 #pragma warning disable CS0618
         env.Engine.MemWrite(secondPage, payload);
 #pragma warning restore CS0618
@@ -223,24 +227,24 @@ public class MmapSupportTests
         env.MapUserPage(0x14000);
         env.WriteCString(0x14000, "/cow-mprotect");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x14000, 0x8000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x14000, (uint)FileFlags.O_RDWR, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x14000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x14000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
-        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, LinuxConstants.PageSize * 3));
 
         const uint baseAddr = 0x54000000;
         var mapLen = (uint)(LinuxConstants.PageSize * 3);
         var mapped = await env.Call("SysMmap2", baseAddr, mapLen, (uint)(Protection.Read | Protection.Write),
-            (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0);
+            (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd);
         Assert.Equal((int)baseAddr, mapped);
 
-        var middlePage = baseAddr + (uint)LinuxConstants.PageSize;
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, isWrite: true, env.Engine));
+        var middlePage = baseAddr + LinuxConstants.PageSize;
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, true, env.Engine));
 
-        Assert.Equal(0, await env.Call("SysMprotect", baseAddr, (uint)(LinuxConstants.PageSize * 2),
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize * 2,
             (uint)Protection.Read));
 
-        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, isWrite: false, env.Engine));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(middlePage, false, env.Engine));
         var probe = new byte[1];
         Assert.True(env.Engine.CopyFromUser(middlePage, probe));
     }
@@ -252,17 +256,17 @@ public class MmapSupportTests
         env.MapUserPage(0x15000);
         env.WriteCString(0x15000, "/cow-share-mprotect");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x15000, 0x8000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x15000, (uint)FileFlags.O_RDWR, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x15000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x15000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
-        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, LinuxConstants.PageSize * 3));
 
         const uint baseAddr = 0x54100000;
         var mapLen = (uint)(LinuxConstants.PageSize * 3);
         Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
-            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0));
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd));
 
-        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize,
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
             (uint)Protection.Read));
 
         var splitVmas = env.Vma.VMAs
@@ -282,17 +286,17 @@ public class MmapSupportTests
         env.MapUserPage(0x16000);
         env.WriteCString(0x16000, "/cow-share-munmap");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x16000, 0x8000 | 0x1A4, 0));
-        var fd = await env.Call("SysOpen", 0x16000, (uint)FileFlags.O_RDWR, 0);
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x16000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x16000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
-        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, (uint)(LinuxConstants.PageSize * 3)));
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, LinuxConstants.PageSize * 3));
 
         const uint baseAddr = 0x54200000;
         var mapLen = (uint)(LinuxConstants.PageSize * 3);
         Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
-            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd, 0));
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd));
 
-        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + (uint)LinuxConstants.PageSize, LinuxConstants.PageSize));
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
 
         var splitVmas = env.Vma.VMAs
             .Where(v => v.Start >= baseAddr && v.End <= baseAddr + mapLen)

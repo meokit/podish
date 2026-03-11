@@ -1,8 +1,6 @@
-using System.Net;
 using System.Text;
 using Fiberish.Core.Net;
 using Xunit;
-using System.Threading;
 
 namespace Fiberish.Tests.Core;
 
@@ -14,7 +12,7 @@ public class NetstackWakeTests
         using var netns = LoopbackNetNamespace.Create(0x0A590002u, 24);
         using var ev = new AutoResetEvent(false);
         var token = NetstackWakeRegistry.Register(ev);
-        
+
         try
         {
             netns.BindWakeCallback(token);
@@ -25,7 +23,7 @@ public class NetstackWakeTests
             // State change: Bind an active socket
             using var listener = netns.CreateTcpListener();
             listener.Listen(8080);
-            
+
             // Should trigger notify from inside FFI since it changes state
             netns.Poll(0);
 
@@ -44,7 +42,7 @@ public class NetstackWakeTests
         using var netns = LoopbackNetNamespace.Create(0x0A590002u, 24);
         using var ev = new AutoResetEvent(false);
         var token = NetstackWakeRegistry.Register(ev);
-        
+
         try
         {
             netns.BindWakeCallback(token);
@@ -52,19 +50,19 @@ public class NetstackWakeTests
             using var server = netns.CreateUdpSocket();
             server.Bind(19210);
             netns.Poll(0);
-            
+
             // Consume the first edge
             Assert.True(ev.WaitOne(100));
 
             // Without ClearNotify, further sends shouldn't trigger the callback again
             var payload = Encoding.ASCII.GetBytes("udp-loopback");
             server.SendTo(0x7F000001u, 19210, payload);
-            
+
             Assert.False(ev.WaitOne(0), "Should coalesce and not trigger again before ClearNotify");
 
             // Now clear
             netns.ClearNotify();
-            
+
             // Poll to process the send, which should trigger a new state change
             netns.Poll(0);
 
@@ -83,7 +81,7 @@ public class NetstackWakeTests
         using var netns = LoopbackNetNamespace.Create(0x0A590002u, 24);
         using var ev = new AutoResetEvent(false);
         var token = NetstackWakeRegistry.Register(ev);
-        
+
         try
         {
             netns.BindWakeCallback(token);
@@ -91,7 +89,7 @@ public class NetstackWakeTests
             using var listener = netns.CreateTcpListener();
             listener.Listen(9090);
             netns.Poll(0);
-            
+
             Assert.True(ev.WaitOne(100));
 
             // Now unbind

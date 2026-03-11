@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -75,9 +77,9 @@ public class SysVSemManagerTests
 
         // op 1: Increment by 2 (sem_num=0, sem_op=2, sem_flg=0)
         var sops1 = new byte[6];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(0, 2), 0);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(2, 2), 2);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(4, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(0, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(2, 2), 2);
+        BinaryPrimitives.WriteInt16LittleEndian(sops1.AsSpan(4, 2), 0);
         ctx.Engine.CopyToUser(sopsPtr, sops1);
 
         var ret = await ctx.Manager.SemOp(semid, sopsPtr, 1, ctx.Engine);
@@ -86,9 +88,10 @@ public class SysVSemManagerTests
 
         // op 2: Decrement by 3 with IPC_NOWAIT (sem_num=0, sem_op=-3, sem_flg=IPC_NOWAIT)
         var sops2 = new byte[6];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(0, 2), 0);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(2, 2), -3);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(4, 2), (short)LinuxConstants.IPC_NOWAIT);
+        BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(0, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(2, 2), -3);
+        BinaryPrimitives.WriteInt16LittleEndian(sops2.AsSpan(4, 2),
+            LinuxConstants.IPC_NOWAIT);
         ctx.Engine.CopyToUser(sopsPtr, sops2);
 
         // Should return EAGAIN immediately
@@ -109,9 +112,9 @@ public class SysVSemManagerTests
         ctx.MapUserPage(sopsPtr);
 
         var waitForOne = new byte[6];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
         ctx.Engine.CopyToUser(sopsPtr, waitForOne);
 
         var pending = ctx.Manager.SemOp(semid, sopsPtr, 1, ctx.Engine).AsTask();
@@ -133,9 +136,9 @@ public class SysVSemManagerTests
         ctx.MapUserPage(sopsPtr);
 
         var waitForOne = new byte[6];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(0, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(2, 2), -1);
+        BinaryPrimitives.WriteInt16LittleEndian(waitForOne.AsSpan(4, 2), 0);
         ctx.Engine.CopyToUser(sopsPtr, waitForOne);
 
         var pending = ctx.Manager.SemOp(semid, sopsPtr, 1, ctx.Engine).AsTask();
@@ -150,11 +153,11 @@ public class SysVSemManagerTests
 
     private sealed class TestContext : IDisposable
     {
-        private readonly FiberTask _task;
-        private readonly KernelScheduler _kernel;
-        private static readonly System.Reflection.MethodInfo DrainEventsMethod =
+        private static readonly MethodInfo DrainEventsMethod =
             typeof(KernelScheduler).GetMethod("DrainEvents",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        private readonly KernelScheduler _kernel;
 
         public TestContext(SysVSemManager? manager = null, int processId = 2000)
         {
@@ -169,26 +172,26 @@ public class SysVSemManagerTests
                 EUID = 0,
                 EGID = 0
             };
-            _task = new FiberTask(processId, process, Engine, _kernel);
+            Task = new FiberTask(processId, process, Engine, _kernel);
         }
 
         public Engine Engine { get; }
         public VMAManager Vma { get; }
         public SysVSemManager Manager { get; }
-        public FiberTask Task => _task;
-
-        public void MapUserPage(uint addr)
-        {
-            Vma.Mmap(addr, (uint)LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
-                Engine);
-            Assert.True(Vma.HandleFault(addr, true, Engine));
-        }
+        public FiberTask Task { get; }
 
         public void Dispose()
         {
             KernelScheduler.Current = null;
-            GC.KeepAlive(_task);
+            GC.KeepAlive(Task);
+        }
+
+        public void MapUserPage(uint addr)
+        {
+            Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+                Engine);
+            Assert.True(Vma.HandleFault(addr, true, Engine));
         }
 
         public void DrainEvents()

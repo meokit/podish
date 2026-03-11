@@ -6,10 +6,10 @@ namespace Fiberish.VFS;
 internal sealed class ReadinessWaiter
 {
     private static readonly ConcurrentBag<AsyncWaitQueue> WaitQueuePool = new();
+    private readonly Func<FiberTask?> _currentTaskAccessor;
 
     private readonly Func<LinuxFile, short, short> _poll;
     private readonly Func<LinuxFile, Action, short, IDisposable?> _registerWaitHandle;
-    private readonly Func<FiberTask?> _currentTaskAccessor;
 
     public ReadinessWaiter(
         Func<LinuxFile, short, short> poll,
@@ -77,7 +77,8 @@ internal sealed class ReadinessWaiter
     private static void DispatchSignal(AsyncWaitQueue queue, KernelScheduler? scheduler)
     {
         if (scheduler == null)
-            throw new InvalidOperationException("ReadinessWaiter callback requires an active scheduler-bound task context.");
+            throw new InvalidOperationException(
+                "ReadinessWaiter callback requires an active scheduler-bound task context.");
         scheduler.ScheduleFromAnyThread(queue.Signal);
     }
 }

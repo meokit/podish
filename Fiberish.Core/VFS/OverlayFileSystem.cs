@@ -1,5 +1,7 @@
+using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
+
 // needed for SyscallManager Access if required, but maybe not directly here yet
 
 namespace Fiberish.VFS;
@@ -61,13 +63,15 @@ public class OverlayMountOptions
 
 public class OverlaySuperBlock : SuperBlock
 {
-    private readonly Dictionary<string, HashSet<string>> _whiteouts = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _opaqueDirs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OverlayFileLockState> _flocks = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _opaqueDirs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<string>> _whiteouts = new(StringComparer.Ordinal);
 
-    public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper, DeviceNumberManager? devManager = null) : base(devManager)
+    public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper,
+        DeviceNumberManager? devManager = null) : base(devManager)
     {
-        if (lowers.Count == 0) throw new ArgumentException("OverlayFS requires at least one lower layer", nameof(lowers));
+        if (lowers.Count == 0)
+            throw new ArgumentException("OverlayFS requires at least one lower layer", nameof(lowers));
         Type = type;
         LowerSBs = lowers;
         LowerSB = lowers[0];
@@ -250,31 +254,104 @@ public class OverlayInode : Inode
     private Inode? SourceInode => UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
     public override bool SupportsMmap => Type == InodeType.File && (SourceInode?.SupportsMmap ?? false);
 
-    public override ulong Ino { get => SourceInode?.Ino ?? 0; set { if (SourceInode != null) SourceInode.Ino = value; } }
-    public override uint Dev => SourceInode?.Dev ?? base.Dev;
-    public override InodeType Type { get => SourceInode?.Type ?? InodeType.File; set { if (SourceInode != null) SourceInode.Type = value; } }
-    public override int Mode { get => SourceInode?.Mode ?? 0; set { if (SourceInode != null) SourceInode.Mode = value; } }
-    public override uint Rdev { get => SourceInode?.Rdev ?? 0; set { if (SourceInode != null) SourceInode.Rdev = value; } }
-    public override int Uid { get => SourceInode?.Uid ?? 0; set { if (SourceInode != null) SourceInode.Uid = value; } }
-    public override int Gid { get => SourceInode?.Gid ?? 0; set { if (SourceInode != null) SourceInode.Gid = value; } }
-    public override ulong Size 
-    { 
-        get {
-            return SourceInode?.Size ?? 0;
+    public override ulong Ino
+    {
+        get => SourceInode?.Ino ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Ino = value;
         }
-        set { 
-            if (SourceInode != null) SourceInode.Size = value; 
-        } 
     }
-    public override DateTime MTime { get => SourceInode?.MTime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.MTime = value; } }
-    public override DateTime ATime { get => SourceInode?.ATime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.ATime = value; } }
-    public override DateTime CTime { get => SourceInode?.CTime ?? DateTime.UnixEpoch; set { if (SourceInode != null) SourceInode.CTime = value; } }
+
+    public override uint Dev => SourceInode?.Dev ?? base.Dev;
+
+    public override InodeType Type
+    {
+        get => SourceInode?.Type ?? InodeType.File;
+        set
+        {
+            if (SourceInode != null) SourceInode.Type = value;
+        }
+    }
+
+    public override int Mode
+    {
+        get => SourceInode?.Mode ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Mode = value;
+        }
+    }
+
+    public override uint Rdev
+    {
+        get => SourceInode?.Rdev ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Rdev = value;
+        }
+    }
+
+    public override int Uid
+    {
+        get => SourceInode?.Uid ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Uid = value;
+        }
+    }
+
+    public override int Gid
+    {
+        get => SourceInode?.Gid ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Gid = value;
+        }
+    }
+
+    public override ulong Size
+    {
+        get => SourceInode?.Size ?? 0;
+        set
+        {
+            if (SourceInode != null) SourceInode.Size = value;
+        }
+    }
+
+    public override DateTime MTime
+    {
+        get => SourceInode?.MTime ?? DateTime.UnixEpoch;
+        set
+        {
+            if (SourceInode != null) SourceInode.MTime = value;
+        }
+    }
+
+    public override DateTime ATime
+    {
+        get => SourceInode?.ATime ?? DateTime.UnixEpoch;
+        set
+        {
+            if (SourceInode != null) SourceInode.ATime = value;
+        }
+    }
+
+    public override DateTime CTime
+    {
+        get => SourceInode?.CTime ?? DateTime.UnixEpoch;
+        set
+        {
+            if (SourceInode != null) SourceInode.CTime = value;
+        }
+    }
 
     /// <summary>
-    /// Lower dentries ordered from top-most lower layer to bottom-most lower layer.
-    /// Lookup resolves in this order.
+    ///     Lower dentries ordered from top-most lower layer to bottom-most lower layer.
+    ///     Lookup resolves in this order.
     /// </summary>
     public IReadOnlyList<Dentry> LowerDentries { get; }
+
     public Dentry? LowerDentry => LowerDentries.Count > 0 ? LowerDentries[0] : null;
     public Dentry? UpperDentry { get; private set; }
 
@@ -357,49 +434,44 @@ public class OverlayInode : Inode
                 UpperDentry = existing;
                 return 0;
             }
+
             upperParent.Inode!.Mkdir(upperDentry, Mode, Uid, Gid);
             UpperDentry = upperDentry;
             return 0;
         }
-        else
-        {
-            upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
 
-            // 3. Copy data
-            var lowerInode = LowerInode;
-            if (lowerInode != null)
+        upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
+
+        // 3. Copy data
+        var lowerInode = LowerInode;
+        if (lowerInode != null)
+            try
             {
-                try
+                var buf = new byte[4096];
+                long pos = 0;
+                while (true)
                 {
-                    var buf = new byte[4096];
-                    long pos = 0;
-                    while (true)
-                    {
-                        // Use null to trigger host-internal read without dependency on user's open mode
-                        var n = lowerInode.Read(null!, buf, pos);
-                        if (n <= 0) break;
-                        upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
-                        pos += n;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Fiberish.Diagnostics.Logging.CreateLogger<OverlayInode>().LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
-                    // Cleanup failed upper dentry if needed? For now just return error.
-                    return -(int)Errno.EACCES;
+                    // Use null to trigger host-internal read without dependency on user's open mode
+                    var n = lowerInode.Read(null!, buf, pos);
+                    if (n <= 0) break;
+                    upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
+                    pos += n;
                 }
             }
-
-            UpperDentry = upperDentry;
-
-            // 4. Redirect handle if provided
-            if (linuxFile != null && UpperInode != null)
+            catch (Exception ex)
             {
-                RebindFileBacking(linuxFile, UpperInode, "OverlayInode.CopyUp");
+                Logging.CreateLogger<OverlayInode>()
+                    .LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
+                // Cleanup failed upper dentry if needed? For now just return error.
+                return -(int)Errno.EACCES;
             }
 
-            return 0;
-        }
+        UpperDentry = upperDentry;
+
+        // 4. Redirect handle if provided
+        if (linuxFile != null && UpperInode != null) RebindFileBacking(linuxFile, UpperInode, "OverlayInode.CopyUp");
+
+        return 0;
     }
 
     private Dentry EnsureParentUpper(Dentry lowerDentry)
@@ -419,7 +491,8 @@ public class OverlayInode : Inode
 
         // Must create parent directory in upper
         var newUpperParent = new Dentry(parentLower.Name, null, upperParentOfParent, osb.UpperSB);
-        upperParentOfParent.Inode!.Mkdir(newUpperParent, parentLower.Inode!.Mode, parentLower.Inode.Uid, parentLower.Inode.Gid);
+        upperParentOfParent.Inode!.Mkdir(newUpperParent, parentLower.Inode!.Mode, parentLower.Inode.Uid,
+            parentLower.Inode.Gid);
         return newUpperParent;
     }
 
@@ -501,9 +574,9 @@ public class OverlayInode : Inode
     }
 
     /// <summary>
-    /// Copy-up a lower-only directory to the upper FS.
-    /// Creates an empty directory in the upper FS with the same mode/uid/gid.
-    /// Does NOT copy children — they remain in the lower layer and are merged via Lookup.
+    ///     Copy-up a lower-only directory to the upper FS.
+    ///     Creates an empty directory in the upper FS with the same mode/uid/gid.
+    ///     Does NOT copy children — they remain in the lower layer and are merged via Lookup.
     /// </summary>
     private void CopyUpDirectory()
     {
@@ -595,6 +668,7 @@ public class OverlayInode : Inode
             osb.AddWhiteout(GetDirectoryKey(), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
+
         NamespaceOps.OnDirectoryRemoved(this, overlayEntry.Inode!, "OverlayInode.Rmdir");
     }
 
@@ -644,7 +718,8 @@ public class OverlayInode : Inode
         }
 
         if (targetEntry?.Inode != null)
-            NamespaceOps.OnRenameOverwrite(sourceEntry.Inode, targetEntry.Inode, "OverlayInode.Rename.overwrite-target");
+            NamespaceOps.OnRenameOverwrite(sourceEntry.Inode, targetEntry.Inode,
+                "OverlayInode.Rename.overwrite-target");
         if (sourceOverlay.Type == InodeType.Directory && !ReferenceEquals(this, targetParent))
             NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "OverlayInode.Rename");
     }
@@ -1003,18 +1078,42 @@ public interface IOverlayWhiteoutCodec
 
 public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
 {
-    public bool IsInternalMarkerName(string name) => false;
-    public bool HasEncodedWhiteout(Inode? upperDir, string name) => false;
-    public bool IsEncodedOpaque(Inode? upperDir) => false;
-    public bool IsEncodedOpaqueEntry(DirectoryEntry entry) => false;
+    public bool IsInternalMarkerName(string name)
+    {
+        return false;
+    }
+
+    public bool HasEncodedWhiteout(Inode? upperDir, string name)
+    {
+        return false;
+    }
+
+    public bool IsEncodedOpaque(Inode? upperDir)
+    {
+        return false;
+    }
+
+    public bool IsEncodedOpaqueEntry(DirectoryEntry entry)
+    {
+        return false;
+    }
+
     public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName)
     {
         targetName = string.Empty;
         return false;
     }
 
-    public bool IsWhiteoutInode(Inode? inode) => false;
-    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name) => false;
+    public bool IsWhiteoutInode(Inode? inode)
+    {
+        return false;
+    }
+
+    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name)
+    {
+        return false;
+    }
+
     public void ClearEncodedWhiteout(OverlayInode dir, string name)
     {
     }

@@ -26,7 +26,7 @@ public class HostfsMountOptionsTests
         Assert.Equal(1000, opts.MountUid);
         Assert.Equal(1000, opts.MountGid);
         Assert.Equal(18, opts.Umask); // 022 octal = 18 decimal
-        Assert.Equal(9, opts.Fmask);  // 011 octal = 9 decimal
+        Assert.Equal(9, opts.Fmask); // 011 octal = 9 decimal
         Assert.Equal(0, opts.Dmask);
         Assert.False(opts.MetadataLess);
     }
@@ -52,10 +52,10 @@ public class HostfsMountOptionsTests
     public void ApplyModeMask_FmaskDmask()
     {
         var opts = HostfsMountOptions.Parse("fmask=0111,dmask=000");
-        
+
         // Directory: 0777 -> 0777 (dmask 000)
         Assert.Equal(0x1FF, opts.ApplyModeMask(true, 0x1FF));
-        
+
         // File: 0777 -> 0666 (fmask 111 removes exec bits)
         Assert.Equal(0x1B6, opts.ApplyModeMask(false, 0x1FF));
     }

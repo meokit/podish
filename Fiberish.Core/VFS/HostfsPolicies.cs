@@ -99,99 +99,6 @@ internal static partial class HostInodeIdentityResolver
                                                     OperatingSystem.IsMacCatalyst();
 #endif
 
-    internal readonly record struct HostUnixStatData(
-        ulong Device,
-        ulong Inode,
-        ulong LinkCount,
-        uint Mode,
-        uint Uid,
-        uint Gid);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LinuxTimespec
-    {
-        public long TvSec;
-        public long TvNsec;
-    }
-
-    // glibc struct stat layout on Linux x86_64.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LinuxStatX64
-    {
-        public ulong StDev;
-        public ulong StIno;
-        public ulong StNlink;
-        public uint StMode;
-        public uint StUid;
-        public uint StGid;
-        public int Padding0;
-        public ulong StRdev;
-        public long StSize;
-        public long StBlksize;
-        public long StBlocks;
-        public LinuxTimespec StAtim;
-        public LinuxTimespec StMtim;
-        public LinuxTimespec StCtim;
-        public long Reserved0;
-        public long Reserved1;
-        public long Reserved2;
-    }
-
-    // glibc struct stat layout on Linux arm64.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LinuxStatArm64
-    {
-        public ulong StDev;
-        public ulong StIno;
-        public uint StMode;
-        public uint StNlink;
-        public uint StUid;
-        public uint StGid;
-        public ulong StRdev;
-        public ulong Padding1;
-        public long StSize;
-        public int StBlksize;
-        public int Padding2;
-        public long StBlocks;
-        public LinuxTimespec StAtim;
-        public LinuxTimespec StMtim;
-        public LinuxTimespec StCtim;
-        public uint Reserved0;
-        public uint Reserved1;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DarwinTimespec
-    {
-        public long TvSec;
-        public long TvNsec;
-    }
-
-    // Darwin (macOS/iOS/tvOS/watchOS/MacCatalyst) struct stat layout.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DarwinStat
-    {
-        public int StDev;
-        public ushort StMode;
-        public ushort StNlink;
-        public ulong StIno;
-        public uint StUid;
-        public uint StGid;
-        public int StRdev;
-        public DarwinTimespec StAtimespec;
-        public DarwinTimespec StMtimespec;
-        public DarwinTimespec StCtimespec;
-        public DarwinTimespec StBirthtimespec;
-        public long StSize;
-        public long StBlocks;
-        public int StBlksize;
-        public uint StFlags;
-        public uint StGen;
-        public int StLspare;
-        public long StQspare0;
-        public long StQspare1;
-    }
-
     [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static partial int lstat_linux_x64(string path, out LinuxStatX64 stat);
 
@@ -248,8 +155,7 @@ internal static partial class HostInodeIdentityResolver
                 hostPath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                FileOptions.None);
+                FileShare.ReadWrite | FileShare.Delete);
 
             if (!GetFileInformationByHandle(handle, out var fileInfo))
                 return false;
@@ -371,7 +277,7 @@ internal static partial class HostInodeIdentityResolver
             return false;
 
         statData = new HostUnixStatData(
-            unchecked((ulong)(uint)fallbackDarwinStat.StDev),
+            unchecked((uint)fallbackDarwinStat.StDev),
             fallbackDarwinStat.StIno,
             fallbackDarwinStat.StNlink,
             fallbackDarwinStat.StMode,
@@ -394,5 +300,98 @@ internal static partial class HostInodeIdentityResolver
             UnixModeSocket => InodeType.Socket,
             _ => InodeType.Unknown
         };
+    }
+
+    internal readonly record struct HostUnixStatData(
+        ulong Device,
+        ulong Inode,
+        ulong LinkCount,
+        uint Mode,
+        uint Uid,
+        uint Gid);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxTimespec
+    {
+        public long TvSec;
+        public long TvNsec;
+    }
+
+    // glibc struct stat layout on Linux x86_64.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStatX64
+    {
+        public ulong StDev;
+        public ulong StIno;
+        public ulong StNlink;
+        public uint StMode;
+        public uint StUid;
+        public uint StGid;
+        public int Padding0;
+        public ulong StRdev;
+        public long StSize;
+        public long StBlksize;
+        public long StBlocks;
+        public LinuxTimespec StAtim;
+        public LinuxTimespec StMtim;
+        public LinuxTimespec StCtim;
+        public long Reserved0;
+        public long Reserved1;
+        public long Reserved2;
+    }
+
+    // glibc struct stat layout on Linux arm64.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStatArm64
+    {
+        public ulong StDev;
+        public ulong StIno;
+        public uint StMode;
+        public uint StNlink;
+        public uint StUid;
+        public uint StGid;
+        public ulong StRdev;
+        public ulong Padding1;
+        public long StSize;
+        public int StBlksize;
+        public int Padding2;
+        public long StBlocks;
+        public LinuxTimespec StAtim;
+        public LinuxTimespec StMtim;
+        public LinuxTimespec StCtim;
+        public uint Reserved0;
+        public uint Reserved1;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DarwinTimespec
+    {
+        public long TvSec;
+        public long TvNsec;
+    }
+
+    // Darwin (macOS/iOS/tvOS/watchOS/MacCatalyst) struct stat layout.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DarwinStat
+    {
+        public int StDev;
+        public ushort StMode;
+        public ushort StNlink;
+        public ulong StIno;
+        public uint StUid;
+        public uint StGid;
+        public int StRdev;
+        public DarwinTimespec StAtimespec;
+        public DarwinTimespec StMtimespec;
+        public DarwinTimespec StCtimespec;
+        public DarwinTimespec StBirthtimespec;
+        public long StSize;
+        public long StBlocks;
+        public int StBlksize;
+        public uint StFlags;
+        public uint StGen;
+        public int StLspare;
+        public long StQspare0;
+        public long StQspare1;
     }
 }

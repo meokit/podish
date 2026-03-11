@@ -1,24 +1,41 @@
-using Fiberish.Core.Native;
 using System.Net;
 using System.Runtime.InteropServices;
+using Fiberish.Core.Native;
 
 namespace Fiberish.Core.Net;
 
 public sealed class LoopbackNetNamespace : IDisposable
 {
-    private ulong _handle;
+    private static readonly NetstackNative.NetnsNotifyCallback NotifyThunk = OnNetnsNotify;
+
+    private static readonly nint NotifyThunkPtr =
+        Marshal.GetFunctionPointerForDelegate(NotifyThunk);
 
     private LoopbackNetNamespace(ulong handle, uint ipv4Be, byte prefixLen)
     {
-        _handle = handle;
+        Handle = handle;
         Ipv4AddressBe = ipv4Be;
         PrefixLength = prefixLen;
     }
 
     public uint Ipv4AddressBe { get; }
     public byte PrefixLength { get; }
-    public ulong Handle => _handle;
-    public IPAddress PrivateIpv4Address => new([(byte)(Ipv4AddressBe >> 24), (byte)(Ipv4AddressBe >> 16), (byte)(Ipv4AddressBe >> 8), (byte)Ipv4AddressBe]);
+    public ulong Handle { get; private set; }
+
+    public IPAddress PrivateIpv4Address => new([
+        (byte)(Ipv4AddressBe >> 24), (byte)(Ipv4AddressBe >> 16), (byte)(Ipv4AddressBe >> 8), (byte)Ipv4AddressBe
+    ]);
+
+    public void Dispose()
+    {
+        if (Handle == 0)
+            return;
+
+        UnbindWakeCallback();
+        var handle = Handle;
+        Handle = 0;
+        NetstackNative.Destroy(handle);
+    }
 
     public static LoopbackNetNamespace Create(uint ipv4Be, byte prefixLen)
     {
@@ -39,14 +56,11 @@ public sealed class LoopbackNetNamespace : IDisposable
     public long Poll(long nowMillis)
     {
         ThrowIfDisposed();
-        var rc = NetstackNative.Poll(_handle, nowMillis, out var nextPollMillis);
+        var rc = NetstackNative.Poll(Handle, nowMillis, out var nextPollMillis);
         if (rc != 0)
             throw new InvalidOperationException($"Failed to poll net namespace (rc={rc}).");
         return nextPollMillis;
     }
-
-    private static readonly NetstackNative.NetnsNotifyCallback NotifyThunk = OnNetnsNotify;
-    private static readonly nint NotifyThunkPtr = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(NotifyThunk);
 
     private static void OnNetnsNotify(nint token)
     {
@@ -56,39 +70,25 @@ public sealed class LoopbackNetNamespace : IDisposable
     public void BindWakeCallback(nint token)
     {
         ThrowIfDisposed();
-        var rc = NetstackNative.SetNotifyCallback(_handle, NotifyThunkPtr, token);
+        var rc = NetstackNative.SetNotifyCallback(Handle, NotifyThunkPtr, token);
         if (rc != 0) throw new InvalidOperationException($"Failed to bind wake callback (rc={rc})");
     }
 
     public void UnbindWakeCallback()
     {
-        if (_handle != 0)
-        {
-            NetstackNative.SetNotifyCallback(_handle, 0, 0);
-        }
+        if (Handle != 0) NetstackNative.SetNotifyCallback(Handle, 0, 0);
     }
 
     public void ClearNotify()
     {
         ThrowIfDisposed();
-        NetstackNative.ClearNotify(_handle);
-    }
-
-    public void Dispose()
-    {
-        if (_handle == 0)
-            return;
-
-        UnbindWakeCallback();
-        var handle = _handle;
-        _handle = 0;
-        NetstackNative.Destroy(handle);
+        NetstackNative.ClearNotify(Handle);
     }
 
     public TcpListenerSocket CreateTcpListener()
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateTcpListener(_handle);
+        var socket = NetstackNative.CreateTcpListener(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create TCP listener socket.");
         return new TcpListenerSocket(this, socket);
@@ -97,7 +97,7 @@ public sealed class LoopbackNetNamespace : IDisposable
     public TcpStreamSocket CreateTcpStream()
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateTcpStream(_handle);
+        var socket = NetstackNative.CreateTcpStream(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create TCP stream socket.");
         return new TcpStreamSocket(this, socket);
@@ -106,7 +106,7 @@ public sealed class LoopbackNetNamespace : IDisposable
     public UdpDatagramSocket CreateUdpSocket()
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateUdpSocket(_handle);
+        var socket = NetstackNative.CreateUdpSocket(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create UDP socket.");
         return new UdpDatagramSocket(this, socket);
@@ -114,7 +114,7 @@ public sealed class LoopbackNetNamespace : IDisposable
 
     private void ThrowIfDisposed()
     {
-        if (_handle == 0)
+        if (Handle == 0)
             throw new ObjectDisposedException(nameof(LoopbackNetNamespace));
     }
 
@@ -129,14 +129,6 @@ public sealed class LoopbackNetNamespace : IDisposable
             _handle = handle;
         }
 
-        public void Listen(ushort localPort, uint backlog = 16)
-        {
-            ThrowIfDisposed();
-            var rc = NetstackNative.TcpListenerListen(_namespace.Handle, _handle, localPort, backlog);
-            if (rc != 0)
-                throw new InvalidOperationException($"Failed to listen on TCP socket (rc={rc}).");
-        }
-
         public bool AcceptPending
         {
             get
@@ -149,15 +141,6 @@ public sealed class LoopbackNetNamespace : IDisposable
             }
         }
 
-        public TcpStreamSocket Accept()
-        {
-            ThrowIfDisposed();
-            var rc = NetstackNative.TcpListenerAccept(_namespace.Handle, _handle, out var accepted);
-            if (rc != 0)
-                throw new InvalidOperationException($"Failed to accept TCP socket (rc={rc}).");
-            return new TcpStreamSocket(_namespace, accepted);
-        }
-
         public void Dispose()
         {
             if (_handle == 0)
@@ -166,6 +149,23 @@ public sealed class LoopbackNetNamespace : IDisposable
             var handle = _handle;
             _handle = 0;
             NetstackNative.CloseSocket(_namespace.Handle, handle);
+        }
+
+        public void Listen(ushort localPort, uint backlog = 16)
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.TcpListenerListen(_namespace.Handle, _handle, localPort, backlog);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to listen on TCP socket (rc={rc}).");
+        }
+
+        public TcpStreamSocket Accept()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.TcpListenerAccept(_namespace.Handle, _handle, out var accepted);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to accept TCP socket (rc={rc}).");
+            return new TcpStreamSocket(_namespace, accepted);
         }
 
         private void ThrowIfDisposed()
@@ -184,14 +184,6 @@ public sealed class LoopbackNetNamespace : IDisposable
         {
             _namespace = @namespace;
             _handle = handle;
-        }
-
-        public void Connect(uint remoteIpv4Be, ushort remotePort)
-        {
-            ThrowIfDisposed();
-            var rc = NetstackNative.TcpStreamConnect(_namespace.Handle, _handle, remoteIpv4Be, remotePort);
-            if (rc != 0)
-                throw new InvalidOperationException($"Failed to connect TCP socket (rc={rc}).");
         }
 
         public bool CanRead
@@ -259,10 +251,13 @@ public sealed class LoopbackNetNamespace : IDisposable
             get
             {
                 ThrowIfDisposed();
-                var rc = NetstackNative.TcpStreamGetLocalEndpoint(_namespace.Handle, _handle, out var ipv4Be, out var port);
+                var rc = NetstackNative.TcpStreamGetLocalEndpoint(_namespace.Handle, _handle, out var ipv4Be,
+                    out var port);
                 if (rc != 0)
                     throw new InvalidOperationException($"Failed to query local endpoint (rc={rc}).");
-                return new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+                return new IPEndPoint(
+                    new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]),
+                    port);
             }
         }
 
@@ -271,11 +266,32 @@ public sealed class LoopbackNetNamespace : IDisposable
             get
             {
                 ThrowIfDisposed();
-                var rc = NetstackNative.TcpStreamGetRemoteEndpoint(_namespace.Handle, _handle, out var ipv4Be, out var port);
+                var rc = NetstackNative.TcpStreamGetRemoteEndpoint(_namespace.Handle, _handle, out var ipv4Be,
+                    out var port);
                 if (rc != 0)
                     throw new InvalidOperationException($"Failed to query remote endpoint (rc={rc}).");
-                return new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+                return new IPEndPoint(
+                    new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]),
+                    port);
             }
+        }
+
+        public void Dispose()
+        {
+            if (_handle == 0)
+                return;
+
+            var handle = _handle;
+            _handle = 0;
+            NetstackNative.CloseSocket(_namespace.Handle, handle);
+        }
+
+        public void Connect(uint remoteIpv4Be, ushort remotePort)
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.TcpStreamConnect(_namespace.Handle, _handle, remoteIpv4Be, remotePort);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to connect TCP socket (rc={rc}).");
         }
 
         public int Send(ReadOnlySpan<byte> data)
@@ -285,7 +301,8 @@ public sealed class LoopbackNetNamespace : IDisposable
             {
                 fixed (byte* ptr = data)
                 {
-                    var rc = NetstackNative.TcpStreamSend(_namespace.Handle, _handle, ptr, (nuint)data.Length, out var written);
+                    var rc = NetstackNative.TcpStreamSend(_namespace.Handle, _handle, ptr, (nuint)data.Length,
+                        out var written);
                     if (rc != 0)
                         throw new InvalidOperationException($"Failed to send TCP data (rc={rc}).");
                     return checked((int)written);
@@ -300,7 +317,8 @@ public sealed class LoopbackNetNamespace : IDisposable
             {
                 fixed (byte* ptr = buffer)
                 {
-                    var rc = NetstackNative.TcpStreamRecv(_namespace.Handle, _handle, ptr, (nuint)buffer.Length, out var read);
+                    var rc = NetstackNative.TcpStreamRecv(_namespace.Handle, _handle, ptr, (nuint)buffer.Length,
+                        out var read);
                     if (rc != 0)
                         throw new InvalidOperationException($"Failed to receive TCP data (rc={rc}).");
                     return checked((int)read);
@@ -314,16 +332,6 @@ public sealed class LoopbackNetNamespace : IDisposable
             var rc = NetstackNative.TcpStreamClose(_namespace.Handle, _handle);
             if (rc != 0)
                 throw new InvalidOperationException($"Failed to close TCP send side (rc={rc}).");
-        }
-
-        public void Dispose()
-        {
-            if (_handle == 0)
-                return;
-
-            var handle = _handle;
-            _handle = 0;
-            NetstackNative.CloseSocket(_namespace.Handle, handle);
         }
 
         private void ThrowIfDisposed()
@@ -342,14 +350,6 @@ public sealed class LoopbackNetNamespace : IDisposable
         {
             _namespace = @namespace;
             _handle = handle;
-        }
-
-        public void Bind(ushort localPort)
-        {
-            ThrowIfDisposed();
-            var rc = NetstackNative.UdpSocketBind(_namespace.Handle, _handle, localPort);
-            if (rc != 0)
-                throw new InvalidOperationException($"Failed to bind UDP socket (rc={rc}).");
         }
 
         public bool CanRead
@@ -381,11 +381,32 @@ public sealed class LoopbackNetNamespace : IDisposable
             get
             {
                 ThrowIfDisposed();
-                var rc = NetstackNative.UdpSocketGetLocalEndpoint(_namespace.Handle, _handle, out var ipv4Be, out var port);
+                var rc = NetstackNative.UdpSocketGetLocalEndpoint(_namespace.Handle, _handle, out var ipv4Be,
+                    out var port);
                 if (rc != 0)
                     throw new InvalidOperationException($"Failed to query UDP local endpoint (rc={rc}).");
-                return new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+                return new IPEndPoint(
+                    new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]),
+                    port);
             }
+        }
+
+        public void Dispose()
+        {
+            if (_handle == 0)
+                return;
+
+            var handle = _handle;
+            _handle = 0;
+            NetstackNative.CloseSocket(_namespace.Handle, handle);
+        }
+
+        public void Bind(ushort localPort)
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.UdpSocketBind(_namespace.Handle, _handle, localPort);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to bind UDP socket (rc={rc}).");
         }
 
         public int SendTo(uint remoteIpv4Be, ushort remotePort, ReadOnlySpan<byte> data)
@@ -395,7 +416,8 @@ public sealed class LoopbackNetNamespace : IDisposable
             {
                 fixed (byte* ptr = data)
                 {
-                    var rc = NetstackNative.UdpSocketSendTo(_namespace.Handle, _handle, remoteIpv4Be, remotePort, ptr, (nuint)data.Length,
+                    var rc = NetstackNative.UdpSocketSendTo(_namespace.Handle, _handle, remoteIpv4Be, remotePort, ptr,
+                        (nuint)data.Length,
                         out var written);
                     if (rc != 0)
                         throw new InvalidOperationException($"Failed to send UDP data (rc={rc}).");
@@ -411,24 +433,19 @@ public sealed class LoopbackNetNamespace : IDisposable
             {
                 fixed (byte* ptr = buffer)
                 {
-                    var rc = NetstackNative.UdpSocketRecvFrom(_namespace.Handle, _handle, ptr, (nuint)buffer.Length, out var read,
+                    var rc = NetstackNative.UdpSocketRecvFrom(_namespace.Handle, _handle, ptr, (nuint)buffer.Length,
+                        out var read,
                         out var ipv4Be, out var port);
                     if (rc != 0)
                         throw new InvalidOperationException($"Failed to receive UDP data (rc={rc}).");
-                    remoteEndPoint = new IPEndPoint(new IPAddress([(byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be]), port);
+                    remoteEndPoint =
+                        new IPEndPoint(
+                            new IPAddress([
+                                (byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be
+                            ]), port);
                     return checked((int)read);
                 }
             }
-        }
-
-        public void Dispose()
-        {
-            if (_handle == 0)
-                return;
-
-            var handle = _handle;
-            _handle = 0;
-            NetstackNative.CloseSocket(_namespace.Handle, handle);
         }
 
         private void ThrowIfDisposed()

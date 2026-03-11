@@ -1,5 +1,4 @@
 using System.Text;
-using System.Linq;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -31,14 +30,14 @@ public struct PathLocation
 
 public partial class SyscallManager
 {
+    // Lazy-initialized PathWalker instance
+    private PathWalker? _pathWalker;
+
     // Callbacks for Task interaction
     public Func<int, uint, uint, uint, uint, (int, Exception?)>? CloneHandler { get; set; }
     public Action<Engine, int, bool>? ExitHandler { get; set; }
     public Func<Engine, int>? GetTID { get; set; }
     public Func<Engine, int>? GetTGID { get; set; }
-
-    // Lazy-initialized PathWalker instance
-    private PathWalker? _pathWalker;
 
     /// <summary>
     ///     Gets the PathWalker instance for advanced path resolution.
@@ -129,7 +128,7 @@ public partial class SyscallManager
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
         FDs[fd] = linuxFile;
-        var cloexec = closeOnExec ?? ((linuxFile.Flags & FileFlags.O_CLOEXEC) != 0);
+        var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
         if (cloexec)
             FdCloseOnExecSet.Add(fd);
         else
@@ -224,7 +223,7 @@ public partial class SyscallManager
             var fallbackEngine = fallbackProcess?.Threads
                 .Select(static t => t.CPU)
                 .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? Engine;
-            mmTargets[this.Mem] = (fallbackEngine, fallbackProcess);
+            mmTargets[Mem] = (fallbackEngine, fallbackProcess);
         }
 
         foreach (var (mm, target) in mmTargets)
@@ -239,24 +238,24 @@ public partial class SyscallManager
 
         var syncedFiles = new HashSet<LinuxFile>();
         foreach (var manager in managers)
-            foreach (var file in manager.FDs.Values)
+        foreach (var file in manager.FDs.Values)
+        {
+            if (file == null || !syncedFiles.Add(file)) continue;
+            try
             {
-                if (file == null || !syncedFiles.Add(file)) continue;
-                try
-                {
-                    file.OpenedInode?.Sync(file);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogDebug(ex, "Inode.Sync failed for one open file");
-                }
+                file.OpenedInode?.Sync(file);
             }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Inode.Sync failed for one open file");
+            }
+        }
 
         var superblocks = new HashSet<SuperBlock>();
         foreach (var manager in managers)
-            foreach (var mount in manager.Mounts)
-                if (mount?.SB != null)
-                    superblocks.Add(mount.SB);
+        foreach (var mount in manager.Mounts)
+            if (mount?.SB != null)
+                superblocks.Add(mount.SB);
 
         foreach (var sb in superblocks)
         {

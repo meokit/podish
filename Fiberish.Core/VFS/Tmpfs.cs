@@ -101,12 +101,15 @@ public class TmpfsSuperBlock : IndexedMemorySuperBlock
     }
 
     public long SizeLimitBytes { get; }
+
     public long UsedDataBytes
     {
         get
         {
             lock (Lock)
+            {
                 return _usedDataBytes;
+            }
         }
     }
 

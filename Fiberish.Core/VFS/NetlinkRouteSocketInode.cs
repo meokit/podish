@@ -1,8 +1,6 @@
 using System.Buffers.Binary;
-using System.Collections.Generic;
-using System.Linq;
-using System;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Native;
@@ -12,23 +10,9 @@ namespace Fiberish.VFS;
 
 public sealed class NetlinkRouteSocketInode : Inode
 {
-    private AsyncWaitQueue _readWaitQueue = new();
     private readonly Queue<byte[]> _responses = new();
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
-
-    // Single-thread scheduling model: keep using-scope syntax for future lock insertion.
-    private readonly struct StateScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
-
-    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
-    {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
-        return default;
-    }
+    private AsyncWaitQueue _readWaitQueue = new();
 
     public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, Func<NetDeviceSetSnapshot> snapshotProvider)
     {
@@ -37,6 +21,12 @@ public sealed class NetlinkRouteSocketInode : Inode
         Type = InodeType.Socket;
         Mode = 0x1ED;
         _snapshotProvider = snapshotProvider;
+    }
+
+    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    {
+        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        return default;
     }
 
     public ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> payload, int flags)
@@ -148,9 +138,9 @@ public sealed class NetlinkRouteSocketInode : Inode
             var totalLen = 16 + payloadLen;
             var msg = new byte[Align4(totalLen)];
             WriteNlmsgHeader(msg, (uint)totalLen, LinuxConstants.RTM_NEWLINK,
-                (ushort)(LinuxConstants.NLM_F_MULTI), seq, 0);
+                LinuxConstants.NLM_F_MULTI, seq, 0);
             var off = 16;
-            msg[off] = (byte)LinuxConstants.AF_INET;
+            msg[off] = LinuxConstants.AF_INET;
             msg[off + 1] = 0;
             BinaryPrimitives.WriteUInt16LittleEndian(msg.AsSpan(off + 2, 2),
                 dev.Name == "lo" ? LinuxConstants.ARPHRD_LOOPBACK : LinuxConstants.ARPHRD_ETHER);
@@ -189,9 +179,9 @@ public sealed class NetlinkRouteSocketInode : Inode
             var totalLen = 16 + payloadLen;
             var msg = new byte[Align4(totalLen)];
             WriteNlmsgHeader(msg, (uint)totalLen, LinuxConstants.RTM_NEWADDR,
-                (ushort)(LinuxConstants.NLM_F_MULTI), seq, 0);
+                LinuxConstants.NLM_F_MULTI, seq, 0);
             var off = 16;
-            msg[off] = (byte)LinuxConstants.AF_INET;
+            msg[off] = LinuxConstants.AF_INET;
             msg[off + 1] = dev.Ipv4PrefixLength;
             msg[off + 2] = 0;
             msg[off + 3] = dev.Name == "lo" ? LinuxConstants.RT_SCOPE_HOST : LinuxConstants.RT_SCOPE_UNIVERSE;
@@ -228,7 +218,7 @@ public sealed class NetlinkRouteSocketInode : Inode
 
     private static byte[] BuildAttr(ushort type, string ascii)
     {
-        return BuildAttr(type, System.Text.Encoding.ASCII.GetBytes(ascii));
+        return BuildAttr(type, Encoding.ASCII.GetBytes(ascii));
     }
 
     private static byte[] BuildAttrU32(ushort type, uint value)
@@ -287,7 +277,16 @@ public sealed class NetlinkRouteSocketInode : Inode
                 _responses.Enqueue(response);
             waitQueue = _readWaitQueue;
         }
+
         waitQueue.Set();
         return payload.Length;
+    }
+
+    // Single-thread scheduling model: keep using-scope syntax for future lock insertion.
+    private readonly struct StateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
     }
 }

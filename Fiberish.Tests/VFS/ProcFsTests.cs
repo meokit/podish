@@ -1,5 +1,5 @@
-using System.Text;
 using System.Reflection;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -22,7 +22,7 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
 
             var mountsBefore = ReadAll(sm.PathWalk("/proc/mounts"));
@@ -171,7 +171,7 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var process = new Process(7777, runtime.Memory, runtime.Syscalls)
             {
                 PPID = 1,
@@ -236,7 +236,7 @@ public class ProcFsTests
     public void ProcMemInfo_ShouldUseLiveMemoryStats()
     {
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        IntPtr allocated = IntPtr.Zero;
+        var allocated = IntPtr.Zero;
         ExternalPageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
         try
         {
@@ -288,16 +288,16 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
             Assert.Equal("0\n", ReadAll(loc));
 
             cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
-            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            GlobalPageCacheManager.TrackPageCache(cache);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
 
@@ -320,9 +320,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -372,9 +372,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -385,8 +385,8 @@ public class ProcFsTests
             Assert.True(procRoot.Dentry.TryGetCachedChild("sys", out _));
 
             cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(cache, GlobalPageCacheManager.PageCacheClass.File);
-            var page = cache.GetOrCreatePage(0, _ => true, out _, strictQuota: true, AllocationClass.PageCache);
+            GlobalPageCacheManager.TrackPageCache(cache);
+            var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
 
@@ -423,9 +423,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -471,9 +471,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
 
             var root = sm.Root.Dentry!;
             var hold = root.Inode!.Lookup("hold");
@@ -525,9 +525,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: true);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, true);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 0, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 0, true);
 
             var root = sm.Root.Dentry!;
             var hold = root.Inode!.Lookup("hold");
@@ -576,9 +576,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 1000, grantCapSysAdmin: false);
+            AttachTaskContext(runtime, 1000, false);
 
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
@@ -598,9 +598,9 @@ public class ProcFsTests
 
         try
         {
-            var runtime = KernelRuntime.Bootstrap(rootDir, strace: false, useOverlay: false);
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, uid: 1000, grantCapSysAdmin: true);
+            AttachTaskContext(runtime, 1000, true);
 
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
@@ -686,7 +686,7 @@ public class ProcFsTests
             PGID = pid,
             SID = pid
         };
-        process.SetCapability(Process.CapabilitySysAdmin, grantCapSysAdmin, grantCapSysAdmin, inheritable: false);
+        process.SetCapability(Process.CapabilitySysAdmin, grantCapSysAdmin, grantCapSysAdmin, false);
         scheduler.RegisterProcess(process);
         var task = new FiberTask(process.TGID, process, runtime.Engine, scheduler);
         runtime.Engine.Owner = task;

@@ -4,8 +4,8 @@ using System.Text;
 namespace Podish.Core;
 
 /// <summary>
-/// Cooperative cross-instance file lock. Callers sharing the same lock file path
-/// serialize critical sections across threads/processes.
+///     Cooperative cross-instance file lock. Callers sharing the same lock file path
+///     serialize critical sections across threads/processes.
 /// </summary>
 public static class CooperativeFileLock
 {
@@ -18,7 +18,7 @@ public static class CooperativeFileLock
             throw new ArgumentOutOfRangeException(nameof(retryDelayMs));
 
         var lockName = BuildMutexName(lockPath);
-        var mutex = new Mutex(initiallyOwned: false, name: lockName);
+        var mutex = new Mutex(false, lockName);
         var budget = timeout ?? TimeSpan.FromSeconds(30);
         try
         {

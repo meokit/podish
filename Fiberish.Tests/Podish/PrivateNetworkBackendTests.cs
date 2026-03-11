@@ -1,4 +1,3 @@
-using System.Net;
 using Fiberish.Core.Net;
 using Xunit;
 
@@ -19,7 +18,7 @@ public class PrivateNetworkBackendTests
         try
         {
             // Create multiple containers
-            for (int i = 0; i < 5; i++)
+            for (var i = 0; i < 5; i++)
             {
                 var spec = new ContainerNetworkSpec
                 {
@@ -105,7 +104,7 @@ public class PrivateNetworkBackendTests
         {
             // Try to allocate more IPs than available (2-254 = 253 addresses)
             // We'll allocate many to trigger exhaustion
-            for (int i = 0; i < 260; i++)
+            for (var i = 0; i < 260; i++)
             {
                 var spec = new ContainerNetworkSpec
                 {
@@ -118,11 +117,9 @@ public class PrivateNetworkBackendTests
                     Assert.Throws<InvalidOperationException>(() => backend.CreateContainerNetwork(spec));
                     break;
                 }
-                else
-                {
-                    var ctx = backend.CreateContainerNetwork(spec);
-                    contexts.Add(ctx);
-                }
+
+                var ctx = backend.CreateContainerNetwork(spec);
+                contexts.Add(ctx);
             }
         }
         finally
@@ -144,7 +141,7 @@ public class PrivateNetworkBackendTests
 
         // Create multiple containers
         var contexts = new List<ContainerNetworkContext>();
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             var spec = new ContainerNetworkSpec { ContainerId = $"lifecycle-test-{i}" };
             var ctx = backend.CreateContainerNetwork(spec);
@@ -155,7 +152,7 @@ public class PrivateNetworkBackendTests
         }
 
         // Destroy them in reverse order
-        for (int i = contexts.Count - 1; i >= 0; i--)
+        for (var i = contexts.Count - 1; i >= 0; i--)
         {
             var ctx = contexts[i];
             backend.DestroyContainerNetwork(ctx);
@@ -164,7 +161,7 @@ public class PrivateNetworkBackendTests
 
         // Create new containers after destroying old ones
         var newContexts = new List<ContainerNetworkContext>();
-        for (int i = 0; i < 3; i++)
+        for (var i = 0; i < 3; i++)
         {
             var spec = new ContainerNetworkSpec { ContainerId = $"lifecycle-new-{i}" };
             var ctx = backend.CreateContainerNetwork(spec);
@@ -189,12 +186,12 @@ public class PrivateNetworkBackendTests
         using var backend = new PrivateNetworkBackend(sw);
 
         // Repeatedly create and destroy containers to check for leaks
-        for (int round = 0; round < 10; round++)
+        for (var round = 0; round < 10; round++)
         {
             var contexts = new List<ContainerNetworkContext>();
 
             // Create several containers
-            for (int i = 0; i < 5; i++)
+            for (var i = 0; i < 5; i++)
             {
                 var spec = new ContainerNetworkSpec
                 {
@@ -216,7 +213,7 @@ public class PrivateNetworkBackendTests
         var finalContexts = new List<ContainerNetworkContext>();
         try
         {
-            for (int i = 0; i < 5; i++)
+            for (var i = 0; i < 5; i++)
             {
                 var spec = new ContainerNetworkSpec
                 {

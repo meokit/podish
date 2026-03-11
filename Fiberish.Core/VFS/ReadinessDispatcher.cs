@@ -18,11 +18,6 @@ internal sealed class SchedulerReadyDispatcher : IReadyDispatcher
         _scheduler = scheduler;
     }
 
-    public static SchedulerReadyDispatcher FromCurrent()
-    {
-        return new SchedulerReadyDispatcher(KernelScheduler.Current);
-    }
-
     public bool CanDispatch => _scheduler != null;
 
     public FiberTask? CurrentTask => _scheduler?.CurrentTask;
@@ -37,5 +32,10 @@ internal sealed class SchedulerReadyDispatcher : IReadyDispatcher
         }
 
         scheduler.ScheduleFromAnyThread(callback);
+    }
+
+    public static SchedulerReadyDispatcher FromCurrent()
+    {
+        return new SchedulerReadyDispatcher(KernelScheduler.Current);
     }
 }

@@ -13,19 +13,30 @@ namespace Fiberish.Core.VFS.TTY;
 public class TtyDevice
 {
     public const int DefaultInputCapacityBytes = 64 * 1024;
+    private readonly byte[] _hardwareBuffer;
 
     private readonly object _lock = new();
-    private readonly byte[] _hardwareBuffer;
-    private int _head;
-    private int _tail;
     private int _count;
+    private int _head;
 
     // Volatile flag: indicates if new data is available
     // This avoids calling TryDequeue on every tick
     private volatile bool _interruptFlag;
-    private volatile bool _resizePending;
-    private int _pendingRows;
     private int _pendingCols;
+    private int _pendingRows;
+    private volatile bool _resizePending;
+    private int _tail;
+
+    /// <summary>
+    ///     Called by InputLoop (background thread) to enqueue input data.
+    ///     This is the ONLY method called from the background thread.
+    /// </summary>
+    public TtyDevice(int inputCapacityBytes = DefaultInputCapacityBytes)
+    {
+        if (inputCapacityBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(inputCapacityBytes));
+        _hardwareBuffer = new byte[inputCapacityBytes];
+    }
 
     /// <summary>
     ///     Check if there is pending input without consuming it.
@@ -49,17 +60,6 @@ public class TtyDevice
 
     // Event raised when input is enqueued (allows waking up sleeping scheduler)
     public event Action? OnInputEnqueued;
-
-    /// <summary>
-    ///     Called by InputLoop (background thread) to enqueue input data.
-    ///     This is the ONLY method called from the background thread.
-    /// </summary>
-    public TtyDevice(int inputCapacityBytes = DefaultInputCapacityBytes)
-    {
-        if (inputCapacityBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(inputCapacityBytes));
-        _hardwareBuffer = new byte[inputCapacityBytes];
-    }
 
     public int EnqueueInput(byte[] data)
     {

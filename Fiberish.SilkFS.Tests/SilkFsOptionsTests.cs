@@ -1,5 +1,3 @@
-using Xunit;
-
 namespace Fiberish.SilkFS.Tests;
 
 public class SilkFsOptionsTests

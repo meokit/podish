@@ -53,12 +53,12 @@ public partial class SyscallManager
 
         return cmd switch
         {
-            F_DUPFD => sm.DupFD(targetFd, (int)arg, closeOnExec: false),
+            F_DUPFD => sm.DupFD(targetFd, (int)arg, false),
             F_GETFD => sm.IsFdCloseOnExec(targetFd) ? (int)FD_CLOEXEC : 0,
             F_SETFD => SetFdFlags(sm, targetFd, arg),
             F_GETFL => (int)(file.Flags & ~FileFlags.O_CLOEXEC),
             F_SETFL => SetStatusFlags(file, arg),
-            F_DUPFD_CLOEXEC => sm.DupFD(targetFd, (int)arg, closeOnExec: true),
+            F_DUPFD_CLOEXEC => sm.DupFD(targetFd, (int)arg, true),
             _ => -(int)Errno.EINVAL
         };
 
@@ -76,6 +76,5 @@ public partial class SyscallManager
             file.Flags = (file.Flags & ~settableMask) | newStatusBits;
             return 0;
         }
-
     }
 }

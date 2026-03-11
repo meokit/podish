@@ -1,6 +1,5 @@
 using System.Text;
 using Fiberish.Core;
-using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 
@@ -23,9 +22,9 @@ public class ProcFileSystem : FileSystem
 public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
 {
     private ulong _nextIno = 1;
-    public SyscallManager? FallbackSyscallManager { get; }
 
-    public ProcSuperBlock(FileSystemType type, SyscallManager? fallbackSm, DeviceNumberManager? devManager = null) : base(devManager)
+    public ProcSuperBlock(FileSystemType type, SyscallManager? fallbackSm, DeviceNumberManager? devManager = null) :
+        base(devManager)
     {
         Type = type;
         FallbackSyscallManager = fallbackSm;
@@ -35,18 +34,7 @@ public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
         Root.Parent = Root;
     }
 
-    public override Inode AllocInode()
-    {
-        throw new NotSupportedException();
-    }
-
-    public ulong AllocateIno()
-    {
-        lock (Lock)
-        {
-            return _nextIno++;
-        }
-    }
+    public SyscallManager? FallbackSyscallManager { get; }
 
     public long DropDentryCache()
     {
@@ -61,6 +49,19 @@ public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
         }
 
         return dropped;
+    }
+
+    public override Inode AllocInode()
+    {
+        throw new NotSupportedException();
+    }
+
+    public ulong AllocateIno()
+    {
+        lock (Lock)
+        {
+            return _nextIno++;
+        }
     }
 }
 
@@ -101,7 +102,8 @@ file static class ProcContext
 
 file sealed class ProcOpenContext
 {
-    public ProcOpenContext(KernelScheduler? scheduler, FiberTask? task, Process? process, SyscallManager? syscallManager)
+    public ProcOpenContext(KernelScheduler? scheduler, FiberTask? task, Process? process,
+        SyscallManager? syscallManager)
     {
         Scheduler = scheduler;
         Task = task;
@@ -150,16 +152,12 @@ file sealed class ProcRootInode : Inode
         if (root.TryGetCachedChild(name, out var cached))
         {
             if (int.TryParse(name, out var cachedPid) && ProcContext.ResolveProcessByPid(cachedPid, _sb) == null)
-            {
                 _ = root.TryUncacheChild(name, "ProcRootInode.Lookup.stale-pid", out _);
-            }
             else
-            {
                 return cached;
-            }
         }
 
-        Dentry? created = name switch
+        var created = name switch
         {
             "mounts" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
             "mountinfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
@@ -258,8 +256,8 @@ file sealed class ProcRootInode : Inode
 
 file sealed class ProcPidDirectoryInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
     private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
 
     public ProcPidDirectoryInode(ProcSuperBlock sb, int pid)
     {
@@ -282,7 +280,7 @@ file sealed class ProcPidDirectoryInode : Inode
         if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
-        Dentry? created = name switch
+        var created = name switch
         {
             "status" => CreateFile(dir, name, 0x124, _ =>
             {
@@ -383,8 +381,8 @@ file sealed class ProcPidDirectoryInode : Inode
 
 file sealed class ProcPidSymlinkInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
     private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
     private readonly Func<Process, string> _targetResolver;
 
     public ProcPidSymlinkInode(ProcSuperBlock sb, int pid, Func<Process, string> targetResolver)
@@ -414,8 +412,8 @@ file sealed class ProcPidSymlinkInode : Inode
 
 file sealed class ProcPidFdDirectoryInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
     private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
 
     public ProcPidFdDirectoryInode(ProcSuperBlock sb, int pid)
     {
@@ -475,8 +473,8 @@ file sealed class ProcPidFdDirectoryInode : Inode
 
 file sealed class ProcPidFdInfoDirectoryInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
     private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
 
     public ProcPidFdInfoDirectoryInode(ProcSuperBlock sb, int pid)
     {
@@ -535,9 +533,9 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode
 
 file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode
 {
-    private readonly ProcSuperBlock _sb;
-    private readonly int _pid;
     private readonly int _fd;
+    private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
 
     public ProcPidFdSymlinkInode(ProcSuperBlock sb, int pid, int fd)
     {
@@ -552,6 +550,25 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
+    public bool TryResolveLink(out LinuxFile file)
+    {
+        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
+        if (process == null)
+        {
+            file = null!;
+            return false;
+        }
+
+        if (!process.Syscalls.FDs.TryGetValue(_fd, out var existing) || existing == null)
+        {
+            file = null!;
+            return false;
+        }
+
+        file = existing;
+        return true;
+    }
+
     public override string Readlink()
     {
         var process = ProcContext.ResolveProcessByPid(_pid, _sb);
@@ -564,31 +581,13 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode
         var loc = new PathLocation(file.Dentry, file.Mount);
         return process.Syscalls.GetAbsolutePath(loc);
     }
-
-    public bool TryResolveLink(out LinuxFile file)
-    {
-        var process = ProcContext.ResolveProcessByPid(_pid, _sb);
-        if (process == null)
-        {
-            file = null!;
-            return false;
-        }
-        if (!process.Syscalls.FDs.TryGetValue(_fd, out var existing) || existing == null)
-        {
-            file = null!;
-            return false;
-        }
-
-        file = existing;
-        return true;
-    }
 }
 
 file sealed class ProcPidFdInfoFileInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
-    private readonly int _pid;
     private readonly int _fd;
+    private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
 
     public ProcPidFdInfoFileInode(ProcSuperBlock sb, int pid, int fd)
     {
@@ -644,8 +643,8 @@ file enum ProcSysKind
 
 file sealed class ProcSysRootInode : Inode
 {
-    private readonly ProcSuperBlock _sb;
     private readonly ProcSysKind _kind;
+    private readonly ProcSuperBlock _sb;
 
     public ProcSysRootInode(ProcSuperBlock sb, ProcSysKind kind = ProcSysKind.Root)
     {
@@ -667,7 +666,7 @@ file sealed class ProcSysRootInode : Inode
         if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
-        Dentry? created = (_kind, name) switch
+        var created = (_kind, name) switch
         {
             (ProcSysKind.Root, "kernel") => CreateDir(dir, name, ProcSysKind.Kernel),
             (ProcSysKind.Root, "vm") => CreateDir(dir, name, ProcSysKind.Vm),
@@ -731,7 +730,8 @@ file sealed class ProcSysRootInode : Inode
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory, int mode = 0x124,
+    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory,
+        int mode = 0x124,
         ProcWriteHandler? writeHandler = null)
     {
         var inode = new ProcDynamicFileInode(_sb, mode, contentFactory, writeHandler);

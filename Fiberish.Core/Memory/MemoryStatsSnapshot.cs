@@ -69,33 +69,33 @@ public readonly record struct MemoryStatsSnapshot(
         var available = Math.Min(total, Math.Max(0, free + reclaimable - pressurePenalty));
 
         return new MemoryStatsSnapshot(
-            MemTotalBytes: total,
-            UsedBytes: allocated,
-            FreeBytes: free,
-            MemAvailableBytes: available,
-            CachedBytes: cachedBytes,
-            DirtyBytes: dirtyBytes,
-            AnonPagesBytes: anonBytes,
-            MappedBytes: allocated,
-            ReclaimableBytes: reclaimable,
-            ShmemBytes: shmemBytes,
-            WritebackBytes: writebackBytes,
-            CommittedBytes: committedBytes,
-            ActiveBytes: active,
-            InactiveBytes: inactive,
-            ActiveAnonBytes: activeAnon,
-            InactiveAnonBytes: inactiveAnon,
-            AnonymousZeroMappedBytes: anonymousZeroMappedBytes,
-            AnonymousSharedMaterializedBytes: anonymousSharedMaterializedBytes,
-            UnreclaimablePrivateOverlayBytes: privateOverlayBytes,
-            PrivateAnonBytes: privateBreakdown.TotalAnon,
-            PrivateFileBytes: privateBreakdown.TotalFilePrivate,
-            ActivePrivateAnonBytes: privateBreakdown.ActiveAnon,
-            InactivePrivateAnonBytes: privateBreakdown.InactiveAnon,
-            ActivePrivateFileBytes: privateBreakdown.ActiveFilePrivate,
-            InactivePrivateFileBytes: privateBreakdown.InactiveFilePrivate,
-            ActiveFileBytes: activeFile + activeShmem,
-            InactiveFileBytes: inactiveFile + inactiveShmem);
+            total,
+            allocated,
+            free,
+            available,
+            cachedBytes,
+            dirtyBytes,
+            anonBytes,
+            allocated,
+            reclaimable,
+            shmemBytes,
+            writebackBytes,
+            committedBytes,
+            active,
+            inactive,
+            activeAnon,
+            inactiveAnon,
+            anonymousZeroMappedBytes,
+            anonymousSharedMaterializedBytes,
+            privateOverlayBytes,
+            privateBreakdown.TotalAnon,
+            privateBreakdown.TotalFilePrivate,
+            privateBreakdown.ActiveAnon,
+            privateBreakdown.InactiveAnon,
+            privateBreakdown.ActiveFilePrivate,
+            privateBreakdown.InactiveFilePrivate,
+            activeFile + activeShmem,
+            inactiveFile + inactiveShmem);
     }
 
     private static long EstimateSysVShmBytes(SyscallManager? sm)
@@ -137,19 +137,6 @@ public readonly record struct MemoryStatsSnapshot(
         return (activeFile, inactiveFile, activeShmem, inactiveShmem);
     }
 
-    private readonly record struct PrivateBreakdown(
-        long TotalAnon,
-        long TotalFilePrivate,
-        long ActiveAnon,
-        long InactiveAnon,
-        long ActiveFilePrivate,
-        long InactiveFilePrivate);
-
-    private readonly record struct ProcessMemoryStats(
-        long CommittedBytes,
-        long AnonymousZeroMappedBytes,
-        PrivateBreakdown PrivateBreakdown);
-
     private static ProcessMemoryStats AggregateProcessMemoryStats(SyscallManager? sm, long nowTicks)
     {
         var processes = ResolveProcesses(sm);
@@ -165,57 +152,60 @@ public readonly record struct MemoryStatsSnapshot(
         long activeFilePrivate = 0;
         long inactiveFilePrivate = 0;
         foreach (var process in processes)
+        foreach (var vma in process.Mem.VMAs)
         {
-            foreach (var vma in process.Mem.VMAs)
+            if ((vma.Flags & MapFlags.Private) == 0) continue;
+            committedBytes += vma.Length;
+
+            if (vma.File == null)
             {
-                if ((vma.Flags & MapFlags.Private) == 0) continue;
-                committedBytes += vma.Length;
-
-                if (vma.File == null)
+                var sharedStates = vma.SharedObject.SnapshotPageStates();
+                var privateStates =
+                    vma.PrivateObject?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
+                if (vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
                 {
-                    var sharedStates = vma.SharedObject.SnapshotPageStates();
-                    var privateStates = vma.PrivateObject?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
-                    if (vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
-                    {
-                        var startPageIndex = vma.ViewPageOffset;
-                        var endPageIndex = startPageIndex + (vma.Length / LinuxConstants.PageSize);
-                        var materializedSharedPages = vma.SharedObject.CountPagesInRange(startPageIndex, endPageIndex);
-                        var privatePages = vma.PrivateObject?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
-                        var zeroPages = Math.Max(0L, (long)(endPageIndex - startPageIndex) - materializedSharedPages - privatePages);
-                        anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
-                    }
-
-                    foreach (var state in sharedStates)
-                    {
-                        var key = (nint)state.Ptr;
-                        if (!seenPtrs.Add(key)) continue;
-                        totalAnon += LinuxConstants.PageSize;
-                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
-                        else inactiveAnon += LinuxConstants.PageSize;
-                    }
-
-                    foreach (var state in privateStates)
-                    {
-                        var key = (nint)state.Ptr;
-                        if (!seenPtrs.Add(key)) continue;
-                        totalAnon += LinuxConstants.PageSize;
-                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
-                        else inactiveAnon += LinuxConstants.PageSize;
-                    }
-                    continue;
+                    var startPageIndex = vma.ViewPageOffset;
+                    var endPageIndex = startPageIndex + vma.Length / LinuxConstants.PageSize;
+                    var materializedSharedPages = vma.SharedObject.CountPagesInRange(startPageIndex, endPageIndex);
+                    var privatePages = vma.PrivateObject?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
+                    var zeroPages = Math.Max(0L,
+                        endPageIndex - startPageIndex - materializedSharedPages - privatePages);
+                    anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
                 }
 
-                if (vma.PrivateObject == null) continue;
-                foreach (var state in vma.PrivateObject.SnapshotPageStates())
+                foreach (var state in sharedStates)
                 {
-                    var key = (nint)state.Ptr;
+                    var key = state.Ptr;
                     if (!seenPtrs.Add(key)) continue;
-                    totalFilePrivate += LinuxConstants.PageSize;
+                    totalAnon += LinuxConstants.PageSize;
                     if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
-                        activeFilePrivate += LinuxConstants.PageSize;
-                    else
-                        inactiveFilePrivate += LinuxConstants.PageSize;
+                        activeAnon += LinuxConstants.PageSize;
+                    else inactiveAnon += LinuxConstants.PageSize;
                 }
+
+                foreach (var state in privateStates)
+                {
+                    var key = state.Ptr;
+                    if (!seenPtrs.Add(key)) continue;
+                    totalAnon += LinuxConstants.PageSize;
+                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                        activeAnon += LinuxConstants.PageSize;
+                    else inactiveAnon += LinuxConstants.PageSize;
+                }
+
+                continue;
+            }
+
+            if (vma.PrivateObject == null) continue;
+            foreach (var state in vma.PrivateObject.SnapshotPageStates())
+            {
+                var key = state.Ptr;
+                if (!seenPtrs.Add(key)) continue;
+                totalFilePrivate += LinuxConstants.PageSize;
+                if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                    activeFilePrivate += LinuxConstants.PageSize;
+                else
+                    inactiveFilePrivate += LinuxConstants.PageSize;
             }
         }
 
@@ -230,4 +220,17 @@ public readonly record struct MemoryStatsSnapshot(
                 activeFilePrivate,
                 inactiveFilePrivate));
     }
+
+    private readonly record struct PrivateBreakdown(
+        long TotalAnon,
+        long TotalFilePrivate,
+        long ActiveAnon,
+        long InactiveAnon,
+        long ActiveFilePrivate,
+        long InactiveFilePrivate);
+
+    private readonly record struct ProcessMemoryStats(
+        long CommittedBytes,
+        long AnonymousZeroMappedBytes,
+        PrivateBreakdown PrivateBreakdown);
 }

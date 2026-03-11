@@ -11,9 +11,9 @@ public enum NamespaceLinkDeltaKind
 }
 
 /// <summary>
-/// Centralized namespace link-count transitions.
-/// Filesystems should route link/unlink/rmdir/rename-overwrite through this helper
-/// so link semantics stay consistent across implementations.
+///     Centralized namespace link-count transitions.
+///     Filesystems should route link/unlink/rmdir/rename-overwrite through this helper
+///     so link semantics stay consistent across implementations.
 /// </summary>
 public static class NamespaceOps
 {
@@ -82,7 +82,7 @@ public static class NamespaceOps
 
     public static void OnLinkAdded(Inode inode, string reason)
     {
-        ApplyLinkDelta(NamespaceLinkDeltaKind.LinkAdded, reason, inode: inode);
+        ApplyLinkDelta(NamespaceLinkDeltaKind.LinkAdded, reason, inode);
     }
 
     public static void OnDirectoryCreated(Inode parentDirectory, Inode childDirectory, string reason)
@@ -90,13 +90,13 @@ public static class NamespaceOps
         ApplyLinkDelta(
             NamespaceLinkDeltaKind.DirectoryCreated,
             reason,
-            inode: childDirectory,
-            parentDirectory: parentDirectory);
+            childDirectory,
+            parentDirectory);
     }
 
     public static void OnEntryRemoved(Inode? inode, string reason)
     {
-        ApplyLinkDelta(NamespaceLinkDeltaKind.EntryRemoved, reason, inode: inode);
+        ApplyLinkDelta(NamespaceLinkDeltaKind.EntryRemoved, reason, inode);
     }
 
     public static void OnDirectoryRemoved(Inode parentDirectory, Inode removedDirectory, string reason)
@@ -104,8 +104,8 @@ public static class NamespaceOps
         ApplyLinkDelta(
             NamespaceLinkDeltaKind.DirectoryRemoved,
             reason,
-            inode: removedDirectory,
-            parentDirectory: parentDirectory);
+            removedDirectory,
+            parentDirectory);
     }
 
     public static void OnDirectoryMovedAcrossParents(Inode oldParentDirectory, Inode newParentDirectory, string reason)
@@ -122,7 +122,7 @@ public static class NamespaceOps
         ApplyLinkDelta(
             NamespaceLinkDeltaKind.RenameOverwrite,
             reason,
-            inode: sourceInode,
+            sourceInode,
             secondaryInode: replacedInode);
     }
 }

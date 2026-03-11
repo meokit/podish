@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -6,7 +5,7 @@ using Fiberish.Native;
 namespace Fiberish.Syscalls;
 
 /// <summary>
-/// Represents a System V shared memory segment.
+///     Represents a System V shared memory segment.
 /// </summary>
 public class SysVShmSegment
 {
@@ -28,13 +27,13 @@ public class SysVShmSegment
     public MemoryObject BackingObject { get; set; } = null!;
 
     /// <summary>
-    /// Number of pages in this segment.
+    ///     Number of pages in this segment.
     /// </summary>
     public uint PageCount => (Size + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize;
 }
 
 /// <summary>
-/// Represents an attachment of a process to a shared memory segment.
+///     Represents an attachment of a process to a shared memory segment.
 /// </summary>
 public class SysVShmAttach
 {
@@ -46,15 +45,15 @@ public class SysVShmAttach
 }
 
 /// <summary>
-/// Manages System V shared memory segments globally.
-/// This is a global IPC namespace shared across all processes in the emulator.
+///     Manages System V shared memory segments globally.
+///     This is a global IPC namespace shared across all processes in the emulator.
 /// </summary>
 public class SysVShmManager
 {
-    private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
-    private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
     private readonly List<SysVShmAttach> _attaches = new();
     private readonly MemoryObjectManager _memoryObjects;
+    private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
+    private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
     private int _nextShmid = 1;
 
     public SysVShmManager(MemoryObjectManager? memoryObjects = null)
@@ -63,7 +62,7 @@ public class SysVShmManager
     }
 
     /// <summary>
-    /// Get or create a shared memory segment.
+    ///     Get or create a shared memory segment.
     /// </summary>
     /// <param name="key">IPC key (0 = IPC_PRIVATE)</param>
     /// <param name="size">Size in bytes (will be rounded up to page boundary)</param>
@@ -76,7 +75,7 @@ public class SysVShmManager
     {
         // Round size up to page boundary
         var alignedSize = (size + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
-        if (alignedSize == 0) alignedSize = (uint)LinuxConstants.PageSize;
+        if (alignedSize == 0) alignedSize = LinuxConstants.PageSize;
 
         // Single-container scheduler-thread ownership: SysV SHM metadata is mutated on scheduler thread.
         // Check if key exists (and not IPC_PRIVATE)
@@ -131,7 +130,7 @@ public class SysVShmManager
     }
 
     /// <summary>
-    /// Attach a shared memory segment to the process address space.
+    ///     Attach a shared memory segment to the process address space.
     /// </summary>
     /// <param name="shmid">Segment ID</param>
     /// <param name="addr">Desired address (0 = auto-allocate)</param>
@@ -163,7 +162,7 @@ public class SysVShmManager
             : Protection.Read | Protection.Write;
 
         if ((flags & LinuxConstants.SHM_REMAP) != 0 && addr == 0)
-            return (long)-(int)Errno.EINVAL;
+            return -(int)Errno.EINVAL;
 
         // Determine address
         var attachAddr = addr;
@@ -172,7 +171,7 @@ public class SysVShmManager
             // Auto-allocate: find free region
             attachAddr = FindFreeRegion(vmaManager, segment.Size);
             if (attachAddr == 0)
-                return (long)-(int)Errno.ENOMEM;
+                return -(int)Errno.ENOMEM;
         }
         else
         {
@@ -182,11 +181,11 @@ public class SysVShmManager
 
             // Check alignment
             if ((attachAddr & 0xFFFu) != 0)
-                return (long)-(int)Errno.EINVAL;
+                return -(int)Errno.EINVAL;
         }
 
         if (!TryComputeRangeEnd(attachAddr, segment.Size, out var attachEnd))
-            return (long)-(int)Errno.EINVAL;
+            return -(int)Errno.EINVAL;
 
         // Check for overlapping VMAs unless SHM_REMAP is specified
         var existingVmas = vmaManager.FindVMAsInRange(attachAddr, attachEnd);
@@ -201,7 +200,7 @@ public class SysVShmManager
             else
             {
                 // Without SHM_REMAP, overlapping mappings are an error
-                return (long)-(int)Errno.EINVAL;
+                return -(int)Errno.EINVAL;
             }
         }
 
@@ -243,16 +242,16 @@ public class SysVShmManager
             segment.ATime = DateTime.UtcNow;
             segment.Lpid = pid;
 
-            return (long)attachAddr;
+            return attachAddr;
         }
         catch
         {
-            return (long)-(int)Errno.ENOMEM;
+            return -(int)Errno.ENOMEM;
         }
     }
 
     /// <summary>
-    /// Detach a shared memory segment from the process address space.
+    ///     Detach a shared memory segment from the process address space.
     /// </summary>
     /// <param name="addr">Address of the attachment</param>
     /// <param name="pid">Process ID</param>
@@ -292,7 +291,7 @@ public class SysVShmManager
     }
 
     /// <summary>
-    /// Control operations on a shared memory segment.
+    ///     Control operations on a shared memory segment.
     /// </summary>
     /// <param name="shmid">Segment ID</param>
     /// <param name="cmd">Command (IPC_STAT, IPC_SET, IPC_RMID, etc.)</param>
@@ -357,7 +356,7 @@ public class SysVShmManager
     }
 
     /// <summary>
-    /// Called when a process exits to detach all its shared memory attachments.
+    ///     Called when a process exits to detach all its shared memory attachments.
     /// </summary>
     public void OnProcessExit(int pid, VMAManager vmaManager, Engine engine, Process? process = null)
     {
@@ -395,9 +394,7 @@ public class SysVShmManager
     {
         long bytes = 0;
         foreach (var segment in _segmentsByShmid.Values)
-        {
             bytes += (long)segment.BackingObject.PageCount * LinuxConstants.PageSize;
-        }
 
         return bytes;
     }
@@ -580,12 +577,12 @@ public class SysVShmManager
 }
 
 /// <summary>
-/// Extension methods for VMAManager to support SysV SHM.
+///     Extension methods for VMAManager to support SysV SHM.
 /// </summary>
 public static class VMAManagerExtensions
 {
     /// <summary>
-    /// Add a VMA directly (for SysV SHM use).
+    ///     Add a VMA directly (for SysV SHM use).
     /// </summary>
     public static void AddVma(this VMAManager vmaManager, VMA vma)
     {

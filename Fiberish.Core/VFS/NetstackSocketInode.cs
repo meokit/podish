@@ -1,10 +1,11 @@
-using System.Net;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.VFS;
 
@@ -12,19 +13,19 @@ public sealed class NetstackSocketInode : Inode
 {
     private readonly LoopbackNetNamespace _namespace;
     private readonly SocketType _socketType;
-    private LoopbackNetNamespace.TcpListenerSocket? _listener;
-    private LoopbackNetNamespace.TcpStreamSocket? _stream;
-    private LoopbackNetNamespace.UdpDatagramSocket? _udp;
-    private IPEndPoint? _boundEndPoint;
-    private IPEndPoint? _lastDatagramPeer;
-    private IPEndPoint? _connectedDatagramPeer;
-    private int _socketError;
-    private bool _reuseAddress;
-    private int? _receiveTimeoutMs;
-    private int? _sendTimeoutMs;
     private int _backlog;
+    private IPEndPoint? _boundEndPoint;
+    private IPEndPoint? _connectedDatagramPeer;
+    private IPEndPoint? _lastDatagramPeer;
+    private LoopbackNetNamespace.TcpListenerSocket? _listener;
+    private int? _receiveTimeoutMs;
+    private bool _reuseAddress;
+    private int? _sendTimeoutMs;
     private bool _shutdownRead;
     private bool _shutdownWrite;
+    private int _socketError;
+    private LoopbackNetNamespace.TcpStreamSocket? _stream;
+    private LoopbackNetNamespace.UdpDatagramSocket? _udp;
 
     public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
     {
@@ -36,7 +37,8 @@ public sealed class NetstackSocketInode : Inode
         Mode = 0x1ED;
     }
 
-    private NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, LoopbackNetNamespace.TcpStreamSocket stream)
+    private NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace,
+        LoopbackNetNamespace.TcpStreamSocket stream)
         : this(ino, sb, @namespace, SocketType.Stream)
     {
         _stream = stream;
@@ -62,6 +64,7 @@ public sealed class NetstackSocketInode : Inode
             _udp ??= _namespace.CreateUdpSocket();
             _udp.Bind((ushort)endpoint.Port);
         }
+
         return 0;
     }
 
@@ -142,10 +145,12 @@ public sealed class NetstackSocketInode : Inode
                 _udp.Bind(0);
                 _boundEndPoint = _udp.LocalEndPoint;
             }
+
             _connectedDatagramPeer = endpoint;
             _lastDatagramPeer = endpoint;
             return 0;
         }
+
         if (_socketType != SocketType.Stream)
             return -(int)Errno.EOPNOTSUPP;
         if (!IsValidConnectAddress(endpoint.Address))
@@ -191,6 +196,7 @@ public sealed class NetstackSocketInode : Inode
                 return -(int)Errno.EDESTADDRREQ;
             return await SendToAsync(file, buffer, _connectedDatagramPeer, flags);
         }
+
         if (_socketType != SocketType.Stream)
             return -(int)Errno.EDESTADDRREQ;
         if (_stream == null)
@@ -233,6 +239,7 @@ public sealed class NetstackSocketInode : Inode
                     return result.Bytes;
             }
         }
+
         if (_socketType != SocketType.Stream)
             return -(int)Errno.ENOTCONN;
         if (_stream == null)
@@ -284,7 +291,8 @@ public sealed class NetstackSocketInode : Inode
         return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
     }
 
-    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
+    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer,
+        int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return (0, null);
@@ -367,6 +375,7 @@ public sealed class NetstackSocketInode : Inode
                     _stream.CloseWrite();
                     _shutdownWrite = true;
                 }
+
                 return 0;
             case 2:
                 _shutdownRead = true;
@@ -375,6 +384,7 @@ public sealed class NetstackSocketInode : Inode
                     _stream.CloseWrite();
                     _shutdownWrite = true;
                 }
+
                 return 0;
             default:
                 return -(int)Errno.EINVAL;
@@ -464,7 +474,8 @@ public sealed class NetstackSocketInode : Inode
 
     private bool IsValidBindAddress(IPAddress address)
     {
-        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.Loopback) || address.Equals(_namespace.PrivateIpv4Address))
+        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.Loopback) ||
+            address.Equals(_namespace.PrivateIpv4Address))
             return true;
         return false;
     }
@@ -498,21 +509,29 @@ public sealed class NetstackSocketInode : Inode
 
     private sealed class PollingWaitRegistration : IDisposable
     {
-        private readonly NetstackSocketInode _inode;
-        private readonly LinuxFile _file;
-        private readonly KernelScheduler _scheduler;
         private readonly Action _callback;
         private readonly short _events;
-        private Fiberish.Core.Timer? _timer;
+        private readonly LinuxFile _file;
+        private readonly NetstackSocketInode _inode;
+        private readonly KernelScheduler _scheduler;
         private bool _disposed;
+        private Timer? _timer;
 
-        public PollingWaitRegistration(NetstackSocketInode inode, LinuxFile file, KernelScheduler scheduler, Action callback, short events)
+        public PollingWaitRegistration(NetstackSocketInode inode, LinuxFile file, KernelScheduler scheduler,
+            Action callback, short events)
         {
             _inode = inode;
             _file = file;
             _scheduler = scheduler;
             _callback = callback;
             _events = events;
+        }
+
+        public void Dispose()
+        {
+            _disposed = true;
+            _timer?.Cancel();
+            _timer = null;
         }
 
         public void Arm()
@@ -522,13 +541,6 @@ public sealed class NetstackSocketInode : Inode
 
             var delay = Math.Max(1, _inode._namespace.Poll(Environment.TickCount64));
             _timer = _scheduler.ScheduleTimer(delay, Tick);
-        }
-
-        public void Dispose()
-        {
-            _disposed = true;
-            _timer?.Cancel();
-            _timer = null;
         }
 
         private void Tick()

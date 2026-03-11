@@ -13,11 +13,11 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     private static readonly ILogger Logger = Logging.CreateLogger<SaeaOperation>();
     private static readonly Action CompletedSentinel = () => { };
     private Action? _continuation;
+    private bool _enableSignalSafetyNet;
     private volatile bool _isCompleted;
     private KernelScheduler? _scheduler;
     private FiberTask? _task;
     private FiberTask.WaitToken? _waitToken;
-    private bool _enableSignalSafetyNet;
 
     public SaeaOperation()
     {
@@ -87,17 +87,14 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
             {
                 var task = _task;
                 if (task != null)
-                {
                     _scheduler.Schedule(() =>
                     {
                         task.TrySetActiveWaitReason(WakeReason.IO);
                         c();
                     }, task);
-                }
                 else
-                {
-                    _scheduler.Schedule(c, null);
-                }
+                    _scheduler.Schedule(c);
+
                 Logger.LogTrace(
                     "[SaeaAwaitable] Completed scheduling continuation: task={TaskId} scheduler={HasScheduler}",
                     _task?.TID, true);
@@ -112,8 +109,8 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     }
 
     /// <summary>
-    /// Must be called immediately after ResetState() and before the async socket call,
-    /// so that signals can interrupt this wait via <see cref="FiberTask.SetWaitContinuation"/>.
+    ///     Must be called immediately after ResetState() and before the async socket call,
+    ///     so that signals can interrupt this wait via <see cref="FiberTask.SetWaitContinuation" />.
     /// </summary>
     public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true)
     {
@@ -144,43 +141,58 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
 
 internal readonly struct SaeaAwaitable
 {
-    private readonly SaeaOperation _operation;
-
     public SaeaAwaitable(SaeaOperation operation)
     {
-        _operation = operation;
+        Operation = operation;
     }
 
-    public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true) =>
-        _operation.BeginWait(task, enableSignalSafetyNet);
-    public void ResetState() => _operation.ResetState();
-    public void SetBuffer(byte[]? buffer, int offset, int count) => _operation.SetBuffer(buffer, offset, count);
+    public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true)
+    {
+        Operation.BeginWait(task, enableSignalSafetyNet);
+    }
+
+    public void ResetState()
+    {
+        Operation.ResetState();
+    }
+
+    public void SetBuffer(byte[]? buffer, int offset, int count)
+    {
+        Operation.SetBuffer(buffer, offset, count);
+    }
 
     public SocketFlags SocketFlags
     {
-        get => _operation.SocketFlags;
-        set => _operation.SocketFlags = value;
+        get => Operation.SocketFlags;
+        set => Operation.SocketFlags = value;
     }
 
     public EndPoint? RemoteEndPoint
     {
-        get => _operation.RemoteEndPoint;
-        set => _operation.RemoteEndPoint = value;
+        get => Operation.RemoteEndPoint;
+        set => Operation.RemoteEndPoint = value;
     }
 
     public Socket? AcceptSocket
     {
-        get => _operation.AcceptSocket;
-        set => _operation.AcceptSocket = value;
+        get => Operation.AcceptSocket;
+        set => Operation.AcceptSocket = value;
     }
 
-    public int BytesTransferred => _operation.BytesTransferred;
-    public SocketError SocketError => _operation.SocketError;
+    public int BytesTransferred => Operation.BytesTransferred;
+    public SocketError SocketError => Operation.SocketError;
 
-    public SaeaAwaiter GetAwaiter() => new(_operation);
+    public SaeaAwaiter GetAwaiter()
+    {
+        return new SaeaAwaiter(Operation);
+    }
 
-    public static implicit operator SocketAsyncEventArgs(SaeaAwaitable value) => value._operation;
-    internal SaeaOperation Operation => _operation;
+    public static implicit operator SocketAsyncEventArgs(SaeaAwaitable value)
+    {
+        return value.Operation;
+    }
+
+    internal SaeaOperation Operation { get; }
 }
 
 internal readonly struct SaeaAwaiter : INotifyCompletion
@@ -193,8 +205,16 @@ internal readonly struct SaeaAwaiter : INotifyCompletion
     }
 
     public bool IsCompleted => _operation.IsCompleted;
-    public void OnCompleted(Action continuation) => _operation.OnCompleted(continuation);
-    public void GetResult() => _operation.GetResult();
+
+    public void OnCompleted(Action continuation)
+    {
+        _operation.OnCompleted(continuation);
+    }
+
+    public void GetResult()
+    {
+        _operation.GetResult();
+    }
 }
 
 internal static class SaeaPool

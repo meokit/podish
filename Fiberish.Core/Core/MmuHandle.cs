@@ -16,6 +16,15 @@ public sealed class MmuHandle : SafeHandleZeroOrMinusOneIsInvalid
         SetHandle(handle);
     }
 
+    public nuint Identity
+    {
+        get
+        {
+            ThrowIfInvalid();
+            return X86Native.MmuGetIdentity(handle);
+        }
+    }
+
     public static MmuHandle CreateEmpty()
     {
         var handle = X86Native.MmuCreateEmpty();
@@ -40,15 +49,6 @@ public sealed class MmuHandle : SafeHandleZeroOrMinusOneIsInvalid
         if (retained == IntPtr.Zero)
             throw new InvalidOperationException("Failed to retain MMU handle.");
         return new MmuHandle(retained);
-    }
-
-    public nuint Identity
-    {
-        get
-        {
-            ThrowIfInvalid();
-            return X86Native.MmuGetIdentity(handle);
-        }
     }
 
     internal IntPtr DangerousMmuHandle()

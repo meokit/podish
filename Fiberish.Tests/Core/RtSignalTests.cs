@@ -1,34 +1,13 @@
-using Xunit;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
+using Xunit;
 
 namespace Fiberish.Tests.Core;
 
 public class RtSignalTests
 {
     private static readonly int SIGRTMIN = 34; // Linux SIGRTMIN
-
-    private sealed class TestEnv : IDisposable
-    {
-        public KernelScheduler Scheduler { get; }
-        public FiberTask Task { get; }
-        public Process Process { get; }
-        public Engine Engine { get; }
-
-        public TestEnv()
-        {
-            Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
-            Engine = new Engine();
-            Process = new Process(100, new Fiberish.Memory.VMAManager(), null!);
-            Task = new FiberTask(100, Process, Engine, Scheduler);
-        }
-
-        public void Dispose()
-        {
-            KernelScheduler.Current = null;
-        }
-    }
 
     // ─── Standard (non-RT) signals: saturation semantics ─────────────────────
 
@@ -44,7 +23,9 @@ public class RtSignalTests
         var count = 0;
         env.Task.PendingSignalQueue.Lock(q =>
         {
-            foreach (var s in q) if (s.Signo == (int)Signal.SIGUSR1) count++;
+            foreach (var s in q)
+                if (s.Signo == (int)Signal.SIGUSR1)
+                    count++;
         });
 
         Assert.Equal(1, count); // Should only be in the queue once
@@ -67,6 +48,7 @@ public class RtSignalTests
         {
             info = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
         }
+
         Assert.NotNull(info);
 
         // After dequeue, bit should be clear
@@ -89,7 +71,9 @@ public class RtSignalTests
         var count = 0;
         env.Task.PendingSignalQueue.Lock(q =>
         {
-            foreach (var s in q) if (s.Signo == rtSig) count++;
+            foreach (var s in q)
+                if (s.Signo == rtSig)
+                    count++;
         });
 
         Assert.Equal(3, count); // All three copies must be queued
@@ -141,6 +125,7 @@ public class RtSignalTests
         {
             env.Task.DequeueSignalUnsafe(rtSig);
         }
+
         Assert.NotEqual(0UL, env.Task.PendingSignals & bit);
 
         // Second dequeue clears bit
@@ -148,6 +133,7 @@ public class RtSignalTests
         {
             env.Task.DequeueSignalUnsafe(rtSig);
         }
+
         Assert.Equal(0UL, env.Task.PendingSignals & bit);
     }
 
@@ -176,6 +162,28 @@ public class RtSignalTests
         });
 
         Assert.Equal(1, stdCount); // Standard signal saturated
-        Assert.Equal(2, rtCount);  // RT signals both queued
+        Assert.Equal(2, rtCount); // RT signals both queued
+    }
+
+    private sealed class TestEnv : IDisposable
+    {
+        public TestEnv()
+        {
+            Scheduler = new KernelScheduler();
+            KernelScheduler.Current = Scheduler;
+            Engine = new Engine();
+            Process = new Process(100, new VMAManager(), null!);
+            Task = new FiberTask(100, Process, Engine, Scheduler);
+        }
+
+        public KernelScheduler Scheduler { get; }
+        public FiberTask Task { get; }
+        public Process Process { get; }
+        public Engine Engine { get; }
+
+        public void Dispose()
+        {
+            KernelScheduler.Current = null;
+        }
     }
 }

@@ -9,7 +9,8 @@ public interface INetworkSwitch
     void Attach(ContainerNetworkContext context);
     void Detach(ContainerNetworkContext context);
 
-    ConnectTarget ResolvePublishedPortTarget(ContainerNetworkContext context, int containerPort, TransportProtocol protocol);
+    ConnectTarget ResolvePublishedPortTarget(ContainerNetworkContext context, int containerPort,
+        TransportProtocol protocol);
 
     bool IsLocalAddress(ContainerNetworkContext context, IPAddress address);
 }

@@ -1,5 +1,3 @@
-using System.Threading;
-
 namespace Fiberish.Core;
 
 internal sealed class KernelSyncContext : SynchronizationContext

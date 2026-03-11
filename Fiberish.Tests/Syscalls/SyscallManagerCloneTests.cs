@@ -1,6 +1,5 @@
 using Fiberish.Core;
 using Fiberish.Memory;
-using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
@@ -17,7 +16,7 @@ public class SyscallManagerCloneTests
         var sm = new SyscallManager(engine, vma, 0);
         sm.MountRootHostfs(".");
 
-        var cloned = sm.Clone(vma, shareFiles: false, shareFs: false);
+        var cloned = sm.Clone(vma, false, false);
 
         Assert.NotNull(cloned.AnonMount);
         Assert.Same(sm.AnonMount, cloned.AnonMount);
@@ -36,7 +35,7 @@ public class SyscallManagerCloneTests
         Assert.True(procBefore.IsValid);
         Assert.Equal("proc", procBefore.Mount!.FsType);
 
-        var cloned = sm.Clone(vma, shareFiles: false, shareFs: false);
+        var cloned = sm.Clone(vma, false, false);
         cloned.Close();
 
         var procAfter = sm.PathWalkWithFlags("/proc", LookupFlags.FollowSymlink);
@@ -59,7 +58,7 @@ public class SyscallManagerCloneTests
         var file = new LinuxFile(root.Dentry!, FileFlags.O_RDONLY, root.Mount!);
         var fd = sm.AllocFD(file);
 
-        var shared = sm.Clone(vma, shareFiles: true, shareFs: false);
+        var shared = sm.Clone(vma, true, false);
         Assert.NotNull(shared.GetFD(fd));
 
         shared.Close();

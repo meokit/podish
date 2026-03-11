@@ -11,13 +11,13 @@ public sealed class RelaySession : IDisposable
         HostSocket = hostSocket;
         GuestStream = guestStream;
         Context = context;
-        
+
         HostToGuestBuffer = new byte[64 * 1024];
         GuestToHostBuffer = new byte[64 * 1024];
-        
+
         HostReceiveArgs = new SocketAsyncEventArgs();
         HostReceiveArgs.SetBuffer(HostToGuestBuffer);
-        
+
         HostSendArgs = new SocketAsyncEventArgs();
         HostSendArgs.SetBuffer(GuestToHostBuffer);
     }
@@ -43,20 +43,34 @@ public sealed class RelaySession : IDisposable
 
     public SocketAsyncEventArgs HostReceiveArgs { get; }
     public SocketAsyncEventArgs HostSendArgs { get; }
-    
+
     public bool HostReceivePending { get; set; }
     public bool HostSendPending { get; set; }
-    
+
     public bool HostReceiveEventBound { get; set; }
     public bool HostSendEventBound { get; set; }
-    
+
     public bool IsDisposed { get; private set; }
 
     public void Dispose()
     {
         IsDisposed = true;
-        try { HostSocket.Dispose(); } catch { }
-        try { GuestStream.Dispose(); } catch { }
+        try
+        {
+            HostSocket.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            GuestStream.Dispose();
+        }
+        catch
+        {
+        }
+
         HostReceiveArgs.Dispose();
         HostSendArgs.Dispose();
     }

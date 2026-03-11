@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Podish.Core;
 using Podish.Core.Native;
 using Xunit;
+using Xunit.Sdk;
 
 namespace Fiberish.Tests.Podish;
 
@@ -15,7 +16,7 @@ public class NativeIpcMsgPackTests
     {
         using var harness = NativeIpcHarness.Create();
 
-        var args = EncodePollArgs(timeoutMs: 0);
+        var args = EncodePollArgs(0);
         var frame = InvokePollEvent(harness.CtxHandle, args);
         var (eventType, _, _) = DecodeEvent(frame);
         Assert.Equal(PodishNativeApi.PodIpcEventNone, eventType);
@@ -24,21 +25,21 @@ public class NativeIpcMsgPackTests
     [Fact]
     public void PodCtxCallMsgPack_PollEvent_ReturnsLogEvent()
     {
-        using var harness = NativeIpcHarness.Create(logLevel: "info");
+        using var harness = NativeIpcHarness.Create("info");
         var marker = "ipc-log-" + Guid.NewGuid().ToString("N");
 
         harness.Context.Context.LoggerFactory.CreateLogger("native-ipc-test").LogInformation("{Marker}", marker);
 
         for (var i = 0; i < 20; i++)
         {
-            var args = EncodePollArgs(timeoutMs: 200);
+            var args = EncodePollArgs(200);
             var frame = InvokePollEvent(harness.CtxHandle, args);
             var (eventType, _, message) = DecodeEvent(frame);
             if (eventType == PodishNativeApi.PodIpcEventLogLine && message.Contains(marker, StringComparison.Ordinal))
                 return;
         }
 
-        throw new Xunit.Sdk.XunitException("Did not receive expected log event");
+        throw new XunitException("Did not receive expected log event");
     }
 
     [Fact]
@@ -50,14 +51,14 @@ public class NativeIpcMsgPackTests
 
         for (var i = 0; i < 10; i++)
         {
-            var args = EncodePollArgs(timeoutMs: 100);
+            var args = EncodePollArgs(100);
             var frame = InvokePollEvent(harness.CtxHandle, args);
             var (eventType, _, _) = DecodeEvent(frame);
             if (eventType == PodishNativeApi.PodIpcEventContainerStateChanged)
                 return;
         }
 
-        throw new Xunit.Sdk.XunitException("Did not receive container state changed event");
+        throw new XunitException("Did not receive container state changed event");
     }
 
     [Fact]
@@ -119,8 +120,8 @@ public class NativeIpcMsgPackTests
 
     private sealed class NativeIpcHarness : IDisposable
     {
-        private readonly string _root;
         private readonly GCHandle _ctxHandle;
+        private readonly string _root;
 
         private NativeIpcHarness(string root, NativeContext context, GCHandle ctxHandle)
         {
@@ -131,6 +132,15 @@ public class NativeIpcMsgPackTests
 
         public NativeContext Context { get; }
         public IntPtr CtxHandle => GCHandle.ToIntPtr(_ctxHandle);
+
+        public void Dispose()
+        {
+            if (_ctxHandle.IsAllocated)
+                _ctxHandle.Free();
+            Context.Dispose();
+            Context.Context.Dispose();
+            Directory.Delete(_root, true);
+        }
 
         public static NativeIpcHarness Create(string logLevel = "error")
         {
@@ -148,15 +158,6 @@ public class NativeIpcMsgPackTests
             };
             var handle = GCHandle.Alloc(context, GCHandleType.Normal);
             return new NativeIpcHarness(root, context, handle);
-        }
-
-        public void Dispose()
-        {
-            if (_ctxHandle.IsAllocated)
-                _ctxHandle.Free();
-            Context.Dispose();
-            Context.Context.Dispose();
-            Directory.Delete(_root, true);
         }
     }
 }

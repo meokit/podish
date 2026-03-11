@@ -1,36 +1,24 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Fiberish.Core.Net;
-using Moq;
+using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core.Networking;
 using Xunit;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Fiberish.Tests.Podish;
 
 public class PortForwardingTests
 {
-    private class MockNetstackStream : INetstackStream
-    {
-        public bool CanRead => true;
-        public bool CanWrite => true;
-        public bool MayRead => true;
-        public bool MayWrite => true;
-        public bool IsClosed => false;
-        public int Read(Span<byte> buffer) => 0;
-        public int Write(ReadOnlySpan<byte> buffer) => buffer.Length;
-        public void CloseWrite() { }
-        public void Dispose() { }
-    }
-
     [Fact]
     public void RelaySession_Buffering_Works()
     {
         // Arrange
         var mockStream = new MockNetstackStream();
         var hostSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        var context = new ContainerNetworkContext("test", NetworkMode.Private, IPAddress.Any, (LoopbackNetNamespace)null!, null!);
+        var context = new ContainerNetworkContext("test", NetworkMode.Private, IPAddress.Any,
+            (LoopbackNetNamespace)null!, null!);
         using var session = new RelaySession(1, hostSocket, mockStream, context);
 
         var data = Encoding.ASCII.GetBytes("hello");
@@ -51,7 +39,8 @@ public class PortForwardingTests
         guestListener.Listen(18080);
 
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context =
+            new ContainerNetworkContext("test-container", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
         sw.Attach(context);
 
         // 2. Start PortForwardLoop
@@ -66,20 +55,22 @@ public class PortForwardingTests
                 ContainerPort = 18080,
                 Protocol = TransportProtocol.Tcp
             };
-            
+
             loop.StartPublishedPorts(context, [spec]);
 
             // Wait for listener to be ready and get the port
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // 4. Connect from Host
@@ -89,7 +80,7 @@ public class PortForwardingTests
             // 5. Guest Accept
             LoopUntil(netns, () => guestListener.AcceptPending, 2000);
             using var guestAccepted = guestListener.Accept();
-            
+
             // Wait for handshake
             LoopUntil(netns, () => guestAccepted.State == 4, 3000);
 
@@ -131,7 +122,8 @@ public class PortForwardingTests
         guestListener.Listen(18081);
 
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container-wake", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context = new ContainerNetworkContext("test-container-wake", NetworkMode.Private, netns.PrivateIpv4Address,
+            netns, sw);
         sw.Attach(context);
 
         // 2. Start PortForwardLoop
@@ -146,19 +138,21 @@ public class PortForwardingTests
                 ContainerPort = 18081,
                 Protocol = TransportProtocol.Tcp
             };
-            
+
             loop.StartPublishedPorts(context, [spec]);
 
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // 4. Connect from Host
@@ -168,29 +162,29 @@ public class PortForwardingTests
             // 5. Guest Accept
             LoopUntil(netns, () => guestListener.AcceptPending, 2000);
             using var guestAccepted = guestListener.Accept();
-            
+
             // Wait for handshake
             LoopUntil(netns, () => guestAccepted.State == 4, 3000);
 
             // Give the loop a moment to settle into a deep wait
-            await Task.Delay(200); 
+            await Task.Delay(200);
 
             // 6. Data Transfer: Guest -> Host (Crucial part: no host event!)
             var response = Encoding.ASCII.GetBytes("hello-waker");
-            
+
             // Send data from guest. This should trigger `state.notify()` -> C# callback -> `_wakeSignal.Set()`
             guestAccepted.Send(response);
 
             // Host receives data without having sent anything first.
             // If the loop is sleeping forever, this will timeout and fail the test.
             var hostBuffer = new byte[32];
-            
+
             var receiveTask = hostClient.ReceiveAsync(hostBuffer, SocketFlags.None);
             var timeoutTask = Task.Delay(2000);
-            
+
             var completed = await Task.WhenAny(receiveTask, timeoutTask);
             Assert.Equal(receiveTask, completed); // Ensures it didn't timeout
-            
+
             var hostRead = await receiveTask;
             Assert.Equal("hello-waker", Encoding.ASCII.GetString(hostBuffer, 0, hostRead));
 
@@ -207,13 +201,14 @@ public class PortForwardingTests
 
     private static void LoopUntil(LoopbackNetNamespace netns, Func<bool> condition, int timeoutMs)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
             if (condition()) return;
             netns.Poll(sw.ElapsedMilliseconds);
             Thread.Sleep(10);
         }
+
         throw new TimeoutException("Timed out waiting for netstack condition.");
     }
 
@@ -227,7 +222,8 @@ public class PortForwardingTests
         // 1. Setup Guest Netstack WITHOUT a listener (port is closed)
         using var netns = LoopbackNetNamespace.Create(0x0A580003u, 24);
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container-closed", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context = new ContainerNetworkContext("test-container-closed", NetworkMode.Private,
+            netns.PrivateIpv4Address, netns, sw);
         sw.Attach(context);
 
         var loop = new PortForwardLoop(NullLogger<PortForwardLoop>.Instance);
@@ -245,16 +241,18 @@ public class PortForwardingTests
             loop.StartPublishedPorts(context, [spec]);
 
             // Wait for listener to be ready
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // 3. Connect from Host - should accept but then disconnect when guest connection fails
@@ -264,8 +262,8 @@ public class PortForwardingTests
             // 4. Wait for the guest connection attempt to fail and host to be disconnected.
             // Avoid blocking Receive() with timeout here; use bounded polling to keep this
             // test deterministic across runtime/socket timing differences.
-            bool disconnected = false;
-            for (int i = 0; i < 40; i++)
+            var disconnected = false;
+            for (var i = 0; i < 40; i++)
             {
                 netns.Poll(i * 50);
                 await Task.Delay(50);
@@ -318,7 +316,8 @@ public class PortForwardingTests
         guestListener.Listen(18083);
 
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container-teardown", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context = new ContainerNetworkContext("test-container-teardown", NetworkMode.Private,
+            netns.PrivateIpv4Address, netns, sw);
         sw.Attach(context);
 
         var loop = new PortForwardLoop(NullLogger<PortForwardLoop>.Instance);
@@ -336,16 +335,18 @@ public class PortForwardingTests
             loop.StartPublishedPorts(context, [spec]);
 
             // Wait for listener
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // 3. Connect from Host
@@ -394,7 +395,8 @@ public class PortForwardingTests
         guestListener.Listen(18084);
 
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container-multi", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context = new ContainerNetworkContext("test-container-multi", NetworkMode.Private, netns.PrivateIpv4Address,
+            netns, sw);
         sw.Attach(context);
 
         var loop = new PortForwardLoop(NullLogger<PortForwardLoop>.Instance);
@@ -411,23 +413,25 @@ public class PortForwardingTests
 
             loop.StartPublishedPorts(context, [spec]);
 
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // 3. Establish multiple concurrent connections
             var hostClients = new List<Socket>();
             var guestSockets = new List<LoopbackNetNamespace.TcpStreamSocket>();
 
-            for (int i = 0; i < 3; i++)
+            for (var i = 0; i < 3; i++)
             {
                 var hostClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
                 await hostClient.ConnectAsync("127.0.0.1", hostPort);
@@ -442,14 +446,14 @@ public class PortForwardingTests
             Assert.Equal(3, hostClients.Count);
 
             // 4. Send data on all connections
-            for (int i = 0; i < 3; i++)
+            for (var i = 0; i < 3; i++)
             {
                 var data = Encoding.ASCII.GetBytes($"msg-{i}");
                 await hostClients[i].SendAsync(data, SocketFlags.None);
             }
 
             // 5. Verify all received
-            for (int i = 0; i < 3; i++)
+            for (var i = 0; i < 3; i++)
             {
                 var buffer = new byte[32];
                 LoopUntil(netns, () => guestSockets[i].CanRead, 3000);
@@ -473,10 +477,7 @@ public class PortForwardingTests
                 client.Dispose();
             }
 
-            foreach (var gs in guestSockets)
-            {
-                gs.Dispose();
-            }
+            foreach (var gs in guestSockets) gs.Dispose();
         }
         finally
         {
@@ -498,7 +499,8 @@ public class PortForwardingTests
         guestListener.Listen(18085);
 
         var sw = new DummySwitch();
-        var context = new ContainerNetworkContext("test-container-wake-teardown", NetworkMode.Private, netns.PrivateIpv4Address, netns, sw);
+        var context = new ContainerNetworkContext("test-container-wake-teardown", NetworkMode.Private,
+            netns.PrivateIpv4Address, netns, sw);
         sw.Attach(context);
 
         var loop = new PortForwardLoop(NullLogger<PortForwardLoop>.Instance);
@@ -516,16 +518,18 @@ public class PortForwardingTests
             loop.StartPublishedPorts(context, [spec]);
 
             // Wait for it to be active
-            int hostPort = 0;
-            for (int i = 0; i < 50; i++)
+            var hostPort = 0;
+            for (var i = 0; i < 50; i++)
             {
                 if (loop.GetActivePorts(context.ContainerId).Any())
                 {
                     hostPort = loop.GetActivePorts(context.ContainerId).First();
                     break;
                 }
+
                 await Task.Delay(20);
             }
+
             Assert.NotEqual(0, hostPort);
 
             // Create some activity to trigger wake callbacks
@@ -575,7 +579,40 @@ public class PortForwardingTests
         finally
         {
             // Ensure dispose is called even if test fails, but avoid double dispose
-            try { loop.Dispose(); } catch { }
+            try
+            {
+                loop.Dispose();
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private class MockNetstackStream : INetstackStream
+    {
+        public bool IsClosed => false;
+        public bool CanRead => true;
+        public bool CanWrite => true;
+        public bool MayRead => true;
+        public bool MayWrite => true;
+
+        public int Read(Span<byte> buffer)
+        {
+            return 0;
+        }
+
+        public int Write(ReadOnlySpan<byte> buffer)
+        {
+            return buffer.Length;
+        }
+
+        public void CloseWrite()
+        {
+        }
+
+        public void Dispose()
+        {
         }
     }
 }

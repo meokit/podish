@@ -10,6 +10,7 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using Process = Fiberish.Core.Process;
 
 namespace Fiberish.Syscalls;
 
@@ -17,8 +18,7 @@ public partial class SyscallManager
 {
     private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
     private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
-    private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
-    private static readonly long SysinfoUptimeStartTimestamp = Stopwatch.GetTimestamp();
+
     private const int SupportedMembarrierCommands =
         LinuxConstants.MEMBARRIER_CMD_GLOBAL |
         LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED |
@@ -27,10 +27,14 @@ public partial class SyscallManager
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED |
         LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE |
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
+
     private const int MembarrierRegisterCommands =
         LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED |
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED |
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
+
+    private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
+    private static readonly long SysinfoUptimeStartTimestamp = Stopwatch.GetTimestamp();
 
     private static long GetVirtualCpuCycles()
     {
@@ -145,9 +149,11 @@ public partial class SyscallManager
                 freeBytes,
                 Math.Max(
                     sharedBytes,
-                    Math.Max(bufferBytes, Math.Max(totalSwapBytes, Math.Max(freeSwapBytes, Math.Max(totalHighBytes, freeHighBytes)))))));
+                    Math.Max(bufferBytes,
+                        Math.Max(totalSwapBytes, Math.Max(freeSwapBytes, Math.Max(totalHighBytes, freeHighBytes)))))));
 
         var memUnit = maxBytes <= int.MaxValue ? 1 : LinuxConstants.PageSize;
+
         int ToSysValue(long bytes)
         {
             if (bytes <= 0) return 0;
@@ -306,7 +312,7 @@ public partial class SyscallManager
     private struct PauseAwaiter : INotifyCompletion
     {
         private readonly FiberTask _task;
-        private FiberTask.WaitToken _token;
+        private readonly FiberTask.WaitToken _token;
 
         public PauseAwaiter(FiberTask task)
         {
@@ -331,10 +337,7 @@ public partial class SyscallManager
         public AwaitResult GetResult()
         {
             var reason = _task.CompleteWaitToken(_token);
-            if (reason != WakeReason.None)
-            {
-                return AwaitResult.Interrupted;
-            }
+            if (reason != WakeReason.None) return AwaitResult.Interrupted;
 
             return AwaitResult.Completed;
         }
@@ -613,7 +616,7 @@ public partial class SyscallManager
         };
     }
 
-    private static int RegisterMembarrier(Fiberish.Core.Process process, int registerCmd)
+    private static int RegisterMembarrier(Process process, int registerCmd)
     {
         if ((registerCmd & MembarrierRegisterCommands) == 0) return -(int)Errno.EINVAL;
         process.MembarrierRegisteredCommands |= registerCmd;

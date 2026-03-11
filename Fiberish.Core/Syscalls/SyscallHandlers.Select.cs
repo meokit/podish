@@ -491,7 +491,10 @@ public partial class SyscallManager
             _state = new SelectAwaitState(sm, n, inp, outp, exp, timeoutMs);
         }
 
-        public SelectAwaiter GetAwaiter() => new(_state);
+        public SelectAwaiter GetAwaiter()
+        {
+            return new SelectAwaiter(_state);
+        }
     }
 
     public readonly struct SelectAwaiter : INotifyCompletion
@@ -510,26 +513,29 @@ public partial class SyscallManager
             _state.OnCompleted(continuation);
         }
 
-        public int GetResult() => _state.GetResult();
+        public int GetResult()
+        {
+            return _state.GetResult();
+        }
     }
 
     internal sealed class SelectAwaitState
     {
-        private readonly uint _inp;
-        private readonly uint _outp;
         private readonly uint _exp;
+        private readonly uint _inp;
         private readonly int _n;
+        private readonly uint _outp;
         private readonly SyscallManager _sm;
         private readonly long _timeoutMs;
+        private readonly List<IDisposable> _waitRegistrations = [];
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
         private int _reschedulePending;
         private int _result;
         private FiberTask _task = null!;
-        private FiberTask.WaitToken? _token;
         private Timer? _timer;
-        private readonly List<IDisposable> _waitRegistrations = [];
+        private FiberTask.WaitToken? _token;
 
         public SelectAwaitState(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
         {
@@ -672,7 +678,10 @@ public partial class SyscallManager
             _state = new PollAwaitState(sm, fdsAddr, nfds, timeoutMs);
         }
 
-        public PollAwaiter GetAwaiter() => new(_state);
+        public PollAwaiter GetAwaiter()
+        {
+            return new PollAwaiter(_state);
+        }
     }
 
     public readonly struct PollAwaiter : INotifyCompletion
@@ -691,7 +700,10 @@ public partial class SyscallManager
             _state.OnCompleted(continuation);
         }
 
-        public int GetResult() => _state.GetResult();
+        public int GetResult()
+        {
+            return _state.GetResult();
+        }
     }
 
     internal sealed class PollAwaitState
@@ -700,15 +712,15 @@ public partial class SyscallManager
         private readonly uint _nfds;
         private readonly SyscallManager _sm;
         private readonly int _timeoutMs;
+        private readonly List<IDisposable> _waitRegistrations = [];
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
         private int _reschedulePending;
         private int _result;
         private FiberTask _task = null!;
-        private FiberTask.WaitToken? _token;
         private Timer? _timer;
-        private readonly List<IDisposable> _waitRegistrations = [];
+        private FiberTask.WaitToken? _token;
 
         public PollAwaitState(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
         {

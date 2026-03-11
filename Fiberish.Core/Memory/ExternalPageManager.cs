@@ -1,5 +1,5 @@
-using System.Runtime.InteropServices;
 using System.IO.MemoryMappedFiles;
+using System.Runtime.InteropServices;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
@@ -30,84 +30,12 @@ public enum ExternalPageBackend
 
 public sealed class ExternalPageManager
 {
-    private sealed class State
-    {
-        public long NextSegmentId;
-        public readonly Dictionary<long, SegmentEntry> Segments = new();
-        public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
-        public readonly object GlobalLock = new();
-        public long StrictAllocSuccess;
-        public long StrictAllocReclaimSuccess;
-        public long StrictAllocFail;
-        public long LegacyAllocOverQuota;
-        public readonly long[] AllocPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
-        public readonly long[] FreedPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
-        public readonly long[] AllocPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
-        public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
-        public long MemoryQuotaBytes = 256L * 1024 * 1024;
-        public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
-    }
-
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly State? _previous;
-
-        public ScopeRestore(State? previous)
-        {
-            _previous = previous;
-        }
-
-        public void Dispose()
-        {
-            ScopedState.Value = _previous;
-        }
-    }
-
     private static readonly AsyncLocal<State?> ScopedState = new();
     private static readonly State DefaultState = new();
 
-    private static State CurrentState => ScopedState.Value ?? DefaultState;
-
-    public static IDisposable BeginIsolatedScope()
-    {
-        var previous = ScopedState.Value;
-        ScopedState.Value = new State();
-        return new ScopeRestore(previous);
-    }
-
-    private enum SegmentBackingKind
-    {
-        ExternalUnknown,
-        AlignedAlloc,
-        MmapAnonymous
-    }
-
-    private sealed class SegmentEntry
-    {
-        public required nint BasePtr;
-        public required int PageCount;
-        public required bool Owned;
-        public required SegmentBackingKind BackingKind;
-        public required nuint AllocationBytes;
-        public MemoryMappedFile? MappedFile;
-        public MemoryMappedViewAccessor? ViewAccessor;
-        public nint RawViewPointer;
-        public bool PointerAcquired;
-        public int LivePages;
-        public IDisposable? ExternalOwner;
-    }
-
-    private sealed class PageRefEntry
-    {
-        public required long SegmentId;
-        public required int PageIndex;
-        public required nint Ptr;
-        public required AllocationClass Class;
-        public required AllocationSource Source;
-        public int RefCount;
-    }
-
     private readonly Dictionary<uint, IntPtr> _pages = new();
+
+    private static State CurrentState => ScopedState.Value ?? DefaultState;
 
     public static long MemoryQuotaBytes
     {
@@ -119,6 +47,13 @@ public sealed class ExternalPageManager
     {
         get => CurrentState.PreferredBackend;
         set => CurrentState.PreferredBackend = value;
+    }
+
+    public static IDisposable BeginIsolatedScope()
+    {
+        var previous = ScopedState.Value;
+        ScopedState.Value = new State();
+        return new ScopeRestore(previous);
     }
 
     public bool TryGet(uint pageAddr, out IntPtr ptr)
@@ -172,16 +107,14 @@ public sealed class ExternalPageManager
     {
         addedRef = false;
         if (ptr == IntPtr.Zero) return false;
-        if (_pages.TryGetValue(pageAddr, out var existing))
-        {
-            return existing == ptr;
-        }
+        if (_pages.TryGetValue(pageAddr, out var existing)) return existing == ptr;
 
         if (!ZeroPageProvider.IsZeroPage(ptr))
         {
             AddGlobalRef(ptr);
             addedRef = true;
         }
+
         _pages[pageAddr] = ptr;
         return true;
     }
@@ -254,17 +187,6 @@ public sealed class ExternalPageManager
             Interlocked.Read(ref state.LegacyAllocOverQuota));
     }
 
-    public readonly record struct AllocationClassStat(
-        AllocationClass Class,
-        long AllocatedPages,
-        long FreedPages,
-        long LivePages);
-    public readonly record struct AllocationSourceStat(
-        AllocationSource Source,
-        long AllocatedPages,
-        long FreedPages,
-        long LivePages);
-
     public static IReadOnlyList<AllocationClassStat> GetAllocationClassStats()
     {
         var state = CurrentState;
@@ -320,7 +242,7 @@ public sealed class ExternalPageManager
         var state = CurrentState;
         lock (state.GlobalLock)
         {
-            var key = (nint)ptr;
+            var key = ptr;
             if (state.PageRefs.TryGetValue(key, out var existing))
             {
                 existing.RefCount++;
@@ -363,7 +285,8 @@ public sealed class ExternalPageManager
         }
     }
 
-    private static void RegisterOwnedSinglePage(State state, nint ptr, AllocationClass allocationClass, AllocationSource allocationSource)
+    private static void RegisterOwnedSinglePage(State state, nint ptr, AllocationClass allocationClass,
+        AllocationSource allocationSource)
     {
         var segmentId = Interlocked.Increment(ref state.NextSegmentId);
         state.Segments[segmentId] = new SegmentEntry
@@ -401,13 +324,10 @@ public sealed class ExternalPageManager
 
         lock (state.GlobalLock)
         {
-            var key = (nint)ptr;
+            var key = ptr;
             if (!state.PageRefs.TryGetValue(key, out var entry)) return;
             entry.RefCount--;
-            if (entry.RefCount > 0)
-            {
-                return;
-            }
+            if (entry.RefCount > 0) return;
 
             allocationClass = entry.Class;
             allocationSource = entry.Source;
@@ -432,10 +352,8 @@ public sealed class ExternalPageManager
             if (segmentToFree.BackingKind == SegmentBackingKind.MmapAnonymous)
             {
                 if (segmentToFree.PointerAcquired && segmentToFree.ViewAccessor != null)
-                    unsafe
-                    {
-                        segmentToFree.ViewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
-                    }
+                    segmentToFree.ViewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+
                 segmentToFree.ViewAccessor?.Dispose();
                 segmentToFree.MappedFile?.Dispose();
             }
@@ -458,11 +376,12 @@ public sealed class ExternalPageManager
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
         var state = CurrentState;
-        var overQuota = state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
+        var overQuota = state.MemoryQuotaBytes > 0 &&
+                        GetAllocatedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
         IntPtr ptr;
         unsafe
         {
-            ptr = (IntPtr)NativeMemory.AlignedAlloc((nuint)LinuxConstants.PageSize, (nuint)LinuxConstants.PageSize);
+            ptr = (IntPtr)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
         }
 
         if (ptr == IntPtr.Zero) return IntPtr.Zero;
@@ -474,8 +393,9 @@ public sealed class ExternalPageManager
 
         lock (state.GlobalLock)
         {
-            RegisterOwnedSinglePage(state, (nint)ptr, allocationClass, allocationSource);
+            RegisterOwnedSinglePage(state, ptr, allocationClass, allocationSource);
         }
+
         Interlocked.Increment(ref state.AllocPagesByClass[(int)allocationClass]);
         Interlocked.Increment(ref state.AllocPagesBySource[(int)allocationSource]);
 
@@ -498,8 +418,9 @@ public sealed class ExternalPageManager
 
         if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
         {
-            reclaimed = MemoryPressureCoordinator.TryReclaimForAllocation(bytesLong, allocationClass, allocationSource) >
-                        0;
+            reclaimed =
+                MemoryPressureCoordinator.TryReclaimForAllocation(bytesLong, allocationClass, allocationSource) >
+                0;
 
             if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
             {
@@ -508,7 +429,7 @@ public sealed class ExternalPageManager
             }
         }
 
-        nuint bytes = (nuint)bytesLong;
+        var bytes = (nuint)bytesLong;
         nint ptr = 0;
         var backingKind = SegmentBackingKind.AlignedAlloc;
         MemoryMappedFile? mappedFile = null;
@@ -541,11 +462,8 @@ public sealed class ExternalPageManager
 
             if (ptr == 0)
             {
-                if (pointerAcquired && viewAccessor != null)
-                    unsafe
-                    {
-                        viewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
-                    }
+                if (pointerAcquired && viewAccessor != null) viewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+
                 viewAccessor?.Dispose();
                 mappedFile?.Dispose();
                 viewAccessor = null;
@@ -559,8 +477,9 @@ public sealed class ExternalPageManager
         {
             unsafe
             {
-                ptr = (nint)NativeMemory.AlignedAlloc(bytes, (nuint)LinuxConstants.PageSize);
+                ptr = (nint)NativeMemory.AlignedAlloc(bytes, LinuxConstants.PageSize);
             }
+
             backingKind = SegmentBackingKind.AlignedAlloc;
         }
 
@@ -616,7 +535,7 @@ public sealed class ExternalPageManager
         else
             Interlocked.Increment(ref state.StrictAllocSuccess);
 
-        basePtr = (IntPtr)ptr;
+        basePtr = ptr;
         return true;
     }
 
@@ -673,6 +592,7 @@ public sealed class ExternalPageManager
             externalOwner?.Dispose();
             return;
         }
+
         AddGlobalRef(ptr, externalOwner: externalOwner);
     }
 
@@ -682,4 +602,81 @@ public sealed class ExternalPageManager
         if (ZeroPageProvider.IsZeroPage(ptr)) return;
         ReleaseGlobalRef(ptr);
     }
+
+    private sealed class State
+    {
+        public readonly long[] AllocPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
+        public readonly long[] AllocPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
+        public readonly long[] FreedPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
+        public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
+        public readonly object GlobalLock = new();
+        public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
+        public readonly Dictionary<long, SegmentEntry> Segments = new();
+        public long LegacyAllocOverQuota;
+        public long MemoryQuotaBytes = 256L * 1024 * 1024;
+        public long NextSegmentId;
+        public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
+        public long StrictAllocFail;
+        public long StrictAllocReclaimSuccess;
+        public long StrictAllocSuccess;
+    }
+
+    private sealed class ScopeRestore : IDisposable
+    {
+        private readonly State? _previous;
+
+        public ScopeRestore(State? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            ScopedState.Value = _previous;
+        }
+    }
+
+    private enum SegmentBackingKind
+    {
+        ExternalUnknown,
+        AlignedAlloc,
+        MmapAnonymous
+    }
+
+    private sealed class SegmentEntry
+    {
+        public required nuint AllocationBytes;
+        public required SegmentBackingKind BackingKind;
+        public required nint BasePtr;
+        public IDisposable? ExternalOwner;
+        public int LivePages;
+        public MemoryMappedFile? MappedFile;
+        public required bool Owned;
+        public required int PageCount;
+        public bool PointerAcquired;
+        public nint RawViewPointer;
+        public MemoryMappedViewAccessor? ViewAccessor;
+    }
+
+    private sealed class PageRefEntry
+    {
+        public required AllocationClass Class;
+        public required int PageIndex;
+        public required nint Ptr;
+        public int RefCount;
+        public required long SegmentId;
+        public required AllocationSource Source;
+    }
+
+    public readonly record struct AllocationClassStat(
+        AllocationClass Class,
+        long AllocatedPages,
+        long FreedPages,
+        long LivePages);
+
+    public readonly record struct AllocationSourceStat(
+        AllocationSource Source,
+        long AllocatedPages,
+        long FreedPages,
+        long LivePages);
 }

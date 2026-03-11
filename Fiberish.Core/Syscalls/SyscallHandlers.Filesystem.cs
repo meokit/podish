@@ -50,10 +50,7 @@ public partial class SyscallManager
         if (err != 0) return err;
         if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount))
-        {
-            return -(int)Errno.EXDEV;
-        }
+        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
         try
         {
@@ -63,7 +60,7 @@ public partial class SyscallManager
         }
         catch (Exception ex)
         {
-            return MapFsExceptionToErrno(ex, Errno.EIO);
+            return MapFsExceptionToErrno(ex);
         }
     }
 
@@ -96,21 +93,17 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
-        var oldLoc = sm.PathWalkWithFlags(oldpath, oldStartLoc.IsValid ? oldStartLoc : sm.CurrentWorkingDirectory, followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
-        if (!oldLoc.IsValid)
-        {
-            return -(int)Errno.ENOENT;
-        }
+        var oldLoc = sm.PathWalkWithFlags(oldpath, oldStartLoc.IsValid ? oldStartLoc : sm.CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (!oldLoc.IsValid) return -(int)Errno.ENOENT;
+
         if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
         var (dirLoc, name, err) = sm.PathWalkForCreate(newpath, newStartLoc.IsValid ? newStartLoc : null);
         if (err != 0) return err;
         if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount))
-        {
-            return -(int)Errno.EXDEV;
-        }
+        if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
         try
         {
@@ -120,7 +113,7 @@ public partial class SyscallManager
         }
         catch (Exception ex)
         {
-            return MapFsExceptionToErrno(ex, Errno.EIO);
+            return MapFsExceptionToErrno(ex);
         }
     }
 
@@ -440,12 +433,14 @@ public partial class SyscallManager
         return await ListXAttrPath(state, a1, a2, a3, LookupFlags.FollowSymlink);
     }
 
-    private static async ValueTask<int> SysLListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysLListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         return await ListXAttrPath(state, a1, a2, a3, LookupFlags.None);
     }
 
-    private static async ValueTask<int> SysFListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private static async ValueTask<int> SysFListXAttr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
@@ -906,7 +901,8 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var oldPath = sm.ReadString(a2);
         var newPath = sm.ReadString(a4);
-        Logger.LogInformation($"[RenameAt] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}'");
+        Logger.LogInformation(
+            $"[RenameAt] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}'");
         return ImplRename(sm, (int)a1, oldPath, (int)a3, newPath, 0);
     }
 
@@ -916,7 +912,8 @@ public partial class SyscallManager
         if (sm == null) return -(int)Errno.EPERM;
         var oldPath = sm.ReadString(a2);
         var newPath = sm.ReadString(a4);
-        Logger.LogInformation($"[RenameAt2] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}' flags={a5}");
+        Logger.LogInformation(
+            $"[RenameAt2] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}' flags={a5}");
         return ImplRename(sm, (int)a1, oldPath, (int)a3, newPath, a5);
     }
 
@@ -985,10 +982,8 @@ public partial class SyscallManager
             return 0;
 
         if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0)
-        {
             if (targetExists)
                 return -(int)Errno.EEXIST;
-        }
 
         if ((flags & LinuxConstants.RENAME_EXCHANGE) != 0)
         {
@@ -1088,31 +1083,21 @@ public partial class SyscallManager
             var newParentInode = newParentLoc.Dentry?.Inode;
 
             if (oldParentInode != null)
-            {
                 foreach (var pDentry in oldParentInode.Dentries.ToList())
-                {
                     _ = pDentry.TryUncacheChild(oldName, "SysRename.cleanup-old", out _);
-                }
-            }
 
             if (newParentInode != null)
-            {
                 foreach (var pDentry in newParentInode.Dentries.ToList())
-                {
                     // Clean up only the pre-existing target dentry that got replaced.
                     // Do not tear down the freshly moved source dentry.
                     if (replacedTargetInode != null &&
                         pDentry.TryGetCachedChild(newName, out var victimDentry) &&
                         ReferenceEquals(victimDentry.Inode, replacedTargetInode))
                     {
-                        if (victimDentry.Inode != null)
-                        {
-                            victimDentry.UnbindInode("SysRename.cleanup-replaced-target");
-                        }
+                        if (victimDentry.Inode != null) victimDentry.UnbindInode("SysRename.cleanup-replaced-target");
+
                         _ = pDentry.TryUncacheChild(newName, "SysRename.cleanup-replaced-target", out _);
                     }
-                }
-            }
 
             // Note: We don't necessarily need to move the dentry object here; 
             // the next Lookup will create a fresh Dentry pointing to the correct Inode.
@@ -1413,7 +1398,7 @@ public partial class SyscallManager
         if ((mode & 4) != 0) req |= AccessMode.MayRead;
         if ((mode & 2) != 0) req |= AccessMode.MayWrite;
         if ((mode & 1) != 0) req |= AccessMode.MayExec;
-        return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, useEffectiveIds: false);
+        return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, false);
     }
 
     private static async ValueTask<int> SysGetdents64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -1506,7 +1491,7 @@ public partial class SyscallManager
 
     private static int ApplyModeChange(Inode inode, int mode, Process? process = null)
     {
-        var normalizedMode = process == null ? (mode & 0xFFF) : DacPolicy.NormalizeChmodMode(process, inode, mode);
+        var normalizedMode = process == null ? mode & 0xFFF : DacPolicy.NormalizeChmodMode(process, inode, mode);
         if (inode is HostInode hostInode) return hostInode.SetProjectedMode(normalizedMode);
 
         inode.Mode = normalizedMode;
@@ -1934,10 +1919,10 @@ public partial class SyscallManager
         {
             if (targetMount == null) return -(int)Errno.EINVAL;
 
-            var remountSet = flags & SyscallManager.MountFlagMask;
-            var remountClear = (~flags) & SyscallManager.MountFlagMask;
-            targetMount.Flags = SyscallManager.ApplyMountFlagUpdate(targetMount.Flags, remountSet, remountClear);
-            SyscallManager.RefreshMountOptions(targetMount);
+            var remountSet = flags & MountFlagMask;
+            var remountClear = ~flags & MountFlagMask;
+            targetMount.Flags = ApplyMountFlagUpdate(targetMount.Flags, remountSet, remountClear);
+            RefreshMountOptions(targetMount);
 
             // Update MountList
             var targetPath = sm.GetAbsolutePath(targetLoc);
@@ -1963,8 +1948,8 @@ public partial class SyscallManager
             var bindMount = srcMount.Clone(srcDentry);
             bindMount.Source = source;
             bindMount.FsType = "none"; // bind mounts show as "none" in /proc/mounts
-            bindMount.Flags = flags & SyscallManager.MountFlagMask;
-            bindMount.Options = SyscallManager.BuildMountOptions(bindMount.Flags);
+            bindMount.Flags = flags & MountFlagMask;
+            bindMount.Options = BuildMountOptions(bindMount.Flags);
 
             var attachRc = sm.AttachDetachedMount(bindMount, targetLoc);
             if (attachRc != 0) return attachRc;
@@ -1975,7 +1960,7 @@ public partial class SyscallManager
         }
 
         // Regular mount (non-bind): converge to fs context + detached mount path
-        var mountFlags = flags & SyscallManager.MountFlagMask;
+        var mountFlags = flags & MountFlagMask;
         var fsCtx = sm.BuildFsContextFromLegacyMount(fstype, source, mountFlags, dataString);
         var mountRc = sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var newMount, (int)flags);
         if (mountRc != 0 || newMount == null)
@@ -2127,8 +2112,8 @@ public partial class SyscallManager
     private const uint MOUNT_ATTR_IDMAP = 0x00100000;
 
     /// <summary>
-    /// fsopen(2) - Open filesystem context
-    /// syscall number 430 on x86
+    ///     fsopen(2) - Open filesystem context
+    ///     syscall number 430 on x86
     /// </summary>
     private static async ValueTask<int> SysFsopen(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -2150,8 +2135,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// fsconfig(2) - Configure filesystem context
-    /// syscall number 431 on x86
+    ///     fsconfig(2) - Configure filesystem context
+    ///     syscall number 431 on x86
     /// </summary>
     private static async ValueTask<int> SysFsconfig(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
@@ -2201,8 +2186,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// fsmount(2) - Create detached mount from context
-    /// syscall number 432 on x86
+    ///     fsmount(2) - Create detached mount from context
+    ///     syscall number 432 on x86
     /// </summary>
     private static async ValueTask<int> SysFsmount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
@@ -2230,8 +2215,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// open_tree(2) - Get a file descriptor for a mount point
-    /// syscall number 428 on x86
+    ///     open_tree(2) - Get a file descriptor for a mount point
+    ///     syscall number 428 on x86
     /// </summary>
     private static async ValueTask<int> SysOpenTree(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -2286,8 +2271,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// move_mount(2) - Move a mount from one place to another
-    /// syscall number 429 on x86
+    ///     move_mount(2) - Move a mount from one place to another
+    ///     syscall number 429 on x86
     /// </summary>
     private static async ValueTask<int> SysMoveMount(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -2334,8 +2319,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// mount_setattr(2) - Set attributes on a mount
-    /// syscall number 442 on x86
+    ///     mount_setattr(2) - Set attributes on a mount
+    ///     syscall number 442 on x86
     /// </summary>
     private static async ValueTask<int> SysMountSetattr(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
@@ -2384,10 +2369,10 @@ public partial class SyscallManager
         var attrSet = BitConverter.ToUInt64(buf, 0);
         var attrClr = BitConverter.ToUInt64(buf, 8);
 
-        var setMask = SyscallManager.MapMountAttrToMountFlags(attrSet);
-        var clearMask = SyscallManager.MapMountAttrToMountFlags(attrClr);
-        mount.Flags = SyscallManager.ApplyMountFlagUpdate(mount.Flags, setMask, clearMask);
-        SyscallManager.RefreshMountOptions(mount);
+        var setMask = MapMountAttrToMountFlags(attrSet);
+        var clearMask = MapMountAttrToMountFlags(attrClr);
+        mount.Flags = ApplyMountFlagUpdate(mount.Flags, setMask, clearMask);
+        RefreshMountOptions(mount);
 
         return 0;
     }

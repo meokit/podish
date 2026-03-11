@@ -1,6 +1,6 @@
-using Fiberish.Diagnostics;
-using Fiberish.Core.VFS.TTY;
 using Fiberish.Core.Net;
+using Fiberish.Core.VFS.TTY;
+using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
@@ -42,9 +42,9 @@ public sealed class PodishRunResult
 
 public sealed class PodishContainerSession
 {
+    private readonly ContainerProcessController _processController;
     private readonly Task<int> _runTask;
     private readonly PodishTerminalBridge? _terminalBridge;
-    private readonly ContainerProcessController _processController;
 
     internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask,
         PodishTerminalBridge? terminalBridge, ContainerProcessController processController)
@@ -108,9 +108,9 @@ public sealed class PodishContainerSession
 public sealed class ContainerProcessController
 {
     private readonly object _lock = new();
-    private Action<int>? _signalInit;
-    private Action? _forceStop;
     private readonly Queue<int> _pendingSignals = [];
+    private Action? _forceStop;
+    private Action<int>? _signalInit;
 
     public int? InitPid { get; private set; }
 
@@ -191,8 +191,8 @@ public sealed class PodishTerminalBridge
     private readonly object _lock = new();
     private readonly Queue<byte> _outputBuffer = [];
     private readonly AutoResetEvent _outputEvent = new(false);
-    private TtyDiscipline? _tty;
     private Action<TtyEndpointKind, byte[]>? _outputHandler;
+    private TtyDiscipline? _tty;
 
     public void BindTty(TtyDiscipline tty)
     {
@@ -298,9 +298,8 @@ public sealed class PodishTerminalBridge
 
 public sealed class PodishContext : IDisposable
 {
-    private readonly ILogger _logger;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly PodishFileLoggerProvider _fileLoggerProvider;
+    private readonly ILogger _logger;
 
     public PodishContext(PodishContextOptions options)
     {
@@ -324,13 +323,13 @@ public sealed class PodishContext : IDisposable
             throw new ArgumentException($"invalid log level: {options.LogLevel}", nameof(options));
 
         _fileLoggerProvider = new PodishFileLoggerProvider(logFile);
-        _loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+        LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder.ClearProviders();
             builder.SetMinimumLevel(level);
             builder.AddProvider(_fileLoggerProvider);
         });
-        _logger = _loggerFactory.CreateLogger<PodishContext>();
+        _logger = LoggerFactory.CreateLogger<PodishContext>();
     }
 
     public string WorkDir { get; }
@@ -339,21 +338,21 @@ public sealed class PodishContext : IDisposable
     public string OciStoreImagesDir { get; }
     public string LogsDir { get; }
     public string ContainersDir { get; }
-    public ILoggerFactory LoggerFactory => _loggerFactory;
+    public ILoggerFactory LoggerFactory { get; }
+
+    public void Dispose()
+    {
+        LoggerFactory.Dispose();
+    }
 
     public void SetLogObserver(Action<LogLevel, string>? observer)
     {
         _fileLoggerProvider.SetObserver(observer);
     }
 
-    public void Dispose()
-    {
-        _loggerFactory.Dispose();
-    }
-
     public async Task<OciStoredImage> PullImageAsync(string image)
     {
-        using var _ = Logging.BeginScope(_loggerFactory);
+        using var _ = Logging.BeginScope(LoggerFactory);
         var pullService = new OciPullService(_logger);
         var safeImageName = image.Replace("/", "_").Replace(":", "_");
         var storeDir = Path.Combine(OciStoreImagesDir, safeImageName);
@@ -362,8 +361,8 @@ public sealed class PodishContext : IDisposable
 
     public async Task<PodishRunResult> RunAsync(PodishRunSpec spec)
     {
-        using var _ = Logging.BeginScope(_loggerFactory);
-        var session = await StartInternalAsync(spec, attachTerminalBridge: false);
+        using var _ = Logging.BeginScope(LoggerFactory);
+        var session = await StartInternalAsync(spec, false);
         var exitCode = await session.WaitAsync();
 
         return new PodishRunResult
@@ -376,8 +375,8 @@ public sealed class PodishContext : IDisposable
 
     public async Task<PodishContainerSession> StartAsync(PodishRunSpec spec, string? containerIdOverride = null)
     {
-        using var _ = Logging.BeginScope(_loggerFactory);
-        return await StartInternalAsync(spec, attachTerminalBridge: true, containerIdOverride);
+        using var _ = Logging.BeginScope(LoggerFactory);
+        return await StartInternalAsync(spec, true, containerIdOverride);
     }
 
     private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
@@ -427,7 +426,7 @@ public sealed class PodishContext : IDisposable
 
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
         var processController = new ContainerProcessController();
-        var service = new ContainerRuntimeService(_logger, _loggerFactory);
+        var service = new ContainerRuntimeService(_logger, LoggerFactory);
         var runTask = Task.Run(() => service.RunAsync(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,

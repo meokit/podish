@@ -152,18 +152,14 @@ public partial class SyscallManager
     {
         var unblocked = task.PendingSignals & ~task.SignalMask;
         if (unblocked != 0)
-        {
             // Find the first unblocked pending signal and mark as interrupting
             // so the guest execution loop will pick it up after the syscall returns
-            for (int i = 1; i <= 64; i++)
-            {
+            for (var i = 1; i <= 64; i++)
                 if ((unblocked & (1UL << (i - 1))) != 0)
                 {
                     task.TrySetActiveWaitReason(WakeReason.Signal);
                     break;
                 }
-            }
-        }
     }
 
     private static async ValueTask<int> SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -196,7 +192,7 @@ public partial class SyscallManager
 
         if (pid == -1)
         {
-            if (sig != 0) delivered = kernel.SignalAllProcesses(sig, excludePid: task.Process.TGID);
+            if (sig != 0) delivered = kernel.SignalAllProcesses(sig, task.Process.TGID);
             if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
             return 0;
         }
@@ -301,9 +297,7 @@ public partial class SyscallManager
         // uc_sigmask (128 bytes, but we only use 8) -> offset 108
         var maskBuf = new byte[8];
         if (task.CPU.CopyFromUser(ucontextAddr + 108, maskBuf))
-        {
             task.SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
-        }
 
         return (int)task.CPU.RegRead(Reg.EAX);
     }
@@ -411,12 +405,12 @@ public partial class SyscallManager
         if (!engine.CopyFromUser(ptr, buf))
             return new SigInfo { Signo = defaultSig, Code = 0 };
 
-        var signo = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var errno = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        var code = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-        var pid = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
-        var uid = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
-        var value = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(20, 4));
+        var signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var errno = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        var code = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
+        var pid = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+        var uid = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
+        var value = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(20, 4));
 
         return new SigInfo
         {

@@ -80,7 +80,7 @@ public class CrossMountBehaviorTests
         var oldDirFd = await env.OpenDirectory("/mnt");
         var newDirFd = await env.OpenDirectory("/");
 
-        var rc = await env.Call("SysLinkat", (uint)oldDirFd, 0x16000, (uint)newDirFd, 0x17000, 0);
+        var rc = await env.Call("SysLinkat", (uint)oldDirFd, 0x16000, (uint)newDirFd, 0x17000);
         Assert.Equal(-(int)Errno.EXDEV, rc);
 
         Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/source.txt", LookupFlags.None).IsValid);
@@ -505,7 +505,7 @@ public class CrossMountBehaviorTests
         {
             var addr = AllocateMappedUserPage();
             WriteCString(addr, path);
-            var fd = await Call("SysOpen", addr, 0, 0);
+            var fd = await Call("SysOpen", addr);
             Assert.True(fd >= 0);
             return fd;
         }

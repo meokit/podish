@@ -6,8 +6,8 @@ using Xunit;
 namespace Fiberish.Tests.Core;
 
 /// <summary>
-/// Tests for vfork (CLONE_VFORK) parent blocking semantics.
-/// Validates that the parent task is suspended until the child signals VforkDoneEvent.
+///     Tests for vfork (CLONE_VFORK) parent blocking semantics.
+///     Validates that the parent task is suspended until the child signals VforkDoneEvent.
 /// </summary>
 public class VforkTests
 {
@@ -17,8 +17,8 @@ public class VforkTests
     }
 
     /// <summary>
-    /// Test: vfork parent blocks until child signals VforkDoneEvent via _exit path.
-    /// Expected order: Child runs first → signals → Parent resumes.
+    ///     Test: vfork parent blocks until child signals VforkDoneEvent via _exit path.
+    ///     Expected order: Child runs first → signals → Parent resumes.
     /// </summary>
     [Fact]
     public void Vfork_ParentBlocksUntilChildExit()
@@ -70,7 +70,7 @@ public class VforkTests
     }
 
     /// <summary>
-    /// Test: VforkDoneEvent that is already signaled completes immediately.
+    ///     Test: VforkDoneEvent that is already signaled completes immediately.
     /// </summary>
     [Fact]
     public void Vfork_AlreadySignaled_CompletesImmediately()
@@ -101,7 +101,7 @@ public class VforkTests
     }
 
     /// <summary>
-    /// Test: SignalVforkDone is idempotent — calling it when no event is set is safe.
+    ///     Test: SignalVforkDone is idempotent — calling it when no event is set is safe.
     /// </summary>
     [Fact]
     public void SignalVforkDone_NoEvent_IsNoop()
@@ -117,7 +117,7 @@ public class VforkTests
     }
 
     /// <summary>
-    /// Test: SignalVforkDone clears the event and parent reference after signaling.
+    ///     Test: SignalVforkDone clears the event and parent reference after signaling.
     /// </summary>
     [Fact]
     public void SignalVforkDone_ClearsState()
@@ -138,7 +138,7 @@ public class VforkTests
     }
 
     /// <summary>
-    /// Test: Multiple sequential vforks — each parent blocks until its child signals.
+    ///     Test: Multiple sequential vforks — each parent blocks until its child signals.
     /// </summary>
     [Fact]
     public void Vfork_MultipleSequential_EachBlocks()
@@ -166,10 +166,12 @@ public class VforkTests
             while (await event1 != AwaitResult.Completed)
             {
             }
+
             sb.Append("P-Mid;");
             while (await event2 != AwaitResult.Completed)
             {
             }
+
             sb.Append("P-End;");
             parent.Exited = true;
             parent.Status = FiberTaskStatus.Terminated;
@@ -221,15 +223,29 @@ public class VforkTests
 
     private class MockEngine : Engine
     {
-        public MockEngine() : base(true) { }
+        public MockEngine() : base(true)
+        {
+        }
 
         public override EmuStatus Status => EmuStatus.Running;
         public override uint Eip { get; set; }
         public override uint Eflags { get; set; }
 
-        protected override void Dispose(bool disposing) { }
-        public override void Run(uint endEip = 0, ulong maxInsts = 0) { }
-        public override uint RegRead(Reg reg) { return 0; }
-        public override void RegWrite(Reg reg, uint val) { }
+        protected override void Dispose(bool disposing)
+        {
+        }
+
+        public override void Run(uint endEip = 0, ulong maxInsts = 0)
+        {
+        }
+
+        public override uint RegRead(Reg reg)
+        {
+            return 0;
+        }
+
+        public override void RegWrite(Reg reg, uint val)
+        {
+        }
     }
 }

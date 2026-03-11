@@ -21,21 +21,21 @@ public class OpenTruncateSyscallTests
         env.MapUserPage(0x13000); // read buffer
         env.WriteCString(0x10000, "/trunc-open");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x10000, 0x8000 | 0x1A4));
 
-        var fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDWR, 0);
+        var fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
         env.WriteBytes(0x11000, "AAAAAA"u8.ToArray());
         Assert.Equal(6, await env.Call("SysWrite", (uint)fd, 0x11000, 6));
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
 
-        fd = await env.Call("SysOpen", 0x10000, (uint)(FileFlags.O_WRONLY | FileFlags.O_TRUNC), 0);
+        fd = await env.Call("SysOpen", 0x10000, (uint)(FileFlags.O_WRONLY | FileFlags.O_TRUNC));
         Assert.True(fd >= 0);
         env.WriteBytes(0x12000, "B"u8.ToArray());
         Assert.Equal(1, await env.Call("SysWrite", (uint)fd, 0x12000, 1));
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
 
-        fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY, 0);
+        fd = await env.Call("SysOpen", 0x10000);
         Assert.True(fd >= 0);
         Assert.Equal(1, await env.Call("SysRead", (uint)fd, 0x13000, 16));
         Assert.Equal("B", Encoding.ASCII.GetString(env.ReadBytes(0x13000, 1)));
@@ -53,9 +53,9 @@ public class OpenTruncateSyscallTests
         env.MapUserPage(0x23000); // read buffer
         env.WriteCString(0x20000, "/trunc-creat");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x20000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x20000, 0x8000 | 0x1A4));
 
-        var fd = await env.Call("SysOpen", 0x20000, (uint)FileFlags.O_RDWR, 0);
+        var fd = await env.Call("SysOpen", 0x20000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
         env.WriteBytes(0x21000, "AAAAAA"u8.ToArray());
         Assert.Equal(6, await env.Call("SysWrite", (uint)fd, 0x21000, 6));
@@ -67,7 +67,7 @@ public class OpenTruncateSyscallTests
         Assert.Equal(1, await env.Call("SysWrite", (uint)fd, 0x22000, 1));
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
 
-        fd = await env.Call("SysOpen", 0x20000, (uint)FileFlags.O_RDONLY, 0);
+        fd = await env.Call("SysOpen", 0x20000);
         Assert.True(fd >= 0);
         Assert.Equal(1, await env.Call("SysRead", (uint)fd, 0x23000, 16));
         Assert.Equal("B", Encoding.ASCII.GetString(env.ReadBytes(0x23000, 1)));
@@ -84,9 +84,9 @@ public class OpenTruncateSyscallTests
         env.MapUserPage(0x32000); // growth payload
         env.WriteCString(0x30000, "/grow-write");
 
-        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x30000, 0x8000 | 0x1A4, 0));
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x30000, 0x8000 | 0x1A4));
 
-        var fd = await env.Call("SysOpen", 0x30000, (uint)FileFlags.O_RDWR, 0);
+        var fd = await env.Call("SysOpen", 0x30000, (uint)FileFlags.O_RDWR);
         Assert.True(fd >= 0);
 
         var firstPage = new byte[LinuxConstants.PageSize];
@@ -101,19 +101,18 @@ public class OpenTruncateSyscallTests
             LinuxConstants.PageSize * 2,
             (uint)(Protection.Read | Protection.Write),
             (uint)(MapFlags.Shared | MapFlags.Fixed),
-            (uint)fd,
-            0);
+            (uint)fd);
         Assert.Equal((int)mapAddr, mmapRc);
 
         Assert.Equal(FaultResult.BusError,
-            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, isWrite: true, env.Engine));
+            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, true, env.Engine));
 
         env.WriteBytes(0x32000, "Z"u8.ToArray());
         Assert.Equal(1,
-            await env.Call("SysPWrite", (uint)fd, 0x32000, 1, LinuxConstants.PageSize, 0));
+            await env.Call("SysPWrite", (uint)fd, 0x32000, 1, LinuxConstants.PageSize));
 
         Assert.Equal(FaultResult.Handled,
-            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, isWrite: true, env.Engine));
+            env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, true, env.Engine));
 
         Assert.Equal(0, await env.Call("SysClose", (uint)fd));
     }

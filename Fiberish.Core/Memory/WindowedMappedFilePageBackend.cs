@@ -1,192 +1,16 @@
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
-using System.Threading;
-using Microsoft.Win32.SafeHandles;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
 
 internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
 {
-    private enum WindowAccessMode
-    {
-        ReadOnly,
-        ReadWrite
-    }
-
-    private interface IWindowMapping : IDisposable
-    {
-        nint RawPtr { get; }
-        nint Ptr { get; }
-        long Length { get; }
-        bool Flush();
-    }
-
-    private sealed class MmfWindowMapping : IWindowMapping
-    {
-        private readonly MemoryMappedFile _mmf;
-        private readonly MemoryMappedViewAccessor _view;
-
-        public MmfWindowMapping(MemoryMappedFile mmf, MemoryMappedViewAccessor view, nint rawPtr, nint ptr, long length)
-        {
-            _mmf = mmf;
-            _view = view;
-            RawPtr = rawPtr;
-            Ptr = ptr;
-            Length = length;
-        }
-
-        public nint RawPtr { get; }
-        public nint Ptr { get; }
-        public long Length { get; }
-
-        public bool Flush()
-        {
-            try
-            {
-                _view.Flush();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        public void Dispose()
-        {
-            unsafe
-            {
-                _view.SafeMemoryMappedViewHandle.ReleasePointer();
-            }
-
-            _view.Dispose();
-            _mmf.Dispose();
-        }
-    }
-
-    private sealed class UnixWindowMapping : IWindowMapping
-    {
-        private const int ProtRead = 0x1;
-        private const int ProtWrite = 0x2;
-        private const int MapShared = 0x01;
-
-        private readonly nint _addr;
-
-        private UnixWindowMapping(nint addr, long length)
-        {
-            _addr = addr;
-            Length = length;
-        }
-
-        public nint RawPtr => _addr;
-        public nint Ptr => _addr;
-        public long Length { get; }
-
-        public bool Flush()
-        {
-            return msync(_addr, checked((nuint)Length), GetMsSyncFlag()) == 0;
-        }
-
-        public void Dispose()
-        {
-            _ = munmap(_addr, checked((nuint)Length));
-        }
-
-        public static UnixWindowMapping? TryCreate(string path, long offset, long length, bool writable)
-        {
-            try
-            {
-                using var handle = File.OpenHandle(
-                    path,
-                    FileMode.Open,
-                    writable ? FileAccess.ReadWrite : FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                var fd = checked((int)handle.DangerousGetHandle());
-                var prot = writable ? ProtRead | ProtWrite : ProtRead;
-                var addr = mmap(0, checked((nuint)length), prot, MapShared, fd, (nint)offset);
-                if (addr == new nint(-1))
-                    return null;
-                return new UnixWindowMapping(addr, length);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static int GetMsSyncFlag()
-        {
-            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst() ||
-                OperatingSystem.IsTvOS() || OperatingSystem.IsWatchOS())
-                return 0x0010;
-            return 0x0004;
-        }
-
-        [DllImport("libc", EntryPoint = "mmap")]
-        private static extern nint mmap(nint addr, nuint length, int prot, int flags, int fd, nint offset);
-
-        [DllImport("libc", EntryPoint = "munmap")]
-        private static extern int munmap(nint addr, nuint length);
-
-        [DllImport("libc", EntryPoint = "msync")]
-        private static extern int msync(nint addr, nuint length, int flags);
-    }
-
-    private sealed class Window : IDisposable
-    {
-        public required long Start { get; init; }
-        public required IWindowMapping Mapping { get; init; }
-        public required WindowAccessMode AccessMode { get; init; }
-        public int RefCount { get; set; }
-        public bool Retired { get; set; }
-
-        public long Length => Mapping.Length;
-        public nint RawPtr => Mapping.RawPtr;
-        public nint Ptr => Mapping.Ptr;
-
-        public bool Flush()
-        {
-            return Mapping.Flush();
-        }
-
-        public void Dispose()
-        {
-            Mapping.Dispose();
-        }
-    }
-
-    private sealed class PageHandle : IPageHandle
-    {
-        private readonly WindowedMappedFilePageBackend _owner;
-        private readonly long _pageIndex;
-        private Window? _window;
-        private readonly IntPtr _pointer;
-        private int _disposed;
-
-        public PageHandle(WindowedMappedFilePageBackend owner, long pageIndex, Window window, IntPtr pointer)
-        {
-            _owner = owner;
-            _pageIndex = pageIndex;
-            _window = window;
-            _pointer = pointer;
-        }
-
-        public IntPtr Pointer => _pointer;
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            var window = Interlocked.Exchange(ref _window, null);
-            if (window != null)
-                _owner.ReleaseHandle(_pageIndex, window);
-        }
-    }
-
-    private readonly Dictionary<long, Window> _windows = [];
+    private readonly HostMemoryMapGeometry _geometry;
     private readonly Dictionary<long, int> _guestPageRefs = [];
     private readonly object _lock = new();
-    private readonly HostMemoryMapGeometry _geometry;
+
+    private readonly Dictionary<long, Window> _windows = [];
     private string _path;
 
     public WindowedMappedFilePageBackend(string path, HostMemoryMapGeometry geometry)
@@ -245,7 +69,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
                     existing.RefCount++;
                     IncrementGuestPageRefLocked(filePageIndex);
                     handle = new PageHandle(this, filePageIndex, existing,
-                        (IntPtr)(existing.Ptr + (nint)offsetInWindow));
+                        existing.Ptr + (nint)offsetInWindow);
                     return true;
                 }
                 else
@@ -262,7 +86,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
             _windows[windowStart] = created;
             IncrementGuestPageRefLocked(filePageIndex);
             handle = new PageHandle(this, filePageIndex, created,
-                (IntPtr)(created.Ptr + (nint)offsetInWindow));
+                created.Ptr + (nint)offsetInWindow);
             return true;
         }
     }
@@ -326,11 +150,11 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         if (remaining <= 0) return null;
         var requiresTailExtension = requiredCoverage > remaining;
 
-        var cappedWindowLength = Math.Min((long)_geometry.AllocationGranularity, Math.Max(remaining, requiredCoverage));
+        var cappedWindowLength = Math.Min(_geometry.AllocationGranularity, Math.Max(remaining, requiredCoverage));
         if (cappedWindowLength < requiredCoverage)
             return null;
 
-        IWindowMapping? mapping = !OperatingSystem.IsWindows() && requiresTailExtension
+        var mapping = !OperatingSystem.IsWindows() && requiresTailExtension
             ? CreateUnixMappedWindow(windowStart, cappedWindowLength, writable)
             : CreateMemoryMappedWindow(windowStart, Math.Min(cappedWindowLength, remaining), writable);
         if (mapping == null)
@@ -351,7 +175,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         try
         {
             var access = writable ? MemoryMappedFileAccess.ReadWrite : MemoryMappedFileAccess.Read;
-            var mmf = MemoryMappedFile.CreateFromFile(_path, FileMode.Open, mapName: null, capacity: 0, access);
+            var mmf = MemoryMappedFile.CreateFromFile(_path, FileMode.Open, null, 0, access);
             var view = mmf.CreateViewAccessor(windowStart, windowLength, access);
 
             unsafe
@@ -403,12 +227,10 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
     {
         var disposeNow = new List<Window>(_windows.Count);
         foreach (var window in _windows.Values)
-        {
             if (window.RefCount == 0)
                 disposeNow.Add(window);
             else
                 window.Retired = true;
-        }
 
         _windows.Clear();
         return disposeNow;
@@ -433,7 +255,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
     private static long AlignDown(long value, int alignment)
     {
         if (alignment <= 0) return value;
-        return (value / alignment) * alignment;
+        return value / alignment * alignment;
     }
 
     private static long AlignUp(long value, int alignment)
@@ -447,5 +269,175 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
     {
         foreach (var window in windows)
             window.Dispose();
+    }
+
+    private enum WindowAccessMode
+    {
+        ReadOnly,
+        ReadWrite
+    }
+
+    private interface IWindowMapping : IDisposable
+    {
+        nint RawPtr { get; }
+        nint Ptr { get; }
+        long Length { get; }
+        bool Flush();
+    }
+
+    private sealed class MmfWindowMapping : IWindowMapping
+    {
+        private readonly MemoryMappedFile _mmf;
+        private readonly MemoryMappedViewAccessor _view;
+
+        public MmfWindowMapping(MemoryMappedFile mmf, MemoryMappedViewAccessor view, nint rawPtr, nint ptr, long length)
+        {
+            _mmf = mmf;
+            _view = view;
+            RawPtr = rawPtr;
+            Ptr = ptr;
+            Length = length;
+        }
+
+        public nint RawPtr { get; }
+        public nint Ptr { get; }
+        public long Length { get; }
+
+        public bool Flush()
+        {
+            try
+            {
+                _view.Flush();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            _view.SafeMemoryMappedViewHandle.ReleasePointer();
+
+            _view.Dispose();
+            _mmf.Dispose();
+        }
+    }
+
+    private sealed class UnixWindowMapping : IWindowMapping
+    {
+        private const int ProtRead = 0x1;
+        private const int ProtWrite = 0x2;
+        private const int MapShared = 0x01;
+
+        private UnixWindowMapping(nint addr, long length)
+        {
+            RawPtr = addr;
+            Length = length;
+        }
+
+        public nint RawPtr { get; }
+
+        public nint Ptr => RawPtr;
+        public long Length { get; }
+
+        public bool Flush()
+        {
+            return msync(RawPtr, checked((nuint)Length), GetMsSyncFlag()) == 0;
+        }
+
+        public void Dispose()
+        {
+            _ = munmap(RawPtr, checked((nuint)Length));
+        }
+
+        public static UnixWindowMapping? TryCreate(string path, long offset, long length, bool writable)
+        {
+            try
+            {
+                using var handle = File.OpenHandle(
+                    path,
+                    FileMode.Open,
+                    writable ? FileAccess.ReadWrite : FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                var fd = checked((int)handle.DangerousGetHandle());
+                var prot = writable ? ProtRead | ProtWrite : ProtRead;
+                var addr = mmap(0, checked((nuint)length), prot, MapShared, fd, (nint)offset);
+                if (addr == new nint(-1))
+                    return null;
+                return new UnixWindowMapping(addr, length);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static int GetMsSyncFlag()
+        {
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst() ||
+                OperatingSystem.IsTvOS() || OperatingSystem.IsWatchOS())
+                return 0x0010;
+            return 0x0004;
+        }
+
+        [DllImport("libc", EntryPoint = "mmap")]
+        private static extern nint mmap(nint addr, nuint length, int prot, int flags, int fd, nint offset);
+
+        [DllImport("libc", EntryPoint = "munmap")]
+        private static extern int munmap(nint addr, nuint length);
+
+        [DllImport("libc", EntryPoint = "msync")]
+        private static extern int msync(nint addr, nuint length, int flags);
+    }
+
+    private sealed class Window : IDisposable
+    {
+        public required long Start { get; init; }
+        public required IWindowMapping Mapping { get; init; }
+        public required WindowAccessMode AccessMode { get; init; }
+        public int RefCount { get; set; }
+        public bool Retired { get; set; }
+
+        public long Length => Mapping.Length;
+        public nint RawPtr => Mapping.RawPtr;
+        public nint Ptr => Mapping.Ptr;
+
+        public void Dispose()
+        {
+            Mapping.Dispose();
+        }
+
+        public bool Flush()
+        {
+            return Mapping.Flush();
+        }
+    }
+
+    private sealed class PageHandle : IPageHandle
+    {
+        private readonly WindowedMappedFilePageBackend _owner;
+        private readonly long _pageIndex;
+        private int _disposed;
+        private Window? _window;
+
+        public PageHandle(WindowedMappedFilePageBackend owner, long pageIndex, Window window, IntPtr pointer)
+        {
+            _owner = owner;
+            _pageIndex = pageIndex;
+            _window = window;
+            Pointer = pointer;
+        }
+
+        public IntPtr Pointer { get; }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            var window = Interlocked.Exchange(ref _window, null);
+            if (window != null)
+                _owner.ReleaseHandle(_pageIndex, window);
+        }
     }
 }

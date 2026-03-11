@@ -14,14 +14,6 @@ namespace Fiberish.Tests.Syscalls;
 
 public class WaitSyscallTests
 {
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct PollFd
-    {
-        public int Fd;
-        public short Events;
-        public short Revents;
-    }
-
     private static ValueTask<int> Invoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -171,7 +163,8 @@ public class WaitSyscallTests
         BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0x1122334455667788UL);
         env.Write(epollEventPtr, epollEvent);
 
-        var ctl = await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd, epollEventPtr, 0, 0);
+        var ctl = await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd, epollEventPtr, 0,
+            0);
         Assert.Equal(0, ctl);
 
         var payload = new byte[8];
@@ -180,8 +173,10 @@ public class WaitSyscallTests
 
         var rc = await Invoke(env, "SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0);
         Assert.Equal(1, rc);
-        Assert.Equal(LinuxConstants.EPOLLIN, BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
-        Assert.Equal(0x1122334455667788UL, BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
+        Assert.Equal(LinuxConstants.EPOLLIN,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+        Assert.Equal(0x1122334455667788UL,
+            BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
     }
 
     [Fact]
@@ -285,7 +280,8 @@ public class WaitSyscallTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode, [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.Contains(ex.SocketErrorCode,
+                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
         }
 
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLOUT, Revents = 0 });
@@ -317,6 +313,14 @@ public class WaitSyscallTests
             env.DrainEvents();
             await Task.Delay(5);
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct PollFd
+    {
+        public int Fd;
+        public short Events;
+        public short Revents;
     }
 
     private sealed class TestEnv : IDisposable
@@ -383,6 +387,7 @@ public class WaitSyscallTests
             {
                 handle.Free();
             }
+
             Write(addr, buffer);
         }
 

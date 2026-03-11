@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
@@ -35,7 +36,7 @@ public partial class SyscallManager
             {
                 var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
                 if (hostPtr == IntPtr.Zero) return -(int)Errno.EFAULT;
-                physKey = (nint)hostPtr;
+                physKey = hostPtr;
             }
 
             var waiter = isPrivate
@@ -77,15 +78,13 @@ public partial class SyscallManager
         if (!isPrivate)
         {
             if (opCode == 1) // WAKE
-            {
                 // Force a page fault to ensure the page is mapped in this process's engine,
                 // so we can reliably get its physical address for the cross-process shared key.
                 sm.Engine.CopyFromUser(uaddr, new byte[1]);
-            }
 
             var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
             // Fall back to virtual address key if not mapped (best-effort)
-            sharedKey = hostPtr != IntPtr.Zero ? (nint)hostPtr : 0;
+            sharedKey = hostPtr != IntPtr.Zero ? hostPtr : 0;
         }
 
         if (opCode == 1) // WAKE
@@ -102,25 +101,28 @@ public partial class SyscallManager
 
     private readonly struct FutexAwaitable
     {
-        private readonly Fiberish.Core.Waiter _waiter;
+        private readonly Waiter _waiter;
         private readonly FiberTask _task;
 
-        public FutexAwaitable(Fiberish.Core.Waiter waiter, FiberTask task)
+        public FutexAwaitable(Waiter waiter, FiberTask task)
         {
             _waiter = waiter;
             _task = task;
         }
 
-        public FutexAwaiter GetAwaiter() => new(_waiter, _task);
+        public FutexAwaiter GetAwaiter()
+        {
+            return new FutexAwaiter(_waiter, _task);
+        }
     }
 
-    private readonly struct FutexAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+    private readonly struct FutexAwaiter : INotifyCompletion
     {
-        private readonly Fiberish.Core.Waiter _waiter;
+        private readonly Waiter _waiter;
         private readonly FiberTask _task;
         private readonly FiberTask.WaitToken _token;
 
-        public FutexAwaiter(Fiberish.Core.Waiter waiter, FiberTask task)
+        public FutexAwaiter(Waiter waiter, FiberTask task)
         {
             _waiter = waiter;
             _task = task;
@@ -138,10 +140,7 @@ public partial class SyscallManager
             var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
             waiterAwaiter.OnCompleted(() =>
             {
-                if (task.GetWaitReason(token) == WakeReason.None)
-                {
-                    task.TrySetWaitReason(token, WakeReason.Event);
-                }
+                if (task.GetWaitReason(token) == WakeReason.None) task.TrySetWaitReason(token, WakeReason.Event);
 
                 runOnce.Invoke();
             });
@@ -158,10 +157,7 @@ public partial class SyscallManager
                 return AwaitResult.Interrupted;
             }
 
-            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result)
-            {
-                return AwaitResult.Interrupted;
-            }
+            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result) return AwaitResult.Interrupted;
 
             return AwaitResult.Completed;
         }

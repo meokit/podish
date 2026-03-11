@@ -11,45 +11,6 @@ internal static class ProcessAddressSpaceSync
     private static readonly Dictionary<IntPtr, (VMAManager AddressSpace, Engine Engine)> AddressSpaceByEngineState = [];
     [ThreadStatic] private static Stack<EngineSnapshotBuffer>? SnapshotBufferPool;
 
-    private sealed class EngineSnapshotBuffer
-    {
-        public readonly List<Engine> Engines = [];
-        public readonly HashSet<IntPtr> SeenStates = [];
-    }
-
-    private readonly struct EngineSnapshotLease : IDisposable
-    {
-        private readonly EngineSnapshotBuffer _buffer;
-
-        public EngineSnapshotLease(EngineSnapshotBuffer buffer)
-        {
-            _buffer = buffer;
-        }
-
-        public List<Engine> Engines => _buffer.Engines;
-        public HashSet<IntPtr> SeenStates => _buffer.SeenStates;
-
-        public void Dispose()
-        {
-            _buffer.Engines.Clear();
-            _buffer.SeenStates.Clear();
-            (SnapshotBufferPool ??= new Stack<EngineSnapshotBuffer>()).Push(_buffer);
-        }
-    }
-
-    internal readonly struct AddressSpaceScope : IDisposable
-    {
-        public AddressSpaceScope(Process? process)
-        {
-            _ = process;
-        }
-
-        public void Dispose()
-        {
-            // No-op for single-thread scheduler. Keep scope shape for future lock integration.
-        }
-    }
-
     private static Process? ResolveProcess(Engine engine, Process? process)
     {
         return process ?? (engine.Owner as FiberTask)?.Process;
@@ -188,7 +149,6 @@ internal static class ProcessAddressSpaceSync
         lock (AddressSpaceRegistryLock)
         {
             if (EnginesByAddressSpace.TryGetValue(addressSpace, out var set))
-            {
                 foreach (var engine in set)
                 {
                     var state = engine.State;
@@ -196,13 +156,12 @@ internal static class ProcessAddressSpaceSync
                     if (!seenStates.Add(state)) continue;
                     engines.Add(engine);
                 }
-            }
         }
     }
 
     private static long GetMinSeenSequence(VMAManager addressSpace)
     {
-        long min = long.MaxValue;
+        var min = long.MaxValue;
         lock (AddressSpaceRegistryLock)
         {
             if (!EnginesByAddressSpace.TryGetValue(addressSpace, out var set))
@@ -251,7 +210,7 @@ internal static class ProcessAddressSpaceSync
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         vmaManager.Munmap(addr, len, engine);
-        PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange: true);
+        PublishInvalidation(vmaManager, engine, addr, len, true);
     }
 
     internal static void Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
@@ -297,7 +256,8 @@ internal static class ProcessAddressSpaceSync
             vmaManager.PruneCodeCacheResetRanges(minSeen);
     }
 
-    internal static uint Mmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection perms, MapFlags flags,
+    internal static uint Mmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection perms,
+        MapFlags flags,
         LinuxFile? file, long offset, long filesz, string name, Process? process = null)
     {
         using var scope = EnterAddressSpaceScope(engine, process);
@@ -307,7 +267,7 @@ internal static class ProcessAddressSpaceSync
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, filesz, name, engine);
-        PublishInvalidation(vmaManager, engine, mapped, alignedLen, resetCodeCacheRange: true);
+        PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }
 
@@ -316,7 +276,7 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return;
         using var scope = EnterAddressSpaceScope(engine, process);
-        PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange: true);
+        PublishInvalidation(vmaManager, engine, addr, len, true);
     }
 
     internal static void SyncSharedRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
@@ -412,5 +372,44 @@ internal static class ProcessAddressSpaceSync
         if (resetCodeCacheRange)
             vmaManager.RecordCodeCacheResetRange(sequence, addr, len);
         engine.AddressSpaceMapSequenceSeen = sequence;
+    }
+
+    private sealed class EngineSnapshotBuffer
+    {
+        public readonly List<Engine> Engines = [];
+        public readonly HashSet<IntPtr> SeenStates = [];
+    }
+
+    private readonly struct EngineSnapshotLease : IDisposable
+    {
+        private readonly EngineSnapshotBuffer _buffer;
+
+        public EngineSnapshotLease(EngineSnapshotBuffer buffer)
+        {
+            _buffer = buffer;
+        }
+
+        public List<Engine> Engines => _buffer.Engines;
+        public HashSet<IntPtr> SeenStates => _buffer.SeenStates;
+
+        public void Dispose()
+        {
+            _buffer.Engines.Clear();
+            _buffer.SeenStates.Clear();
+            (SnapshotBufferPool ??= new Stack<EngineSnapshotBuffer>()).Push(_buffer);
+        }
+    }
+
+    internal readonly struct AddressSpaceScope : IDisposable
+    {
+        public AddressSpaceScope(Process? process)
+        {
+            _ = process;
+        }
+
+        public void Dispose()
+        {
+            // No-op for single-thread scheduler. Keep scope shape for future lock integration.
+        }
     }
 }

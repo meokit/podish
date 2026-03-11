@@ -6,7 +6,8 @@ namespace Fiberish.Core;
 
 public static class ProcessFactory
 {
-    public static Process CreateEngineInitProcess(KernelRuntime runtime, KernelScheduler scheduler, UTSNamespace? uts = null)
+    public static Process CreateEngineInitProcess(KernelRuntime runtime, KernelScheduler scheduler,
+        UTSNamespace? uts = null)
     {
         var initPid = scheduler.AllocateTaskId();
         var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
@@ -63,9 +64,8 @@ public static class ProcessFactory
             {
                 var parent = scheduler.GetProcess(parentPid);
                 if (parent != null)
-                {
-                    if (!parent.Children.Contains(proc.TGID)) parent.Children.Add(proc.TGID);
-                }
+                    if (!parent.Children.Contains(proc.TGID))
+                        parent.Children.Add(proc.TGID);
             }
 
             return mainTask;

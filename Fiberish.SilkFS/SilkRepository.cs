@@ -53,7 +53,8 @@ public sealed class SilkRepository
     {
         var path = GetLiveInodePath(ino);
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
-        using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+        using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete);
         fs.SetLength(Math.Max(0, size));
     }
 

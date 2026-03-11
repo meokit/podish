@@ -1,8 +1,7 @@
+using System.Security.Cryptography;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
-using Fiberish.Diagnostics;
 using Fiberish.Native;
-using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
@@ -174,11 +173,9 @@ public class ConsoleInode : Inode
         {
             const short POLLOUT = 0x0004;
             if ((events & POLLOUT) != 0)
-            {
                 // Current TTY write wait registration has no cancellation API.
                 // Fallback to bool-based registration with no-op handle.
                 return _discipline.RegisterWriteWait(callback) ? NoopWaitRegistration.Instance : null;
-            }
         }
 
         return null;
@@ -232,7 +229,7 @@ public class RandomInode : Inode
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+        RandomNumberGenerator.Fill(buffer);
         return buffer.Length;
     }
 

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Xunit;
@@ -8,8 +9,8 @@ namespace Fiberish.Tests.Memory;
 public class WindowedMappedFilePageBackendTests
 {
     private static readonly HostMemoryMapGeometry Geometry16K =
-        new(LinuxConstants.PageSize, 16384, 16384, SupportsMappedFileBackend: true,
-            SupportsDirectMappedTailPage: true);
+        new(LinuxConstants.PageSize, 16384, 16384, true,
+            true);
 
     [Fact]
     public void FourGuestPagesWithin16KWindow_UseSingleWindow()
@@ -23,7 +24,8 @@ public class WindowedMappedFilePageBackendTests
             var handles = new List<IPageHandle>();
             for (var i = 0; i < 4; i++)
             {
-                Assert.True(backend.TryAcquirePageHandle(i, new FileInfo(path).Length, writable: false, out var handle));
+                Assert.True(backend.TryAcquirePageHandle(i, new FileInfo(path).Length, false,
+                    out var handle));
                 Assert.NotNull(handle);
                 handles.Add(handle!);
             }
@@ -33,7 +35,7 @@ public class WindowedMappedFilePageBackendTests
             Assert.Equal(16384, diagnostics.WindowBytes);
             Assert.Equal(4, diagnostics.GuestPageCount);
 
-            Assert.True(backend.TryAcquirePageHandle(4, new FileInfo(path).Length, writable: false, out var extra));
+            Assert.True(backend.TryAcquirePageHandle(4, new FileInfo(path).Length, false, out var extra));
             Assert.NotNull(extra);
             handles.Add(extra!);
 
@@ -62,13 +64,13 @@ public class WindowedMappedFilePageBackendTests
         try
         {
             using var backend = new WindowedMappedFilePageBackend(pathA, Geometry16K);
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, writable: false, out var oldHandle));
+            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, false, out var oldHandle));
             Assert.NotNull(oldHandle);
             Assert.Equal("AAAA", ReadString(oldHandle!.Pointer, 4));
 
             backend.UpdatePath(pathB);
 
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, writable: false, out var newHandle));
+            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, false, out var newHandle));
             Assert.NotNull(newHandle);
             Assert.Equal("BBBB", ReadString(newHandle!.Pointer, 4));
             Assert.Equal("AAAA", ReadString(oldHandle.Pointer, 4));
@@ -92,7 +94,7 @@ public class WindowedMappedFilePageBackendTests
         try
         {
             using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, writable: true, out var handle));
+            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, true, out var handle));
             Assert.NotNull(handle);
 
             Marshal.Copy("YZ"u8.ToArray(), 0, handle!.Pointer + 1, 2);
@@ -102,7 +104,7 @@ public class WindowedMappedFilePageBackendTests
             backend.Truncate(0);
             var diagnostics = backend.GetDiagnostics();
             Assert.Equal(0, diagnostics.WindowCount);
-            Assert.False(backend.TryAcquirePageHandle(0, 0, writable: false, out _));
+            Assert.False(backend.TryAcquirePageHandle(0, 0, false, out _));
 
             handle.Dispose();
         }
@@ -127,7 +129,7 @@ public class WindowedMappedFilePageBackendTests
             var geometry = HostMemoryMapGeometryProvider.GetCurrent();
             using var backend = new WindowedMappedFilePageBackend(path, geometry);
 
-            Assert.True(backend.TryAcquirePageHandle(1, fileSize, writable: true, out var handle));
+            Assert.True(backend.TryAcquirePageHandle(1, fileSize, true, out var handle));
             Assert.NotNull(handle);
 
             var tailBytes = new byte[24];
@@ -135,7 +137,7 @@ public class WindowedMappedFilePageBackendTests
             Assert.All(tailBytes, b => Assert.Equal((byte)0, b));
 
             Marshal.Copy("TAIL!"u8.ToArray(), 0, handle.Pointer + 123 + 16, 5);
-            Assert.True(backend.TryAcquirePageHandle(1, fileSize, writable: true, out var peerHandle));
+            Assert.True(backend.TryAcquirePageHandle(1, fileSize, true, out var peerHandle));
             Assert.NotNull(peerHandle);
             Assert.Equal("TAIL!", ReadString(peerHandle!.Pointer + 123 + 16, 5));
 
@@ -166,6 +168,6 @@ public class WindowedMappedFilePageBackendTests
     {
         var bytes = new byte[count];
         Marshal.Copy(ptr, bytes, 0, count);
-        return System.Text.Encoding.ASCII.GetString(bytes);
+        return Encoding.ASCII.GetString(bytes);
     }
 }

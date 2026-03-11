@@ -1,11 +1,8 @@
-using Fiberish.Native;
-using System.IO;
-
 namespace Fiberish.VFS;
 
 /// <summary>
-/// A Stream implementation that wraps a VFS LinuxFile.
-/// This allows standard .NET libraries (like LibObjectFile) to read/write VFS files.
+///     A Stream implementation that wraps a VFS LinuxFile.
+///     This allows standard .NET libraries (like LibObjectFile) to read/write VFS files.
 /// </summary>
 public class VfsStream : Stream
 {
@@ -58,6 +55,7 @@ public class VfsStream : Stream
                 _position = Length + offset;
                 break;
         }
+
         return _position;
     }
 
@@ -76,10 +74,8 @@ public class VfsStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
-        {
-            _file.Close();
-        }
+        if (disposing) _file.Close();
+
         base.Dispose(disposing);
     }
 }

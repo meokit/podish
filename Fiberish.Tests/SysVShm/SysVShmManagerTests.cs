@@ -60,7 +60,7 @@ public class SysVShmManagerTests
 
         const uint addr = 0x20000000;
         var ret1 = ctx.Manager.ShmAt(shmid1, addr, 0, 2000, ctx.Vma, ctx.Engine);
-        Assert.Equal((long)addr, ret1);
+        Assert.Equal(addr, ret1);
 
         var ret2 = ctx.Manager.ShmAt(shmid2, addr, 0, 2000, ctx.Vma, ctx.Engine);
         Assert.Equal(-(int)Errno.EINVAL, (int)ret2);
@@ -76,7 +76,7 @@ public class SysVShmManagerTests
 
         const uint addr = 0x21000000;
         var attachRet = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine);
-        Assert.Equal((long)addr, attachRet);
+        Assert.Equal(addr, attachRet);
 
         // Same process, different TID, but the TGID (process ID) passed to IPC is the same.
         var detachRet = ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine);
@@ -90,15 +90,15 @@ public class SysVShmManagerTests
         var sharedVma = new VMAManager();
         sharedVma.AddSharedRef();
 
-        using var p1 = new TestContext(manager, processId: 3101, vma: sharedVma);
-        using var p2 = new TestContext(manager, processId: 3102, vma: sharedVma);
+        using var p1 = new TestContext(manager, 3101, sharedVma);
+        using var p2 = new TestContext(manager, 3102, sharedVma);
 
         var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3101);
         Assert.True(shmid > 0);
 
         const uint addr = 0x21400000;
         var attachRet = manager.ShmAt(shmid, addr, 0, 3101, p1.Vma, p1.Engine, p1.Process);
-        Assert.Equal((long)addr, attachRet);
+        Assert.Equal(addr, attachRet);
 
         // Shared VM (CLONE_VM-style): peer process should be able to detach by address space.
         var detachRet = manager.ShmDt(addr, 3102, p2.Vma, p2.Engine, p2.Process);
@@ -116,7 +116,7 @@ public class SysVShmManagerTests
 
         const uint addr = 0x22000000;
         var attachRet = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine);
-        Assert.Equal((long)addr, attachRet);
+        Assert.Equal(addr, attachRet);
         Assert.NotEmpty(ctx.Vma.FindVMAsInRange(addr, addr + 4096));
 
         ctx.Manager.OnProcessExit(3001, ctx.Vma, ctx.Engine);
@@ -131,15 +131,15 @@ public class SysVShmManagerTests
         var sharedVma = new VMAManager();
         sharedVma.AddSharedRef();
 
-        using var p1 = new TestContext(manager, processId: 3201, vma: sharedVma);
-        using var p2 = new TestContext(manager, processId: 3202, vma: sharedVma);
+        using var p1 = new TestContext(manager, 3201, sharedVma);
+        using var p2 = new TestContext(manager, 3202, sharedVma);
 
         var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3201);
         Assert.True(shmid > 0);
 
         const uint addr = 0x22400000;
         var attachRet = manager.ShmAt(shmid, addr, 0, 3201, p1.Vma, p1.Engine, p1.Process);
-        Assert.Equal((long)addr, attachRet);
+        Assert.Equal(addr, attachRet);
         Assert.NotEmpty(sharedVma.FindVMAsInRange(addr, addr + 4096));
 
         manager.OnProcessExit(3201, p1.Vma, p1.Engine, p1.Process);
@@ -153,15 +153,15 @@ public class SysVShmManagerTests
     public void ShmDt_MustNotDetachAttachmentOfAnotherProcess()
     {
         var manager = new SysVShmManager();
-        using var p1 = new TestContext(manager, processId: 2001);
-        using var p2 = new TestContext(manager, processId: 2002);
+        using var p1 = new TestContext(manager, 2001);
+        using var p2 = new TestContext(manager, 2002);
 
         var shmid = manager.ShmGet(0x8899, 4096, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0, 2001);
         Assert.True(shmid > 0);
 
         const uint addr = 0x23000000;
-        Assert.Equal((long)addr, manager.ShmAt(shmid, addr, 0, 2001, p1.Vma, p1.Engine));
-        Assert.Equal((long)addr, manager.ShmAt(shmid, addr, 0, 2002, p2.Vma, p2.Engine));
+        Assert.Equal(addr, manager.ShmAt(shmid, addr, 0, 2001, p1.Vma, p1.Engine));
+        Assert.Equal(addr, manager.ShmAt(shmid, addr, 0, 2002, p2.Vma, p2.Engine));
 
         // Detach from process 2 first. This must not remove process 1's attach record.
         Assert.Equal(0, manager.ShmDt(addr, 2002, p2.Vma, p2.Engine));
@@ -194,8 +194,8 @@ public class SysVShmManagerTests
         Assert.True(shmid2 > 0);
 
         const uint addr = 0x22800000;
-        Assert.Equal((long)addr, ctx.Manager.ShmAt(shmid1, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process));
-        Assert.Equal((long)addr,
+        Assert.Equal(addr, ctx.Manager.ShmAt(shmid1, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+        Assert.Equal(addr,
             ctx.Manager.ShmAt(shmid2, addr, LinuxConstants.SHM_REMAP, 3001, ctx.Vma, ctx.Engine, ctx.Process));
 
         // Only the new mapping should remain attached.
@@ -207,11 +207,11 @@ public class SysVShmManagerTests
     public void ShmAt_WithAddressRangeOverflow_ShouldReturnEinval()
     {
         using var ctx = new TestContext();
-        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, (uint)(LinuxConstants.PageSize * 2), 0x1FF, 0, 0,
+        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, LinuxConstants.PageSize * 2, 0x1FF, 0, 0,
             3001);
         Assert.True(shmid > 0);
 
-        var addr = LinuxConstants.TaskSize32 - (uint)LinuxConstants.PageSize;
+        var addr = LinuxConstants.TaskSize32 - LinuxConstants.PageSize;
         var ret = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process);
         Assert.Equal(-(int)Errno.EINVAL, (int)ret);
     }
@@ -240,19 +240,19 @@ public class SysVShmManagerTests
         public SysVShmManager Manager { get; }
         public Process Process { get; }
 
-        public void MapUserPage(uint addr)
-        {
-            Vma.Mmap(addr, (uint)LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
-                Engine);
-            Assert.True(Vma.HandleFault(addr, true, Engine));
-        }
-
         public void Dispose()
         {
             GC.KeepAlive(_task);
             // Engine.Dispose() currently logs full stack traces, which makes test output unreadable.
             // Let process teardown reclaim the mock test engines.
+        }
+
+        public void MapUserPage(uint addr)
+        {
+            Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+                Engine);
+            Assert.True(Vma.HandleFault(addr, true, Engine));
         }
     }
 }

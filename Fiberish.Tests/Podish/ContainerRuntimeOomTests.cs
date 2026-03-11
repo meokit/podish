@@ -1,5 +1,5 @@
-using Fiberish.Memory;
 using Fiberish.Core.Net;
+using Fiberish.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
 using Xunit;

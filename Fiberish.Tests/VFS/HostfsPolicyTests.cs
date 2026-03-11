@@ -1,8 +1,8 @@
 using Fiberish.Core;
 using Fiberish.Memory;
-using Fiberish.VFS;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -110,7 +110,8 @@ public class HostfsPolicyTests
 
     private sealed class RootOnlyMountBoundaryPolicy : IMountBoundaryPolicy
     {
-        public bool Allows(string mountRootPath, string candidatePath, ulong? rootMountDomainId, ulong? candidateMountDomainId)
+        public bool Allows(string mountRootPath, string candidatePath, ulong? rootMountDomainId,
+            ulong? candidateMountDomainId)
         {
             var comparison = OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase

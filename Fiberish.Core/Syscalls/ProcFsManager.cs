@@ -1,7 +1,6 @@
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
-using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -78,8 +77,8 @@ public static class ProcFsManager
         };
 
         // Determine TTY info
-        int ttyNr = 0;
-        int tpgid = -1;
+        var ttyNr = 0;
+        var tpgid = -1;
         if (process.ControllingTty != null)
         {
             // Try to assign a device number. Standard /dev/ttyx is typically major 4. Let's just mock one or use 0x8800 for pty
@@ -255,22 +254,22 @@ public static class ProcFsManager
 
     public static string GenerateSysKernelHostname(Process? process)
     {
-        return $"{(process?.UTS.NodeName ?? "x86emu")}\n";
+        return $"{process?.UTS.NodeName ?? "x86emu"}\n";
     }
 
     public static string GenerateSysKernelOsRelease(Process? process)
     {
-        return $"{(process?.UTS.Release ?? "6.1.0")}\n";
+        return $"{process?.UTS.Release ?? "6.1.0"}\n";
     }
 
     public static string GenerateSysKernelOstype(Process? process)
     {
-        return $"{(process?.UTS.SysName ?? "Linux")}\n";
+        return $"{process?.UTS.SysName ?? "Linux"}\n";
     }
 
     public static string GenerateSysKernelVersion(Process? process)
     {
-        return $"{(process?.UTS.Version ?? "#1 SMP PREEMPT")}\n";
+        return $"{process?.UTS.Version ?? "#1 SMP PREEMPT"}\n";
     }
 
     public static string GenerateSysVmOvercommitMemory()

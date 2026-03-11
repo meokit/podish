@@ -1,6 +1,5 @@
-using System;
-using Xunit;
 using Fiberish.Core;
+using Xunit;
 
 namespace Fiberish.Tests.Core;
 
@@ -9,9 +8,9 @@ public class TimeWheelTests
     [Fact]
     public void Schedule_FiresAtCorrectTick()
     {
-        var wheel = new TimeWheel(0);
-        bool fired1 = false;
-        bool fired2 = false;
+        var wheel = new TimeWheel();
+        var fired1 = false;
+        var fired2 = false;
 
         wheel.Schedule(50, () => fired1 = true);
         wheel.Schedule(100, () => fired2 = true);
@@ -33,10 +32,10 @@ public class TimeWheelTests
     [Fact]
     public void Schedule_Rollover_CascadesProperly()
     {
-        var wheel = new TimeWheel(0);
-        bool firedTv2 = false;
-        bool firedTv3 = false;
-        bool firedTv4 = false;
+        var wheel = new TimeWheel();
+        var firedTv2 = false;
+        var firedTv3 = false;
+        var firedTv4 = false;
 
         long delayTv2 = 300; // Requires _tv2 (1 << 8 = 256)
         long delayTv3 = 20000; // Requires _tv3 (1 << 14 = 16384)
@@ -65,8 +64,8 @@ public class TimeWheelTests
     [Fact]
     public void Cancel_Timer_DoesNotFire()
     {
-        var wheel = new TimeWheel(0);
-        bool fired = false;
+        var wheel = new TimeWheel();
+        var fired = false;
 
         var timer = wheel.Schedule(100, () => fired = true);
         timer.Cancel();
@@ -79,10 +78,10 @@ public class TimeWheelTests
     [Fact]
     public void HasTimers_Accurate()
     {
-        var wheel = new TimeWheel(0);
+        var wheel = new TimeWheel();
         Assert.False(wheel.HasTimers);
 
-        var timer = wheel.Schedule(10, () => {});
+        var timer = wheel.Schedule(10, () => { });
         Assert.True(wheel.HasTimers);
 
         wheel.Advance(11);
