@@ -189,15 +189,11 @@ public unsafe partial class X86Native
 
     [LibraryImport(LibName, EntryPoint = "X86_CloneMmuFromRef")]
     [SuppressGCTransition]
-    public static partial IntPtr CloneMmuFromRef(MmuRef mmuRef, int mode);
+    public static partial IntPtr CloneMmuFromRef(MmuRef mmuRef);
 
     [LibraryImport(LibName, EntryPoint = "X86_AttachMmu")]
     [SuppressGCTransition]
     public static partial int AttachMmu(IntPtr state, IntPtr detachedMmu);
-
-    [LibraryImport(LibName, EntryPoint = "X86_DetachedMmuGetCloneMode")]
-    [SuppressGCTransition]
-    public static partial int DetachedMmuGetCloneMode(IntPtr detachedMmu);
 
     [LibraryImport(LibName, EntryPoint = "X86_DestroyDetachedMmu")]
     [SuppressGCTransition]

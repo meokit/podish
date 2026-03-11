@@ -37,7 +37,6 @@ typedef struct {
 } X86_MmuRef;
 
 enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
-enum { X86_MMU_CLONE_MODE_FULL = 0, X86_MMU_CLONE_MODE_SKIP_EXTERNAL = 1 };
 
 // Creation / Destruction
 EmuState* X86_Create();
@@ -93,12 +92,10 @@ X86_MmuRef X86_GetMmuRef(EmuState* state);
 // Detach MMU from engine into a detached handle. Engine receives a fresh empty MMU.
 X86_DetachedMmu* X86_DetachMmu(EmuState* state);
 // Clone MMU from mmu ref into detached handle.
-// mode: X86_MMU_CLONE_MODE_FULL or X86_MMU_CLONE_MODE_SKIP_EXTERNAL
-X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref, int mode);
+// External pages are always skipped and never converted to owned pages.
+X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref);
 // Attach detached MMU to engine and consume handle on success.
 int X86_AttachMmu(EmuState* state, X86_DetachedMmu* detached);
-// Query clone mode of detached MMU handle.
-int X86_DetachedMmuGetCloneMode(X86_DetachedMmu* detached);
 // Destroy detached MMU handle if not attached/consumed.
 void X86_DestroyDetachedMmu(X86_DetachedMmu* detached);
 

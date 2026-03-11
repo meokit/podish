@@ -23,19 +23,26 @@ struct PageTableChunk {
     }
 
     // Copy Constructor for Deep Copy (Fork)
+    // External pages are intentionally not copied and not converted to owned pages.
+    // This guarantees cloned MMUs never "internalize" externally managed memory.
     PageTableChunk(const PageTableChunk& other) {
-        permissions = other.permissions;
         for (size_t i = 0; i < 1024; ++i) {
-            if (other.pages[i]) {
-                pages[i] = new std::byte[PAGE_SIZE];
-                std::memcpy(pages[i], other.pages[i], PAGE_SIZE);
-                if (has_property(permissions[i], Property::External)) {
-                    // This page is now owned by the new MMU copy.
-                    permissions[i] = permissions[i] & ~Property::External;
-                }
-            } else {
+            permissions[i] = other.permissions[i];
+
+            if (!other.pages[i]) {
                 pages[i] = nullptr;
+                continue;
             }
+
+            if (has_property(permissions[i], Property::External)) {
+                // Do not clone external mappings into owned memory.
+                pages[i] = nullptr;
+                permissions[i] = Property::None;
+                continue;
+            }
+
+            pages[i] = new std::byte[PAGE_SIZE];
+            std::memcpy(pages[i], other.pages[i], PAGE_SIZE);
         }
     }
 
@@ -293,10 +300,9 @@ public:
         tlb.flush();
     }
 
-    [[nodiscard]] std::shared_ptr<PageDirectory> clone_page_directory(bool skip_external) const {
+    // Clone page directory into a detached copy. External pages are always skipped.
+    [[nodiscard]] std::shared_ptr<PageDirectory> clone_page_directory() const {
         if (!page_dir) return std::make_shared<PageDirectory>();
-        if (!skip_external) return std::make_shared<PageDirectory>(*page_dir);
-
         auto cloned = std::make_shared<PageDirectory>();
         for (size_t l1 = 0; l1 < page_dir->l1_directory.size(); ++l1) {
             const auto& src_chunk = page_dir->l1_directory[l1];

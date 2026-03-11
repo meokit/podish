@@ -20,7 +20,6 @@ public class EngineMmuTransferTests
 
         var before = engine.GetMmuRef();
         var detached = engine.DetachMmu();
-        Assert.Equal(MmuCloneMode.Full, detached.GetCloneMode());
         Assert.True(before.IsValid);
         Assert.NotEqual(before.Identity, engine.GetMmuRef().Identity);
 
@@ -37,7 +36,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void CloneMmu_SkipExternal_DropsExternalMappings_ButKeepsOwnedPages()
+    public void CloneMmu_DropsExternalMappings_ButKeepsOwnedPages()
     {
         using var parent = new Engine();
         using var child = new Engine();
@@ -58,8 +57,7 @@ public class EngineMmuTransferTests
             Marshal.WriteByte(owned, 0x22);
 
             var mmuRef = parent.GetMmuRef();
-            using var detached = parent.CloneMmu(mmuRef, MmuCloneMode.SkipExternal);
-            Assert.Equal(MmuCloneMode.SkipExternal, detached.GetCloneMode());
+            using var detached = parent.CloneMmu(mmuRef);
             child.AttachMmu(detached);
 
             var read = new byte[1];
@@ -74,7 +72,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void CloneForkWithSkipExternal_UsesClonedMmuPayload()
+    public void CloneFork_DropsExternalMappings_ByDefault()
     {
         using var parent = new Engine();
         const uint externalAddr = 0x00700000;
@@ -93,7 +91,7 @@ public class EngineMmuTransferTests
             Assert.NotEqual(IntPtr.Zero, owned);
             Marshal.WriteByte(owned, 0x66);
 
-            using var child = parent.Clone(shareMem: false, mmuCloneMode: MmuCloneMode.SkipExternal);
+            using var child = parent.Clone(shareMem: false);
             Assert.NotEqual(parent.GetMmuRef().Identity, child.GetMmuRef().Identity);
 
             var read = new byte[1];
@@ -105,14 +103,6 @@ public class EngineMmuTransferTests
         {
             Marshal.FreeHGlobal(external);
         }
-    }
-
-    [Fact]
-    public void CloneThreadWithSkipExternal_IsRejected()
-    {
-        using var engine = new Engine();
-        Assert.Throws<ArgumentException>(() =>
-            engine.Clone(shareMem: true, mmuCloneMode: MmuCloneMode.SkipExternal));
     }
 
     [Fact]
@@ -141,7 +131,7 @@ public class EngineMmuTransferTests
             Assert.False(child.CopyFromUser(ownedAddr, read));
 
             var mmuRef = parent.GetMmuRef();
-            using var detached = parent.CloneMmu(mmuRef, MmuCloneMode.SkipExternal);
+            using var detached = parent.CloneMmu(mmuRef);
             child.AttachMmu(detached);
 
             Assert.False(child.CopyFromUser(externalAddr, read));

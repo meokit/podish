@@ -27,7 +27,6 @@ using MicroTLB = mem::MicroTLB;
 
 struct X86_DetachedMmu {
     std::shared_ptr<mem::PageDirectory> page_dir;
-    int clone_mode = X86_MMU_CLONE_MODE_FULL;
 };
 
 extern "C" {
@@ -367,18 +366,15 @@ X86_DetachedMmu* X86_DetachMmu(EmuState* state) {
 
     auto* detached = new X86_DetachedMmu();
     detached->page_dir = state->mmu.detach_page_directory();
-    detached->clone_mode = X86_MMU_CLONE_MODE_FULL;
     X86_ResetCodeCache(state);
     return detached;
 }
 
-X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref, int mode) {
-    if (mode != X86_MMU_CLONE_MODE_FULL && mode != X86_MMU_CLONE_MODE_SKIP_EXTERNAL) return nullptr;
+X86_DetachedMmu* X86_CloneMmuFromRef(X86_MmuRef mmu_ref) {
     if (!X86_IsMmuRefValid(mmu_ref)) return nullptr;
 
     auto* detached = new X86_DetachedMmu();
-    detached->clone_mode = mode;
-    detached->page_dir = mmu_ref.state->mmu.clone_page_directory(mode == X86_MMU_CLONE_MODE_SKIP_EXTERNAL);
+    detached->page_dir = mmu_ref.state->mmu.clone_page_directory();
     return detached;
 }
 
@@ -389,11 +385,6 @@ int X86_AttachMmu(EmuState* state, X86_DetachedMmu* detached) {
     X86_ResetCodeCache(state);
     delete detached;
     return 1;
-}
-
-int X86_DetachedMmuGetCloneMode(X86_DetachedMmu* detached) {
-    if (!detached) return -1;
-    return detached->clone_mode;
 }
 
 void X86_DestroyDetachedMmu(X86_DetachedMmu* detached) {

@@ -1358,7 +1358,7 @@ public class FiberTask
         try
         {
             // 1. Clone CPU
-            newCpu = CPU.Clone(cloneVm, cloneVm ? MmuCloneMode.Full : MmuCloneMode.SkipExternal);
+            newCpu = CPU.Clone(cloneVm);
 
             // 2. Resource Management
             Process newProc;
