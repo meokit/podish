@@ -44,14 +44,15 @@ public readonly record struct MemoryStatsSnapshot(
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
         var nowTicks = DateTime.UtcNow.Ticks;
-        var privateBreakdown = EstimatePrivateBreakdown(sm, nowTicks);
-        var anonymousZeroMappedBytes = EstimateAnonymousZeroMappedBytes(sm);
+        var processStats = AggregateProcessMemoryStats(sm, nowTicks);
+        var privateBreakdown = processStats.PrivateBreakdown;
+        var anonymousZeroMappedBytes = processStats.AnonymousZeroMappedBytes;
         var anonymousSharedMaterializedBytes = cache.AnonSharedSourcePages * LinuxConstants.PageSize;
         var privateOverlayBytes = privateBreakdown.TotalAnon + privateBreakdown.TotalFilePrivate;
         var anonBytes = Math.Max(0, allocated - cachedBytes) + anonymousSharedMaterializedBytes;
         var shmemCacheBytes = cache.ShmemPages * LinuxConstants.PageSize;
         var writebackBytes = cache.WritebackPages * LinuxConstants.PageSize;
-        var committedBytes = EstimateCommittedBytes(sm);
+        var committedBytes = processStats.CommittedBytes;
         var sysvShmBytes = EstimateSysVShmBytes(sm);
         var shmemBytes = shmemCacheBytes + sysvShmBytes;
         var (activeFile, inactiveFile, activeShmem, inactiveShmem) = SplitCacheByAge(cacheStates, nowTicks);
@@ -97,55 +98,10 @@ public readonly record struct MemoryStatsSnapshot(
             InactiveFileBytes: inactiveFile + inactiveShmem);
     }
 
-    private static long EstimateCommittedBytes(SyscallManager? sm)
-    {
-        var processes = ResolveProcesses(sm);
-        long committed = 0;
-        foreach (var process in processes)
-        {
-            foreach (var vma in process.Mem.VMAs)
-            {
-                // Simplified committed-as model: private mappings potentially consume private memory.
-                if ((vma.Flags & MapFlags.Private) == 0) continue;
-                committed += vma.Length;
-            }
-        }
-
-        return committed;
-    }
-
     private static long EstimateSysVShmBytes(SyscallManager? sm)
     {
         if (sm == null) return 0;
         return sm.SysVShm.GetResidentBytesSnapshot();
-    }
-
-    private static long EstimateAnonymousZeroMappedBytes(SyscallManager? sm)
-    {
-        var processes = ResolveProcesses(sm);
-        if (processes.Count == 0) return 0;
-
-        long bytes = 0;
-        foreach (var process in processes)
-        {
-            foreach (var vma in process.Mem.VMAs)
-            {
-                if ((vma.Flags & MapFlags.Private) == 0) continue;
-                if (vma.File != null) continue;
-                if (vma.SharedObject.Role != MemoryObjectRole.AnonSharedSourceZeroFill) continue;
-
-                var pageCount = vma.Length / LinuxConstants.PageSize;
-                for (uint i = 0; i < pageCount; i++)
-                {
-                    var pageIndex = vma.ViewPageOffset + i;
-                    if (vma.SharedObject.GetPage(pageIndex) != IntPtr.Zero) continue;
-                    if (vma.PrivateObject?.GetPage(pageIndex) != IntPtr.Zero) continue;
-                    bytes += LinuxConstants.PageSize;
-                }
-            }
-        }
-
-        return bytes;
     }
 
     private static IReadOnlyList<Process> ResolveProcesses(SyscallManager? sm)
@@ -189,12 +145,19 @@ public readonly record struct MemoryStatsSnapshot(
         long ActiveFilePrivate,
         long InactiveFilePrivate);
 
-    private static PrivateBreakdown EstimatePrivateBreakdown(SyscallManager? sm, long nowTicks)
+    private readonly record struct ProcessMemoryStats(
+        long CommittedBytes,
+        long AnonymousZeroMappedBytes,
+        PrivateBreakdown PrivateBreakdown);
+
+    private static ProcessMemoryStats AggregateProcessMemoryStats(SyscallManager? sm, long nowTicks)
     {
         var processes = ResolveProcesses(sm);
         if (processes.Count == 0) return default;
 
         var seenPtrs = new HashSet<nint>();
+        long committedBytes = 0;
+        long anonymousZeroMappedBytes = 0;
         long totalAnon = 0;
         long totalFilePrivate = 0;
         long activeAnon = 0;
@@ -206,10 +169,23 @@ public readonly record struct MemoryStatsSnapshot(
             foreach (var vma in process.Mem.VMAs)
             {
                 if ((vma.Flags & MapFlags.Private) == 0) continue;
+                committedBytes += vma.Length;
 
                 if (vma.File == null)
                 {
-                    foreach (var state in vma.SharedObject.SnapshotPageStates())
+                    var sharedStates = vma.SharedObject.SnapshotPageStates();
+                    var privateStates = vma.PrivateObject?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
+                    if (vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
+                    {
+                        var startPageIndex = vma.ViewPageOffset;
+                        var endPageIndex = startPageIndex + (vma.Length / LinuxConstants.PageSize);
+                        var materializedSharedPages = vma.SharedObject.CountPagesInRange(startPageIndex, endPageIndex);
+                        var privatePages = vma.PrivateObject?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
+                        var zeroPages = Math.Max(0L, (long)(endPageIndex - startPageIndex) - materializedSharedPages - privatePages);
+                        anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
+                    }
+
+                    foreach (var state in sharedStates)
                     {
                         var key = (nint)state.Ptr;
                         if (!seenPtrs.Add(key)) continue;
@@ -217,6 +193,16 @@ public readonly record struct MemoryStatsSnapshot(
                         if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
                         else inactiveAnon += LinuxConstants.PageSize;
                     }
+
+                    foreach (var state in privateStates)
+                    {
+                        var key = (nint)state.Ptr;
+                        if (!seenPtrs.Add(key)) continue;
+                        totalAnon += LinuxConstants.PageSize;
+                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
+                        else inactiveAnon += LinuxConstants.PageSize;
+                    }
+                    continue;
                 }
 
                 if (vma.PrivateObject == null) continue;
@@ -224,30 +210,24 @@ public readonly record struct MemoryStatsSnapshot(
                 {
                     var key = (nint)state.Ptr;
                     if (!seenPtrs.Add(key)) continue;
-                    if (vma.File == null)
-                    {
-                        totalAnon += LinuxConstants.PageSize;
-                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks) activeAnon += LinuxConstants.PageSize;
-                        else inactiveAnon += LinuxConstants.PageSize;
-                    }
+                    totalFilePrivate += LinuxConstants.PageSize;
+                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                        activeFilePrivate += LinuxConstants.PageSize;
                     else
-                    {
-                        totalFilePrivate += LinuxConstants.PageSize;
-                        if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
-                            activeFilePrivate += LinuxConstants.PageSize;
-                        else
-                            inactiveFilePrivate += LinuxConstants.PageSize;
-                    }
+                        inactiveFilePrivate += LinuxConstants.PageSize;
                 }
             }
         }
 
-        return new PrivateBreakdown(
-            totalAnon,
-            totalFilePrivate,
-            activeAnon,
-            inactiveAnon,
-            activeFilePrivate,
-            inactiveFilePrivate);
+        return new ProcessMemoryStats(
+            committedBytes,
+            anonymousZeroMappedBytes,
+            new PrivateBreakdown(
+                totalAnon,
+                totalFilePrivate,
+                activeAnon,
+                inactiveAnon,
+                activeFilePrivate,
+                inactiveFilePrivate));
     }
 }

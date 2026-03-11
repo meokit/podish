@@ -138,7 +138,7 @@ public class CowForkCloneTests
     }
 
     [Fact]
-    public void MapAnonymousPage_MaterializesSharedSource_AndLaterPrivateWriteCopiesThatContent()
+    public void PrefaultRange_WithWriteIntent_CreatesPrivatePageWithoutSharedSourceMaterialization()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
         using var engine = new Engine();
@@ -150,27 +150,18 @@ public class CowForkCloneTests
         Assert.Equal(mapAddr, mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-materialize", engine));
 
-        Assert.True(mm.MapAnonymousPage(mapAddr, engine, Protection.Read | Protection.Write));
+        Assert.True(mm.PrefaultRange(mapAddr, LinuxConstants.PageSize, engine, writeIntent: true));
         var vma = Assert.Single(mm.VMAs);
         var pageIndex = vma.ViewPageOffset;
-        var sharedPage = vma.SharedObject.GetPage(pageIndex);
-        Assert.NotEqual(IntPtr.Zero, sharedPage);
-
-        Assert.True(engine.CopyToUser(mapAddr, new byte[] { (byte)'M' }));
-        mm.TearDownNativeMappings(
-            engine,
-            mapAddr,
-            LinuxConstants.PageSize,
-            captureDirtySharedPages: false,
-            invalidateCodeRange: true,
-            releaseExternalPages: true);
-
-        Assert.True(engine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
         var privatePage = vma.PrivateObject!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, privatePage);
-        Assert.NotEqual(sharedPage, privatePage);
+        Assert.Equal(IntPtr.Zero, vma.SharedObject.GetPage(pageIndex));
 
         var probe = new byte[1];
+        Assert.True(engine.CopyFromUser(mapAddr, probe));
+        Assert.Equal(0, probe[0]);
+
+        Assert.True(engine.CopyToUser(mapAddr, new byte[] { (byte)'P' }));
         Assert.True(engine.CopyFromUser(mapAddr, probe));
         Assert.Equal((byte)'P', probe[0]);
     }

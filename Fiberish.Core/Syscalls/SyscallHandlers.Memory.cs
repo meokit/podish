@@ -384,7 +384,7 @@ public partial class SyscallManager
             sourceVma.ViewPageOffset + ((sourceAddr - sourceVma.Start) / LinuxConstants.PageSize);
         var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
         for (uint i = 0; i < pageCount; i++)
-            if (privateObject.GetPage(startPage + i) != IntPtr.Zero)
+            if (privateObject.PeekPage(startPage + i) != IntPtr.Zero)
                 return true;
 
         return false;

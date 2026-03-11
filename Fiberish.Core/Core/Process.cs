@@ -184,11 +184,10 @@ public class Process
         // Setup Stack
         var spBase = res.SP;
         var stackData = res.InitialStack;
-        for (var addr = spBase & LinuxConstants.PageMask;
-             addr < ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask);
-             addr += LinuxConstants.PageSize)
-            if (!Syscalls.Mem.MapAnonymousPage(addr, engine, Protection.Read | Protection.Write))
-                throw new OutOfMemoryException($"Failed to allocate stack page at 0x{addr:x}");
+        var stackStart = spBase & LinuxConstants.PageMask;
+        var stackLength = ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask) - stackStart;
+        if (!Syscalls.Mem.PrefaultRange(stackStart, stackLength, engine, writeIntent: true))
+            throw new OutOfMemoryException($"Failed to allocate initial stack pages at 0x{stackStart:x}");
 
         if (!engine.CopyToUser(spBase, stackData))
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");

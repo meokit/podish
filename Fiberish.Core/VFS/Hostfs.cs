@@ -1748,7 +1748,7 @@ public partial class HostInode : Inode
         for (var i = 0; i < request.PageCount; i++)
         {
             var pageIndex = request.StartPageIndex + i;
-            if (PageCache.GetPage((uint)pageIndex) != IntPtr.Zero) continue;
+            if (PageCache.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
 
             var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
             {
@@ -1809,7 +1809,7 @@ public partial class HostInode : Inode
 
         foreach (var pageIndex in toFlush)
         {
-            var pagePtr = PageCache.GetPage((uint)pageIndex);
+            var pagePtr = PageCache.PeekPage((uint)pageIndex);
             if (pagePtr == IntPtr.Zero)
             {
                 lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);

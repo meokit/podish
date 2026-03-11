@@ -382,7 +382,7 @@ public class LayerInode : Inode
         for (var i = 0; i < request.PageCount; i++)
         {
             var pageIndex = request.StartPageIndex + i;
-            if (PageCache.GetPage((uint)pageIndex) != IntPtr.Zero) continue;
+            if (PageCache.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
 
             var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
             {

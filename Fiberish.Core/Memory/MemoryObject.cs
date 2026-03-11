@@ -20,9 +20,14 @@ public enum MemoryObjectRole
 
 public sealed class MemoryObject
 {
-    private readonly Dictionary<uint, IntPtr> _pages = new();
-    private readonly HashSet<uint> _dirtyPages = [];
-    private readonly Dictionary<uint, long> _lastAccessTicks = new();
+    private sealed class PageEntry
+    {
+        public required IntPtr Ptr { get; set; }
+        public bool Dirty { get; set; }
+        public long LastAccessTicks { get; set; }
+    }
+
+    private readonly Dictionary<uint, PageEntry> _pages = new();
     private readonly object _lock = new();
     private int _refCount = 1;
 
@@ -72,13 +77,21 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            if (_pages.TryGetValue(pageIndex, out var p))
+            if (_pages.TryGetValue(pageIndex, out var entry))
             {
-                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
-                return p;
+                entry.LastAccessTicks = DateTime.UtcNow.Ticks;
+                return entry.Ptr;
             }
 
             return IntPtr.Zero;
+        }
+    }
+
+    public IntPtr PeekPage(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            return _pages.TryGetValue(pageIndex, out var entry) ? entry.Ptr : IntPtr.Zero;
         }
     }
 
@@ -89,8 +102,11 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            _pages[pageIndex] = ptr;
-            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+            _pages[pageIndex] = new PageEntry
+            {
+                Ptr = ptr,
+                LastAccessTicks = DateTime.UtcNow.Ticks
+            };
         }
     }
 
@@ -101,12 +117,15 @@ public sealed class MemoryObject
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 inserted = false;
-                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
-                return existing;
+                existing.LastAccessTicks = DateTime.UtcNow.Ticks;
+                return existing.Ptr;
             }
 
-            _pages[pageIndex] = ptr;
-            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+            _pages[pageIndex] = new PageEntry
+            {
+                Ptr = ptr,
+                LastAccessTicks = DateTime.UtcNow.Ticks
+            };
             inserted = true;
             return ptr;
         }
@@ -119,10 +138,8 @@ public sealed class MemoryObject
         {
             _refCount--;
             if (_refCount > 0) return;
-            toRelease = _pages.Values.ToList();
+            toRelease = _pages.Values.Select(static entry => entry.Ptr).ToList();
             _pages.Clear();
-            _dirtyPages.Clear();
-            _lastAccessTicks.Clear();
         }
 
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
@@ -142,7 +159,8 @@ public sealed class MemoryObject
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 isNew = false;
-                return existing;
+                existing.LastAccessTicks = DateTime.UtcNow.Ticks;
+                return existing.Ptr;
             }
         }
 
@@ -179,11 +197,15 @@ public sealed class MemoryObject
             {
                 ExternalPageManager.ReleasePtr(ptr);
                 isNew = false;
-                return raced;
+                raced.LastAccessTicks = DateTime.UtcNow.Ticks;
+                return raced.Ptr;
             }
 
-            _pages[pageIndex] = ptr;
-            _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+            _pages[pageIndex] = new PageEntry
+            {
+                Ptr = ptr,
+                LastAccessTicks = DateTime.UtcNow.Ticks
+            };
             isNew = true;
             return ptr;
         }
@@ -193,10 +215,10 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            if (_pages.ContainsKey(pageIndex))
+            if (_pages.TryGetValue(pageIndex, out var entry))
             {
-                _dirtyPages.Add(pageIndex);
-                _lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
+                entry.Dirty = true;
+                entry.LastAccessTicks = DateTime.UtcNow.Ticks;
             }
         }
     }
@@ -205,7 +227,7 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            return _dirtyPages.Contains(pageIndex);
+            return _pages.TryGetValue(pageIndex, out var entry) && entry.Dirty;
         }
     }
 
@@ -213,7 +235,8 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            _dirtyPages.Remove(pageIndex);
+            if (_pages.TryGetValue(pageIndex, out var entry))
+                entry.Dirty = false;
         }
     }
 
@@ -230,7 +253,7 @@ public sealed class MemoryObject
             {
                 unsafe
                 {
-                    var span = new Span<byte>((void*)tailPage, LinuxConstants.PageSize);
+                    var span = new Span<byte>((void*)tailPage.Ptr, LinuxConstants.PageSize);
                     span[tailBytes..].Clear();
                 }
             }
@@ -244,9 +267,8 @@ public sealed class MemoryObject
             toRelease = new List<IntPtr>(keysToDrop.Length);
             foreach (var key in keysToDrop)
             {
-                toRelease.Add(_pages[key]);
+                toRelease.Add(_pages[key].Ptr);
                 _pages.Remove(key);
-                _dirtyPages.Remove(key);
             }
         }
 
@@ -266,11 +288,13 @@ public sealed class MemoryObject
         {
             foreach (var (pageIndex, pagePtr) in _pages)
             {
-                ExternalPageManager.AddRef(pagePtr);
-                clone._pages[pageIndex] = pagePtr;
-                clone._lastAccessTicks[pageIndex] = DateTime.UtcNow.Ticks;
-                if (_dirtyPages.Contains(pageIndex))
-                    clone._dirtyPages.Add(pageIndex);
+                ExternalPageManager.AddRef(pagePtr.Ptr);
+                clone._pages[pageIndex] = new PageEntry
+                {
+                    Ptr = pagePtr.Ptr,
+                    Dirty = pagePtr.Dirty,
+                    LastAccessTicks = DateTime.UtcNow.Ticks
+                };
             }
         }
 
@@ -296,14 +320,31 @@ public sealed class MemoryObject
         {
             if (_pages.Count == 0) return Array.Empty<PageState>();
             var states = new List<PageState>(_pages.Count);
-            foreach (var (pageIndex, ptr) in _pages)
+            foreach (var (pageIndex, entry) in _pages)
             {
-                var lastAccess = _lastAccessTicks.TryGetValue(pageIndex, out var ts) ? ts : 0;
-                states.Add(new PageState(pageIndex, ptr, _dirtyPages.Contains(pageIndex), lastAccess));
+                states.Add(new PageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
             }
 
             return states;
         }
+    }
+
+    public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
+    {
+        if (startPageIndex >= endPageIndex) return 0;
+
+        long count = 0;
+        lock (_lock)
+        {
+            foreach (var pageIndex in _pages.Keys)
+            {
+                if (pageIndex < startPageIndex || pageIndex >= endPageIndex)
+                    continue;
+                count++;
+            }
+        }
+
+        return count;
     }
 
     public bool TryEvictCleanPage(uint pageIndex)
@@ -312,12 +353,12 @@ public sealed class MemoryObject
         IntPtr ptr;
         lock (_lock)
         {
-            if (_dirtyPages.Contains(pageIndex)) return false;
-            if (!_pages.TryGetValue(pageIndex, out ptr)) return false;
+            if (!_pages.TryGetValue(pageIndex, out var entry)) return false;
+            if (entry.Dirty) return false;
+            ptr = entry.Ptr;
             // If referenced elsewhere (e.g. mapped by an engine), skip eviction.
             if (ExternalPageManager.GetRefCount(ptr) > 1) return false;
             _pages.Remove(pageIndex);
-            _lastAccessTicks.Remove(pageIndex);
         }
 
         ExternalPageManager.ReleasePtr(ptr);

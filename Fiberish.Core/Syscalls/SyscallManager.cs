@@ -615,8 +615,8 @@ public partial class SyscallManager
         ProcessAddressSpaceSync.Mmap(Mem, Engine, vdsoAddr, 4096, Protection.Read | Protection.Exec,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]");
 
-        // Directly allocate the page in the engine with RW permissions for initial setup
-        if (!Mem.MapAnonymousPage(vdsoAddr, Engine, Protection.Read | Protection.Write))
+        // Prefault a writable private page for initial setup.
+        if (!Mem.PrefaultRange(vdsoAddr, 4096, Engine, writeIntent: true))
             throw new OutOfMemoryException("Failed to allocate vDSO page");
 
         // Write trampolines
