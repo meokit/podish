@@ -1889,7 +1889,7 @@ public partial class HostInode : Inode
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        out IPageHandle? pageHandle)
+        bool writable, out IPageHandle? pageHandle)
     {
         pageHandle = null;
         if (Type != InodeType.File) return false;
@@ -1898,11 +1898,35 @@ public partial class HostInode : Inode
 
         lock (_mappedCacheLock)
         {
-            _mappedPageCache ??= new MappedFilePageCache(ResolveHostPath(linuxFile), writable: true);
+            _mappedPageCache ??= new MappedFilePageCache(ResolveHostPath(linuxFile));
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
                 (long)Size,
+                writable,
                 out pageHandle);
+        }
+    }
+
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    {
+        lock (_mappedCacheLock)
+        {
+            if (_mappedPageCache?.TryFlushPage(pageIndex) != true)
+                return false;
+        }
+
+        lock (_dirtyPageLock) _dirtyPageIndexes.Remove(pageIndex);
+        if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+            PageCache?.ClearDirty((uint)pageIndex);
+        if (linuxFile != null) Sync(linuxFile);
+        return true;
+    }
+
+    internal FilePageBackendDiagnostics GetMappedPageCacheDiagnostics()
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.GetDiagnostics() ?? default;
         }
     }
 

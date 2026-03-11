@@ -1064,7 +1064,7 @@ public class VMAManager
                         return FaultResult.BusError;
 
                     IntPtr srcPage;
-                    if (!TryResolveMappedFilePage(vma, pageIndex, absoluteFileOffset, out srcPage))
+                    if (!TryResolveMappedFilePage(vma, pageIndex, absoluteFileOffset, writable: false, out srcPage))
                     {
                         srcPage = vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
                         {
@@ -1183,7 +1183,11 @@ public class VMAManager
         IntPtr hostPtr;
         IntPtr AllocateOrResolveHostPage()
         {
-            if (TryResolveMappedFilePage(vma, pageIndex, normalAbsoluteFileOffset, out var resolvedPage))
+            var prefersWritableMappedPage = vma.File != null &&
+                                           (vma.Flags & MapFlags.Shared) != 0 &&
+                                           (vma.Perms & Protection.Write) != 0;
+            if (TryResolveMappedFilePage(vma, pageIndex, normalAbsoluteFileOffset, prefersWritableMappedPage,
+                    out var resolvedPage))
                 return resolvedPage;
 
             return vma.MemoryObject.GetOrCreatePage(pageIndex, ptr =>
@@ -1268,12 +1272,13 @@ public class VMAManager
         return HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
     }
 
-    private static bool TryResolveMappedFilePage(VMA vma, uint pageIndex, long absoluteFileOffset, out IntPtr pagePtr)
+    private static bool TryResolveMappedFilePage(VMA vma, uint pageIndex, long absoluteFileOffset, bool writable,
+        out IntPtr pagePtr)
     {
         pagePtr = IntPtr.Zero;
         var inode = vma.File?.OpenedInode;
         if (inode == null) return false;
-        if (!inode.TryAcquireMappedPageHandle(vma.File, pageIndex, absoluteFileOffset, out var pageHandle))
+        if (!inode.TryAcquireMappedPageHandle(vma.File, pageIndex, absoluteFileOffset, writable, out var pageHandle))
             return false;
         if (pageHandle == null) return false;
 
@@ -1488,10 +1493,17 @@ public class VMAManager
                 GlobalPageCacheManager.BeginWritebackPages();
                 try
                 {
-                    var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen),
-                        pageData, true);
-                    if (rc == 0)
+                    if (inode.TryFlushMappedPage(vma.File, pageIndex))
+                    {
                         vma.MemoryObject.ClearDirty(pageIndex);
+                    }
+                    else
+                    {
+                        var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen),
+                            pageData, true);
+                        if (rc == 0)
+                            vma.MemoryObject.ClearDirty(pageIndex);
+                    }
                 }
                 finally
                 {

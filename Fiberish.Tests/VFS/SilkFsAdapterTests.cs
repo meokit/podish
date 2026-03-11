@@ -54,7 +54,7 @@ public class SilkFsAdapterTests
             Assert.True(loc.IsValid);
             Assert.Equal("silkfs", loc.Mount!.FsType);
 
-            Assert.True(Directory.Exists(Path.Combine(silkRoot, "objects")));
+            Assert.True(Directory.Exists(Path.Combine(silkRoot, "live")));
             Assert.True(File.Exists(Path.Combine(silkRoot, "metadata.sqlite3")));
 
             var file = new Dentry("hello.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
@@ -290,7 +290,7 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
-    public void Silkfs_ObjectRefCount_CleansUnusedObjectsOnRewriteAndUnlink()
+    public void Silkfs_LiveFile_RewritesAndDeletesWithoutObjectStore()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");
         try
@@ -328,25 +328,19 @@ public class SilkFsAdapterTests
             repo.Initialize();
             var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "obj.txt");
             Assert.NotNull(ino);
-            var obj1 = repo.Metadata.GetInodeObject(ino!.Value);
-            Assert.NotNull(obj1);
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj1!));
+            var livePath = repo.GetLiveInodePath(ino!.Value);
+            Assert.True(File.Exists(livePath));
+            Assert.Equal("A", File.ReadAllText(livePath));
 
             wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(1, file.Inode.Write(wf, "B"u8.ToArray(), 0));
             wf.Close();
 
-            var obj2 = repo.Metadata.GetInodeObject(ino.Value);
-            Assert.NotNull(obj2);
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj2!));
-            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj1!));
+            Assert.True(File.Exists(livePath));
+            Assert.Equal("B", File.ReadAllText(livePath));
 
             loc.Dentry.Inode!.Unlink("obj.txt");
-            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj2));
-
-            var objectFiles = Directory.EnumerateFiles(Path.Combine(silkRoot, "objects"), "*",
-                SearchOption.AllDirectories).ToArray();
-            Assert.Empty(objectFiles);
+            Assert.False(File.Exists(livePath));
 
             sm.Close();
         }
@@ -399,7 +393,7 @@ public class SilkFsAdapterTests
 
             Assert.Null(repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "gone.txt"));
             Assert.Null(repo.Metadata.GetInode(ino!.Value));
-            Assert.Null(repo.Metadata.GetInodeObject(ino.Value));
+            Assert.False(File.Exists(repo.GetLiveInodePath(ino.Value)));
             sm.Close();
         }
         finally
@@ -469,7 +463,7 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
-    public void Silkfs_UnlinkOpenFile_DefersObjectDeletionUntilClose()
+    public void Silkfs_UnlinkOpenFile_DefersLiveFileDeletionUntilClose()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-open-{Guid.NewGuid():N}");
         try
@@ -506,15 +500,13 @@ public class SilkFsAdapterTests
             repo.Initialize();
             var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "held.txt");
             Assert.NotNull(ino);
-            var obj = repo.Metadata.GetInodeObject(ino!.Value);
-            Assert.False(string.IsNullOrEmpty(obj));
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
+            var livePath = repo.GetLiveInodePath(ino!.Value);
+            Assert.True(File.Exists(livePath));
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
             loc.Dentry.Inode!.Unlink("held.txt");
 
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
-            Assert.NotNull(repo.ReadObject(obj));
+            Assert.True(File.Exists(livePath));
             var readBuf = new byte[16];
             var n = rf.OpenedInode!.Read(rf, readBuf, 0);
             Assert.Equal(5, n);
@@ -522,8 +514,7 @@ public class SilkFsAdapterTests
 
             rf.Close();
 
-            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj));
-            Assert.Null(repo.ReadObject(obj));
+            Assert.False(File.Exists(livePath));
             sm.Close();
         }
         finally
@@ -533,7 +524,7 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
-    public void Silkfs_UnlinkMmapHold_DefersObjectDeletionUntilMunmap()
+    public void Silkfs_UnlinkMmapHold_DefersLiveFileDeletionUntilMunmap()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-mmap-{Guid.NewGuid():N}");
         try
@@ -570,9 +561,8 @@ public class SilkFsAdapterTests
             repo.Initialize();
             var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "mapheld.txt");
             Assert.NotNull(ino);
-            var obj = repo.Metadata.GetInodeObject(ino!.Value);
-            Assert.False(string.IsNullOrEmpty(obj));
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj!));
+            var livePath = repo.GetLiveInodePath(ino!.Value);
+            Assert.True(File.Exists(livePath));
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!, LinuxFile.ReferenceKind.MmapHold);
             const uint mapAddr = 0x58000000;
@@ -588,13 +578,11 @@ public class SilkFsAdapterTests
                 engine);
 
             loc.Dentry.Inode!.Unlink("mapheld.txt");
-            Assert.Equal(1, repo.Metadata.GetObjectRefCount(obj));
-            Assert.NotNull(repo.ReadObject(obj));
+            Assert.True(File.Exists(livePath));
 
             mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-            Assert.Equal(0, repo.Metadata.GetObjectRefCount(obj));
-            Assert.Null(repo.ReadObject(obj));
+            Assert.False(File.Exists(livePath));
             sm.Close();
         }
         finally

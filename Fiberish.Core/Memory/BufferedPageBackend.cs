@@ -9,14 +9,24 @@ internal sealed class BufferedPageBackend : IFilePageBackend
     {
     }
 
-    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, out IPageHandle? handle)
+    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle)
     {
         handle = null;
         return false;
     }
 
+    public bool TryFlushPage(long filePageIndex)
+    {
+        return false;
+    }
+
     public void Truncate(long size)
     {
+    }
+
+    public FilePageBackendDiagnostics GetDiagnostics()
+    {
+        return default;
     }
 
     public void Dispose()

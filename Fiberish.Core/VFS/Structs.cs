@@ -885,9 +885,17 @@ public abstract class Inode : IPageCacheOps
     ///     Return false to use regular in-memory page cache allocation + ReadPage fallback.
     /// </summary>
     public virtual bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        out IPageHandle? pageHandle)
+        bool writable, out IPageHandle? pageHandle)
     {
+        _ = writable;
         pageHandle = null;
+        return false;
+    }
+
+    public virtual bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    {
+        _ = linuxFile;
+        _ = pageIndex;
         return false;
     }
 

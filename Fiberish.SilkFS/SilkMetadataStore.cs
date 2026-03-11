@@ -29,10 +29,6 @@ public readonly record struct SilkDentryRecord(
     string Name,
     long Ino);
 
-public readonly record struct SilkObjectBindingResult(
-    bool Changed,
-    string? UnreferencedObjectId);
-
 public sealed class SilkMetadataStore
 {
     public const long RootInode = 1;
@@ -164,27 +160,12 @@ public sealed class SilkMetadataStore
                          PRIMARY KEY (parent_ino, name)
                        );
                        """);
+        Exec(conn, tx, "DROP TABLE IF EXISTS inode_objects;");
+        Exec(conn, tx, "DROP TABLE IF EXISTS objects;");
         Exec(conn, tx, """
-                       CREATE TABLE IF NOT EXISTS inode_objects (
-                         ino INTEGER PRIMARY KEY,
-                         object_id TEXT NOT NULL,
-                         FOREIGN KEY (ino) REFERENCES inodes(ino) ON DELETE CASCADE
-                       );
+                       INSERT INTO meta(k, v) VALUES ('schema_version', '2')
+                       ON CONFLICT(k) DO UPDATE SET v = excluded.v;
                        """);
-        Exec(conn, tx, """
-                       CREATE TABLE IF NOT EXISTS objects (
-                         object_id TEXT PRIMARY KEY,
-                         refcount INTEGER NOT NULL
-                       );
-                       """);
-        Exec(conn, tx, """
-                       INSERT INTO objects(object_id, refcount)
-                       SELECT io.object_id, COUNT(1)
-                       FROM inode_objects io
-                       GROUP BY io.object_id
-                       ON CONFLICT(object_id) DO UPDATE SET refcount = excluded.refcount;
-                       """);
-        Exec(conn, tx, "INSERT OR IGNORE INTO meta(k, v) VALUES ('schema_version', '1');");
 
         var rootExists = ScalarLong(conn, tx, "SELECT COUNT(1) FROM inodes WHERE ino = 1;");
         if (rootExists == 0)
@@ -345,33 +326,6 @@ public sealed class SilkMetadataStore
         cmd.ExecuteNonQuery();
     }
 
-    public string? DeleteInodeWithObjectRefCount(long ino)
-    {
-        if (ino == RootInode) return null;
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        var oldObjectId = GetInodeObject(conn, tx, ino);
-
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText = "DELETE FROM inodes WHERE ino = @ino;";
-            cmd.Parameters.AddWithValue("@ino", ino);
-            cmd.ExecuteNonQuery();
-        }
-
-        string? unreferenced = null;
-        if (!string.IsNullOrEmpty(oldObjectId))
-        {
-            if (DecrementObjectRef(conn, tx, oldObjectId!))
-                unreferenced = oldObjectId;
-        }
-
-        tx.Commit();
-        return unreferenced;
-    }
-
     public void SetXAttr(long ino, string key, ReadOnlySpan<byte> value)
     {
         using var conn = OpenConnection();
@@ -417,87 +371,6 @@ public sealed class SilkMetadataStore
         cmd.Parameters.AddWithValue("@ino", ino);
         cmd.Parameters.AddWithValue("@key", key);
         cmd.ExecuteNonQuery();
-    }
-
-    public void SetInodeObject(long ino, string objectId)
-    {
-        if (string.IsNullOrWhiteSpace(objectId))
-            throw new ArgumentException("Object id cannot be empty.", nameof(objectId));
-
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText =
-            "INSERT INTO inode_objects(ino, object_id) VALUES (@ino, @obj) ON CONFLICT(ino) DO UPDATE SET object_id = excluded.object_id;";
-        cmd.Parameters.AddWithValue("@ino", ino);
-        cmd.Parameters.AddWithValue("@obj", objectId);
-        cmd.ExecuteNonQuery();
-    }
-
-    public SilkObjectBindingResult SetInodeObjectWithRefCount(long ino, string objectId)
-    {
-        if (string.IsNullOrWhiteSpace(objectId))
-            throw new ArgumentException("Object id cannot be empty.", nameof(objectId));
-
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        var current = GetInodeObject(conn, tx, ino);
-        if (string.Equals(current, objectId, StringComparison.Ordinal))
-        {
-            tx.Commit();
-            return new SilkObjectBindingResult(false, null);
-        }
-
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText =
-                "INSERT INTO inode_objects(ino, object_id) VALUES (@ino, @obj) ON CONFLICT(ino) DO UPDATE SET object_id = excluded.object_id;";
-            cmd.Parameters.AddWithValue("@ino", ino);
-            cmd.Parameters.AddWithValue("@obj", objectId);
-            cmd.ExecuteNonQuery();
-        }
-
-        IncrementObjectRef(conn, tx, objectId);
-
-        string? unreferenced = null;
-        if (!string.IsNullOrEmpty(current))
-        {
-            if (DecrementObjectRef(conn, tx, current!))
-                unreferenced = current;
-        }
-
-        tx.Commit();
-        return new SilkObjectBindingResult(true, unreferenced);
-    }
-
-    public string? GetInodeObject(long ino)
-    {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT object_id FROM inode_objects WHERE ino = @ino;";
-        cmd.Parameters.AddWithValue("@ino", ino);
-        var value = cmd.ExecuteScalar();
-        return value == null || value is DBNull ? null : (string)value;
-    }
-
-    public void RemoveInodeObject(long ino)
-    {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM inode_objects WHERE ino = @ino;";
-        cmd.Parameters.AddWithValue("@ino", ino);
-        cmd.ExecuteNonQuery();
-    }
-
-    public long GetObjectRefCount(string objectId)
-    {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT refcount FROM objects WHERE object_id = @obj;";
-        cmd.Parameters.AddWithValue("@obj", objectId);
-        var v = cmd.ExecuteScalar();
-        return v == null || v is DBNull ? 0 : Convert.ToInt64(v);
     }
 
     public void MarkWhiteout(long parentIno, string name)
@@ -577,61 +450,6 @@ public sealed class SilkMetadataStore
         cmd.Transaction = tx;
         cmd.CommandText = sql;
         return Convert.ToInt64(cmd.ExecuteScalar());
-    }
-
-    private static void IncrementObjectRef(SqliteConnection conn, SqliteTransaction tx, string objectId)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = """
-                          INSERT INTO objects(object_id, refcount) VALUES (@obj, 1)
-                          ON CONFLICT(object_id) DO UPDATE SET refcount = refcount + 1;
-                          """;
-        cmd.Parameters.AddWithValue("@obj", objectId);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static bool DecrementObjectRef(SqliteConnection conn, SqliteTransaction tx, string objectId)
-    {
-        long current;
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText = "SELECT refcount FROM objects WHERE object_id = @obj;";
-            cmd.Parameters.AddWithValue("@obj", objectId);
-            var v = cmd.ExecuteScalar();
-            current = v == null || v is DBNull ? 0 : Convert.ToInt64(v);
-        }
-
-        if (current <= 1)
-        {
-            using var del = conn.CreateCommand();
-            del.Transaction = tx;
-            del.CommandText = "DELETE FROM objects WHERE object_id = @obj;";
-            del.Parameters.AddWithValue("@obj", objectId);
-            del.ExecuteNonQuery();
-            return true;
-        }
-
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE objects SET refcount = refcount - 1 WHERE object_id = @obj;";
-            cmd.Parameters.AddWithValue("@obj", objectId);
-            cmd.ExecuteNonQuery();
-        }
-
-        return false;
-    }
-
-    private static string? GetInodeObject(SqliteConnection conn, SqliteTransaction tx, long ino)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = "SELECT object_id FROM inode_objects WHERE ino = @ino;";
-        cmd.Parameters.AddWithValue("@ino", ino);
-        var value = cmd.ExecuteScalar();
-        return value == null || value is DBNull ? null : (string)value;
     }
 
     private static void UpsertInodeCore(SqliteConnection conn, SqliteTransaction tx, long ino, SilkInodeKind kind, int mode,

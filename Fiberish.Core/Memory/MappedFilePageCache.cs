@@ -7,9 +7,9 @@ internal sealed class MappedFilePageCache : IDisposable
 {
     private readonly IFilePageBackend _backend;
 
-    public MappedFilePageCache(string path, bool writable)
+    public MappedFilePageCache(string path)
     {
-        _backend = FilePageBackendSelector.Create(path, writable);
+        _backend = FilePageBackendSelector.Create(path);
     }
 
     public void UpdatePath(string path)
@@ -17,14 +17,24 @@ internal sealed class MappedFilePageCache : IDisposable
         _backend.UpdatePath(path);
     }
 
-    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, out IPageHandle? handle)
+    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle)
     {
-        return _backend.TryAcquirePageHandle(filePageIndex, fileSize, out handle);
+        return _backend.TryAcquirePageHandle(filePageIndex, fileSize, writable, out handle);
+    }
+
+    public bool TryFlushPage(long filePageIndex)
+    {
+        return _backend.TryFlushPage(filePageIndex);
     }
 
     public void Truncate(long size)
     {
         _backend.Truncate(size);
+    }
+
+    public FilePageBackendDiagnostics GetDiagnostics()
+    {
+        return _backend.GetDiagnostics();
     }
 
     public void Dispose()

@@ -85,9 +85,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
         var orphanInodes = Repository.Metadata.ListOrphanInodes();
         foreach (var orphanIno in orphanInodes)
         {
-            var unreferencedObject = Repository.Metadata.DeleteInodeWithObjectRefCount(orphanIno);
-            if (!string.IsNullOrEmpty(unreferencedObject))
-                Repository.DeleteObject(unreferencedObject!);
+            Repository.Metadata.DeleteInode(orphanIno);
             Repository.DeleteLiveInodeData(orphanIno);
         }
 
@@ -237,15 +235,6 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         if (Type != InodeType.File && Type != InodeType.Symlink) return;
         var data = _repository.ReadLiveInodeData((long)Ino);
-        if (data == null)
-        {
-            var objectId = _metadata.GetInodeObject((long)Ino);
-            if (string.IsNullOrEmpty(objectId)) return;
-            data = _repository.ReadObject(objectId!);
-            if (data != null)
-                _repository.WriteLiveInodeData((long)Ino, data);
-        }
-
         if (data == null) return;
 
         _ = base.Truncate(0);
@@ -271,10 +260,6 @@ public sealed class SilkInode : IndexedMemoryInode
         if (Type != InodeType.File && Type != InodeType.Symlink) return;
         var data = ReadAllData();
         _repository.WriteLiveInodeData((long)Ino, data);
-        var objectId = _repository.PutObject(data);
-        var binding = _metadata.SetInodeObjectWithRefCount((long)Ino, objectId);
-        if (!string.IsNullOrEmpty(binding.UnreferencedObjectId))
-            _repository.DeleteObject(binding.UnreferencedObjectId!);
     }
 
     private byte[] ReadAllData()
@@ -708,9 +693,7 @@ public sealed class SilkInode : IndexedMemoryInode
         if (Type != InodeType.File && Type != InodeType.Symlink) return Array.Empty<byte>();
         var live = _repository.ReadLiveInodeData((long)Ino);
         if (live != null) return live;
-        var objectId = _metadata.GetInodeObject((long)Ino);
-        if (string.IsNullOrEmpty(objectId)) return Array.Empty<byte>();
-        return _repository.ReadObject(objectId!) ?? Array.Empty<byte>();
+        return Array.Empty<byte>();
     }
 
     private void ClearPageCacheDirtyState()
@@ -747,7 +730,7 @@ public sealed class SilkInode : IndexedMemoryInode
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        out IPageHandle? pageHandle)
+        bool writable, out IPageHandle? pageHandle)
     {
         pageHandle = null;
         if (Type != InodeType.File && Type != InodeType.Symlink) return false;
@@ -756,11 +739,38 @@ public sealed class SilkInode : IndexedMemoryInode
 
         lock (_mappedCacheLock)
         {
-            _mappedPageCache ??= new MappedFilePageCache(_repository.GetLiveInodePath((long)Ino), writable: true);
+            _mappedPageCache ??= new MappedFilePageCache(_repository.GetLiveInodePath((long)Ino));
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
                 (long)Size,
+                writable,
                 out pageHandle);
+        }
+    }
+
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    {
+        lock (_mappedCacheLock)
+        {
+            if (_mappedPageCache?.TryFlushPage(pageIndex) != true)
+                return false;
+        }
+
+        lock (Lock)
+        {
+            DirtyPageIndexes.Remove(pageIndex);
+            if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                PageCache?.ClearDirty((uint)pageIndex);
+        }
+
+        return true;
+    }
+
+    internal FilePageBackendDiagnostics GetMappedPageCacheDiagnostics()
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.GetDiagnostics() ?? default;
         }
     }
 
@@ -780,9 +790,7 @@ public sealed class SilkInode : IndexedMemoryInode
         var ino = (long)Ino;
         if (ino != SilkMetadataStore.RootInode)
         {
-            var unrefObject = _metadata.DeleteInodeWithObjectRefCount(ino);
-            if (!string.IsNullOrEmpty(unrefObject))
-                _repository.DeleteObject(unrefObject!);
+            _metadata.DeleteInode(ino);
             _repository.DeleteLiveInodeData(ino);
         }
 

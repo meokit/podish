@@ -54,9 +54,9 @@ public class LayerSilkOverlayTests
             Assert.NotNull(etcIno);
             var fiberIno = upperRepo.Metadata.LookupDentry(etcIno!.Value, "fiber.txt");
             Assert.NotNull(fiberIno);
-            var obj = upperRepo.Metadata.GetInodeObject(fiberIno!.Value);
-            Assert.False(string.IsNullOrEmpty(obj));
-            Assert.Equal(1, upperRepo.Metadata.GetObjectRefCount(obj!));
+            var livePath = upperRepo.GetLiveInodePath(fiberIno!.Value);
+            Assert.True(File.Exists(livePath));
+            Assert.Equal("hello", File.ReadAllText(livePath));
 
             var lowerEtc = lowerSb.Root.Inode!.Lookup("etc");
             Assert.NotNull(lowerEtc);
