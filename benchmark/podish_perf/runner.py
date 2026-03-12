@@ -19,10 +19,13 @@ import pexpect
 MARKER_BEGIN = "__PODISH_BENCH_BEGIN__"
 MARKER_END = "__PODISH_BENCH_END__"
 DEFAULT_CASES = ("compress", "compile", "run")
+DEFAULT_ENGINE = "jit"
+AOT_BINARY_RELATIVE = Path("build/nativeaot/podish-cli-static/Podish.Cli")
 
 
 @dataclass
 class SampleResult:
+    engine: str
     case: str
     iteration: int
     seconds: float
@@ -37,6 +40,10 @@ def repo_root() -> Path:
 
 def default_rootfs() -> Path:
     return Path(__file__).resolve().parent / "rootfs" / "coremark_i386_alpine"
+
+
+def default_aot_binary(project_root: Path) -> Path:
+    return project_root / AOT_BINARY_RELATIVE
 
 
 def build_guest_script(case: str, iterations: int) -> str:
@@ -83,13 +90,8 @@ echo {MARKER_END}
     raise ValueError(f"unknown case: {case}")
 
 
-def build_podish_args(project_root: Path, rootfs: Path, script: str) -> list[str]:
-    return [
-        "run",
-        "--project",
-        str(project_root / "Podish.Cli" / "Podish.Cli.csproj"),
-        "--no-build",
-        "--",
+def build_engine_command(project_root: Path, engine: str, aot_binary: Path, rootfs: Path, script: str) -> tuple[str, list[str]]:
+    podish_args = [
         "run",
         "--rm",
         "--rootfs",
@@ -99,6 +101,26 @@ def build_podish_args(project_root: Path, rootfs: Path, script: str) -> list[str
         "-lc",
         script,
     ]
+
+    if engine == "jit":
+        return (
+            "dotnet",
+            [
+                "run",
+                "--project",
+                str(project_root / "Podish.Cli" / "Podish.Cli.csproj"),
+                "-c",
+                "Release",
+                "--no-build",
+                "--",
+                *podish_args,
+            ],
+        )
+
+    if engine == "aot":
+        return (str(aot_binary), podish_args)
+
+    raise ValueError(f"unknown engine: {engine}")
 
 
 def clean_env() -> dict[str, str]:
@@ -136,6 +158,8 @@ def extract_coremark_score(output: str) -> float | None:
 
 def run_sample(
     project_root: Path,
+    engine: str,
+    aot_binary: Path,
     base_rootfs: Path,
     case: str,
     iteration: int,
@@ -147,14 +171,14 @@ def run_sample(
     keep_workdirs: bool,
 ) -> SampleResult:
     work_rootfs = create_work_rootfs(base_rootfs, case, iteration, work_dir, reuse_rootfs)
-    transcript = results_dir / f"{case}-{iteration:02d}.log"
+    transcript = results_dir / f"{engine}-{case}-{iteration:02d}.log"
     script = build_guest_script(case, iterations)
-    args = build_podish_args(project_root, work_rootfs, script)
+    program, args = build_engine_command(project_root, engine, aot_binary, work_rootfs, script)
     start = 0.0
     end = 0.0
 
     child = pexpect.spawn(
-        "dotnet",
+        program,
         args,
         cwd=str(project_root),
         encoding="utf-8",
@@ -186,6 +210,7 @@ def run_sample(
         shutil.rmtree(work_rootfs, ignore_errors=True)
 
     return SampleResult(
+        engine=engine,
         case=case,
         iteration=iteration,
         seconds=end - start,
@@ -196,26 +221,27 @@ def run_sample(
 
 
 def print_summary(results: list[SampleResult]) -> None:
-    grouped: dict[str, list[SampleResult]] = {}
+    grouped: dict[tuple[str, str], list[SampleResult]] = {}
     for sample in results:
-        grouped.setdefault(sample.case, []).append(sample)
+        grouped.setdefault((sample.engine, sample.case), []).append(sample)
 
     print("")
-    print("Case      Samples  Min(s)  Median(s)  Mean(s)  Notes")
-    print("--------  -------  ------  ---------  -------  -----")
-    for case in DEFAULT_CASES:
-        samples = grouped.get(case, [])
-        if not samples:
-            continue
-        durations = [sample.seconds for sample in samples]
-        notes = ""
-        scores = [sample.coremark_score for sample in samples if sample.coremark_score is not None]
-        if scores:
-            notes = f"Iterations/Sec median={statistics.median(scores):.2f}"
-        print(
-            f"{case:<8}  {len(samples):>7}  {min(durations):>6.3f}  "
-            f"{statistics.median(durations):>9.3f}  {statistics.mean(durations):>7.3f}  {notes}"
-        )
+    print("Engine  Case      Samples  Min(s)  Median(s)  Mean(s)  Notes")
+    print("------  --------  -------  ------  ---------  -------  -----")
+    for engine in ("jit", "aot"):
+        for case in DEFAULT_CASES:
+            samples = grouped.get((engine, case), [])
+            if not samples:
+                continue
+            durations = [sample.seconds for sample in samples]
+            notes = ""
+            scores = [sample.coremark_score for sample in samples if sample.coremark_score is not None]
+            if scores:
+                notes = f"Iterations/Sec median={statistics.median(scores):.2f}"
+            print(
+                f"{engine:<6}  {case:<8}  {len(samples):>7}  {min(durations):>6.3f}  "
+                f"{statistics.median(durations):>9.3f}  {statistics.mean(durations):>7.3f}  {notes}"
+            )
 
 
 def parse_args() -> argparse.Namespace:
@@ -231,6 +257,17 @@ def parse_args() -> argparse.Namespace:
         "--project-root",
         default=str(repo_root()),
         help="Repository root containing Podish.Cli",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=("jit", "aot"),
+        default=DEFAULT_ENGINE,
+        help="Execution engine: release JIT via dotnet run, or NativeAOT binary",
+    )
+    parser.add_argument(
+        "--aot-binary",
+        default=None,
+        help="Path to the NativeAOT Podish.Cli binary used when --engine=aot",
     )
     parser.add_argument(
         "--results-dir",
@@ -270,11 +307,23 @@ def main() -> int:
     project_root = Path(args.project_root).resolve()
     base_rootfs = Path(args.rootfs).resolve()
     work_dir = Path(args.work_dir).resolve()
+    aot_binary = (
+        Path(args.aot_binary).resolve()
+        if args.aot_binary
+        else default_aot_binary(project_root)
+    )
 
     if not base_rootfs.is_dir():
         print(
             f"rootfs not found: {base_rootfs}\n"
             f"run benchmark/podish_perf/prepare_coremark_env.sh first",
+            file=sys.stderr,
+        )
+        return 1
+    if args.engine == "aot" and not aot_binary.is_file():
+        print(
+            f"aot binary not found: {aot_binary}\n"
+            f"build it first with: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true",
             file=sys.stderr,
         )
         return 1
@@ -294,6 +343,9 @@ def main() -> int:
     print(f"[runner] project_root={project_root}")
     print(f"[runner] rootfs={base_rootfs}")
     print(f"[runner] results_dir={results_dir}")
+    print(f"[runner] engine={args.engine}")
+    if args.engine == "aot":
+        print(f"[runner] aot_binary={aot_binary}")
     print(f"[runner] cases={','.join(selected_cases)} repeat={args.repeat} iterations={args.iterations}")
 
     for case in selected_cases:
@@ -301,6 +353,8 @@ def main() -> int:
             print(f"[runner] case={case} sample={iteration}/{args.repeat}")
             sample = run_sample(
                 project_root=project_root,
+                engine=args.engine,
+                aot_binary=aot_binary,
                 base_rootfs=base_rootfs,
                 case=case,
                 iteration=iteration,
@@ -319,7 +373,9 @@ def main() -> int:
 
     summary_path = results_dir / "summary.json"
     payload = {
+        "engine": args.engine,
         "rootfs": str(base_rootfs),
+        "aot_binary": str(aot_binary) if args.engine == "aot" else None,
         "repeat": args.repeat,
         "iterations": args.iterations,
         "cases": selected_cases,

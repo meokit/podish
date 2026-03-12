@@ -1,7 +1,7 @@
 # Podish CoreMark Performance Runner
 
-This directory contains a standalone performance harness for Podish.Cli. It is
-deliberately separate from `pytest`, so normal test runs do not execute any
+This directory contains a standalone performance harness for `Podish.Cli`. It
+is deliberately separate from `pytest`, so normal test runs do not execute any
 performance workload.
 
 ## What it does
@@ -18,11 +18,17 @@ performance workload.
 
 ## Prepare the rootfs
 
-Build Podish.Cli first because the runner uses `dotnet run --project ... --no-build`:
+Build the release JIT binary first because the runner uses `dotnet run -c Release --no-build`:
 
 ```bash
-dotnet build Podish.Cli/Podish.Cli.csproj
+dotnet build Podish.Cli/Podish.Cli.csproj -c Release
 benchmark/podish_perf/prepare_coremark_env.sh
+```
+
+If you want to benchmark NativeAOT, also publish the AOT binary:
+
+```bash
+dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -o build/nativeaot/podish-cli-static
 ```
 
 On macOS, make sure `podman machine start` is already running before preparing
@@ -36,18 +42,28 @@ benchmark/podish_perf/rootfs/coremark_i386_alpine
 
 ## Run the benchmarks
 
+Release JIT:
+
 ```bash
-python3 benchmark/podish_perf/runner.py --repeat 3
+python3 benchmark/podish_perf/runner.py --engine jit --repeat 3
+```
+
+NativeAOT:
+
+```bash
+python3 benchmark/podish_perf/runner.py --engine aot --repeat 3
 ```
 
 Useful options:
 
 ```bash
-python3 benchmark/podish_perf/runner.py --case compile --case run --repeat 5
-python3 benchmark/podish_perf/runner.py --iterations 1000
-python3 benchmark/podish_perf/runner.py --reuse-rootfs
+python3 benchmark/podish_perf/runner.py --engine jit --case compile --case run --repeat 5
+python3 benchmark/podish_perf/runner.py --engine aot --iterations 1000
+python3 benchmark/podish_perf/runner.py --engine jit --reuse-rootfs
+python3 benchmark/podish_perf/runner.py --engine aot --aot-binary /path/to/Podish.Cli
 ```
 
 By default the runner copies the prepared rootfs into a disposable work
 directory for each sample, so `--rootfs` does not get dirtied by benchmark
-writes. Logs and `summary.json` are written under `benchmark/podish_perf/results/`.
+writes. Logs and `summary.json` are written under
+`benchmark/podish_perf/results/`.
