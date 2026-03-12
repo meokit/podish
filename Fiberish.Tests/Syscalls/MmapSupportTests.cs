@@ -205,9 +205,10 @@ public class MmapSupportTests
 #pragma warning restore CS0618
         Assert.True(env.Engine.IsDirty(secondPage));
 
-        var vma = env.Vma.FindVMA(baseAddr);
+        var vma = env.Vma.FindVmArea(baseAddr);
         Assert.NotNull(vma);
         var secondPageIndex = vma!.GetPageIndex(secondPage);
+        Assert.NotNull(vma.VmMapping);
         Assert.False(vma.VmMapping.IsDirty(secondPageIndex));
         Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
 
@@ -274,9 +275,7 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(3, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].VmAnonVma);
-        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[1].VmAnonVma);
-        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[2].VmAnonVma);
+        Assert.All(splitVmas, vma => Assert.Null(vma.VmAnonVma));
     }
 
     [Fact]
@@ -303,8 +302,7 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(2, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].VmAnonVma);
-        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[1].VmAnonVma);
+        Assert.All(splitVmas, vma => Assert.Null(vma.VmAnonVma));
     }
 
     [Fact]
@@ -368,6 +366,7 @@ public class MmapSupportTests
             env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize * 2, false, env.Engine));
 
         var mappedVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == baseAddr));
+        Assert.NotNull(mappedVma.VmMapping);
         Assert.Equal(3, mappedVma.VmMapping.PageCount);
 
         Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
@@ -377,8 +376,12 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(2, splitVmas.Length);
-        Assert.Equal(3, splitVmas[0].VmMapping.PageCount);
-        Assert.Same(splitVmas[0].VmMapping, splitVmas[1].VmMapping);
+        Assert.NotNull(splitVmas[0].VmMapping);
+        Assert.NotNull(splitVmas[1].VmMapping);
+        var firstMapping = splitVmas[0].VmMapping!;
+        var secondMapping = splitVmas[1].VmMapping!;
+        Assert.Equal(3, firstMapping.PageCount);
+        Assert.Same(firstMapping, secondMapping);
         Assert.Equal(FaultResult.Segv,
             env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
     }

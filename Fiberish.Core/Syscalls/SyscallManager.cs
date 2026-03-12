@@ -52,7 +52,7 @@ public partial class SyscallManager
         BrkBase = brk;
         Tty = tty;
         Futex = new FutexManager();
-        SysVShm = new SysVShmManager(mem.MemoryObjects);
+        SysVShm = new SysVShmManager(mem.Backings);
         SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);
@@ -1069,7 +1069,7 @@ public partial class SyscallManager
 
             // Update current engine context (GIL ensures safety)
             Engine = engine;
-            GlobalPageCacheManager.MaybeRunMaintenance(Mem, engine);
+            GlobalAddressSpaceCacheManager.MaybeRunMaintenance(Mem, engine);
 
             // Get current FiberTask (New Model Only) via Engine.Owner
             var fiberTask = engine.Owner as FiberTask;

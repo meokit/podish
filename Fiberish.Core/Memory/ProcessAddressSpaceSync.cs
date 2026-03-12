@@ -197,10 +197,10 @@ internal static class ProcessAddressSpaceSync
         if (len == 0) return;
         if (engines.Count == 0) return;
         var end = ComputeRangeEnd(addr, len);
-        foreach (var vma in vmaManager.FindVMAsInRange(addr, end))
+        foreach (var vma in vmaManager.FindVmAreasInRange(addr, end))
         {
             if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
-            VMAManager.SyncVMA(vma, engines, addr, end);
+            VMAManager.SyncVmArea(vma, engines, addr, end);
         }
     }
 

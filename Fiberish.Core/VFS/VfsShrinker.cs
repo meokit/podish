@@ -40,7 +40,7 @@ public static class VfsShrinker
 
         long pageCacheBytesReclaimed = 0;
         if ((mode & VfsShrinkMode.PageCache) != 0)
-            pageCacheBytesReclaimed = GlobalPageCacheManager.TryReclaimBytes(long.MaxValue);
+            pageCacheBytesReclaimed = GlobalAddressSpaceCacheManager.TryReclaimBytes(long.MaxValue);
 
         long dentriesDropped = 0;
         if ((mode & VfsShrinkMode.DentryCache) != 0)

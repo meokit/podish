@@ -38,16 +38,16 @@ public readonly record struct MemoryStatsSnapshot(
     public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
     {
         var allocated = ExternalPageManager.GetAllocatedBytes();
-        var cache = GlobalPageCacheManager.GetCacheStats();
-        var cacheStates = GlobalPageCacheManager.GetPageStatesSnapshot();
-        var cachedBytes = (cache.TotalPages - cache.AnonSharedSourcePages) * LinuxConstants.PageSize;
+        var cache = GlobalAddressSpaceCacheManager.GetAddressSpaceStats();
+        var cacheStates = GlobalAddressSpaceCacheManager.GetAddressSpacePageStatesSnapshot();
+        var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
         var nowTicks = DateTime.UtcNow.Ticks;
         var processStats = AggregateProcessMemoryStats(sm, nowTicks);
         var privateBreakdown = processStats.PrivateBreakdown;
         var anonymousZeroMappedBytes = processStats.AnonymousZeroMappedBytes;
-        var anonymousSharedMaterializedBytes = cache.AnonSharedSourcePages * LinuxConstants.PageSize;
+        const long anonymousSharedMaterializedBytes = 0;
         var privateOverlayBytes = privateBreakdown.TotalAnon + privateBreakdown.TotalFilePrivate;
         var anonBytes = Math.Max(0, allocated - cachedBytes) + anonymousSharedMaterializedBytes;
         var shmemCacheBytes = cache.ShmemPages * LinuxConstants.PageSize;
@@ -113,7 +113,7 @@ public readonly record struct MemoryStatsSnapshot(
     }
 
     private static (long ActiveFile, long InactiveFile, long ActiveShmem, long InactiveShmem) SplitCacheByAge(
-        IReadOnlyList<GlobalPageCacheManager.CachePageState> cacheStates, long nowTicks)
+        IReadOnlyList<GlobalAddressSpaceCacheManager.AddressSpacePageState> cacheStates, long nowTicks)
     {
         long activeFile = 0;
         long inactiveFile = 0;
@@ -122,7 +122,7 @@ public readonly record struct MemoryStatsSnapshot(
         foreach (var state in cacheStates)
         {
             var active = nowTicks - state.LastAccessTicks <= ActiveThresholdTicks;
-            if (state.Class == GlobalPageCacheManager.PageCacheClass.Shmem)
+            if (state.Class == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem)
             {
                 if (active) activeShmem += LinuxConstants.PageSize;
                 else inactiveShmem += LinuxConstants.PageSize;
@@ -159,29 +159,12 @@ public readonly record struct MemoryStatsSnapshot(
 
             if (vma.File == null)
             {
-                var sharedStates = vma.VmMapping.SnapshotPageStates();
-                var privateStates =
-                    vma.VmAnonVma?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
-                if (vma.VmMapping.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
-                {
-                    var startPageIndex = vma.GetPageIndex(vma.Start);
-                    var endPageIndex = startPageIndex + vma.Length / LinuxConstants.PageSize;
-                    var materializedSharedPages = vma.VmMapping.CountPagesInRange(startPageIndex, endPageIndex);
-                    var privatePages = vma.VmAnonVma?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
-                    var zeroPages = Math.Max(0L,
-                        endPageIndex - startPageIndex - materializedSharedPages - privatePages);
-                    anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
-                }
-
-                foreach (var state in sharedStates)
-                {
-                    var key = state.Ptr;
-                    if (!seenPtrs.Add(key)) continue;
-                    totalAnon += LinuxConstants.PageSize;
-                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
-                        activeAnon += LinuxConstants.PageSize;
-                    else inactiveAnon += LinuxConstants.PageSize;
-                }
+                var privateStates = vma.VmAnonVma?.SnapshotPageStates() ?? Array.Empty<VmPageState>();
+                var startPageIndex = vma.GetPageIndex(vma.Start);
+                var endPageIndex = startPageIndex + vma.Length / LinuxConstants.PageSize;
+                var privatePages = vma.VmAnonVma?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
+                var zeroPages = Math.Max(0L, endPageIndex - startPageIndex - privatePages);
+                anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
 
                 foreach (var state in privateStates)
                 {

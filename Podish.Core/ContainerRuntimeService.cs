@@ -59,7 +59,7 @@ public sealed class ContainerRuntimeService
     {
         await Task.CompletedTask;
         using var _externalPageScope = ExternalPageManager.BeginIsolatedScope();
-        using var _globalPageCacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var _globalPageCacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
 
         var scheduler = new KernelScheduler();
         scheduler.LoggerFactory = _loggerFactory;
@@ -277,8 +277,7 @@ public sealed class ContainerRuntimeService
                     runtime.Syscalls.MountDetachedTmpfsFile(
                         "/etc/hostname",
                         "hostname",
-                        Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)),
-                        true);
+                        Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)));
                 }
 
                 if (!string.IsNullOrWhiteSpace(request.Hostname))
@@ -287,8 +286,7 @@ public sealed class ContainerRuntimeService
                     runtime.Syscalls.MountDetachedTmpfsFile(
                         "/etc/hosts",
                         "hosts",
-                        Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)),
-                        true);
+                        Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)));
                 }
 
                 var resolvConf = BuildResolvConfContent(request.DnsServers);
@@ -296,8 +294,7 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.MountDetachedTmpfsFile(
                     "/etc/resolv.conf",
                     "resolv.conf",
-                    Encoding.UTF8.GetBytes(resolvConf),
-                    true);
+                    Encoding.UTF8.GetBytes(resolvConf));
             }
             catch (Exception ex)
             {

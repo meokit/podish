@@ -1,1 +1,0 @@
-global using VMA = Fiberish.Memory.VmArea;

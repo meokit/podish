@@ -15,7 +15,7 @@ public class ExecveErrorMappingTests
     public async Task SysExecve_WhenExecPathHitsOom_ReturnsEnomem()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
 
         using var engine = new Engine();

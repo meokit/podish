@@ -1,52 +1,11 @@
 using Fiberish.Native;
-using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
-public enum MemoryObjectKind
-{
-    Anonymous,
-    File,
-    Image
-}
-
-public enum MemoryObjectRole
-{
-    FileSharedSource,
-    ShmemSharedSource,
-    AnonSharedSourceZeroFill,
-    PrivateOverlay
-}
-
-public class MemoryObject
+public sealed class VmPageSlots
 {
     private readonly object _lock = new();
-
     private readonly Dictionary<uint, VmPage> _pages = new();
-    private int _refCount = 1;
-
-    public MemoryObject(MemoryObjectKind kind, LinuxFile? file, long fileBaseOffset, long fileSize, bool shared,
-        MemoryObjectRole? role = null)
-    {
-        Kind = kind;
-        File = file;
-        FileBaseOffset = fileBaseOffset;
-        FileSize = fileSize;
-        IsShared = shared;
-        Role = role ?? InferRole(kind, shared);
-    }
-
-    public MemoryObjectKind Kind { get; }
-    public MemoryObjectRole Role { get; }
-    public LinuxFile? File { get; }
-    public long FileBaseOffset { get; }
-    public long FileSize { get; }
-    public bool IsShared { get; }
-
-    public bool IsRecoverableWithoutSwap =>
-        Role is MemoryObjectRole.FileSharedSource or MemoryObjectRole.AnonSharedSourceZeroFill;
-
-    public bool IsPrivateOverlay => Role == MemoryObjectRole.PrivateOverlay;
 
     public int PageCount
     {
@@ -59,28 +18,6 @@ public class MemoryObject
         }
     }
 
-    private static MemoryObjectRole InferRole(MemoryObjectKind kind, bool shared)
-    {
-        return kind switch
-        {
-            MemoryObjectKind.File => MemoryObjectRole.FileSharedSource,
-            MemoryObjectKind.Anonymous when shared => MemoryObjectRole.ShmemSharedSource,
-            MemoryObjectKind.Anonymous => MemoryObjectRole.PrivateOverlay,
-            _ => MemoryObjectRole.PrivateOverlay
-        };
-    }
-
-    public void AddRef()
-    {
-        lock (_lock)
-        {
-            _refCount++;
-        }
-    }
-
-    /// <summary>
-    ///     Try to get an existing page without creating it.
-    /// </summary>
     public IntPtr GetPage(uint pageIndex)
     {
         lock (_lock)
@@ -111,10 +48,7 @@ public class MemoryObject
         }
     }
 
-    /// <summary>
-    ///     Used by COW: store a private page that was just allocated.
-    /// </summary>
-    internal void SetPage(uint pageIndex, IntPtr ptr)
+    public void InstallPage(uint pageIndex, IntPtr ptr)
     {
         lock (_lock)
         {
@@ -126,7 +60,7 @@ public class MemoryObject
         }
     }
 
-    internal IntPtr SetPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
+    public IntPtr InstallPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
     {
         lock (_lock)
         {
@@ -145,30 +79,6 @@ public class MemoryObject
             inserted = true;
             return ptr;
         }
-    }
-
-    public void Release()
-    {
-        List<IntPtr>? toRelease = null;
-        lock (_lock)
-        {
-            _refCount--;
-            if (_refCount > 0) return;
-            toRelease = _pages.Values.Select(static entry => entry.Ptr).ToList();
-            _pages.Clear();
-        }
-
-        foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
-    }
-
-    protected virtual MemoryObject CreateCloneContainer()
-    {
-        return this switch
-        {
-            AddressSpace => new AddressSpace(Kind, File, FileBaseOffset, FileSize, IsShared, Role),
-            AnonVma => new AnonVma(Kind, File, FileBaseOffset, FileSize, IsShared, Role),
-            _ => new MemoryObject(Kind, File, FileBaseOffset, FileSize, IsShared, Role)
-        };
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
@@ -299,28 +209,23 @@ public class MemoryObject
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
     }
 
-    /// <summary>
-    ///     Clone this object by sharing page pointers (AddRef each page) rather than copying bytes.
-    ///     Used for fork-time cloning of private-page containers so each process gets its own
-    ///     metadata object while still deferring physical copy until the next write fault.
-    /// </summary>
-    public MemoryObject ForkCloneSharingPages()
+    public VmPageSlots CloneSharedPagesForFork()
     {
-        var clone = CreateCloneContainer();
+        var clone = new VmPageSlots();
         lock (_lock)
         {
-            foreach (var (pageIndex, pagePtr) in _pages)
+            foreach (var (pageIndex, page) in _pages)
             {
-                ExternalPageManager.AddRef(pagePtr.Ptr);
+                ExternalPageManager.AddRef(page.Ptr);
                 clone._pages[pageIndex] = new VmPage
                 {
-                    Ptr = pagePtr.Ptr,
-                    Dirty = pagePtr.Dirty,
+                    Ptr = page.Ptr,
+                    Dirty = page.Dirty,
                     LastAccessTicks = DateTime.UtcNow.Ticks,
-                    Uptodate = pagePtr.Uptodate,
-                    Writeback = pagePtr.Writeback,
-                    PinCount = pagePtr.PinCount,
-                    MapCount = pagePtr.MapCount
+                    Uptodate = page.Uptodate,
+                    Writeback = page.Writeback,
+                    PinCount = page.PinCount,
+                    MapCount = page.MapCount
                 };
             }
         }
@@ -328,15 +233,14 @@ public class MemoryObject
         return clone;
     }
 
-    public IReadOnlyList<PageState> SnapshotPageStates()
+    public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
         lock (_lock)
         {
-            if (_pages.Count == 0) return Array.Empty<PageState>();
-            var states = new List<PageState>(_pages.Count);
+            if (_pages.Count == 0) return Array.Empty<VmPageState>();
+            var states = new List<VmPageState>(_pages.Count);
             foreach (var (pageIndex, entry) in _pages)
-                states.Add(new PageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
-
+                states.Add(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
             return states;
         }
     }
@@ -344,7 +248,6 @@ public class MemoryObject
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
     {
         if (startPageIndex >= endPageIndex) return 0;
-
         long count = 0;
         lock (_lock)
         {
@@ -361,14 +264,12 @@ public class MemoryObject
 
     public bool TryEvictCleanPage(uint pageIndex)
     {
-        if (!IsRecoverableWithoutSwap) return false;
         IntPtr ptr;
         lock (_lock)
         {
             if (!_pages.TryGetValue(pageIndex, out var entry)) return false;
             if (entry.Dirty) return false;
             ptr = entry.Ptr;
-            // If referenced elsewhere (e.g. mapped by an engine), skip eviction.
             if (ExternalPageManager.GetRefCount(ptr) > 1) return false;
             _pages.Remove(pageIndex);
         }
@@ -423,16 +324,30 @@ public class MemoryObject
         return true;
     }
 
-    public sealed class VmPage
+    public void ReleaseAll()
     {
-        public required IntPtr Ptr { get; set; }
-        public bool Dirty { get; set; }
-        public bool Uptodate { get; set; } = true;
-        public bool Writeback { get; set; }
-        public int MapCount { get; set; }
-        public int PinCount { get; set; }
-        public long LastAccessTicks { get; set; }
-    }
+        List<IntPtr>? toRelease = null;
+        lock (_lock)
+        {
+            if (_pages.Count == 0) return;
+            toRelease = _pages.Values.Select(static entry => entry.Ptr).ToList();
+            _pages.Clear();
+        }
 
-    public readonly record struct PageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks);
+        foreach (var ptr in toRelease)
+            ExternalPageManager.ReleasePtr(ptr);
+    }
 }
+
+public sealed class VmPage
+{
+    public required IntPtr Ptr { get; set; }
+    public bool Dirty { get; set; }
+    public bool Uptodate { get; set; } = true;
+    public bool Writeback { get; set; }
+    public int MapCount { get; set; }
+    public int PinCount { get; set; }
+    public long LastAccessTicks { get; set; }
+}
+
+public readonly record struct VmPageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks);

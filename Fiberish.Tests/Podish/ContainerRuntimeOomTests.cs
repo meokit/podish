@@ -15,7 +15,7 @@ public sealed class ContainerRuntimeOomTests
     public async Task RunAsync_StartupOom_EmitsSpecificUserMessageAndEvent()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
 
         var root = Path.Combine(Path.GetTempPath(), "podish-oom-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

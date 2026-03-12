@@ -211,7 +211,7 @@ public class Process
         // This is critical for vfork+execve: the child may share the parent's VMAManager
         // via CLONE_VM. We must NOT clear the shared memory — instead, create a private
         // VMAManager for this process before proceeding.
-        var freshMem = new VMAManager(Mem.MemoryObjects);
+        var freshMem = new VMAManager(Mem.Backings);
         Mem = freshMem;
         Syscalls.Mem = freshMem;
         ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, freshMem, oldEngine);

@@ -300,7 +300,7 @@ public class LayerFsTests
     [Fact]
     public void PageCacheReclaim_ShouldSkipMappedPage_AndReadStillCorrectAfterUnmap()
     {
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("reclaim.txt", Encoding.UTF8.GetBytes("hello")));
         var fs = new LayerFileSystem();
@@ -325,13 +325,13 @@ public class LayerFsTests
         var cache = Assert.IsType<AddressSpace>(inode.Mapping);
         Assert.True(cache.PageCount > 0);
 
-        var reclaimedWhileMapped = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
+        var reclaimedWhileMapped = GlobalAddressSpaceCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
         Assert.True(reclaimedWhileMapped < LinuxConstants.PageSize);
         Assert.True(cache.PageCount > 0);
 
         mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-        var reclaimedAfterUnmap = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
+        var reclaimedAfterUnmap = GlobalAddressSpaceCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
         Assert.True(reclaimedAfterUnmap >= LinuxConstants.PageSize);
         Assert.Equal(0, cache.PageCount);
 
@@ -352,7 +352,7 @@ public class LayerFsTests
     [Fact]
     public void EndToEnd_ShrinkAll_PathWalkAndMmapCanRebuild()
     {
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
         var sm = new SyscallManager(engine, mm, 0);

@@ -13,7 +13,7 @@ public class PageFaultOomTests
     public void AnonymousFault_WhenQuotaExhausted_ReturnsOom()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
@@ -36,7 +36,7 @@ public class PageFaultOomTests
     public void TaskPageFault_WhenOom_KillsProcessWithSigkill()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         var oldCurrent = KernelScheduler.Current;
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
 

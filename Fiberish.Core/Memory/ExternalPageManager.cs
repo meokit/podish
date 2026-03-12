@@ -41,8 +41,9 @@ public sealed class MappedPageBinding
 {
     public required IntPtr Ptr { get; init; }
     public required MappedPageOwnerKind OwnerKind { get; init; }
-    public MemoryObject? OwnerObject { get; init; }
-    public MemoryObject.VmPage? Page { get; init; }
+    public AddressSpace? Mapping { get; init; }
+    public AnonVma? AnonVma { get; init; }
+    public VmPage? Page { get; init; }
     public uint PageIndex { get; init; }
 
     public static MappedPageBinding FromRaw(IntPtr ptr)
@@ -54,18 +55,25 @@ public sealed class MappedPageBinding
         };
     }
 
-    public static MappedPageBinding FromObjectPage(MemoryObject ownerObject, uint pageIndex, MemoryObject.VmPage page)
+    public static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, VmPage page)
     {
         return new MappedPageBinding
         {
             Ptr = page.Ptr,
-            OwnerKind = ownerObject switch
-            {
-                AddressSpace => MappedPageOwnerKind.AddressSpace,
-                AnonVma => MappedPageOwnerKind.AnonVma,
-                _ => MappedPageOwnerKind.Special
-            },
-            OwnerObject = ownerObject,
+            OwnerKind = MappedPageOwnerKind.AddressSpace,
+            Mapping = mapping,
+            Page = page,
+            PageIndex = pageIndex
+        };
+    }
+
+    public static MappedPageBinding FromAnonVmaPage(AnonVma anonVma, uint pageIndex, VmPage page)
+    {
+        return new MappedPageBinding
+        {
+            Ptr = page.Ptr,
+            OwnerKind = MappedPageOwnerKind.AnonVma,
+            AnonVma = anonVma,
             Page = page,
             PageIndex = pageIndex
         };
@@ -194,7 +202,7 @@ public sealed class ExternalPageManager
             ReleaseGlobalRef(binding.Ptr);
 
         if (binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
-            binding.OwnerObject is AnonVma anonVma &&
+            binding.AnonVma is { } anonVma &&
             binding.Page is { MapCount: <= 0, PinCount: <= 0 } anonPage)
             anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
     }

@@ -1796,14 +1796,14 @@ public partial class HostInode : Inode
         if (!sync) return 0;
 
         int rc;
-        GlobalPageCacheManager.BeginWritebackPages();
+        GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
         try
         {
             rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         }
         finally
         {
-            GlobalPageCacheManager.EndWritebackPages();
+            GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
         }
 
         if (rc < 0) return rc;
@@ -1865,14 +1865,14 @@ public partial class HostInode : Inode
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
                 int rc;
-                GlobalPageCacheManager.BeginWritebackPages();
+                GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
                 try
                 {
                     rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
                 }
                 finally
                 {
-                    GlobalPageCacheManager.EndWritebackPages();
+                    GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
                 }
 
                 if (rc < 0) return rc;

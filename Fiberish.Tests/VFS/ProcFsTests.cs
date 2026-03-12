@@ -281,10 +281,10 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_WriteShouldReclaimPageCache()
     {
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
-        MemoryObject? cache = null;
+        AddressSpace? cache = null;
 
         try
         {
@@ -295,8 +295,8 @@ public class ProcFsTests
             Assert.True(loc.IsValid);
             Assert.Equal("0\n", ReadAll(loc));
 
-            cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(cache);
+            cache = new AddressSpace(AddressSpaceKind.File);
+            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
@@ -365,10 +365,10 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode3_ShouldReclaimPagecacheAndVfsCaches()
     {
-        using var cacheScope = GlobalPageCacheManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
-        MemoryObject? cache = null;
+        AddressSpace? cache = null;
 
         try
         {
@@ -384,8 +384,8 @@ public class ProcFsTests
             Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
             Assert.True(procRoot.Dentry.TryGetCachedChild("sys", out _));
 
-            cache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true);
-            GlobalPageCacheManager.TrackPageCache(cache);
+            cache = new AddressSpace(AddressSpaceKind.File);
+            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);

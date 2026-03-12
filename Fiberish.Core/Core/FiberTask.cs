@@ -329,7 +329,7 @@ public class FiberTask
                     esp, copied, stackBuf.Length);
             }
 
-            Process.Mem.LogVMAs();
+            Process.Mem.LogVmAreas();
 
             // Deliver fatal signal and yield
             PostSignalInfo(new SigInfo
@@ -1244,7 +1244,7 @@ public class FiberTask
             if (CPU.CopyFromUser(ip, bytes))
             {
                 var hex = BitConverter.ToString(bytes).Replace("-", " ");
-                var vma = Process.Mem.FindVMA(ip);
+                var vma = Process.Mem.FindVmArea(ip);
                 Logger.LogInformation("#UD bytes @0x{EIP:X}: {Bytes} (VMA={Vma}, range=0x{Start:X}-0x{End:X})",
                     ip, hex, vma?.Name ?? "<unknown>", vma?.Start ?? 0, vma?.End ?? 0);
             }

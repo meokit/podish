@@ -52,7 +52,7 @@ public class HostMappedPageCacheGeometryTests
             Assert.True(engine.CopyToUser(mapAddr + 3 * LinuxConstants.PageSize + 2, "ZZ"u8.ToArray()));
 
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-            VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
+            VMAManager.SyncVmArea(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
 
             var updated = File.ReadAllBytes(hostFile);
             Assert.Equal((byte)'X', updated[1]);
@@ -154,7 +154,7 @@ public class HostMappedPageCacheGeometryTests
                 Assert.True(engine.CopyToUser(mapAddr + 1, "UV"u8.ToArray()));
                 Assert.True(engine.CopyToUser(mapAddr + 3 * LinuxConstants.PageSize + 2, "WX"u8.ToArray()));
                 var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-                VMAManager.SyncVMA(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
+                VMAManager.SyncVmArea(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
                 mappedFile.Close();
                 sm.Close();
             }
@@ -225,7 +225,7 @@ public class HostMappedPageCacheGeometryTests
 
             Assert.True(engine.CopyToUser(tailPageAddr + 123 + 16, "TAIL!"u8.ToArray()));
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
-            VMAManager.SyncVMA(vma, engine, tailPageAddr, tailPageAddr + LinuxConstants.PageSize);
+            VMAManager.SyncVmArea(vma, engine, tailPageAddr, tailPageAddr + LinuxConstants.PageSize);
 
             var refreshed = File.ReadAllBytes(hostFile);
             Assert.Equal(bytes.Length, refreshed.Length);

@@ -51,6 +51,7 @@ public class TruncateMmapLifecycleTests
 
         var vma = Assert.Single(env.Mm.VMAs);
         var secondPageIndex = vma.GetPageIndex(secondPage);
+        Assert.NotNull(vma.VmMapping);
         Assert.NotEqual(IntPtr.Zero, vma.VmMapping.GetPage(secondPageIndex));
 
         Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
@@ -134,11 +135,12 @@ public class TruncateMmapLifecycleTests
 
         var vma = Assert.Single(env.Mm1.VMAs, candidate => ReferenceEquals(candidate.File?.OpenedInode, env.Inode));
         var secondPageIndex = vma.GetPageIndex(secondPage);
+        Assert.NotNull(vma.VmMapping);
         vma.VmMapping.MarkDirty(secondPageIndex);
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
         Assert.Equal(0UL, env.Task1.PendingSignals);
 
-        VMAManager.SyncVMA(vma, [env.Engine1], vma.Start, vma.End);
+        VMAManager.SyncVmArea(vma, [env.Engine1], vma.Start, vma.End);
 
         Assert.Equal(0UL, env.Task1.PendingSignals);
     }

@@ -24,7 +24,7 @@ public class SysVShmSegment
     public int Lpid { get; set; } // Last operator PID
     public int NAttch { get; set; } // Attach count
     public bool MarkedForDelete { get; set; }
-    public MemoryObject BackingObject { get; set; } = null!;
+    public AddressSpace BackingObject { get; set; } = null!;
 
     /// <summary>
     ///     Number of pages in this segment.
@@ -51,14 +51,14 @@ public class SysVShmAttach
 public class SysVShmManager
 {
     private readonly List<SysVShmAttach> _attaches = new();
-    private readonly MemoryObjectManager _memoryObjects;
+    private readonly VmBackingManager _backings;
     private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
     private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
     private int _nextShmid = 1;
 
-    public SysVShmManager(MemoryObjectManager? memoryObjects = null)
+    public SysVShmManager(VmBackingManager? backings = null)
     {
-        _memoryObjects = memoryObjects ?? new MemoryObjectManager();
+        _backings = backings ?? new VmBackingManager();
     }
 
     /// <summary>
@@ -119,7 +119,7 @@ public class SysVShmManager
             DTime = DateTime.UtcNow,
             NAttch = 0,
             MarkedForDelete = false,
-            BackingObject = _memoryObjects.CreateSharedAnonymous()
+            BackingObject = _backings.CreateSharedAnonymous()
         };
 
         _segmentsByShmid[shmid] = segment;
@@ -136,7 +136,7 @@ public class SysVShmManager
     /// <param name="addr">Desired address (0 = auto-allocate)</param>
     /// <param name="flags">SHM_RDONLY, SHM_RND, SHM_REMAP</param>
     /// <param name="pid">Process ID</param>
-    /// <param name="vmaManager">VMA manager for the process</param>
+    /// <param name="vmaManager">VmArea manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>Attached address on success, negative errno on failure</returns>
     public long ShmAt(int shmid, uint addr, int flags, int pid, VMAManager vmaManager, Engine engine,
@@ -188,7 +188,7 @@ public class SysVShmManager
             return -(int)Errno.EINVAL;
 
         // Check for overlapping VMAs unless SHM_REMAP is specified
-        var existingVmas = vmaManager.FindVMAsInRange(attachAddr, attachEnd);
+        var existingVmas = vmaManager.FindVmAreasInRange(attachAddr, attachEnd);
         if (existingVmas.Count > 0)
         {
             if ((flags & LinuxConstants.SHM_REMAP) != 0)
@@ -204,11 +204,11 @@ public class SysVShmManager
             }
         }
 
-        // Create VMA for this mapping
+        // Create VmArea for this mapping
         try
         {
-            // Create a special VMA that references the segment's backing object
-            var vma = new VMA
+            // Create a special VmArea that references the segment's backing object
+            var vma = new VmArea
             {
                 Start = attachAddr,
                 End = attachEnd,
@@ -222,7 +222,7 @@ public class SysVShmManager
             };
             segment.BackingObject.AddRef();
 
-            // Add VMA to manager
+            // Add VmArea to manager
             vmaManager.AddVma(vma);
             ProcessAddressSpaceSync.PublishMappingChange(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
 
@@ -254,7 +254,7 @@ public class SysVShmManager
     /// </summary>
     /// <param name="addr">Address of the attachment</param>
     /// <param name="pid">Process ID</param>
-    /// <param name="vmaManager">VMA manager for the process</param>
+    /// <param name="vmaManager">VmArea manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>0 on success, negative errno on failure</returns>
     public int ShmDt(uint addr, int pid, VMAManager vmaManager, Engine engine, Process? process = null)
@@ -376,7 +376,7 @@ public class SysVShmManager
 
             if (_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
             {
-                // [P1] Must munmap the VMA to avoid leaking page references
+                // [P1] Must munmap the VmArea to avoid leaking page references
                 ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.Size, ownerProcess);
 
                 segment.NAttch--;
@@ -445,7 +445,7 @@ public class SysVShmManager
         {
             if (!TryComputeRangeEnd(addr, size, out var end))
                 return 0;
-            var vmas = vmaManager.FindVMAsInRange(addr, end);
+            var vmas = vmaManager.FindVmAreasInRange(addr, end);
             if (vmas.Count == 0)
                 return addr;
 
@@ -581,9 +581,9 @@ public class SysVShmManager
 public static class VMAManagerExtensions
 {
     /// <summary>
-    ///     Add a VMA directly (for SysV SHM use).
+    ///     Add a VmArea directly (for SysV SHM use).
     /// </summary>
-    public static void AddVma(this VMAManager vmaManager, VMA vma)
+    public static void AddVma(this VMAManager vmaManager, VmArea vma)
     {
         vmaManager.AddVmaInternal(vma);
     }

@@ -270,7 +270,7 @@ public abstract class Inode : IAddressSpaceOperations
     /// </summary>
     public AddressSpace? Mapping { get; set; }
 
-    public MemoryObjectManager? PageCacheManager { get; set; }
+    public VmBackingManager? MappingManager { get; set; }
 
     public virtual ulong Ino { get; set; }
     public virtual InodeType Type { get; set; }
@@ -652,7 +652,7 @@ public abstract class Inode : IAddressSpaceOperations
     protected virtual void OnEvictCache()
     {
         // Release page-cache resources and remove inode from in-core tracking.
-        PageCacheManager?.ReleaseMapping(this);
+        MappingManager?.ReleaseMapping(this);
         SuperBlock?.RemoveInodeFromTracking(this);
     }
 

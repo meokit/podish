@@ -31,9 +31,9 @@ public class HostfsPageCacheWritebackTests
 
             Assert.True(engine.CopyToUser(mapAddr + 1, "ABC"u8.ToArray()));
 
-            var vma = mm.FindVMA(mapAddr);
+            var vma = mm.FindVmArea(mapAddr);
             Assert.NotNull(vma);
-            VMAManager.SyncVMA(vma!, engine, mapAddr, mapAddr + LinuxConstants.PageSize);
+            VMAManager.SyncVmArea(vma!, engine, mapAddr, mapAddr + LinuxConstants.PageSize);
 
             Assert.Equal("hABCo", File.ReadAllText(hostFile));
             file.Dentry.Inode!.Release(file);
@@ -459,7 +459,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        var manager = new MemoryObjectManager();
+        var manager = new VmBackingManager();
         try
         {
             using var engine = new Engine();

@@ -72,8 +72,8 @@ public class CowForkCloneTests
 
         var parentVma = Assert.Single(parentMm.VMAs);
         Assert.Equal(FaultResult.Handled, parentMm.HandleFaultDetailed(mapAddr, false, parentEngine));
-        Assert.Equal(IntPtr.Zero, parentVma.VmAnonVma!.GetPage(parentVma.GetPageIndex(parentVma.Start)));
-        Assert.Equal(IntPtr.Zero, parentVma.VmMapping.GetPage(parentVma.GetPageIndex(parentVma.Start)));
+        Assert.Null(parentVma.VmAnonVma);
+        Assert.Null(parentVma.VmMapping);
 
         var childMm = parentMm.Clone();
         using var childEngine = new Engine();
@@ -81,9 +81,9 @@ public class CowForkCloneTests
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
         var childVma = Assert.Single(childMm.VMAs);
-        Assert.Same(parentVma.VmMapping, childVma.VmMapping);
-        Assert.NotSame(parentVma.VmAnonVma, childVma.VmAnonVma);
-        Assert.Equal(IntPtr.Zero, childVma.VmAnonVma!.GetPage(childVma.GetPageIndex(childVma.Start)));
+        Assert.Null(parentVma.VmMapping);
+        Assert.Null(childVma.VmMapping);
+        Assert.Null(childVma.VmAnonVma);
 
         Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)'C' }));
 
@@ -93,7 +93,7 @@ public class CowForkCloneTests
         Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
         Assert.Equal(0, parentRead[0]);
         Assert.Equal((byte)'C', childRead[0]);
-        Assert.Equal(IntPtr.Zero, parentVma.VmAnonVma!.GetPage(parentVma.GetPageIndex(parentVma.Start)));
+        Assert.Null(parentVma.VmAnonVma);
         Assert.NotEqual(IntPtr.Zero, childVma.VmAnonVma!.GetPage(childVma.GetPageIndex(childVma.Start)));
     }
 
@@ -130,8 +130,8 @@ public class CowForkCloneTests
 
         var vmas = mm.VMAs.OrderBy(vma => vma.Start).ToArray();
         Assert.Equal(2, vmas.Length);
-        Assert.Equal(IntPtr.Zero, vmas[0].VmMapping.GetPage(vmas[0].GetPageIndex(vmas[0].Start)));
-        Assert.Equal(IntPtr.Zero, vmas[1].VmMapping.GetPage(vmas[1].GetPageIndex(vmas[1].Start)));
+        Assert.Null(vmas[0].VmMapping);
+        Assert.Null(vmas[1].VmMapping);
 
         Assert.True(engine.CopyToUser(map1, new[] { (byte)'Z' }));
         Assert.True(engine.CopyFromUser(map1, buf));
@@ -159,7 +159,7 @@ public class CowForkCloneTests
         var pageIndex = vma.GetPageIndex(vma.Start);
         var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, privatePage);
-        Assert.Equal(IntPtr.Zero, vma.VmMapping.GetPage(pageIndex));
+        Assert.Null(vma.VmMapping);
 
         var probe = new byte[1];
         Assert.True(engine.CopyFromUser(mapAddr, probe));

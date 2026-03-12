@@ -65,7 +65,9 @@ public abstract class IndexedMemoryInode : Inode
         MTime = ATime = CTime = DateTime.Now;
     }
 
-    protected virtual GlobalPageCacheManager.PageCacheClass CacheClass => GlobalPageCacheManager.PageCacheClass.Shmem;
+    protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
+        GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem;
+
     protected virtual bool PinNamespaceDentries => false;
 
     protected IndexedMemorySuperBlock IndexedSb => (IndexedMemorySuperBlock)SuperBlock;
@@ -740,14 +742,13 @@ public abstract class IndexedMemoryInode : Inode
         base.Release(linuxFile);
     }
 
-    protected MemoryObject EnsurePageCacheLocked()
+    protected AddressSpace EnsurePageCacheLocked()
     {
         if (Mapping != null) return Mapping;
-        var role = CacheClass == GlobalPageCacheManager.PageCacheClass.Shmem
-            ? MemoryObjectRole.ShmemSharedSource
-            : MemoryObjectRole.FileSharedSource;
-        Mapping = new AddressSpace(MemoryObjectKind.File, null, 0, 0, true, role);
-        GlobalPageCacheManager.TrackPageCache(Mapping, CacheClass);
+        Mapping = new AddressSpace(CacheClass == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem
+            ? AddressSpaceKind.Shmem
+            : AddressSpaceKind.File);
+        GlobalAddressSpaceCacheManager.TrackAddressSpace(Mapping, CacheClass);
         OwnsPageCache = true;
         return Mapping;
     }
@@ -761,7 +762,7 @@ public abstract class IndexedMemoryInode : Inode
         DirtyPageIndexes.Clear();
     }
 
-    protected static void ReadFromPageCacheLocked(MemoryObject pageCache, long offset, Span<byte> destination)
+    protected static void ReadFromPageCacheLocked(AddressSpace pageCache, long offset, Span<byte> destination)
     {
         var copied = 0;
         while (copied < destination.Length)
@@ -787,7 +788,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    protected static void WriteToPageCacheLocked(MemoryObject pageCache, long offset, ReadOnlySpan<byte> source)
+    protected static void WriteToPageCacheLocked(AddressSpace pageCache, long offset, ReadOnlySpan<byte> source)
     {
         var consumed = 0;
         while (consumed < source.Length)
@@ -822,7 +823,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    protected void MarkDirtyRangeLocked(MemoryObject pageCache, long offset, int length)
+    protected void MarkDirtyRangeLocked(AddressSpace pageCache, long offset, int length)
     {
         if (length <= 0) return;
         var startPage = (uint)(offset / LinuxConstants.PageSize);

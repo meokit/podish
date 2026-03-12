@@ -173,7 +173,8 @@ public sealed class SilkInode : IndexedMemoryInode
         _metadata = repository.Metadata;
     }
 
-    protected override GlobalPageCacheManager.PageCacheClass CacheClass => GlobalPageCacheManager.PageCacheClass.File;
+    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
+        GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File;
 
     private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
 

@@ -36,7 +36,7 @@ public class VmArea
     public ulong VmPgoff { get; set; }
 
     public string Name { get; set; } = string.Empty;
-    public MemoryObject VmMapping { get; set; } = null!;
+    public AddressSpace? VmMapping { get; set; }
 
     /// <summary>
     ///     Holds per-process private pages for MAP_PRIVATE mappings.
@@ -71,7 +71,7 @@ public class VmArea
     }
 
     public LinuxFile? VmFile => File;
-    public AddressSpace? VmAddressSpace => VmMapping as AddressSpace;
+    public AddressSpace? VmAddressSpace => VmMapping;
 
     public bool IsFileBacked => File != null;
     public bool IsPrivateMapping => (Flags & MapFlags.Private) != 0 && VmAnonVma != null;
@@ -126,9 +126,9 @@ public class VmArea
 
     public VmArea Clone()
     {
-        VmMapping.AddRef();
+        VmMapping?.AddRef();
         // Private pages are shared page-for-page across fork and split lazily on the next write.
-        var privateObj = VmAnonVma?.ForkCloneSharingPages() as AnonVma;
+        var privateObj = VmAnonVma?.CloneForFork();
         var clonedFileMapping = FileMapping?.AddRef();
 
         return new VmArea

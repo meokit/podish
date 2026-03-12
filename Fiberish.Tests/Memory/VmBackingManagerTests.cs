@@ -4,12 +4,12 @@ using Xunit;
 
 namespace Fiberish.Tests.Memory;
 
-public class MemoryObjectManagerTests
+public class VmBackingManagerTests
 {
     [Fact]
     public void InodePageCache_DoesNotCollide_ForDifferentInodesWithSameIno()
     {
-        var manager = new MemoryObjectManager();
+        var manager = new VmBackingManager();
         var sb = new TestSuperBlock();
         var inodeA = new TestInode(sb, 42);
         var inodeB = new TestInode(sb, 42);
@@ -33,8 +33,8 @@ public class MemoryObjectManagerTests
     [Fact]
     public void InodePageCache_IsIsolatedAcrossManagers()
     {
-        var managerA = new MemoryObjectManager();
-        var managerB = new MemoryObjectManager();
+        var managerA = new VmBackingManager();
+        var managerB = new VmBackingManager();
         var sb = new TestSuperBlock();
         var inode = new TestInode(sb, 99);
 

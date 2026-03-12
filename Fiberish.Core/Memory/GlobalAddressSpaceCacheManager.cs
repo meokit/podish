@@ -5,16 +5,15 @@ using Fiberish.Native;
 namespace Fiberish.Memory;
 
 /// <summary>
-///     Global page-cache policy manager.
+///     Global address_space cache policy manager.
 ///     Maintenance runs at syscall safe-points to avoid concurrent VM mutation.
 /// </summary>
-public static class GlobalPageCacheManager
+public static class GlobalAddressSpaceCacheManager
 {
-    public enum PageCacheClass
+    public enum AddressSpaceCacheClass
     {
         File,
-        Shmem,
-        AnonSharedSource
+        Shmem
     }
 
     private static readonly AsyncLocal<State?> ScopedState = new();
@@ -46,13 +45,13 @@ public static class GlobalPageCacheManager
         return new ScopeRestore(previous);
     }
 
-    public static void TrackPageCache(MemoryObject pageCache, PageCacheClass cacheClass = PageCacheClass.File)
+    public static void TrackAddressSpace(AddressSpace mapping, AddressSpaceCacheClass cacheClass = AddressSpaceCacheClass.File)
     {
         var state = CurrentState;
         lock (state.Gate)
         {
-            state.TrackedCaches[RuntimeHelpers.GetHashCode(pageCache)] =
-                new TrackedEntry(new WeakReference<MemoryObject>(pageCache), cacheClass);
+            state.TrackedCaches[RuntimeHelpers.GetHashCode(mapping)] =
+                new TrackedEntry(new WeakReference<AddressSpace>(mapping), cacheClass);
         }
     }
 
@@ -88,58 +87,55 @@ public static class GlobalPageCacheManager
         }
     }
 
-    public static CacheStats GetCacheStats()
+    public static AddressSpaceStats GetAddressSpaceStats()
     {
         var state = CurrentState;
         var caches = GetLiveCaches(state);
         long total = 0;
         long dirty = 0;
         long shmem = 0;
-        long anonSharedSource = 0;
         foreach (var (cache, cacheClass) in caches)
         {
             var states = cache.SnapshotPageStates();
             total += states.Count;
-            if (cacheClass == PageCacheClass.Shmem) shmem += states.Count;
-            if (cacheClass == PageCacheClass.AnonSharedSource) anonSharedSource += states.Count;
+            if (cacheClass == AddressSpaceCacheClass.Shmem) shmem += states.Count;
             foreach (var pageState in states)
                 if (pageState.Dirty)
                     dirty++;
         }
 
-        return new CacheStats(
+        return new AddressSpaceStats(
             total,
             total - dirty,
             dirty,
             shmem,
-            anonSharedSource,
             Interlocked.Read(ref state.WritebackPagesInFlight));
     }
 
-    public static IReadOnlyList<CachePageState> GetPageStatesSnapshot()
+    public static IReadOnlyList<AddressSpacePageState> GetAddressSpacePageStatesSnapshot()
     {
         var caches = GetLiveCaches(CurrentState);
-        if (caches.Count == 0) return Array.Empty<CachePageState>();
+        if (caches.Count == 0) return Array.Empty<AddressSpacePageState>();
 
-        var states = new List<CachePageState>();
+        var states = new List<AddressSpacePageState>();
         foreach (var (cache, cacheClass) in caches)
         {
             var cacheStates = cache.SnapshotPageStates();
             foreach (var state in cacheStates)
-                states.Add(new CachePageState(cacheClass, state.Dirty, state.LastAccessTicks));
+                states.Add(new AddressSpacePageState(cacheClass, state.Dirty, state.LastAccessTicks));
         }
 
         return states;
     }
 
-    public static void BeginWritebackPages(int pages = 1)
+    public static void BeginAddressSpaceWriteback(int pages = 1)
     {
         if (pages <= 0) return;
         var state = CurrentState;
         Interlocked.Add(ref state.WritebackPagesInFlight, pages);
     }
 
-    public static void EndWritebackPages(int pages = 1)
+    public static void EndAddressSpaceWriteback(int pages = 1)
     {
         if (pages <= 0) return;
         var state = CurrentState;
@@ -171,11 +167,11 @@ public static class GlobalPageCacheManager
         ReclaimFromCaches(caches, targetFree);
     }
 
-    private static List<(MemoryObject Cache, PageCacheClass Class)> GetLiveCaches(State state)
+    private static List<(AddressSpace Cache, AddressSpaceCacheClass Class)> GetLiveCaches(State state)
     {
         lock (state.Gate)
         {
-            var caches = new List<(MemoryObject Cache, PageCacheClass Class)>(state.TrackedCaches.Count);
+            var caches = new List<(AddressSpace Cache, AddressSpaceCacheClass Class)>(state.TrackedCaches.Count);
             var deadKeys = new List<int>();
             foreach (var (key, entry) in state.TrackedCaches)
                 if (entry.Cache.TryGetTarget(out var cache))
@@ -188,13 +184,13 @@ public static class GlobalPageCacheManager
         }
     }
 
-    private static long ReclaimFromCaches(List<(MemoryObject Cache, PageCacheClass Class)> caches, long targetFreeBytes)
+    private static long ReclaimFromCaches(List<(AddressSpace Cache, AddressSpaceCacheClass Class)> caches, long targetFreeBytes)
     {
         if (targetFreeBytes <= 0) return 0;
-        var candidates = new List<(MemoryObject Cache, uint PageIndex, long LastAccessTicks)>();
+        var candidates = new List<(AddressSpace Cache, uint PageIndex, long LastAccessTicks)>();
         foreach (var (cache, cacheClass) in caches)
         {
-            if (cacheClass == PageCacheClass.Shmem) continue;
+            if (cacheClass == AddressSpaceCacheClass.Shmem) continue;
             var states = cache.SnapshotPageStates();
             foreach (var state in states)
             {
@@ -243,15 +239,14 @@ public static class GlobalPageCacheManager
         }
     }
 
-    private readonly record struct TrackedEntry(WeakReference<MemoryObject> Cache, PageCacheClass Class);
+    private readonly record struct TrackedEntry(WeakReference<AddressSpace> Cache, AddressSpaceCacheClass Class);
 
-    public readonly record struct CacheStats(
+    public readonly record struct AddressSpaceStats(
         long TotalPages,
         long CleanPages,
         long DirtyPages,
         long ShmemPages,
-        long AnonSharedSourcePages,
         long WritebackPages);
 
-    public readonly record struct CachePageState(PageCacheClass Class, bool Dirty, long LastAccessTicks);
+    public readonly record struct AddressSpacePageState(AddressSpaceCacheClass Class, bool Dirty, long LastAccessTicks);
 }

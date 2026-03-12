@@ -230,7 +230,7 @@ public class OverlayTests
             lowerInode.Ino = forcedIno;
             upperInode.Ino = forcedIno;
 
-            var manager = new MemoryObjectManager();
+            var manager = new VmBackingManager();
             var lowerCache = manager.GetOrCreateMapping(lowerInode);
             var upperCache = manager.GetOrCreateMapping(upperInode);
 

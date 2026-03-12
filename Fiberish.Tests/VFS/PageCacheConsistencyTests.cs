@@ -260,9 +260,9 @@ public class PageCacheConsistencyTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "hello");
 
-        var manager = new MemoryObjectManager();
+        var manager = new VmBackingManager();
         LinuxFile? file = null;
-        MemoryObject? cache = null;
+        AddressSpace? cache = null;
         try
         {
             file = OpenHostFile(root, "data.bin");
@@ -324,9 +324,9 @@ public class PageCacheConsistencyTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "hello");
 
-        var manager = new MemoryObjectManager();
+        var manager = new VmBackingManager();
         LinuxFile? file = null;
-        MemoryObject? cache = null;
+        AddressSpace? cache = null;
         try
         {
             file = OpenHostFile(root, "data.bin");

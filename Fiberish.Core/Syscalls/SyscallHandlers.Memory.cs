@@ -82,7 +82,7 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
 
         var mapLen = (len + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
-        if (isNoReplace && sm.Mem.FindVMAsInRange(addr, addr + mapLen).Count > 0)
+        if (isNoReplace && sm.Mem.FindVmAreasInRange(addr, addr + mapLen).Count > 0)
             return -(int)Errno.EEXIST;
 
         if (isAnon)
@@ -196,8 +196,8 @@ public partial class SyscallManager
         var oldLenAligned = (oldLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
         var newLenAligned = (newLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
 
-        // Find the existing VMA containing oldAddr
-        var oldVma = sm.Mem.FindVMA(oldAddr);
+        // Find the existing VmArea containing oldAddr
+        var oldVma = sm.Mem.FindVmArea(oldAddr);
         if (oldVma == null) return -(int)Errno.EFAULT;
 
         // Verify the old range is fully contained within the VMA
@@ -221,9 +221,9 @@ public partial class SyscallManager
 
         // Check if there's free space right after the old region
         var canGrowInPlace = true;
-        var nextVmas = sm.Mem.FindVMAsInRange(growStart, growStart + growLen);
+        var nextVmas = sm.Mem.FindVmAreasInRange(growStart, growStart + growLen);
         foreach (var v in nextVmas)
-            if (v != oldVma) // ignore the VMA itself if it extends past oldLen
+            if (v != oldVma) // ignore the VmArea itself if it extends past oldLen
             {
                 canGrowInPlace = false;
                 break;
@@ -231,7 +231,7 @@ public partial class SyscallManager
 
         if (canGrowInPlace)
         {
-            // If oldAddr is at VMA start and the old region covers the whole VMA, extend it
+            // If oldAddr is at VmArea start and the old region covers the whole VmArea, extend it
             if (oldAddr == oldVma.Start && oldAddr + oldLenAligned == oldVma.End)
             {
                 oldVma.End = oldAddr + newLenAligned;
@@ -298,7 +298,8 @@ public partial class SyscallManager
         return (int)targetAddr;
     }
 
-    private static int TryMapRemapSlice(SyscallManager sm, VMA sourceVma, uint targetAddr, uint length, uint sourceAddr)
+    private static int TryMapRemapSlice(SyscallManager sm, VmArea sourceVma, uint targetAddr, uint length,
+        uint sourceAddr)
     {
         LinuxFile? clonedFile = null;
         try
@@ -309,7 +310,7 @@ public partial class SyscallManager
 
             _ = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, targetAddr, length, sourceVma.Perms, flags,
                 clonedFile, offset, sourceVma.Name);
-            clonedFile = null; // ownership transferred to the new VMA
+            clonedFile = null; // ownership transferred to the new VmArea
             return 0;
         }
         catch (OutOfMemoryException)
@@ -330,7 +331,7 @@ public partial class SyscallManager
         }
     }
 
-    private static LinuxFile? CloneMappingFile(VMA sourceVma)
+    private static LinuxFile? CloneMappingFile(VmArea sourceVma)
     {
         var file = sourceVma.File;
         if (file == null) return null;
@@ -338,13 +339,13 @@ public partial class SyscallManager
         return file;
     }
 
-    private static long ComputeSliceOffset(VMA sourceVma, uint sourceAddr)
+    private static long ComputeSliceOffset(VmArea sourceVma, uint sourceAddr)
     {
         if (!sourceVma.IsFileBacked) return 0;
         return sourceVma.Offset + sourceVma.GetRelativeOffsetForAddress(sourceAddr);
     }
 
-    private static bool NeedsMoveCopy(VMA sourceVma, uint sourceAddr, uint copyLen)
+    private static bool NeedsMoveCopy(VmArea sourceVma, uint sourceAddr, uint copyLen)
     {
         // Anonymous mappings have no stable backing store and must preserve bytes explicitly.
         if (!sourceVma.IsFileBacked) return true;

@@ -15,7 +15,7 @@ public static class MemoryPressureCoordinator
         _ = allocationSource;
         if (targetBytes <= 0) return 0;
         if (allocationClass == AllocationClass.Readahead) return 0;
-        return GlobalPageCacheManager.TryReclaimBytes(targetBytes);
+        return GlobalAddressSpaceCacheManager.TryReclaimBytes(targetBytes);
     }
 
     public static MemoryPressureResult TryRelieveFault(VMAManager addressSpace, Engine engine, long targetBytes,
@@ -25,7 +25,7 @@ public static class MemoryPressureCoordinator
         var unmappedPages = targetMappedPages > 0
             ? addressSpace.DropMappedCleanRecoverablePagesForPressure(engine, targetMappedPages)
             : 0;
-        var reclaimedBytes = targetBytes > 0 ? GlobalPageCacheManager.TryReclaimBytes(targetBytes) : 0;
+        var reclaimedBytes = targetBytes > 0 ? GlobalAddressSpaceCacheManager.TryReclaimBytes(targetBytes) : 0;
         return new MemoryPressureResult(reclaimedBytes, unmappedPages);
     }
 }

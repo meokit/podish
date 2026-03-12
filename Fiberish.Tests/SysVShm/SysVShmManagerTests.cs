@@ -117,11 +117,11 @@ public class SysVShmManagerTests
         const uint addr = 0x22000000;
         var attachRet = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine);
         Assert.Equal(addr, attachRet);
-        Assert.NotEmpty(ctx.Vma.FindVMAsInRange(addr, addr + 4096));
+        Assert.NotEmpty(ctx.Vma.FindVmAreasInRange(addr, addr + 4096));
 
         ctx.Manager.OnProcessExit(3001, ctx.Vma, ctx.Engine);
 
-        Assert.Empty(ctx.Vma.FindVMAsInRange(addr, addr + 4096));
+        Assert.Empty(ctx.Vma.FindVmAreasInRange(addr, addr + 4096));
     }
 
     [Fact]
@@ -140,12 +140,12 @@ public class SysVShmManagerTests
         const uint addr = 0x22400000;
         var attachRet = manager.ShmAt(shmid, addr, 0, 3201, p1.Vma, p1.Engine, p1.Process);
         Assert.Equal(addr, attachRet);
-        Assert.NotEmpty(sharedVma.FindVMAsInRange(addr, addr + 4096));
+        Assert.NotEmpty(sharedVma.FindVmAreasInRange(addr, addr + 4096));
 
         manager.OnProcessExit(3201, p1.Vma, p1.Engine, p1.Process);
 
         // Address space is still shared, so attachment must remain live.
-        Assert.NotEmpty(sharedVma.FindVMAsInRange(addr, addr + 4096));
+        Assert.NotEmpty(sharedVma.FindVmAreasInRange(addr, addr + 4096));
         Assert.Equal(0, manager.ShmDt(addr, 3202, p2.Vma, p2.Engine, p2.Process));
     }
 
@@ -165,12 +165,12 @@ public class SysVShmManagerTests
 
         // Detach from process 2 first. This must not remove process 1's attach record.
         Assert.Equal(0, manager.ShmDt(addr, 2002, p2.Vma, p2.Engine));
-        Assert.Empty(p2.Vma.FindVMAsInRange(addr, addr + 4096));
-        Assert.NotEmpty(p1.Vma.FindVMAsInRange(addr, addr + 4096));
+        Assert.Empty(p2.Vma.FindVmAreasInRange(addr, addr + 4096));
+        Assert.NotEmpty(p1.Vma.FindVmAreasInRange(addr, addr + 4096));
 
         // Process 1 should still be able to detach successfully.
         Assert.Equal(0, manager.ShmDt(addr, 2001, p1.Vma, p1.Engine));
-        Assert.Empty(p1.Vma.FindVMAsInRange(addr, addr + 4096));
+        Assert.Empty(p1.Vma.FindVmAreasInRange(addr, addr + 4096));
     }
 
     [Fact]
