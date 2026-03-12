@@ -137,17 +137,13 @@ EmuState* X86_Create() {
     state->ctx.fpu_cw = 0x037F;
     // Hooks initialized by default constructor of HookManager
 
-    // Initialize Dummy Invalid Block
-    // Allocate enough for 0 ops (just sizeof(BasicBlock)) as it has flexible array member ops[1].
-    // Wait, ops[1] means size is sizeof(BasicBlock).
-    // We don't need extra ops for the dummy block.
-    void* mem = state->block_pool.allocate(sizeof(BasicBlock));
+    // Initialize Dummy Invalid Block.
+    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
     state->dummy_invalid_block = new (mem) BasicBlock;
     state->dummy_invalid_block->is_valid = false;
     state->dummy_invalid_block->inst_count = 0;
-    // We should safely initialize ops[0] just in case?
-    // No, it won't be accessed if is_valid check fails or if we don't chain to it.
-    // But OpExitBlock checks dummy->is_valid (false) and doesn't execute.
+    state->dummy_invalid_block->slot_count = 0;
+    state->dummy_invalid_block->sentinel_slot_index = 0;
     state->ctx.fpu_sw = 0x0000;
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
@@ -225,10 +221,12 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 
     // Initialize Dummy Invalid Block (same as X86_Create)
     // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
-    void* mem = state->block_pool.allocate(sizeof(BasicBlock));
+    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
     state->dummy_invalid_block = new (mem) BasicBlock;
     state->dummy_invalid_block->is_valid = false;
     state->dummy_invalid_block->inst_count = 0;
+    state->dummy_invalid_block->slot_count = 0;
+    state->dummy_invalid_block->sentinel_slot_index = 0;
 
     return state;
 }
@@ -577,14 +575,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         // Link previous block to this one for chaining
         if (state->last_block && state->last_block->inst_count > 0) {
-            // Access the Sentinel Op (always at index inst_count)
-            // Because ops contains [Inst 0, Inst 1, ..., Inst N-1, Sentinel]
-            // inst_count = N. So ops[N] is the Sentinel.
-            state->last_block->ops[state->last_block->inst_count].next_block = block_ptr;
+            SetNextBlock(state->last_block->Sentinel(), block_ptr);
         }
         state->last_block = block_ptr;
         if (block_ptr->inst_count > 0) {
-            DecodedOp* head = &block_ptr->ops[0];
+            DecodedOp* head = block_ptr->FirstOp();
 
             if (block_ptr->entry) {
                 int64_t batch_limit = 1000;
@@ -644,29 +639,49 @@ int X86_Step(EmuState* state) {
         }
     }
 
-    DecodedOp ops[2];
+    DecodedInstTmp inst;
     uint16_t handler_index = 0;
-    std::memset(ops, 0, sizeof(ops));
 
-    if (!DecodeInstruction(buf, &ops[0], &handler_index)) {
-        ops[0].SetLength(1);
+    if (!DecodeInstruction(buf, &inst, &handler_index)) {
+        std::memset(&inst, 0, sizeof(inst));
+        inst.head.SetLength(1);
         // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
-        ops[0].handler = ud2;
+        inst.head.handler = ud2;
     }
 
-    // Sentinel
+    inst.head.next_eip = state->ctx.eip + inst.head.GetLength();
+
+    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2 + sizeof(DecodedOpExt) * 2];
+    std::memset(op_storage, 0, sizeof(op_storage));
+    std::byte* slot_ptr = op_storage;
+
+    std::memcpy(slot_ptr, &inst.head, sizeof(inst.head));
+    DecodedOp* head = reinterpret_cast<DecodedOp*>(slot_ptr);
+    slot_ptr += sizeof(inst.head);
+
+    if (inst.head.meta.flags.has_ext) {
+        std::memcpy(slot_ptr, &inst.ext, sizeof(inst.ext));
+        slot_ptr += sizeof(inst.ext);
+    }
+
+    DecodedOp sentinel{};
+    DecodedOpExt sentinel_ext{};
     HandlerFunc exit_h = g_ExitHandlers[0];
-    ops[1].handler = exit_h;
-    ops[1].next_block = state->dummy_invalid_block;
+    sentinel.handler = exit_h;
+    sentinel.next_eip = head->next_eip;
+    sentinel.meta.flags.has_ext = 1;
+    sentinel_ext.link.next_block = state->dummy_invalid_block;
+    std::memcpy(slot_ptr, &sentinel, sizeof(sentinel));
+    slot_ptr += sizeof(sentinel);
+    std::memcpy(slot_ptr, &sentinel_ext, sizeof(sentinel_ext));
 
     // Run first op
-    HandlerFunc h = ops[0].handler;
-    ops[0].next_eip = state->ctx.eip + ops[0].GetLength();
+    HandlerFunc h = head->handler;
 
     if (h) {
         MicroTLB utlb;
-        h(state, &ops[0], 0, utlb,
+        h(state, head, 0, utlb,
           std::numeric_limits<uint32_t>::max());  // Limit 0 ensures it returns after 1 inst + sentinel
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {

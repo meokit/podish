@@ -14,8 +14,8 @@ namespace fiberish {
 
 // Returns LogicFlow to propagate Restart/Retry
 template <uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, ShimOp* op, uint32_t dest, uint8_t count, bool is_byte,
-                                              mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
+                                              bool is_byte, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;

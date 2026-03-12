@@ -121,7 +121,7 @@ inline bool CheckCondition(EmuState* state, uint8_t cond) {
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const ShimOp* op) {
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = op->prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
     if (seg >= 5) {
@@ -130,19 +130,20 @@ FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const ShimOp* op) {
     return 0;
 }
 
-FORCE_INLINE uint32_t ComputeEA(EmuState* state, const ShimOp* op) {
+FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
     // Branchless calculation using pre-calculated offsets to registers (or zero register)
+    const auto* ext = GetExt(op);
     const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
-    uint32_t base = *(const uint32_t*)(regs_base + op->mem.base_offset);
-    uint32_t index = *(const uint32_t*)(regs_base + op->mem.index_offset);
+    uint32_t base = *(const uint32_t*)(regs_base + ext->data.base_offset);
+    uint32_t index = *(const uint32_t*)(regs_base + ext->data.index_offset);
 
     // index is usually 0 if no index (pointing to zero reg)
     // base is usually 0 if no base (pointing to zero reg)
-    return base + (index << op->mem.scale) + op->mem.disp;
+    return base + (index << ext->data.scale) + ext->data.disp;
 }
 
-FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const ShimOp* op) {
+FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
     uint32_t ea = ComputeEA(state, op);
     return ea + GetSegmentBase(state, op);
 }
@@ -236,7 +237,7 @@ enum class OpOnTLBMiss {
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy>
-FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -268,7 +269,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, ShimOp* op, mem::MicroTLB* 
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy>
-FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, ShimOp* op, T val, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -301,7 +302,7 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, ShimOp* op, T val, mem:
  * Generic Helper for Direct Memory Read
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const ShimOp* op) {
+inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return state->mmu.read<T, false>(addr, utlb, op);
     } else {
@@ -317,7 +318,7 @@ inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb,
  * Generic Helper for Direct Memory Write
  */
 template <typename T, OpOnTLBMiss Strategy>
-FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const ShimOp* op) {
+FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return state->mmu.write<T, false>(addr, val, utlb, op);
     } else {
@@ -339,7 +340,7 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem
 // ------------------------------------------------------------------------------------------------
 
 template <typename T, bool fail_on_tlb_miss = false>
-FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, ShimOp* op) {
+FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
 
@@ -360,7 +361,7 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, S
 }
 
 template <typename T, bool fail_on_tlb_miss = false>
-FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, ShimOp* op) {
+FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
 
@@ -379,16 +380,16 @@ FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, ShimOp* op) 
 
 // Explicit aliases for compatibility
 // Default to fail_on_tlb_miss = true for simple usage (ops_control)
-FORCE_INLINE MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, ShimOp* o) {
+FORCE_INLINE MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
     return Push<uint16_t, true>(s, v, u, o);
 }
-FORCE_INLINE MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, ShimOp* o) {
+FORCE_INLINE MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
     return Push<uint32_t, true>(s, v, u, o);
 }
-FORCE_INLINE MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, ShimOp* o) {
+FORCE_INLINE MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
     return Pop<uint16_t, true>(s, u, o);
 }
-FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, ShimOp* o) {
+FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
     return Pop<uint32_t, true>(s, u, o);
 }
 

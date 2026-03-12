@@ -49,7 +49,7 @@ FORCE_INLINE void SetMmxReg(EmuState* state, int idx, simde__m64 val) {
 
 // Read 64-bit value from MMX register or memory
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -76,7 +76,7 @@ FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, ShimOp* op
 
 // Write 64-bit value to MMX register or memory
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, ShimOp* op, simde__m64 val, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, DecodedOp* op, simde__m64 val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -104,7 +104,7 @@ FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, ShimOp* op, sim
 
 // Read 32-bit value for MOVD (from register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -126,7 +126,7 @@ FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, ShimOp* op
 
 // Read 16-bit value (from register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -148,7 +148,7 @@ FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, ShimOp* op,
 
 // Write 32-bit value for MOVD (to register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, ShimOp* op, uint32_t val, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, DecodedOp* op, uint32_t val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 

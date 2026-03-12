@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 #include "common.h"
@@ -46,7 +47,6 @@ namespace fiberish {
 
 struct EmuState;
 struct DecodedOp;
-struct ShimOp;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -62,7 +62,7 @@ enum class LogicFlow : uint8_t {
 };
 
 #define LogicFuncParams \
-    EmuState *RESTRICT state, ShimOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch
+    EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch
 #define LogicPassParams state, op, utlb, imm, branch
 
 // Logic Function (Standard ABI, implementation)
@@ -70,45 +70,6 @@ enum class LogicFlow : uint8_t {
 using LogicFunc = LogicFlow (*)(LogicFuncParams);  // Always inlined, no restrict needed
 
 struct BasicBlock;
-
-#define COMMON_OP_FIELDS                    \
-    union {                                 \
-        struct {                            \
-            uint32_t disp;        /* 0-3 */ \
-            uint8_t base_offset;  /* 4   */ \
-            uint8_t index_offset; /* 5   */ \
-            uint8_t scale;        /* 6   */ \
-            uint8_t mem_flags;    /* 7   */ \
-        } mem;                              \
-        BasicBlock* next_block;             \
-        uint64_t mem_packed;                \
-    };                                      \
-    uint32_t next_eip; /* 8-11  */          \
-    uint8_t len;       /* 12    */          \
-    uint8_t modrm;     /* 13    */          \
-    union {                                 \
-        uint8_t all;                        \
-        struct {                            \
-            uint8_t lock : 1;               \
-            uint8_t rep : 1;                \
-            uint8_t repne : 1;              \
-            uint8_t segment : 3;            \
-            uint8_t opsize : 1;             \
-            uint8_t addrsize : 1;           \
-        } flags;                            \
-    } prefixes; /* 14    */                 \
-    union {                                 \
-        uint8_t all;                        \
-        struct {                            \
-            uint8_t has_modrm : 1;          \
-            uint8_t has_sib : 1;            \
-            uint8_t has_disp : 1;           \
-            uint8_t is_control_flow : 1;    \
-            uint8_t no_flags : 1;           \
-            uint8_t is_first : 1;           \
-            uint8_t shim : 1;               \
-        } flags;                            \
-    } meta /* 15    */
 
 namespace prefix {
 constexpr uint8_t LOCK = 1 << 0;
@@ -118,55 +79,154 @@ constexpr uint8_t OPSIZE = 1 << 6;
 constexpr uint8_t ADDRSIZE = 1 << 7;
 }  // namespace prefix
 
-struct alignas(16) ShimOp {
-    COMMON_OP_FIELDS;
+constexpr uint8_t kNoRegOffset = 32;
+
+union Prefixes {
+    uint8_t all;
+    struct {
+        uint8_t lock : 1;
+        uint8_t rep : 1;
+        uint8_t repne : 1;
+        uint8_t segment : 3;
+        uint8_t opsize : 1;
+        uint8_t addrsize : 1;
+    } flags;
 };
 
-struct alignas(32) DecodedOp {
-    COMMON_OP_FIELDS;
+union Meta {
+    uint8_t all;
+    struct {
+        uint8_t has_modrm : 1;
+        uint8_t has_ext : 1;
+        uint8_t has_mem : 1;
+        uint8_t has_imm : 1;
+        uint8_t is_control_flow : 1;
+        uint8_t no_flags : 1;
+        uint8_t reserved : 2;
+    } flags;
+};
 
-    uint32_t imm;
-    uint32_t padding0;
+struct alignas(16) DecodedOp {
     HandlerFunc handler;
+    uint32_t next_eip;
+    uint8_t len;
+    uint8_t modrm;
+    Prefixes prefixes;
+    Meta meta;
 
     uint8_t GetLength() const { return len; }
     void SetLength(uint8_t l) { len = l; }
 };
 
-static_assert(sizeof(ShimOp) == 16, "ShimOp must be exactly 16 bytes");
-static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
+struct DecodedMemData {
+    uint32_t imm = 0;
+    uint32_t disp = 0;
+    uint8_t base_offset = kNoRegOffset;
+    uint8_t index_offset = kNoRegOffset;
+    uint8_t scale = 0;
+    uint8_t reserved0 = 0;
+    uint32_t reserved1 = 0;
+};
 
-static_assert(offsetof(ShimOp, next_eip) == offsetof(DecodedOp, next_eip), "Layout mismatch: next_eip");
-static_assert(offsetof(ShimOp, meta) == offsetof(DecodedOp, meta), "Layout mismatch: meta");
-static_assert(offsetof(DecodedOp, imm) == 16, "DecodedOp: imm must start at offset 16");
-static_assert(offsetof(DecodedOp, handler) == 24, "DecodedOp: handler must start at offset 24");
+struct alignas(16) DecodedOpExt {
+    union {
+        DecodedMemData data;
+        struct {
+            BasicBlock* next_block;
+            uint64_t reserved;
+        } link;
+    };
+};
 
-#undef COMMON_OP_FIELDS
+struct alignas(16) DecodedInstTmp {
+    DecodedOp head{};
+    DecodedOpExt ext{};
+};
 
-// Size check
-static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");
+static_assert(sizeof(DecodedOp) == 16, "DecodedOp must be exactly 16 bytes");
+static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
+static_assert(sizeof(DecodedOpExt) == 16, "DecodedOpExt must be exactly 16 bytes");
+static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
+static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
+static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
+static_assert(offsetof(DecodedOp, meta) == 15, "DecodedOp: meta must start at offset 15");
 
-// Size check
-// static_assert(sizeof(DecodedOp) == 32, "DecodedOp size mismatch");
-struct BasicBlock {
+template <typename OpT>
+FORCE_INLINE bool HasExt(const OpT* op) {
+    return op->meta.flags.has_ext;
+}
+
+template <typename OpT>
+FORCE_INLINE bool HasMem(const OpT* op) {
+    return op->meta.flags.has_mem;
+}
+
+template <typename OpT>
+FORCE_INLINE bool HasImm(const OpT* op) {
+    return op->meta.flags.has_imm;
+}
+
+template <typename OpT>
+FORCE_INLINE const DecodedOpExt* GetExt(const OpT* op) {
+    return reinterpret_cast<const DecodedOpExt*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp));
+}
+
+template <typename OpT>
+FORCE_INLINE DecodedOpExt* GetExt(OpT* op) {
+    return reinterpret_cast<DecodedOpExt*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp));
+}
+
+template <typename OpT>
+FORCE_INLINE uint32_t GetImm(const OpT* op) {
+    return HasImm(op) ? GetExt(op)->data.imm : 0;
+}
+
+FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) {
+    size_t size = sizeof(DecodedOp) + (HasExt(op) ? sizeof(DecodedOpExt) : 0);
+    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + size);
+}
+
+FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) {
+    size_t size = sizeof(DecodedOp) + (HasExt(op) ? sizeof(DecodedOpExt) : 0);
+    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + size);
+}
+
+template <typename OpT>
+FORCE_INLINE BasicBlock* GetNextBlock(const OpT* op) {
+    return GetExt(op)->link.next_block;
+}
+
+template <typename OpT>
+FORCE_INLINE void SetNextBlock(OpT* op, BasicBlock* block) {
+    GetExt(op)->link.next_block = block;
+}
+
+struct alignas(16) BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
-    uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
-    uint16_t padding0;    // Align to 8 bytes for exec_count
-    uint8_t padding1;
+    uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
+    uint32_t slot_count;           // Total 16-byte slots including ext slots and sentinel
+    uint32_t sentinel_slot_index;  // Slot index where sentinel head starts
+    uint32_t padding0 = 0;
     bool is_valid = true;
-    uint64_t exec_count;  // Number of times block was executed
+    uint8_t padding1[7] = {};
+    uint64_t exec_count = 0;  // Number of times block was executed
     HandlerFunc entry = nullptr;
 
-    // Flexible Array Member - Must be last
-    // We expect max 64 instructions per block + 1 sentinel + 1 fault handling = ~66
-    // Allocation size will be sizeof(BasicBlock) + sizeof(DecodedOp) * (count - 1)
-    DecodedOp ops[1];
+    // Flexible Array Member - 16-byte slot stream.
+    alignas(16) std::byte slots[sizeof(DecodedOp)];
 
-    // Helper to calculate allocation size
-    static size_t CalculateSize(size_t op_count) {
-        if (op_count == 0) return sizeof(BasicBlock);
-        return sizeof(BasicBlock) + sizeof(DecodedOp) * (op_count - 1);
+    static size_t CalculateSize(size_t slot_count) {
+        if (slot_count == 0) return sizeof(BasicBlock);
+        return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count;
+    }
+
+    DecodedOp* FirstOp() { return reinterpret_cast<DecodedOp*>(slots); }
+    const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(slots); }
+
+    DecodedOp* Sentinel() { return reinterpret_cast<DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp)); }
+    const DecodedOp* Sentinel() const {
+        return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
     }
 
     // Mark block as invalid
@@ -174,7 +234,7 @@ struct BasicBlock {
 };
 
 // Decoder Logic
-bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_index);
+bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts);

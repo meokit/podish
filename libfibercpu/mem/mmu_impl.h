@@ -263,7 +263,7 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 
 // Read
 template <typename T, bool fail_on_tlb_miss>
-[[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(GuestAddr addr, MicroTLB* utlb, const ShimOp* cur_op) {
+[[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(GuestAddr addr, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = read_tlb_only<T>(addr, utlb)) return result;
     get_state()->sync_eip_to_op_start(cur_op);
     if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
@@ -272,7 +272,7 @@ template <typename T, bool fail_on_tlb_miss>
 
 // Write
 template <typename T, bool fail_on_tlb_miss>
-[[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const ShimOp* cur_op) {
+[[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = write_tlb_only<T>(addr, val, utlb)) return result;
     get_state()->sync_eip_to_op_start(cur_op);
     if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);

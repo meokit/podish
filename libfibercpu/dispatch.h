@@ -17,23 +17,24 @@ extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, Decode
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch) {
-    // Prefetch next cache line
-    PREFETCH((void*)(op + 4));
+    // Prefetch further ops
+    PREFETCH(reinterpret_cast<const std::byte*>(op) + 128);
+    PREFETCH(reinterpret_cast<const std::byte*>(op) + 256);
 
     // Execute Logic
-    auto flow = Target(state, reinterpret_cast<ShimOp*>(op), &utlb, op->imm, &branch);
+    auto flow = Target(state, op, &utlb, GetImm(op), &branch);
 
     switch (flow) {
         case LogicFlow::Continue:
             // Direct Relative Dispatch
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
-            ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb, branch);
+            ATTR_MUSTTAIL return NextOp(op)->handler(state, NextOp(op), instr_limit, utlb, branch);
         case LogicFlow::ExitOnCurrentEIP:
-            if (!state->eip_dirty) state->sync_eip_to_op_start(reinterpret_cast<ShimOp*>(op));
+            if (!state->eip_dirty) state->sync_eip_to_op_start(op);
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
-            if (!state->eip_dirty) state->sync_eip_to_op_end(reinterpret_cast<ShimOp*>(op));
+            if (!state->eip_dirty) state->sync_eip_to_op_end(op);
             return instr_limit;
         case LogicFlow::ExitWithoutSyncEIP:
             return instr_limit;

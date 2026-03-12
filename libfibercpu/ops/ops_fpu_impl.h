@@ -52,7 +52,7 @@ inline void SetFpuCompareFlags(EmuState* state, float80 a, float80 b) {
     }
 }
 
-inline mem::MemResult<float80> ReadPackedBcd80(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, ShimOp* op) {
+inline mem::MemResult<float80> ReadPackedBcd80(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, DecodedOp* op) {
     double value = 0.0;
     double place = 1.0;
     for (int i = 0; i < 9; ++i) {
@@ -80,7 +80,7 @@ inline mem::MemResult<float80> ReadPackedBcd80(EmuState* state, uint32_t addr, m
     return f80_from_double(value);
 }
 
-inline bool WritePackedBcd80(EmuState* state, uint32_t addr, float80 value, mem::MicroTLB* utlb, ShimOp* op) {
+inline bool WritePackedBcd80(EmuState* state, uint32_t addr, float80 value, mem::MicroTLB* utlb, DecodedOp* op) {
     double d = std::trunc(f80_to_double(value));
     bool negative = std::signbit(d);
     double abs_val = std::fabs(d);
@@ -105,7 +105,7 @@ inline bool WritePackedBcd80(EmuState* state, uint32_t addr, float80 value, mem:
 
 // Helper to read float32 from memory and convert to float80
 // Uses Blocking Read (fail_on_tlb_miss = false)
-inline mem::MemResult<float80> ReadF32(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+inline mem::MemResult<float80> ReadF32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, ComputeLinearAddress(state, op), utlb, op);
     if (!res) return std::unexpected(res.error());
     uint32_t val = *res;
@@ -115,7 +115,7 @@ inline mem::MemResult<float80> ReadF32(EmuState* state, ShimOp* op, mem::MicroTL
 
 // Helper to read float64 from memory and convert to float80
 // Uses Blocking Read (fail_on_tlb_miss = false)
-inline mem::MemResult<float80> ReadF64(EmuState* state, ShimOp* op, mem::MicroTLB* utlb) {
+inline mem::MemResult<float80> ReadF64(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     auto res = ReadMem<uint64_t, OpOnTLBMiss::Blocking>(state, ComputeLinearAddress(state, op), utlb, op);
     if (!res) return std::unexpected(res.error());
     uint64_t val = *res;

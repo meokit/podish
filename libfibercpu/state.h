@@ -90,8 +90,8 @@ struct EmuState {
     std::chrono::steady_clock::time_point tsc_start_time;
 
     // Helper function to sync eip
-    void sync_eip_to_op_start(const ShimOp* op) { ctx.eip = op->next_eip - op->len; }
-    void sync_eip_to_op_end(const ShimOp* op) { ctx.eip = op->next_eip; }
+    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->len; }
+    void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = op->next_eip; }
 
     std::variant<std::monostate, MemReadOperation, MemWriteOperation> mem_op;
 

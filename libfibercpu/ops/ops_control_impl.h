@@ -86,7 +86,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
 }
 
 // Helper for interrupts (Traps/Interrupts - EIP points to next instruction)
-inline void RaiseInterrupt(EmuState* state, uint8_t vector, ShimOp* op) {
+inline void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
 

@@ -69,21 +69,21 @@ static inline ATTR_PRESERVE_NONE int64_t ExitBlock(EmuState* RESTRICT state, Dec
     // Basic Block Chaining
     // Optim: If next_block is dummy, is_valid is false, so we skip.
     // If next_block is real but invalidated, is_valid is false, so we skip.
-    if (op->next_block->is_valid && op->next_block->start_eip == state->ctx.eip) {
+    BasicBlock* next_block = GetNextBlock(op);
+    if (next_block->is_valid && next_block->start_eip == state->ctx.eip) {
         // Check instruction limit before chaining
         if (instr_limit > 0) {
             // Subtract the NEXT block's size from the limit
-            instr_limit -= op->next_block->inst_count;
+            instr_limit -= next_block->inst_count;
 
-            state->last_block = op->next_block;
-            // ops is now flexible array member, essentially ops[0]
-            DecodedOp* next_head = &op->next_block->ops[0];
+            state->last_block = next_block;
+            DecodedOp* next_head = next_block->FirstOp();
 
-            op->next_block->exec_count++;
+            next_block->exec_count++;
 
-            if (op->next_block->entry != nullptr) {
-                ATTR_MUSTTAIL return op->next_block->entry(state, next_head, instr_limit, utlb,
-                                                           std::numeric_limits<uint32_t>::max());
+            if (next_block->entry != nullptr) {
+                ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb,
+                                                       std::numeric_limits<uint32_t>::max());
             }
         }
     }

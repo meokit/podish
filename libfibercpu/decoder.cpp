@@ -64,13 +64,12 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 
 // Decoder Logic
 // Returns true on success, false on failure/invalid instruction
-bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_index) {
-    // Reset op
-    std::memset(op, 0, sizeof(DecodedOp));
-    // Initialize MemPacked fields for "No Base", "No Index", "Scale 1"
-    op->mem.base_offset = 32;   // Index 8 * 4 (Zero Register)
-    op->mem.index_offset = 32;  // Index 8 * 4
-    op->mem.scale = 0;
+bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
+    std::memset(inst, 0, sizeof(*inst));
+    inst->ext.data.base_offset = kNoRegOffset;
+    inst->ext.data.index_offset = kNoRegOffset;
+
+    DecodedOp* op = &inst->head;
 
     const uint8_t* start = code;
     const uint8_t* ptr = code;
@@ -152,64 +151,68 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
 
         uint8_t mod = (modrm >> 6) & 3;
         uint8_t rm = modrm & 7;
+        bool is_mem_operand = mod != 3;
 
         // SIB? (If Mod != 3 and RM == 4)
         uint8_t sib_byte = 0;
-        if (mod != 3 && rm == 4) {
-            op->meta.flags.has_sib = 1;
+        if (is_mem_operand && rm == 4) {
             sib_byte = *ptr++;
         }
 
         // Displacement?
         uint8_t disp_size = 0;
-        if (mod == 0) {
-            if (rm == 5) disp_size = 4;  // Disp32 (EBP replaced by Disp32)
-        } else if (mod == 1) {
-            disp_size = 1;  // Disp8
-        } else if (mod == 2) {
-            disp_size = 4;  // Disp32
-        }
+        if (is_mem_operand) {
+            op->meta.flags.has_mem = 1;
+            op->meta.flags.has_ext = 1;
 
-        // SIB Base Special Case?
-        if (op->meta.flags.has_sib) {
-            uint8_t base = sib_byte & 7;
-            if (mod == 0 && base == 5) {
-                disp_size = 4;  // Disp32 (Mod=0, Base=5 -> Disp32, no Base)
+            if (mod == 0) {
+                if (rm == 5) disp_size = 4;  // Disp32 (EBP replaced by Disp32)
+            } else if (mod == 1) {
+                disp_size = 1;  // Disp8
+            } else if (mod == 2) {
+                disp_size = 4;  // Disp32
             }
-        }
 
-        if (disp_size > 0) {
-            op->meta.flags.has_disp = 1;
-            if (disp_size == 1) {
-                int8_t d8 = (int8_t)*ptr;
-                op->mem.disp = (uint32_t)(int32_t)d8;  // Sign extend!
-                ptr += 1;
-            } else {
-                op->mem.disp = *reinterpret_cast<const uint32_t*>(ptr);
-                ptr += 4;
+            // SIB Base Special Case?
+            if (rm == 4) {
+                uint8_t base = sib_byte & 7;
+                if (mod == 0 && base == 5) {
+                    disp_size = 4;  // Disp32 (Mod=0, Base=5 -> Disp32, no Base)
+                }
             }
-        }
 
-        // Pre-calculate EA components for faster execution
-        if (op->meta.flags.has_sib) {
-            uint8_t scale = (sib_byte >> 6) & 3;
-            uint8_t index = (sib_byte >> 3) & 7;
-            uint8_t base_reg = sib_byte & 7;
-
-            if (index != 4) op->mem.index_offset = index * 4;
-            op->mem.scale = scale;
-
-            if (mod == 0 && base_reg == 5) {
-                // Base is None (Disp32) - already initialized to 32
-            } else {
-                op->mem.base_offset = base_reg * 4;
+            if (disp_size > 0) {
+                if (disp_size == 1) {
+                    int8_t d8 = (int8_t)*ptr;
+                    inst->ext.data.disp = (uint32_t)(int32_t)d8;  // Sign extend!
+                    ptr += 1;
+                } else {
+                    inst->ext.data.disp = *reinterpret_cast<const uint32_t*>(ptr);
+                    ptr += 4;
+                }
             }
-        } else {
-            // No SIB
-            if (mod == 0 && rm == 5) {
-                // Base is None (Disp32) - already initialized to 32
+
+            // Pre-calculate EA components for faster execution
+            if (rm == 4) {
+                uint8_t scale = (sib_byte >> 6) & 3;
+                uint8_t index = (sib_byte >> 3) & 7;
+                uint8_t base_reg = sib_byte & 7;
+
+                if (index != 4) inst->ext.data.index_offset = index * 4;
+                inst->ext.data.scale = scale;
+
+                if (mod == 0 && base_reg == 5) {
+                    // Base is None (Disp32) - already initialized to kNoRegOffset
+                } else {
+                    inst->ext.data.base_offset = base_reg * 4;
+                }
             } else {
-                op->mem.base_offset = rm * 4;
+                // No SIB
+                if (mod == 0 && rm == 5) {
+                    // Base is None (Disp32) - already initialized to kNoRegOffset
+                } else {
+                    inst->ext.data.base_offset = rm * 4;
+                }
             }
         }
     } else {
@@ -231,18 +234,19 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
     }
 
     if (imm_len > 0) {
-        // op->meta.flags.has_imm = 1;
+        op->meta.flags.has_imm = 1;
+        op->meta.flags.has_ext = 1;
         if (imm_len == 1)
-            op->imm = *reinterpret_cast<const uint8_t*>(ptr);
+            inst->ext.data.imm = *reinterpret_cast<const uint8_t*>(ptr);
         else if (imm_len == 2)
-            op->imm = *reinterpret_cast<const uint16_t*>(ptr);
+            inst->ext.data.imm = *reinterpret_cast<const uint16_t*>(ptr);
         else if (imm_len == 4)
-            op->imm = *reinterpret_cast<const uint32_t*>(ptr);
+            inst->ext.data.imm = *reinterpret_cast<const uint32_t*>(ptr);
         else if (imm_len == 3) {
             // Special Case for ENTER (Iw Ib)
             uint16_t iw = *reinterpret_cast<const uint16_t*>(ptr);
             uint8_t ib = *(ptr + 2);
-            op->imm = iw | (ib << 16);
+            inst->ext.data.imm = iw | (ib << 16);
         }
         ptr += imm_len;
     }
@@ -300,13 +304,13 @@ bool DecodeInstruction(const uint8_t* code, DecodedOp* op, uint16_t* handler_ind
 }
 
 // Helper to check if opcode is Control Flow
-static bool IsControlFlow(const DecodedOp* op) { return op->meta.flags.is_control_flow; }
+static bool IsControlFlow(const DecodedInstTmp& inst) { return inst.head.meta.flags.is_control_flow; }
 
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts) {
     // 1. Decode into temporary storage
     // Use a small buffer on stack to avoid heap allocation for common small blocks?
     // Or just std::vector. std::vector is safer for now.
-    std::vector<DecodedOp> temp_ops;
+    std::vector<DecodedInstTmp> temp_ops;
     constexpr uint64_t MAX_INSTS = 64;
     temp_ops.reserve(MAX_INSTS + 2);  // + Sentinel + potential Fault
 
@@ -390,33 +394,34 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             break;
         }
 
-        DecodedOp op;
+        DecodedInstTmp inst;
         uint16_t handler_index;
-        if (!DecodeInstruction(buf, &op, &handler_index)) {
+        if (!DecodeInstruction(buf, &inst, &handler_index)) {
             // Decode error: Insert Fault Op
             fprintf(stderr,
                     "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
                     "%02X %02X\n",
                     current_eip, buf[0], buf[1], buf[2], buf[3]);
-            std::memset(&op, 0, sizeof(op));
-            op.SetLength(0);  // Fault: EIP points to instruction
+            std::memset(&inst, 0, sizeof(inst));
+            inst.head.SetLength(0);  // Fault: EIP points to instruction
 
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
-            op.handler = ud2;
+            inst.head.handler = ud2;
 
-            op.next_eip = current_eip;
-            temp_ops.push_back(op);
+            inst.head.next_eip = current_eip;
+            temp_ops.push_back(inst);
 
             // Append Sentinel for dispatch safety
-            DecodedOp sentinel;
+            DecodedInstTmp sentinel;
             std::memset(&sentinel, 0, sizeof(sentinel));
 
             HandlerFunc exit_h = g_ExitHandlers[0];
-            sentinel.handler = exit_h;
+            sentinel.head.handler = exit_h;
+            sentinel.head.meta.flags.has_ext = 1;
 
             // Sentinel next_block initialization to dummy
-            sentinel.next_block = state->dummy_invalid_block;
-            sentinel.next_eip = current_eip;
+            SetNextBlock(&sentinel.head, state->dummy_invalid_block);
+            sentinel.head.next_eip = current_eip;
 
             temp_ops.push_back(sentinel);
 
@@ -425,7 +430,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         // Verify length does not exceed valid fetch (Post-Decode Check)
-        if (bytes_to_page_end < 16 && op.GetLength() > bytes_to_page_end) {
+        if (bytes_to_page_end < 16 && inst.head.GetLength() > bytes_to_page_end) {
             // Instruction spans into the probed-invalid page!
             // Trigger fault explicitly by reading the first byte of the invalid region.
             const uint32_t next_page_addr = current_eip + bytes_to_page_end;
@@ -449,9 +454,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         // Check if a specialized handler exists for this opcode + modrm/etc.
-        HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
+        HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &inst.head);
         if (specialized_h) {
-            op.handler = specialized_h;
+            inst.head.handler = specialized_h;
         }
 
         // Recover index logic (to keep op_indices in sync)
@@ -474,31 +479,31 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             opcode = *ptr;
         }
         op_indices.push_back((map << 8) | opcode);
-        op.next_eip = current_eip + op.GetLength();
+        inst.head.next_eip = current_eip + inst.head.GetLength();
 
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
         bool is_nop = (handler_index == 0x90 || handler_index == 0x11F);
-        if (is_nop && !temp_ops.empty() && !IsControlFlow(&temp_ops.back())) {
+        if (is_nop && !temp_ops.empty() && !IsControlFlow(temp_ops.back())) {
             // "Absorb" NOP into the previous instruction
-            DecodedOp& prev = temp_ops.back();
-            uint32_t new_len = (uint32_t)prev.GetLength() + op.GetLength();
+            DecodedInstTmp& prev = temp_ops.back();
+            uint32_t new_len = (uint32_t)prev.head.GetLength() + inst.head.GetLength();
             if (new_len <= 255) {
-                prev.next_eip += op.GetLength();
-                prev.SetLength((uint8_t)new_len);
+                prev.head.next_eip += inst.head.GetLength();
+                prev.head.SetLength((uint8_t)new_len);
                 op_indices.pop_back();
                 // Advance EIP and continue
-                current_eip += op.GetLength();
+                current_eip += inst.head.GetLength();
                 continue;
             }
         }
 
-        temp_ops.push_back(op);
+        temp_ops.push_back(inst);
         inst_count++;
-        uint32_t inst_len = op.GetLength();
+        uint32_t inst_len = inst.head.GetLength();
 
         // Stop if Control Flow
-        if (IsControlFlow(&op)) {
+        if (IsControlFlow(inst)) {
             current_eip += inst_len;
             break;
         }
@@ -507,7 +512,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         current_eip += inst_len;
 
         // Stop if Control Flow (checked again on last op? redundancy from original code)
-        if (IsControlFlow(&temp_ops.back())) {
+        if (IsControlFlow(temp_ops.back())) {
             break;
         }
 
@@ -519,7 +524,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     // Append Sentinel Op
     {
-        DecodedOp sentinel;
+        DecodedInstTmp sentinel;
         std::memset(&sentinel, 0, sizeof(sentinel));
 
         uint32_t k = (uint32_t)current_eip;
@@ -527,9 +532,10 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         k ^= k >> 4;
         uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
-        sentinel.handler = exit_h;
-        sentinel.next_eip = temp_ops.back().next_eip;      // Copy next_eip from last op
-        sentinel.next_block = state->dummy_invalid_block;  // Important!
+        sentinel.head.handler = exit_h;
+        sentinel.head.meta.flags.has_ext = 1;
+        sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
+        SetNextBlock(&sentinel.head, state->dummy_invalid_block);
         temp_ops.push_back(sentinel);
     }
     end_eip = current_eip;
@@ -538,7 +544,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
     // DFE Optimization (Backward Pass)
     live_flags = DFE_ALL_FLAGS;
     for (int i = (int)temp_ops.size() - 2; i >= 0; --i) {
-        DecodedOp& op = temp_ops[i];
+        DecodedOp& op = temp_ops[i].head;
         if (i >= (int)op_indices.size()) break;
 
         uint16_t h_idx = op_indices[i];
@@ -619,24 +625,45 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 finalize:
     if (!success || temp_ops.empty()) return nullptr;
 
-    // 2. Allocate BasicBlock with Flexible Array Member
-    size_t alloc_size = BasicBlock::CalculateSize(temp_ops.size());
+    size_t slot_count = 0;
+    for (const auto& inst : temp_ops) {
+        slot_count += 1 + (inst.head.meta.flags.has_ext ? 1 : 0);
+    }
+
+    size_t alloc_size = BasicBlock::CalculateSize(slot_count);
     void* mem = state->block_pool.allocate(alloc_size);
-    // BasicBlock is POD-like now, no constructor call needed, but we can placement new to be safe/clean
     BasicBlock* block = new (mem) BasicBlock;
 
     block->start_eip = start_eip;
     block->end_eip = end_eip;
     block->inst_count = inst_count;
+    block->slot_count = (uint32_t)slot_count;
     block->exec_count = 0;
     block->is_valid = true;
+    block->sentinel_slot_index = 0;
 
-    // Copy ops
-    std::memcpy(block->ops, temp_ops.data(), temp_ops.size() * sizeof(DecodedOp));
+    std::byte* slot_ptr = block->slots;
+    uint32_t slot_index = 0;
+    for (size_t i = 0; i < temp_ops.size(); ++i) {
+        const auto& inst = temp_ops[i];
+        if (i == temp_ops.size() - 1) {
+            block->sentinel_slot_index = slot_index;
+        }
+
+        std::memcpy(slot_ptr, &inst.head, sizeof(inst.head));
+        slot_ptr += sizeof(inst.head);
+        slot_index += 1;
+
+        if (inst.head.meta.flags.has_ext) {
+            std::memcpy(slot_ptr, &inst.ext, sizeof(inst.ext));
+            slot_ptr += sizeof(inst.ext);
+            slot_index += 1;
+        }
+    }
 
     // JIT Entry or First Op Handler Fallback
-    block->entry = FindJitBlock(block->ops);
-    block->entry = block->entry ? block->entry : block->ops[0].handler;
+    block->entry = FindJitBlock(block->FirstOp());
+    block->entry = block->entry ? block->entry : block->FirstOp()->handler;
 
     return block;
 }

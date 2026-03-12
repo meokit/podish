@@ -14,14 +14,14 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
 
     auto execute_mem_op = [&]<typename T>(uint32_t addr, T* value, bool is_write) {
         if (!is_write) {
-            auto res = state->mmu.read<T>(addr, &utlb, reinterpret_cast<ShimOp*>(op));
+            auto res = state->mmu.read<T>(addr, &utlb, op);
             if (!res) {
                 fault = true;
             } else {
                 *value = *res;
             }
         } else {
-            if (!state->mmu.write<T>(addr, *value, &utlb, reinterpret_cast<ShimOp*>(op))) fault = true;
+            if (!state->mmu.write<T>(addr, *value, &utlb, op)) fault = true;
         }
     };
 
@@ -90,7 +90,8 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     }
 
     state->mem_op.emplace<0>();
-    ATTR_MUSTTAIL return (op + 1)->handler(state, op + 1, instr_limit, utlb, branch);
+    DecodedOp* next_op = NextOp(op);
+    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
