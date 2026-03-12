@@ -21,7 +21,7 @@ public class PageFaultOomTests
         try
         {
             var mapped = mm.Mmap(0x72000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "oom-anon", engine);
+                MapFlags.Private | MapFlags.Anonymous, null, 0, "oom-anon", engine);
             Assert.Equal((uint)0x72000000, mapped);
 
             Assert.Equal(FaultResult.Oom, mm.HandleFaultDetailed(mapped, true, engine));
@@ -54,7 +54,7 @@ public class PageFaultOomTests
             engine.Owner = task;
 
             var mapped = mm.Mmap(0x73000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Anonymous, null, 0, 0, "oom-task", engine);
+                MapFlags.Private | MapFlags.Anonymous, null, 0, "oom-task", engine);
             Assert.Equal((uint)0x73000000, mapped);
             ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
 

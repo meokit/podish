@@ -25,7 +25,7 @@ public class PageCacheConsistencyTests
 
             const uint mapAddr = 0x45000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
@@ -56,8 +56,8 @@ public class PageCacheConsistencyTests
         Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
 
         const uint mapAddr = 0x46000000;
-        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Shared | MapFlags.Fixed, file, 0, (long)dentry.Inode.Size, "MAP_SHARED", engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
+            file, 0, "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, true, engine));
         Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
 
@@ -100,7 +100,7 @@ public class PageCacheConsistencyTests
             var mm = new VMAManager();
             const uint mapAddr = 0x47000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 3, "PQ"u8.ToArray()));
 
@@ -132,7 +132,7 @@ public class PageCacheConsistencyTests
 
             const uint mapAddr = 0x48000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
             var rc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
@@ -163,8 +163,8 @@ public class PageCacheConsistencyTests
         Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
 
         const uint mapAddr = 0x49000000;
-        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Shared | MapFlags.Fixed, file, 0, (long)dentry.Inode.Size, "MAP_SHARED", engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
+            file, 0, "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
 
         var rc = dentry.Inode.Write(file, "MN"u8.ToArray(), 2);
@@ -188,14 +188,14 @@ public class PageCacheConsistencyTests
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
 
         Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
-        var beforeMapCache = dentry.Inode.PageCache;
+        var beforeMapCache = dentry.Inode.Mapping;
         Assert.NotNull(beforeMapCache);
 
         const uint mapAddr = 0x4B000000;
-        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Shared | MapFlags.Fixed, file, 0, (long)dentry.Inode.Size, "MAP_SHARED", engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
+            file, 0, "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
-        Assert.Same(beforeMapCache, dentry.Inode.PageCache);
+        Assert.Same(beforeMapCache, dentry.Inode.Mapping);
 
         var mapped = new byte[5];
         Assert.True(engine.CopyFromUser(mapAddr, mapped));
@@ -235,7 +235,7 @@ public class PageCacheConsistencyTests
             var mm = new VMAManager();
             const uint mapAddr = 0x4A000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
             var rc = file.Dentry.Inode!.Write(file, "UV"u8.ToArray(), 3);
@@ -267,7 +267,7 @@ public class PageCacheConsistencyTests
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = manager.GetOrCreateInodePageCache(inode);
+            cache = manager.GetOrCreateMapping(inode);
 
             var rc = inode.Write(file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
@@ -285,7 +285,7 @@ public class PageCacheConsistencyTests
         finally
         {
             if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
-            if (file?.Dentry.Inode != null) manager.ReleaseInodePageCache(file.Dentry.Inode);
+            if (file?.Dentry.Inode != null) manager.ReleaseMapping(file.Dentry.Inode);
             cache?.Release();
             Directory.Delete(root, true);
         }
@@ -304,7 +304,7 @@ public class PageCacheConsistencyTests
         var inode = dentry.Inode!;
         var rc = inode.Write(file, "hello"u8.ToArray(), 0);
         Assert.Equal(5, rc);
-        var cache = Assert.IsType<MemoryObject>(inode.PageCache);
+        var cache = Assert.IsType<AddressSpace>(inode.Mapping);
 
         // tmpfs data is shmem resident; unflushed page must not be reclaimable as "clean".
         Assert.True(cache.IsDirty(0));
@@ -331,7 +331,7 @@ public class PageCacheConsistencyTests
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = manager.GetOrCreateInodePageCache(inode);
+            cache = manager.GetOrCreateMapping(inode);
 
             var warm = new byte[5];
             var warmN = inode.Read(file, warm, 0);
@@ -351,7 +351,7 @@ public class PageCacheConsistencyTests
         finally
         {
             if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
-            if (file?.Dentry.Inode != null) manager.ReleaseInodePageCache(file.Dentry.Inode);
+            if (file?.Dentry.Inode != null) manager.ReleaseMapping(file.Dentry.Inode);
             cache?.Release();
             Directory.Delete(root, true);
         }

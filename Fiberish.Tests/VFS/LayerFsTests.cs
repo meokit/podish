@@ -282,16 +282,8 @@ public class LayerFsTests
 
         const uint mapAddr = 0x52000000;
         var mmapFile = new LinuxFile(dentry, FileFlags.O_RDONLY, null!, LinuxFile.ReferenceKind.MmapHold);
-        mm.Mmap(
-            mapAddr,
-            LinuxConstants.PageSize,
-            Protection.Read,
-            MapFlags.Shared | MapFlags.Fixed,
-            mmapFile,
-            0,
-            (long)inode.Size,
-            "MAP_SHARED",
-            engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Shared | MapFlags.Fixed, mmapFile, 0,
+            "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
 
         _ = VfsShrinker.DropDentryCache(sb);
@@ -326,19 +318,11 @@ public class LayerFsTests
 
         const uint mapAddr = 0x53000000;
         var mmapFile = new LinuxFile(dentry, FileFlags.O_RDONLY, null!, LinuxFile.ReferenceKind.MmapHold);
-        mm.Mmap(
-            mapAddr,
-            LinuxConstants.PageSize,
-            Protection.Read,
-            MapFlags.Shared | MapFlags.Fixed,
-            mmapFile,
-            0,
-            (long)inode.Size,
-            "MAP_SHARED",
-            engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Shared | MapFlags.Fixed, mmapFile, 0,
+            "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-        var cache = Assert.IsType<MemoryObject>(inode.PageCache);
+        var cache = Assert.IsType<AddressSpace>(inode.Mapping);
         Assert.True(cache.PageCount > 0);
 
         var reclaimedWhileMapped = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
@@ -408,19 +392,12 @@ public class LayerFsTests
         var firstInode = Assert.IsType<LayerInode>(firstDentry.Inode);
 
         const uint mapAddr = 0x54000000;
-        mm.Mmap(
-            mapAddr,
-            LinuxConstants.PageSize,
-            Protection.Read,
-            MapFlags.Shared | MapFlags.Fixed,
-            new LinuxFile(firstDentry, FileFlags.O_RDONLY, firstLoc.Mount!, LinuxFile.ReferenceKind.MmapHold),
-            0,
-            (long)firstInode.Size,
-            "MAP_SHARED",
-            engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Shared | MapFlags.Fixed,
+            new LinuxFile(firstDentry, FileFlags.O_RDONLY, firstLoc.Mount!, LinuxFile.ReferenceKind.MmapHold), 0,
+            "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-        var firstCache = Assert.IsType<MemoryObject>(firstInode.PageCache);
+        var firstCache = Assert.IsType<AddressSpace>(firstInode.Mapping);
         Assert.True(firstCache.PageCount > 0);
 
         var firstShrink = VfsShrinker.Shrink(sm,
@@ -456,16 +433,9 @@ public class LayerFsTests
             rf.Close();
         }
 
-        mm.Mmap(
-            mapAddr,
-            LinuxConstants.PageSize,
-            Protection.Read,
-            MapFlags.Shared | MapFlags.Fixed,
-            new LinuxFile(secondLoc.Dentry!, FileFlags.O_RDONLY, secondLoc.Mount!, LinuxFile.ReferenceKind.MmapHold),
-            0,
-            (long)secondInode.Size,
-            "MAP_SHARED",
-            engine);
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Shared | MapFlags.Fixed,
+            new LinuxFile(secondLoc.Dentry!, FileFlags.O_RDONLY, secondLoc.Mount!, LinuxFile.ReferenceKind.MmapHold), 0,
+            "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
         mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
     }

@@ -27,7 +27,7 @@ public partial class SyscallManager
                 {
                     // Map anonymous
                     ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, start, end - start,
-                        Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0, 0,
+                        Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0,
                         "HEAP");
                 }
                 catch
@@ -110,13 +110,11 @@ public partial class SyscallManager
 
         try
         {
-            var trueFileSz = (long)(f?.OpenedInode?.Size ?? 0);
             if (f != null)
                 mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold);
 
             var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags,
-                mmapFile,
-                offset, trueFileSz, "MMAP2");
+                mmapFile, offset, "MMAP2");
             mmapFile = null; // ownership transferred to VMAs
             return (int)res;
         }
@@ -307,20 +305,10 @@ public partial class SyscallManager
         {
             clonedFile = CloneMappingFile(sourceVma);
             var offset = ComputeSliceOffset(sourceVma, sourceAddr);
-            var backingLength = ComputeSliceBackingLength(sourceVma, sourceAddr);
             var flags = (sourceVma.Flags | MapFlags.Fixed) & ~MapFlags.FixedNoReplace;
 
-            _ = ProcessAddressSpaceSync.Mmap(
-                sm.Mem,
-                sm.Engine,
-                targetAddr,
-                length,
-                sourceVma.Perms,
-                flags,
-                clonedFile,
-                offset,
-                backingLength,
-                sourceVma.Name);
+            _ = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, targetAddr, length, sourceVma.Perms, flags,
+                clonedFile, offset, sourceVma.Name);
             clonedFile = null; // ownership transferred to the new VMA
             return 0;
         }
@@ -352,29 +340,21 @@ public partial class SyscallManager
 
     private static long ComputeSliceOffset(VMA sourceVma, uint sourceAddr)
     {
-        if (sourceVma.File == null) return 0;
-        return sourceVma.Offset + ((long)sourceAddr - sourceVma.Start);
-    }
-
-    private static long ComputeSliceBackingLength(VMA sourceVma, uint sourceAddr)
-    {
-        if (sourceVma.File == null) return 0;
-        var remaining = sourceVma.FileBackingLength - ((long)sourceAddr - sourceVma.Start);
-        return Math.Max(0, remaining);
+        if (!sourceVma.IsFileBacked) return 0;
+        return sourceVma.Offset + sourceVma.GetRelativeOffsetForAddress(sourceAddr);
     }
 
     private static bool NeedsMoveCopy(VMA sourceVma, uint sourceAddr, uint copyLen)
     {
         // Anonymous mappings have no stable backing store and must preserve bytes explicitly.
-        if (sourceVma.File == null) return true;
+        if (!sourceVma.IsFileBacked) return true;
 
         // File-backed private mappings can be rebuilt from the shared source unless they
         // already carry process-private pages in their private object.
-        var privateObject = sourceVma.PrivateObject;
+        var privateObject = sourceVma.VmAnonVma;
         if (privateObject == null || copyLen == 0) return false;
 
-        var startPage =
-            sourceVma.ViewPageOffset + (sourceAddr - sourceVma.Start) / LinuxConstants.PageSize;
+        var startPage = sourceVma.GetPageIndex(sourceAddr & LinuxConstants.PageMask);
         var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
         for (uint i = 0; i < pageCount; i++)
             if (privateObject.PeekPage(startPage + i) != IntPtr.Zero)

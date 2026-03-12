@@ -258,7 +258,7 @@ internal static class ProcessAddressSpaceSync
 
     internal static uint Mmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection perms,
         MapFlags flags,
-        LinuxFile? file, long offset, long filesz, string name, Process? process = null)
+        LinuxFile? file, long offset, string name, Process? process = null)
     {
         using var scope = EnterAddressSpaceScope(engine, process);
         var alignedLen = AlignLengthToPage(len);
@@ -266,7 +266,7 @@ internal static class ProcessAddressSpaceSync
         if (fixedReplace && addr != 0 && alignedLen != 0)
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
-        var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, filesz, name, engine);
+        var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine);
         PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }
@@ -345,6 +345,18 @@ internal static class ProcessAddressSpaceSync
             using var snapshot = RentEngineSnapshot();
             FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
             target.OnFileTruncate(inode, newSize, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
+        }
+    }
+
+    internal static void UnmapMappingRange(Inode inode, long start, long len, bool evenCows)
+    {
+        if (len <= 0) return;
+        var targets = inode.SnapshotMappedAddressSpaces();
+        foreach (var target in targets)
+        {
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates);
+            target.UnmapMappingRange(inode, start, len, evenCows, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
         }
     }
 

@@ -208,7 +208,7 @@ public class CloneThreadLifecycleTests
         Assert.Equal(IntPtr.Zero, peer.CPU.GetPhysicalAddressSafe(addr, false));
 
         env.Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test-remap]",
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test-remap]",
             env.Engine);
         Assert.True(env.Vma.HandleFault(addr, true, env.Engine));
 
@@ -259,7 +259,7 @@ public class CloneThreadLifecycleTests
         const uint twoPages = LinuxConstants.PageSize * 2;
 
         env.Vma.Mmap(addr, twoPages, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, twoPages, "[mremap-test]", env.Engine);
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[mremap-test]", env.Engine);
         Assert.True(env.Vma.HandleFault(addr, true, env.Engine));
         Assert.True(env.Vma.HandleFault(addr + LinuxConstants.PageSize, true, env.Engine));
         Assert.True(env.Engine.CopyToUser(addr + LinuxConstants.PageSize, BitConverter.GetBytes(0xDEADBEEFu)));
@@ -346,7 +346,7 @@ public class CloneThreadLifecycleTests
         public void MapUserPage(uint addr)
         {
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]",
                 Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
         }

@@ -685,9 +685,9 @@ public sealed class SilkInode : IndexedMemoryInode
     {
         lock (Lock)
         {
-            if (PageCache != null)
-                foreach (var state in PageCache.SnapshotPageStates())
-                    PageCache.ClearDirty(state.PageIndex);
+            if (Mapping != null)
+                foreach (var state in Mapping.SnapshotPageStates())
+                    Mapping.ClearDirty(state.PageIndex);
 
             DirtyPageIndexes.Clear();
         }
@@ -743,7 +743,7 @@ public sealed class SilkInode : IndexedMemoryInode
         {
             DirtyPageIndexes.Remove(pageIndex);
             if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-                PageCache?.ClearDirty((uint)pageIndex);
+                Mapping?.ClearDirty((uint)pageIndex);
         }
 
         return true;

@@ -28,12 +28,56 @@ public enum ExternalPageBackend
     MmapAnonymous
 }
 
+public enum MappedPageOwnerKind
+{
+    RawPointer,
+    AddressSpace,
+    AnonVma,
+    ZeroPage,
+    Special
+}
+
+public sealed class MappedPageBinding
+{
+    public required IntPtr Ptr { get; init; }
+    public required MappedPageOwnerKind OwnerKind { get; init; }
+    public MemoryObject? OwnerObject { get; init; }
+    public MemoryObject.VmPage? Page { get; init; }
+    public uint PageIndex { get; init; }
+
+    public static MappedPageBinding FromRaw(IntPtr ptr)
+    {
+        return new MappedPageBinding
+        {
+            Ptr = ptr,
+            OwnerKind = ZeroPageProvider.IsZeroPage(ptr) ? MappedPageOwnerKind.ZeroPage : MappedPageOwnerKind.RawPointer
+        };
+    }
+
+    public static MappedPageBinding FromObjectPage(MemoryObject ownerObject, uint pageIndex, MemoryObject.VmPage page)
+    {
+        return new MappedPageBinding
+        {
+            Ptr = page.Ptr,
+            OwnerKind = ownerObject switch
+            {
+                AddressSpace => MappedPageOwnerKind.AddressSpace,
+                AnonVma => MappedPageOwnerKind.AnonVma,
+                _ => MappedPageOwnerKind.Special
+            },
+            OwnerObject = ownerObject,
+            Page = page,
+            PageIndex = pageIndex
+        };
+    }
+}
+
 public sealed class ExternalPageManager
 {
     private static readonly AsyncLocal<State?> ScopedState = new();
     private static readonly State DefaultState = new();
 
-    private readonly Dictionary<uint, IntPtr> _pages = new();
+    private readonly Dictionary<uint, MappedPageBinding> _pages = new();
 
     private static State CurrentState => ScopedState.Value ?? DefaultState;
 
@@ -60,11 +104,23 @@ public sealed class ExternalPageManager
     {
         if (_pages.TryGetValue(pageAddr, out var page))
         {
-            ptr = page;
+            ptr = page.Ptr;
             return true;
         }
 
         ptr = IntPtr.Zero;
+        return false;
+    }
+
+    public bool TryGetBinding(uint pageAddr, out MappedPageBinding? binding)
+    {
+        if (_pages.TryGetValue(pageAddr, out var existing))
+        {
+            binding = existing;
+            return true;
+        }
+
+        binding = null;
         return false;
     }
 
@@ -75,7 +131,7 @@ public sealed class ExternalPageManager
         if (_pages.TryGetValue(pageAddr, out var page))
         {
             isNew = false;
-            return page;
+            return page.Ptr;
         }
 
         IntPtr ptr;
@@ -98,33 +154,49 @@ public sealed class ExternalPageManager
             return IntPtr.Zero;
         }
 
-        _pages[pageAddr] = ptr;
+        _pages[pageAddr] = MappedPageBinding.FromRaw(ptr);
         isNew = true;
         return ptr;
     }
 
     public bool AddMapping(uint pageAddr, IntPtr ptr, out bool addedRef)
     {
-        addedRef = false;
-        if (ptr == IntPtr.Zero) return false;
-        if (_pages.TryGetValue(pageAddr, out var existing)) return existing == ptr;
+        return AddBinding(pageAddr, MappedPageBinding.FromRaw(ptr), out addedRef);
+    }
 
-        if (!ZeroPageProvider.IsZeroPage(ptr))
+    public bool AddBinding(uint pageAddr, MappedPageBinding binding, out bool addedRef)
+    {
+        addedRef = false;
+        if (binding.Ptr == IntPtr.Zero) return false;
+        if (_pages.TryGetValue(pageAddr, out var existing)) return existing.Ptr == binding.Ptr;
+
+        if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
         {
-            AddGlobalRef(ptr);
+            AddGlobalRef(binding.Ptr);
             addedRef = true;
         }
 
-        _pages[pageAddr] = ptr;
+        if (binding.Page != null)
+            binding.Page.MapCount++;
+
+        _pages[pageAddr] = binding;
         return true;
     }
 
     public void Release(uint pageAddr)
     {
-        if (!_pages.TryGetValue(pageAddr, out var ptr)) return;
+        if (!_pages.TryGetValue(pageAddr, out var binding)) return;
         _pages.Remove(pageAddr);
-        if (!ZeroPageProvider.IsZeroPage(ptr))
-            ReleaseGlobalRef(ptr);
+        if (binding.Page != null && binding.Page.MapCount > 0)
+            binding.Page.MapCount--;
+
+        if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
+            ReleaseGlobalRef(binding.Ptr);
+
+        if (binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
+            binding.OwnerObject is AnonVma anonVma &&
+            binding.Page is { MapCount: <= 0, PinCount: <= 0 } anonPage)
+            anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
     }
 
     public void ReleaseRange(uint addr, uint length)

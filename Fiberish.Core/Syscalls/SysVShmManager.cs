@@ -216,10 +216,9 @@ public class SysVShmManager
                 Flags = MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous,
                 FileMapping = null,
                 Offset = 0,
-                FileBackingLength = segment.Size,
                 Name = $"[sysv shm:{shmid}]",
-                SharedObject = segment.BackingObject,
-                ViewPageOffset = 0
+                VmMapping = segment.BackingObject,
+                VmPgoff = 0
             };
             segment.BackingObject.AddRef();
 

@@ -26,7 +26,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x41000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
             Assert.True(engine.CopyToUser(mapAddr + 1, "ABC"u8.ToArray()));
@@ -60,7 +60,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x42000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
@@ -98,7 +98,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x43000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
@@ -144,7 +144,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x43100000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
@@ -194,7 +194,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x43200000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
@@ -243,7 +243,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x43300000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
@@ -286,7 +286,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x44000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 2, "QQ"u8.ToArray()));
 
@@ -333,7 +333,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x45000000;
             mm2.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file2, 0, (long)file2.Dentry.Inode!.Size, "MAP_SHARED", engine2);
+                MapFlags.Shared | MapFlags.Fixed, file2, 0, "MAP_SHARED", engine2);
             Assert.True(mm2.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
@@ -388,7 +388,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x45200000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file2, 0, (long)file2.Dentry.Inode!.Size, "MAP_SHARED", engine2);
+                MapFlags.Shared | MapFlags.Fixed, file2, 0, "MAP_SHARED", engine2);
             Assert.True(mm.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
@@ -434,7 +434,7 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x45100000;
             mm2.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file2, 0, (long)file2.Dentry.Inode!.Size, "MAP_SHARED", engine2);
+                MapFlags.Shared | MapFlags.Fixed, file2, 0, "MAP_SHARED", engine2);
             Assert.True(mm2.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
@@ -472,7 +472,7 @@ public class HostfsPageCacheWritebackTests
             loc.Dentry!.Inode!.Open(file);
             var fd = sm.AllocFD(file);
 
-            _ = manager.GetOrCreateInodePageCache(file.Dentry.Inode!);
+            _ = manager.GetOrCreateMapping(file.Dentry.Inode!);
             var writeRc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, writeRc);
             Assert.Equal("abcde", File.ReadAllText(hostFile));
@@ -482,7 +482,7 @@ public class HostfsPageCacheWritebackTests
             Assert.Equal("aXYde", File.ReadAllText(hostFile));
 
             sm.FreeFD(fd);
-            manager.ReleaseInodePageCache(file.Dentry.Inode);
+            manager.ReleaseMapping(file.Dentry.Inode);
         }
         finally
         {

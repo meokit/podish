@@ -21,6 +21,16 @@ public interface IPageCacheOps
     int SetPageDirty(long pageIndex);
 }
 
+public interface IAddressSpaceOperations : IPageCacheOps
+{
+    int ReadFolio(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer);
+    int DirtyFolio(long pageIndex);
+    int Writepage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync);
+    int Writepages(LinuxFile? linuxFile, WritePagesRequest request);
+    int InvalidateFolio(long pageIndex);
+    int ReleaseFolio(long pageIndex);
+}
+
 public enum InodeType
 {
     Unknown = 0,
@@ -247,7 +257,7 @@ public abstract class SuperBlock
     }
 }
 
-public abstract class Inode : IPageCacheOps
+public abstract class Inode : IAddressSpaceOperations
 {
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
@@ -256,10 +266,9 @@ public abstract class Inode : IPageCacheOps
     private VMAManager[] _mappedAddressSpaces = [];
 
     /// <summary>
-    ///     Per-inode page cache. Lazily created on first file mmap.
-    ///     Analogous to Linux inode.i_mapping / address_space.
+    ///     Per-inode page cache / address_space. Lazily created on first file mmap.
     /// </summary>
-    public MemoryObject? PageCache { get; set; }
+    public AddressSpace? Mapping { get; set; }
 
     public MemoryObjectManager? PageCacheManager { get; set; }
 
@@ -329,6 +338,57 @@ public abstract class Inode : IPageCacheOps
     public virtual int SetPageDirty(long pageIndex)
     {
         return AopsSetPageDirty(pageIndex);
+    }
+
+    public virtual int ReadFolio(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        return ReadPage(linuxFile, request, pageBuffer);
+    }
+
+    public virtual int DirtyFolio(long pageIndex)
+    {
+        return SetPageDirty(pageIndex);
+    }
+
+    public virtual int Writepage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
+    {
+        return WritePage(linuxFile, request, pageBuffer, sync);
+    }
+
+    public virtual int Writepages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        return WritePages(linuxFile, request);
+    }
+
+    public virtual int InvalidateFolio(long pageIndex)
+    {
+        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1);
+        return 0;
+    }
+
+    public virtual int ReleaseFolio(long pageIndex)
+    {
+        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1, static page => !page.Dirty);
+        return 0;
+    }
+
+    public virtual void InvalidateInodePages2Range(uint startPageIndex, uint endPageIndex)
+    {
+        Mapping?.RemovePagesInRange(startPageIndex, endPageIndex, static page => !page.Dirty);
+    }
+
+    public virtual void TruncateInodePagesRange(long start, long end)
+    {
+        if (end < start) return;
+        if (Mapping == null) return;
+        var startPage = (uint)Math.Max(0, start / LinuxConstants.PageSize);
+        var endPageExclusive = (uint)Math.Max(startPage, (end + LinuxConstants.PageSize) / LinuxConstants.PageSize);
+        Mapping.RemovePagesInRange(startPage, endPageExclusive);
+    }
+
+    public virtual void UnmapMappingRange(long start, long len, bool evenCows)
+    {
+        ProcessAddressSpaceSync.UnmapMappingRange(this, start, len, evenCows);
     }
 
     public void AcquireRef(InodeRefKind kind, string? reason = null)
@@ -592,7 +652,7 @@ public abstract class Inode : IPageCacheOps
     protected virtual void OnEvictCache()
     {
         // Release page-cache resources and remove inode from in-core tracking.
-        PageCacheManager?.ReleaseInodePageCache(this);
+        PageCacheManager?.ReleaseMapping(this);
         SuperBlock?.RemoveInodeFromTracking(this);
     }
 
@@ -696,7 +756,7 @@ public abstract class Inode : IPageCacheOps
         ReadBackendDelegate backendRead)
     {
         if (buffer.Length == 0) return 0;
-        var pageCache = PageCache;
+        var pageCache = Mapping;
         if (pageCache == null) return backendRead(linuxFile, buffer, offset);
         if (offset < 0) return -(int)Errno.EINVAL;
 
@@ -781,7 +841,7 @@ public abstract class Inode : IPageCacheOps
         WriteBackendDelegate backendWrite)
     {
         if (buffer.Length == 0) return 0;
-        var pageCache = PageCache;
+        var pageCache = Mapping;
         if (pageCache == null) return backendWrite(linuxFile, buffer, offset);
         if (linuxFile == null) return backendWrite(linuxFile, buffer, offset);
         if (offset < 0) return -(int)Errno.EINVAL;

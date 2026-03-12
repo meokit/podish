@@ -159,15 +159,15 @@ public readonly record struct MemoryStatsSnapshot(
 
             if (vma.File == null)
             {
-                var sharedStates = vma.SharedObject.SnapshotPageStates();
+                var sharedStates = vma.VmMapping.SnapshotPageStates();
                 var privateStates =
-                    vma.PrivateObject?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
-                if (vma.SharedObject.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
+                    vma.VmAnonVma?.SnapshotPageStates() ?? Array.Empty<MemoryObject.PageState>();
+                if (vma.VmMapping.Role == MemoryObjectRole.AnonSharedSourceZeroFill)
                 {
-                    var startPageIndex = vma.ViewPageOffset;
+                    var startPageIndex = vma.GetPageIndex(vma.Start);
                     var endPageIndex = startPageIndex + vma.Length / LinuxConstants.PageSize;
-                    var materializedSharedPages = vma.SharedObject.CountPagesInRange(startPageIndex, endPageIndex);
-                    var privatePages = vma.PrivateObject?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
+                    var materializedSharedPages = vma.VmMapping.CountPagesInRange(startPageIndex, endPageIndex);
+                    var privatePages = vma.VmAnonVma?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
                     var zeroPages = Math.Max(0L,
                         endPageIndex - startPageIndex - materializedSharedPages - privatePages);
                     anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;
@@ -196,8 +196,8 @@ public readonly record struct MemoryStatsSnapshot(
                 continue;
             }
 
-            if (vma.PrivateObject == null) continue;
-            foreach (var state in vma.PrivateObject.SnapshotPageStates())
+            if (vma.VmAnonVma == null) continue;
+            foreach (var state in vma.VmAnonVma.SnapshotPageStates())
             {
                 var key = state.Ptr;
                 if (!seenPtrs.Add(key)) continue;

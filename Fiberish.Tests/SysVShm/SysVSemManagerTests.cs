@@ -189,7 +189,7 @@ public class SysVSemManagerTests
         public void MapUserPage(uint addr)
         {
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]",
                 Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
         }

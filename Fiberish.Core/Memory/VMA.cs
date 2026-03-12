@@ -1,3 +1,4 @@
+using Fiberish.Native;
 using Fiberish.VFS;
 
 namespace Fiberish.Memory;
@@ -23,7 +24,7 @@ public enum MapFlags
     FixedNoReplace = 0x100000
 }
 
-public class VMA
+public class VmArea
 {
     public uint Start { get; set; }
     public uint End { get; set; } // Exclusive
@@ -32,31 +33,105 @@ public class VMA
     public VmaFileMapping? FileMapping { get; set; }
     public LinuxFile? File => FileMapping?.File;
     public long Offset { get; set; }
+    public ulong VmPgoff { get; set; }
 
-    // Max bytes of valid file data relative to the Start of this VMA. Used for zero-filling BSS and partial pages.
-    public long FileBackingLength { get; set; } // Max bytes to read from file relative to Start
     public string Name { get; set; } = string.Empty;
-    public MemoryObject SharedObject { get; set; } = null!;
+    public MemoryObject VmMapping { get; set; } = null!;
 
     /// <summary>
     ///     Holds per-process private pages for MAP_PRIVATE mappings.
     ///     Null for MAP_SHARED and other non-private mappings.
     /// </summary>
-    public MemoryObject? PrivateObject { get; set; }
-
-    public uint ViewPageOffset { get; set; }
+    public AnonVma? VmAnonVma { get; set; }
 
     public uint Length => End - Start;
 
-    public VMA Clone()
+    public uint VmStart
     {
-        var shared = (Flags & MapFlags.Shared) != 0;
-        SharedObject.AddRef();
+        get => Start;
+        set => Start = value;
+    }
+
+    public uint VmEnd
+    {
+        get => End;
+        set => End = value;
+    }
+
+    public MapFlags VmFlags
+    {
+        get => Flags;
+        set => Flags = value;
+    }
+
+    public Protection VmPageProt
+    {
+        get => Perms;
+        set => Perms = value;
+    }
+
+    public LinuxFile? VmFile => File;
+    public AddressSpace? VmAddressSpace => VmMapping as AddressSpace;
+
+    public bool IsFileBacked => File != null;
+    public bool IsPrivateMapping => (Flags & MapFlags.Private) != 0 && VmAnonVma != null;
+
+    public uint GetPageIndex(uint guestPageStart)
+    {
+        return checked((uint)VmPgoff) + (guestPageStart - Start) / LinuxConstants.PageSize;
+    }
+
+    public long GetRelativeOffsetForAddress(uint guestAddr)
+    {
+        return (long)guestAddr - Start;
+    }
+
+    public long GetRelativeOffsetForPageIndex(uint pageIndex)
+    {
+        return (long)(pageIndex - checked((uint)VmPgoff)) * LinuxConstants.PageSize;
+    }
+
+    public long GetAbsoluteFileOffsetForPageIndex(uint pageIndex)
+    {
+        return Offset + GetRelativeOffsetForPageIndex(pageIndex);
+    }
+
+    public long GetFileBackingLength()
+    {
+        if (!IsFileBacked) return 0;
+
+        var inodeSize = (long)(File?.OpenedInode?.Size ?? 0);
+        var remaining = inodeSize - Offset;
+        if (remaining <= 0) return 0;
+        return Math.Min(remaining, Length);
+    }
+
+    public long GetRemainingBackingBytes(long relativeOffset)
+    {
+        return GetFileBackingLength() - relativeOffset;
+    }
+
+    public int GetReadLengthForRelativeOffset(long relativeOffset)
+    {
+        if (GetFileBackingLength() <= 0)
+            return LinuxConstants.PageSize;
+
+        var remainingBackingBytes = GetRemainingBackingBytes(relativeOffset);
+        if (remainingBackingBytes <= 0)
+            return 0;
+        if (remainingBackingBytes < LinuxConstants.PageSize)
+            return (int)remainingBackingBytes;
+        return LinuxConstants.PageSize;
+    }
+
+    public VmArea Clone()
+    {
+        VmMapping.AddRef();
         // Private pages are shared page-for-page across fork and split lazily on the next write.
-        var privateObj = PrivateObject?.ForkCloneSharingPages();
+        var privateObj = VmAnonVma?.ForkCloneSharingPages() as AnonVma;
         var clonedFileMapping = FileMapping?.AddRef();
 
-        return new VMA
+        return new VmArea
         {
             Start = Start,
             End = End,
@@ -64,11 +139,10 @@ public class VMA
             Flags = Flags,
             FileMapping = clonedFileMapping,
             Offset = Offset,
-            FileBackingLength = FileBackingLength,
+            VmPgoff = VmPgoff,
             Name = Name,
-            SharedObject = SharedObject,
-            PrivateObject = privateObj,
-            ViewPageOffset = ViewPageOffset
+            VmMapping = VmMapping,
+            VmAnonVma = privateObj
         };
     }
 }

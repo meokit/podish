@@ -420,7 +420,7 @@ public partial class SyscallManager
         // Map vDSO page (RX) at a fixed high address to avoid overlap
         uint vdsoAddr = 0x7FFF0000;
         ProcessAddressSpaceSync.Mmap(Mem, Engine, vdsoAddr, 4096, Protection.Read | Protection.Exec,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "[vdso]");
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[vdso]");
 
         // Prefault a writable private page for initial setup.
         if (!Mem.PrefaultRange(vdsoAddr, 4096, Engine, true))

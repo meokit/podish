@@ -1761,14 +1761,14 @@ public partial class HostInode : Inode
 
     protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
-        if (request.PageCount <= 0 || PageCache == null) return 0;
+        if (request.PageCount <= 0 || Mapping == null) return 0;
         var page = new byte[LinuxConstants.PageSize];
         for (var i = 0; i < request.PageCount; i++)
         {
             var pageIndex = request.StartPageIndex + i;
-            if (PageCache.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
+            if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
 
-            var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
+            var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
             {
                 var n = BackendRead(linuxFile, page, pageIndex * LinuxConstants.PageSize);
                 unsafe
@@ -1813,7 +1813,7 @@ public partial class HostInode : Inode
         }
 
         if (request.PageIndex >= 0 && request.PageIndex <= uint.MaxValue)
-            PageCache?.ClearDirty((uint)request.PageIndex);
+            Mapping?.ClearDirty((uint)request.PageIndex);
         if (linuxFile != null) Sync(linuxFile);
         return 0;
     }
@@ -1821,7 +1821,7 @@ public partial class HostInode : Inode
     protected override int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
         if (!request.Sync) return 0;
-        if (PageCache == null) return 0;
+        if (Mapping == null) return 0;
 
         List<long> toFlush;
         lock (_dirtyPageLock)
@@ -1833,7 +1833,7 @@ public partial class HostInode : Inode
 
         foreach (var pageIndex in toFlush)
         {
-            var pagePtr = PageCache.PeekPage((uint)pageIndex);
+            var pagePtr = Mapping.PeekPage((uint)pageIndex);
             if (pagePtr == IntPtr.Zero)
             {
                 lock (_dirtyPageLock)
@@ -1842,7 +1842,7 @@ public partial class HostInode : Inode
                 }
 
                 if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-                    PageCache.ClearDirty((uint)pageIndex);
+                    Mapping.ClearDirty((uint)pageIndex);
                 continue;
             }
 
@@ -1856,7 +1856,7 @@ public partial class HostInode : Inode
                 }
 
                 if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-                    PageCache.ClearDirty((uint)pageIndex);
+                    Mapping.ClearDirty((uint)pageIndex);
                 continue;
             }
 
@@ -1884,7 +1884,7 @@ public partial class HostInode : Inode
             }
 
             if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-                PageCache.ClearDirty((uint)pageIndex);
+                Mapping.ClearDirty((uint)pageIndex);
         }
 
         if (linuxFile != null) Sync(linuxFile);
@@ -1911,9 +1911,9 @@ public partial class HostInode : Inode
             _mappedPageCache?.Truncate(size);
         }
 
-        if (PageCache != null)
+        if (Mapping != null)
         {
-            PageCache.TruncateToSize(size);
+            Mapping.TruncateToSize(size);
             var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
             lock (_dirtyPageLock)
             {
@@ -1959,7 +1959,7 @@ public partial class HostInode : Inode
         }
 
         if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-            PageCache?.ClearDirty((uint)pageIndex);
+            Mapping?.ClearDirty((uint)pageIndex);
         if (linuxFile != null) Sync(linuxFile);
         return true;
     }

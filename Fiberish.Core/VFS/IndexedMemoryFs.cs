@@ -328,7 +328,7 @@ public abstract class IndexedMemoryInode : Inode
                 }
                 else
                 {
-                    existingDentry.Inode.PageCache = null;
+                    existingDentry.Inode.Mapping = null;
                     targetParent.Unlink(newName);
                 }
             }
@@ -637,9 +637,9 @@ public abstract class IndexedMemoryInode : Inode
                 return 0;
             }
 
-            if (PageCache != null)
+            if (Mapping != null)
             {
-                PageCache.TruncateToSize(size);
+                Mapping.TruncateToSize(size);
                 var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
                 DirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
             }
@@ -742,21 +742,21 @@ public abstract class IndexedMemoryInode : Inode
 
     protected MemoryObject EnsurePageCacheLocked()
     {
-        if (PageCache != null) return PageCache;
+        if (Mapping != null) return Mapping;
         var role = CacheClass == GlobalPageCacheManager.PageCacheClass.Shmem
             ? MemoryObjectRole.ShmemSharedSource
             : MemoryObjectRole.FileSharedSource;
-        PageCache = new MemoryObject(MemoryObjectKind.File, null, 0, 0, true, role);
-        GlobalPageCacheManager.TrackPageCache(PageCache, CacheClass);
+        Mapping = new AddressSpace(MemoryObjectKind.File, null, 0, 0, true, role);
+        GlobalPageCacheManager.TrackPageCache(Mapping, CacheClass);
         OwnsPageCache = true;
-        return PageCache;
+        return Mapping;
     }
 
     protected void ReleaseOwnedPageCache()
     {
-        if (!OwnsPageCache || PageCache == null) return;
-        PageCache.Release();
-        PageCache = null;
+        if (!OwnsPageCache || Mapping == null) return;
+        Mapping.Release();
+        Mapping = null;
         OwnsPageCache = false;
         DirtyPageIndexes.Clear();
     }

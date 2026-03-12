@@ -129,8 +129,7 @@ public sealed class LayerIndex
             node.MTime,
             node.ATime,
             node.CTime,
-            node.Content,
-            -1);
+            node.Content);
         AddEntry(entry);
 
         if (node.Type != InodeType.Directory || node.Children == null) return;
@@ -378,16 +377,16 @@ public class LayerInode : Inode
 
     protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
-        if (_entry.Type != InodeType.File || request.PageCount <= 0 || PageCache == null) return 0;
+        if (_entry.Type != InodeType.File || request.PageCount <= 0 || Mapping == null) return 0;
 
         var sb = (LayerSuperBlock)SuperBlock;
         var page = new byte[LinuxConstants.PageSize];
         for (var i = 0; i < request.PageCount; i++)
         {
             var pageIndex = request.StartPageIndex + i;
-            if (PageCache.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
+            if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
 
-            var ptr = PageCache.GetOrCreatePage((uint)pageIndex, p =>
+            var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
             {
                 page.AsSpan().Clear();
                 var fileOffset = pageIndex * LinuxConstants.PageSize;

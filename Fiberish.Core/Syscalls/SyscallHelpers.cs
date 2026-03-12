@@ -267,7 +267,7 @@ public partial class SyscallManager
 
             foreach (var inode in inodes)
             {
-                if (inode.PageCache == null) continue;
+                if (inode.Mapping == null) continue;
                 try
                 {
                     _ = inode.WritePages(null, new WritePagesRequest(0, long.MaxValue, true));

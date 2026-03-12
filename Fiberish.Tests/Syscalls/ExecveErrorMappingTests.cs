@@ -52,7 +52,7 @@ public class ExecveErrorMappingTests
     private static void MapUserPage(VMAManager mm, Engine engine, uint addr)
     {
         mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]",
             engine);
         Assert.True(mm.HandleFault(addr, true, engine));
     }

@@ -14,8 +14,8 @@ public class MemoryObjectManagerTests
         var inodeA = new TestInode(sb, 42);
         var inodeB = new TestInode(sb, 42);
 
-        var cacheA = manager.GetOrCreateInodePageCache(inodeA);
-        var cacheB = manager.GetOrCreateInodePageCache(inodeB);
+        var cacheA = manager.GetOrCreateMapping(inodeA);
+        var cacheB = manager.GetOrCreateMapping(inodeB);
 
         try
         {
@@ -23,8 +23,8 @@ public class MemoryObjectManagerTests
         }
         finally
         {
-            manager.ReleaseInodePageCache(inodeA);
-            manager.ReleaseInodePageCache(inodeB);
+            manager.ReleaseMapping(inodeA);
+            manager.ReleaseMapping(inodeB);
             cacheA.Release();
             cacheB.Release();
         }
@@ -38,11 +38,11 @@ public class MemoryObjectManagerTests
         var sb = new TestSuperBlock();
         var inode = new TestInode(sb, 99);
 
-        var cacheA = managerA.GetOrCreateInodePageCache(inode);
-        managerA.ReleaseInodePageCache(inode);
+        var cacheA = managerA.GetOrCreateMapping(inode);
+        managerA.ReleaseMapping(inode);
         cacheA.Release();
 
-        var cacheB = managerB.GetOrCreateInodePageCache(inode);
+        var cacheB = managerB.GetOrCreateMapping(inode);
 
         try
         {
@@ -50,7 +50,7 @@ public class MemoryObjectManagerTests
         }
         finally
         {
-            managerB.ReleaseInodePageCache(inode);
+            managerB.ReleaseMapping(inode);
             cacheB.Release();
         }
     }

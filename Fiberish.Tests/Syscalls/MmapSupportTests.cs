@@ -207,16 +207,16 @@ public class MmapSupportTests
 
         var vma = env.Vma.FindVMA(baseAddr);
         Assert.NotNull(vma);
-        var secondPageIndex = vma!.ViewPageOffset + 1;
-        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        var secondPageIndex = vma!.GetPageIndex(secondPage);
+        Assert.False(vma.VmMapping.IsDirty(secondPageIndex));
         Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
 
         Assert.Equal(0, await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize, (uint)Protection.Read));
-        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.False(vma.VmMapping.IsDirty(secondPageIndex));
         Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
 
         Assert.Equal(0, await env.Call("SysMprotect", secondPage, LinuxConstants.PageSize, (uint)Protection.Read));
-        Assert.False(vma.SharedObject.IsDirty(secondPageIndex));
+        Assert.False(vma.VmMapping.IsDirty(secondPageIndex));
         Assert.True(env.Engine.HasMappedPage(secondPage, LinuxConstants.PageSize));
     }
 
@@ -250,7 +250,7 @@ public class MmapSupportTests
     }
 
     [Fact]
-    public async Task Mprotect_PrivateFileSplit_ReusesSamePrivateObject()
+    public async Task Mprotect_PrivateFileSplit_ReusesSameVmAnonVma()
     {
         using var env = new TestEnv();
         env.MapUserPage(0x15000);
@@ -274,13 +274,13 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(3, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].PrivateObject);
-        Assert.Same(splitVmas[0].PrivateObject, splitVmas[1].PrivateObject);
-        Assert.Same(splitVmas[0].PrivateObject, splitVmas[2].PrivateObject);
+        Assert.NotNull(splitVmas[0].VmAnonVma);
+        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[1].VmAnonVma);
+        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[2].VmAnonVma);
     }
 
     [Fact]
-    public async Task Munmap_PrivateFileMiddleSplit_ReusesSamePrivateObject()
+    public async Task Munmap_PrivateFileMiddleSplit_ReusesSameVmAnonVma()
     {
         using var env = new TestEnv();
         env.MapUserPage(0x16000);
@@ -303,8 +303,84 @@ public class MmapSupportTests
             .OrderBy(v => v.Start)
             .ToArray();
         Assert.Equal(2, splitVmas.Length);
-        Assert.NotNull(splitVmas[0].PrivateObject);
-        Assert.Same(splitVmas[0].PrivateObject, splitVmas[1].PrivateObject);
+        Assert.NotNull(splitVmas[0].VmAnonVma);
+        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[1].VmAnonVma);
+    }
+
+    [Fact]
+    public async Task Munmap_PrivateAnonymousMiddleSplit_ReleasesUnmappedPrivatePages()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x54300000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.True(env.Engine.CopyToUser(baseAddr, new[] { (byte)0x11 }));
+        Assert.True(env.Engine.CopyToUser(baseAddr + LinuxConstants.PageSize, new[] { (byte)0x22 }));
+        Assert.True(env.Engine.CopyToUser(baseAddr + LinuxConstants.PageSize * 2, new[] { (byte)0x33 }));
+
+        var initialVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == baseAddr));
+        Assert.NotNull(initialVma.VmAnonVma);
+        Assert.Equal(3, initialVma.VmAnonVma!.PageCount);
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
+
+        var splitVmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + mapLen)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(2, splitVmas.Length);
+        Assert.NotNull(splitVmas[0].VmAnonVma);
+        Assert.Same(splitVmas[0].VmAnonVma, splitVmas[1].VmAnonVma);
+        var privateObject = splitVmas[0].VmAnonVma!;
+        Assert.Equal(2, privateObject.PageCount);
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr, LinuxConstants.PageSize));
+        Assert.Equal(1, privateObject.PageCount);
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize * 2, LinuxConstants.PageSize));
+        Assert.Equal(0, privateObject.PageCount);
+    }
+
+    [Fact]
+    public async Task Munmap_SharedFileMiddleRange_DoesNotDropAddressSpacePages()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x17000);
+        env.WriteCString(0x17000, "/shared-cache-munmap");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x17000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x17000, (uint)FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await env.Call("SysFtruncate", (uint)fd, LinuxConstants.PageSize * 3));
+
+        const uint baseAddr = 0x54400000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)(Protection.Read | Protection.Write), (uint)(MapFlags.Shared | MapFlags.Fixed), (uint)fd));
+
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(baseAddr, false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
+        Assert.Equal(FaultResult.Handled,
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize * 2, false, env.Engine));
+
+        var mappedVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == baseAddr));
+        Assert.Equal(3, mappedVma.VmMapping.PageCount);
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize));
+
+        var splitVmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + mapLen)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(2, splitVmas.Length);
+        Assert.Equal(3, splitVmas[0].VmMapping.PageCount);
+        Assert.Same(splitVmas[0].VmMapping, splitVmas[1].VmMapping);
+        Assert.Equal(FaultResult.Segv,
+            env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
     }
 
     private sealed class TestEnv : IDisposable
@@ -338,7 +414,7 @@ public class MmapSupportTests
         public void MapUserPage(uint addr)
         {
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, LinuxConstants.PageSize, "[test]",
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]",
                 Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
         }

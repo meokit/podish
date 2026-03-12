@@ -72,20 +72,20 @@ public class MemoryPressureCoordinatorTests
 
         const uint addr = 0x74000000;
         Assert.Equal(addr, mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-reclaim", engine));
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "anon-reclaim", engine));
 
         Assert.True(engine.CopyFromUser(addr, new byte[1]));
         var vma = Assert.Single(mm.VMAs);
-        var pageIndex = vma.ViewPageOffset;
-        Assert.Equal(IntPtr.Zero, vma.SharedObject.GetPage(pageIndex));
-        Assert.Equal(IntPtr.Zero, vma.PrivateObject!.GetPage(pageIndex));
+        var pageIndex = vma.GetPageIndex(vma.Start);
+        Assert.Equal(IntPtr.Zero, vma.VmMapping.GetPage(pageIndex));
+        Assert.Equal(IntPtr.Zero, vma.VmAnonVma!.GetPage(pageIndex));
         Assert.True(mm.ExternalPages.TryGet(addr, out _));
 
         var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.True(result.MadeProgress);
         Assert.False(mm.ExternalPages.TryGet(addr, out _));
-        Assert.Equal(IntPtr.Zero, vma.SharedObject.GetPage(pageIndex));
+        Assert.Equal(IntPtr.Zero, vma.VmMapping.GetPage(pageIndex));
         Assert.True(engine.CopyFromUser(addr, new byte[1]));
     }
 
@@ -101,19 +101,19 @@ public class MemoryPressureCoordinatorTests
 
         const uint addr = 0x74100000;
         Assert.Equal(addr, mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, 0, "anon-private-overlay", engine));
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "anon-private-overlay", engine));
 
         Assert.True(engine.CopyToUser(addr, new byte[] { 0x5A }));
         var vma = Assert.Single(mm.VMAs);
-        var pageIndex = vma.ViewPageOffset;
-        var privatePage = vma.PrivateObject!.GetPage(pageIndex);
+        var pageIndex = vma.GetPageIndex(vma.Start);
+        var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, privatePage);
 
         var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.False(result.MadeProgress);
         Assert.True(mm.ExternalPages.TryGet(addr, out _));
-        Assert.Equal(privatePage, vma.PrivateObject.GetPage(pageIndex));
+        Assert.Equal(privatePage, vma.VmAnonVma.GetPage(pageIndex));
         var probe = new byte[1];
         Assert.True(engine.CopyFromUser(addr, probe));
         Assert.Equal((byte)0x5A, probe[0]);

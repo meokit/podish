@@ -18,11 +18,11 @@ public enum MemoryObjectRole
     PrivateOverlay
 }
 
-public sealed class MemoryObject
+public class MemoryObject
 {
     private readonly object _lock = new();
 
-    private readonly Dictionary<uint, PageEntry> _pages = new();
+    private readonly Dictionary<uint, VmPage> _pages = new();
     private int _refCount = 1;
 
     public MemoryObject(MemoryObjectKind kind, LinuxFile? file, long fileBaseOffset, long fileSize, bool shared,
@@ -103,6 +103,14 @@ public sealed class MemoryObject
         }
     }
 
+    public VmPage? PeekVmPage(uint pageIndex)
+    {
+        lock (_lock)
+        {
+            return _pages.TryGetValue(pageIndex, out var entry) ? entry : null;
+        }
+    }
+
     /// <summary>
     ///     Used by COW: store a private page that was just allocated.
     /// </summary>
@@ -110,7 +118,7 @@ public sealed class MemoryObject
     {
         lock (_lock)
         {
-            _pages[pageIndex] = new PageEntry
+            _pages[pageIndex] = new VmPage
             {
                 Ptr = ptr,
                 LastAccessTicks = DateTime.UtcNow.Ticks
@@ -129,7 +137,7 @@ public sealed class MemoryObject
                 return existing.Ptr;
             }
 
-            _pages[pageIndex] = new PageEntry
+            _pages[pageIndex] = new VmPage
             {
                 Ptr = ptr,
                 LastAccessTicks = DateTime.UtcNow.Ticks
@@ -151,6 +159,16 @@ public sealed class MemoryObject
         }
 
         foreach (var ptr in toRelease) ExternalPageManager.ReleasePtr(ptr);
+    }
+
+    protected virtual MemoryObject CreateCloneContainer()
+    {
+        return this switch
+        {
+            AddressSpace => new AddressSpace(Kind, File, FileBaseOffset, FileSize, IsShared, Role),
+            AnonVma => new AnonVma(Kind, File, FileBaseOffset, FileSize, IsShared, Role),
+            _ => new MemoryObject(Kind, File, FileBaseOffset, FileSize, IsShared, Role)
+        };
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
@@ -208,7 +226,7 @@ public sealed class MemoryObject
                 return raced.Ptr;
             }
 
-            _pages[pageIndex] = new PageEntry
+            _pages[pageIndex] = new VmPage
             {
                 Ptr = ptr,
                 LastAccessTicks = DateTime.UtcNow.Ticks
@@ -288,17 +306,21 @@ public sealed class MemoryObject
     /// </summary>
     public MemoryObject ForkCloneSharingPages()
     {
-        var clone = new MemoryObject(Kind, File, FileBaseOffset, FileSize, false, Role);
+        var clone = CreateCloneContainer();
         lock (_lock)
         {
             foreach (var (pageIndex, pagePtr) in _pages)
             {
                 ExternalPageManager.AddRef(pagePtr.Ptr);
-                clone._pages[pageIndex] = new PageEntry
+                clone._pages[pageIndex] = new VmPage
                 {
                     Ptr = pagePtr.Ptr,
                     Dirty = pagePtr.Dirty,
-                    LastAccessTicks = DateTime.UtcNow.Ticks
+                    LastAccessTicks = DateTime.UtcNow.Ticks,
+                    Uptodate = pagePtr.Uptodate,
+                    Writeback = pagePtr.Writeback,
+                    PinCount = pagePtr.PinCount,
+                    MapCount = pagePtr.MapCount
                 };
             }
         }
@@ -355,10 +377,60 @@ public sealed class MemoryObject
         return true;
     }
 
-    private sealed class PageEntry
+    public int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
+    {
+        if (startPageIndex >= endPageIndex) return 0;
+        List<IntPtr>? toRelease = null;
+        var removedCount = 0;
+        lock (_lock)
+        {
+            if (_pages.Count == 0) return 0;
+            var keysToDrop = _pages
+                .Where(kv => kv.Key >= startPageIndex && kv.Key < endPageIndex &&
+                             (predicate == null || predicate(kv.Value)))
+                .Select(kv => kv.Key)
+                .ToArray();
+            if (keysToDrop.Length == 0) return 0;
+
+            toRelease = new List<IntPtr>(keysToDrop.Length);
+            foreach (var key in keysToDrop)
+            {
+                toRelease.Add(_pages[key].Ptr);
+                _pages.Remove(key);
+            }
+
+            removedCount = keysToDrop.Length;
+        }
+
+        if (toRelease != null)
+            foreach (var ptr in toRelease)
+                ExternalPageManager.ReleasePtr(ptr);
+        return removedCount;
+    }
+
+    public bool RemovePageIfMatches(uint pageIndex, VmPage page)
+    {
+        IntPtr ptr;
+        lock (_lock)
+        {
+            if (!_pages.TryGetValue(pageIndex, out var existing)) return false;
+            if (!ReferenceEquals(existing, page)) return false;
+            ptr = existing.Ptr;
+            _pages.Remove(pageIndex);
+        }
+
+        ExternalPageManager.ReleasePtr(ptr);
+        return true;
+    }
+
+    public sealed class VmPage
     {
         public required IntPtr Ptr { get; set; }
         public bool Dirty { get; set; }
+        public bool Uptodate { get; set; } = true;
+        public bool Writeback { get; set; }
+        public int MapCount { get; set; }
+        public int PinCount { get; set; }
         public long LastAccessTicks { get; set; }
     }
 

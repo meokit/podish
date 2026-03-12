@@ -37,7 +37,7 @@ public class HostMappedPageCacheGeometryTests
             loc.Dentry!.Inode!.Open(file);
             const uint mapAddr = 0x47000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize * 4, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
 
             for (var i = 0; i < 4; i++)
                 Assert.True(mm.HandleFault(mapAddr + (uint)(i * LinuxConstants.PageSize), true, engine));
@@ -89,8 +89,8 @@ public class HostMappedPageCacheGeometryTests
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
             loc.Dentry!.Inode!.Open(file);
             const uint mapAddr = 0x47100000;
-            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED_RO", engine);
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Shared | MapFlags.Fixed, file, 0,
+                "MAP_SHARED_RO", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
             var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
@@ -140,8 +140,7 @@ public class HostMappedPageCacheGeometryTests
                 file.Inode!.Open(mappedFile);
                 const uint mapAddr = 0x47200000;
                 mm.Mmap(mapAddr, LinuxConstants.PageSize * 4, Protection.Read | Protection.Write,
-                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
-                    engine);
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
 
                 for (var i = 0; i < 4; i++)
                     Assert.True(mm.HandleFault(mapAddr + (uint)(i * LinuxConstants.PageSize), true, engine));
@@ -210,7 +209,7 @@ public class HostMappedPageCacheGeometryTests
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
             const uint mapAddr = 0x47300000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed, file, 0, (long)file.Dentry.Inode!.Size, "MAP_SHARED_TAIL", engine);
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED_TAIL", engine);
 
             var tailPageAddr = mapAddr + LinuxConstants.PageSize;
             Assert.True(mm.HandleFault(tailPageAddr, true, engine));

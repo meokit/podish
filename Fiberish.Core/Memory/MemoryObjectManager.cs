@@ -12,12 +12,12 @@ public sealed class MemoryObjectManager
     ///     Get or create the inode's global page cache MemoryObject.
     ///     Reuses CreateOrOpenNamed (same mechanism as SysV shm).
     /// </summary>
-    public MemoryObject GetOrCreateInodePageCache(Inode inode)
+    public AddressSpace GetOrCreateMapping(Inode inode)
     {
-        if (inode.PageCache != null)
+        if (inode.Mapping != null)
         {
-            inode.PageCache.AddRef();
-            return inode.PageCache;
+            inode.Mapping.AddRef();
+            return inode.Mapping;
         }
 
         var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
@@ -26,13 +26,13 @@ public sealed class MemoryObjectManager
             if (_namedObjects.TryGetValue(key, out var existing))
             {
                 existing.AddRef(); // caller mapping reference
-                inode.PageCache ??= existing;
+                inode.Mapping ??= (AddressSpace)existing;
                 inode.PageCacheManager ??= this;
-                return existing;
+                return inode.Mapping;
             }
 
             var isShmem = IsShmemInode(inode);
-            var obj = new MemoryObject(
+            var obj = new AddressSpace(
                 MemoryObjectKind.File,
                 null,
                 0,
@@ -44,47 +44,49 @@ public sealed class MemoryObjectManager
                 : GlobalPageCacheManager.PageCacheClass.File);
             _namedObjects[key] = obj; // manager-owned reference (initial ref=1)
             obj.AddRef(); // caller mapping reference
-            inode.PageCache = obj;
+            inode.Mapping = obj;
             inode.PageCacheManager = this;
             return obj;
         }
     }
 
-    public void ReleaseInodePageCache(Inode inode)
+    public void ReleaseMapping(Inode inode)
     {
-        if (inode.PageCache == null) return;
+        if (inode.Mapping == null) return;
         var key = $"pagecache:inode:{RuntimeHelpers.GetHashCode(inode)}";
         CloseNamed(key); // decrements ref; freed when count hits 0
-        inode.PageCache = null;
+        inode.Mapping = null;
         inode.PageCacheManager = null;
     }
 
-    public MemoryObject CreateAnonymousSharedSource()
+    public AnonVma CreateAnonymousSharedSource()
     {
-        var obj = new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, false,
+        var obj = new AnonVma(MemoryObjectKind.Anonymous, null, 0, 0, false,
             MemoryObjectRole.AnonSharedSourceZeroFill);
         GlobalPageCacheManager.TrackPageCache(obj, GlobalPageCacheManager.PageCacheClass.AnonSharedSource);
         return obj;
     }
 
-    public MemoryObject CreateSharedAnonymous()
+    public AddressSpace CreateSharedAnonymous()
     {
-        var obj = new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, true,
+        var obj = new AddressSpace(MemoryObjectKind.Anonymous, null, 0, 0, true,
             MemoryObjectRole.ShmemSharedSource);
         GlobalPageCacheManager.TrackPageCache(obj, GlobalPageCacheManager.PageCacheClass.Shmem);
         return obj;
     }
 
-    public MemoryObject CreatePrivateOverlay()
+    public AnonVma CreatePrivateOverlay()
     {
-        return new MemoryObject(MemoryObjectKind.Anonymous, null, 0, 0, false,
+        return new AnonVma(MemoryObjectKind.Anonymous, null, 0, 0, false,
             MemoryObjectRole.PrivateOverlay);
     }
 
     public MemoryObject CreateFile(LinuxFile fileHandle, long fileBaseOffset, long fileSize, bool shared)
     {
-        return new MemoryObject(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, shared,
-            shared ? MemoryObjectRole.FileSharedSource : MemoryObjectRole.PrivateOverlay);
+        return shared
+            ? new AddressSpace(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, true)
+            : new AnonVma(MemoryObjectKind.File, fileHandle, fileBaseOffset, fileSize, false,
+                MemoryObjectRole.PrivateOverlay);
     }
 
     public MemoryObject CreateOrOpenNamed(string name, Func<MemoryObject> factory, out bool created)

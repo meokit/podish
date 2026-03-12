@@ -566,16 +566,8 @@ public class SilkFsAdapterTests
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!, LinuxFile.ReferenceKind.MmapHold);
             const uint mapAddr = 0x58000000;
-            mm.Mmap(
-                mapAddr,
-                LinuxConstants.PageSize,
-                Protection.Read | Protection.Write,
-                MapFlags.Shared | MapFlags.Fixed,
-                mappedFile,
-                0,
-                (long)file.Inode!.Size,
-                "MAP_SHARED",
-                engine);
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
 
             loc.Dentry.Inode!.Unlink("mapheld.txt");
             Assert.True(File.Exists(livePath));
@@ -633,8 +625,7 @@ public class SilkFsAdapterTests
                 var mappedFile = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDWR, fileLoc.Mount!);
                 const uint mapAddr = 0x4C000000;
                 mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
-                    engine);
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
                 Assert.True(mm.HandleFault(mapAddr, true, engine));
                 Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
                 var vma = mm.FindVMA(mapAddr);
@@ -722,8 +713,7 @@ public class SilkFsAdapterTests
                 var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
                 const uint mapAddr = 0x4D000000;
                 mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
-                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, (long)mappedFile.Dentry.Inode!.Size, "MAP_SHARED",
-                    engine);
+                    MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
                 Assert.True(mm.HandleFault(mapAddr, false, engine));
 
                 Assert.Equal(2, mappedFile.Dentry.Inode!.Write(mappedFile, "XY"u8.ToArray(), 1));
@@ -808,7 +798,7 @@ public class SilkFsAdapterTests
             wf.Close();
 
             var silkInode = Assert.IsType<SilkInode>(file.Inode);
-            var cache = Assert.IsType<MemoryObject>(silkInode.PageCache);
+            var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
             var reclaimed = GlobalPageCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
@@ -873,7 +863,7 @@ public class SilkFsAdapterTests
             wf.Close();
 
             var silkInode = Assert.IsType<SilkInode>(file.Inode);
-            var cache = Assert.IsType<MemoryObject>(silkInode.PageCache);
+            var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
             GlobalPageCacheManager.MaybeRunMaintenance(mm, engine);

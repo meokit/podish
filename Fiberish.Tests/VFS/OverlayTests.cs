@@ -231,8 +231,8 @@ public class OverlayTests
             upperInode.Ino = forcedIno;
 
             var manager = new MemoryObjectManager();
-            var lowerCache = manager.GetOrCreateInodePageCache(lowerInode);
-            var upperCache = manager.GetOrCreateInodePageCache(upperInode);
+            var lowerCache = manager.GetOrCreateMapping(lowerInode);
+            var upperCache = manager.GetOrCreateMapping(upperInode);
 
             try
             {
@@ -262,8 +262,8 @@ public class OverlayTests
             }
             finally
             {
-                manager.ReleaseInodePageCache(lowerInode);
-                manager.ReleaseInodePageCache(upperInode);
+                manager.ReleaseMapping(lowerInode);
+                manager.ReleaseMapping(upperInode);
                 lowerCache.Release();
                 upperCache.Release();
             }

@@ -50,14 +50,14 @@ public class TruncateMmapLifecycleTests
         Assert.Equal(FaultResult.Handled, env.Mm.HandleFaultDetailed(secondPage, false, env.Engine));
 
         var vma = Assert.Single(env.Mm.VMAs);
-        var secondPageIndex = vma.ViewPageOffset + 1;
-        Assert.NotEqual(IntPtr.Zero, vma.SharedObject.GetPage(secondPageIndex));
+        var secondPageIndex = vma.GetPageIndex(secondPage);
+        Assert.NotEqual(IntPtr.Zero, vma.VmMapping.GetPage(secondPageIndex));
 
         Assert.Equal(0, env.File.Inode.Truncate(LinuxConstants.PageSize));
         env.Mm.OnFileTruncate(env.File.Inode, LinuxConstants.PageSize, env.Engine);
 
-        Assert.Equal(LinuxConstants.PageSize, vma.FileBackingLength);
-        Assert.Equal(IntPtr.Zero, vma.SharedObject.GetPage(secondPageIndex));
+        Assert.Equal(LinuxConstants.PageSize, vma.GetFileBackingLength());
+        Assert.Equal(IntPtr.Zero, vma.VmMapping.GetPage(secondPageIndex));
     }
 
     [Fact]
@@ -133,9 +133,9 @@ public class TruncateMmapLifecycleTests
         Assert.Equal(FaultResult.Handled, env.Mm1.HandleFaultDetailed(secondPage, true, env.Engine1));
 
         var vma = Assert.Single(env.Mm1.VMAs, candidate => ReferenceEquals(candidate.File?.OpenedInode, env.Inode));
-        var secondPageIndex = vma.ViewPageOffset + 1;
-        vma.SharedObject.MarkDirty(secondPageIndex);
-        vma.FileBackingLength = LinuxConstants.PageSize;
+        var secondPageIndex = vma.GetPageIndex(secondPage);
+        vma.VmMapping.MarkDirty(secondPageIndex);
+        Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
         Assert.Equal(0UL, env.Task1.PendingSignals);
 
         VMAManager.SyncVMA(vma, [env.Engine1], vma.Start, vma.End);
@@ -194,8 +194,7 @@ public class TruncateMmapLifecycleTests
                 Assert.Equal(payload.Length, inode.Write(file, payload, 0));
 
                 var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                    MapFlags.Shared,
-                    file, 0, (long)inode.Size, "shared-mm-map", engine);
+                    MapFlags.Shared, file, 0, "shared-mm-map", engine);
                 var secondPage = map + LinuxConstants.PageSize;
                 Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(secondPage, true, engine));
 
@@ -305,14 +304,14 @@ public class TruncateMmapLifecycleTests
 
         public uint MapShared(uint addr, uint len)
         {
-            return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Shared, File.Handle, 0,
-                (long)File.Inode.Size, "test-map", Engine);
+            return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Shared, File.Handle, 0, "test-map",
+                Engine);
         }
 
         public uint MapPrivate(uint addr, uint len)
         {
             return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Private, File.Handle, 0,
-                (long)File.Inode.Size, "test-map-private", Engine);
+                "test-map-private", Engine);
         }
     }
 
@@ -357,11 +356,9 @@ public class TruncateMmapLifecycleTests
             Assert.Equal(payload.Length, Inode.Write(File1, payload, 0));
 
             Map1 = Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                MapFlags.Shared,
-                File1, 0, (long)Inode.Size, "p1-map", Engine1);
+                MapFlags.Shared, File1, 0, "p1-map", Engine1);
             Map2 = Mm2.Mmap(0x43000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                MapFlags.Shared,
-                File2, 0, (long)Inode.Size, "p2-map", Engine2);
+                MapFlags.Shared, File2, 0, "p2-map", Engine2);
         }
 
         public KernelScheduler Scheduler { get; }
@@ -427,10 +424,10 @@ public class TruncateMmapLifecycleTests
             File2 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             Assert.Equal(1, Inode.Write(File1, new[] { (byte)'A' }, 0));
 
-            Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1,
-                File1, 0, (long)Inode.Size, "map1", Engine1);
-            Map2 = Mm2.Mmap(0x46100000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags2,
-                File2, 0, (long)Inode.Size, "map2", Engine2);
+            Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1, File1, 0,
+                "map1", Engine1);
+            Map2 = Mm2.Mmap(0x46100000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags2, File2, 0,
+                "map2", Engine2);
         }
 
         public KernelScheduler Scheduler { get; }
