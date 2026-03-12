@@ -71,6 +71,9 @@ public sealed class ContainerRuntimeService
         Task? inputTask = null;
         PosixSignalRegistration? sigwinch = null;
         ITtyDriver? driver = null;
+        EventHandler? processExitHandler = null;
+        ConsoleCancelEventHandler? cancelKeyPressHandler = null;
+        var rawModeEnabled = false;
         var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
@@ -92,17 +95,19 @@ public sealed class ContainerRuntimeService
         if (isInteractive)
         {
             var tty = ttyDiag!;
-            stdinStream = new FileStream(new SafeFileHandle(0, true), FileAccess.Read);
+            stdinStream = new FileStream(new SafeFileHandle((IntPtr)0, ownsHandle: false), FileAccess.Read);
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 var res = MacOSTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
+                rawModeEnabled = res == 0;
 
-                // Last-resort cleanup: disable raw mode on any exit path
-                // (Ctrl-C, unhandled exception, Environment.Exit, etc.)
                 void RawModeCleanup()
                 {
+                    if (!rawModeEnabled)
+                        return;
+
                     try
                     {
                         MacOSTermios.DisableRawMode(0);
@@ -112,12 +117,15 @@ public sealed class ContainerRuntimeService
                     }
                 }
 
-                AppDomain.CurrentDomain.ProcessExit += (_, _) => RawModeCleanup();
-                Console.CancelKeyPress += (_, e) =>
+                // Keep a last-resort restore path for abrupt process termination.
+                processExitHandler = (_, _) => RawModeCleanup();
+                cancelKeyPressHandler = (_, _) =>
                 {
                     RawModeCleanup();
                     // Don't cancel — let the default SIGINT handling terminate the process.
                 };
+                AppDomain.CurrentDomain.ProcessExit += processExitHandler;
+                Console.CancelKeyPress += cancelKeyPressHandler;
             }
 
             inputCts = new CancellationTokenSource();
@@ -433,10 +441,6 @@ public sealed class ContainerRuntimeService
             Console.Out.Flush();
             Console.Error.Flush();
 
-            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}",
-                request.ContainerId);
-            stdinStream?.Dispose();
-
             if (inputCts != null)
             {
                 _logger.LogTrace("Container teardown cancelling input loop containerId={ContainerId}",
@@ -478,12 +482,23 @@ public sealed class ContainerRuntimeService
                 _logger.LogWarning(ex, "Failed to close all guest file descriptors during container teardown");
             }
 
-            if (isInteractive && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            if (processExitHandler != null)
+                AppDomain.CurrentDomain.ProcessExit -= processExitHandler;
+
+            if (cancelKeyPressHandler != null)
+                Console.CancelKeyPress -= cancelKeyPressHandler;
+
+            if (rawModeEnabled && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
                 _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
                     request.ContainerId);
                 MacOSTermios.DisableRawMode(0);
+                rawModeEnabled = false;
             }
+
+            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}",
+                request.ContainerId);
+            stdinStream?.Dispose();
 
             _logger.LogTrace("Container teardown unbinding controller containerId={ContainerId}", request.ContainerId);
             request.ProcessController?.Unbind();
