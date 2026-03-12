@@ -52,6 +52,12 @@ struct DecodedOp;
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb, uint32_t branch);
 
+enum class CurrentOpSize : uint8_t {
+    Dynamic = 0,
+    S16 = 1,
+    S32 = 2,
+};
+
 enum class LogicFlow : uint8_t {
     Continue = 0,
     ExitOnCurrentEIP = 1,
@@ -181,15 +187,30 @@ FORCE_INLINE uint32_t GetImm(const OpT* op) {
     return HasImm(op) ? GetExt(op)->data.imm : 0;
 }
 
-FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) {
-    size_t size = sizeof(DecodedOp) + (HasExt(op) ? sizeof(DecodedOpExt) : 0);
-    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + size);
+FORCE_INLINE CurrentOpSize GetCurrentOpSize(const DecodedOp* op) {
+    return HasExt(op) ? CurrentOpSize::S32 : CurrentOpSize::S16;
 }
 
-FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) {
-    size_t size = sizeof(DecodedOp) + (HasExt(op) ? sizeof(DecodedOpExt) : 0);
-    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + size);
+FORCE_INLINE const DecodedOp* NextOp16(const DecodedOp* op) {
+    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp));
 }
+
+FORCE_INLINE DecodedOp* NextOp16(DecodedOp* op) {
+    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp));
+}
+
+FORCE_INLINE const DecodedOp* NextOp32(const DecodedOp* op) {
+    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp) +
+                                              sizeof(DecodedOpExt));
+}
+
+FORCE_INLINE DecodedOp* NextOp32(DecodedOp* op) {
+    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp) + sizeof(DecodedOpExt));
+}
+
+FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return HasExt(op) ? NextOp32(op) : NextOp16(op); }
+
+FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return HasExt(op) ? NextOp32(op) : NextOp16(op); }
 
 template <typename OpT>
 FORCE_INLINE BasicBlock* GetNextBlock(const OpT* op) {

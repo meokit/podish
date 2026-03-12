@@ -60,7 +60,7 @@ void RegisterControlOps() {
     c.mod_mask = 0x03;
     c.mod_val = 0x03;
 
-#define REG_CMOV_SPEC(opcode, name) DispatchRegistrar<OpCmov_##name##_ModReg>::RegisterSpecialized(opcode, c)
+#define REG_CMOV_SPEC(opcode, name) DispatchRegistrar<OpCmov_##name##_ModReg>::RegisterSpecializedAutoBoth(opcode, c)
 
     REG_CMOV_SPEC(0x140, O);
     REG_CMOV_SPEC(0x141, NO);

@@ -20,49 +20,49 @@ void RegisterDataMovOps() {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 0;
-        DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 1;
-        DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 2;
-        DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 3;
-        DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 4;
-        DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 5;
-        DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 6;
-        DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 7;
-        DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+        DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecializedAutoBoth(OP_MOV_RM_STORE, c);
     }
 
     // Load (GvEv_Mem)
@@ -70,49 +70,49 @@ void RegisterDataMovOps() {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 0;
-        DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 1;
-        DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 2;
-        DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 3;
-        DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 4;
-        DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 5;
-        DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 6;
-        DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 7;
-        DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
+        DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecializedAutoBoth(OP_MOV_MR_LOAD, c);
     }
 
     // Key MOV Patterns Specialization
@@ -125,7 +125,7 @@ void RegisterDataMovOps() {
         c.rm_val = 4;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_Ebp_Esp>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Ebp_Esp>::RegisterSpecializedAutoBoth(OP_MOV_RR_LOAD, c);
     }
     // 2. MOV ECX, EAX
     {
@@ -136,7 +136,7 @@ void RegisterDataMovOps() {
         c.rm_val = 0;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_Ecx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Ecx_Eax>::RegisterSpecializedAutoBoth(OP_MOV_RR_LOAD, c);
     }
     // 3. MOV EDX, EAX
     {
@@ -147,7 +147,7 @@ void RegisterDataMovOps() {
         c.rm_val = 0;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+        DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecializedAutoBoth(OP_MOV_RR_LOAD, c);
     }
 
     // EvGv_Reg Specializations (Dst=Reg, Src=Reg) - Store Reg to Reg?
@@ -158,7 +158,7 @@ void RegisterDataMovOps() {
         c.reg_val = 0;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Eax>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Eax>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -166,7 +166,7 @@ void RegisterDataMovOps() {
         c.reg_val = 1;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Ecx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Ecx>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -174,7 +174,7 @@ void RegisterDataMovOps() {
         c.reg_val = 2;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Edx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Edx>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -182,7 +182,7 @@ void RegisterDataMovOps() {
         c.reg_val = 3;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Ebx>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Ebx>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -190,7 +190,7 @@ void RegisterDataMovOps() {
         c.reg_val = 4;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Esp>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Esp>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -198,7 +198,7 @@ void RegisterDataMovOps() {
         c.reg_val = 5;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Ebp>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Ebp>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -206,7 +206,7 @@ void RegisterDataMovOps() {
         c.reg_val = 6;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Esi>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Esi>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
     {
         SpecCriteria c;
@@ -214,7 +214,7 @@ void RegisterDataMovOps() {
         c.reg_val = 7;
         c.mod_mask = 3;
         c.mod_val = 3;
-        DispatchRegistrar<OpMov_EvGv_Edi>::RegisterSpecialized(OP_MOV_RR_STORE, c);
+        DispatchRegistrar<OpMov_EvGv_Edi>::RegisterSpecializedAutoBoth(OP_MOV_RR_STORE, c);
     }
 
     g_Handlers[0x88] = DispatchWrapper<OpMov_EbGb>;  // MOV r/m8, r8

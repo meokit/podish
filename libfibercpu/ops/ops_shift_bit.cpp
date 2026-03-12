@@ -19,45 +19,45 @@ void RegisterShiftBitOps() {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 4;
-        DispatchRegistrar<OpGroup2_EvIb_Shl>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Shl>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Shl>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shl>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shl>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shl>::RegisterSpecializedAutoBoth(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb_Shl_ModReg>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Shl_ModReg>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Shl_ModReg>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shl_ModReg>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shl_ModReg>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shl_ModReg>::RegisterSpecializedAutoBoth(0xD3, c);
     }
     // SHR (5)
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 5;
-        DispatchRegistrar<OpGroup2_EvIb_Shr>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Shr>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Shr>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shr>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shr>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shr>::RegisterSpecializedAutoBoth(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb_Shr_ModReg>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Shr_ModReg>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Shr_ModReg>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Shr_ModReg>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Shr_ModReg>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Shr_ModReg>::RegisterSpecializedAutoBoth(0xD3, c);
     }
     // SAR (7)
     {
         SpecCriteria c;
         c.reg_mask = 7;
         c.reg_val = 7;
-        DispatchRegistrar<OpGroup2_EvIb_Sar>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Sar>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Sar>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Sar>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Sar>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Sar>::RegisterSpecializedAutoBoth(0xD3, c);
 
         c.mod_mask = 0xC0;
         c.mod_val = 0xC0;
-        DispatchRegistrar<OpGroup2_EvIb_Sar_ModReg>::RegisterSpecialized(0xC1, c);
-        DispatchRegistrar<OpGroup2_Ev1_Sar_ModReg>::RegisterSpecialized(0xD1, c);
-        DispatchRegistrar<OpGroup2_EvCl_Sar_ModReg>::RegisterSpecialized(0xD3, c);
+        DispatchRegistrar<OpGroup2_EvIb_Sar_ModReg>::RegisterSpecializedAutoBoth(0xC1, c);
+        DispatchRegistrar<OpGroup2_Ev1_Sar_ModReg>::RegisterSpecializedAutoBoth(0xD1, c);
+        DispatchRegistrar<OpGroup2_EvCl_Sar_ModReg>::RegisterSpecializedAutoBoth(0xD3, c);
     }
 
     g_Handlers[0x1A3] = DispatchWrapper<OpBt_Reg>;
