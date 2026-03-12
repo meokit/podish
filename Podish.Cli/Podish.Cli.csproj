@@ -17,6 +17,35 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <PublishAotUsingRuntimePack Condition="'$(PublishAot)' == 'true'">true</PublishAotUsingRuntimePack>
+        <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
+        <StripSymbols Condition="'$(PublishAot)' == 'true'">false</StripSymbols>
+        <PodishStaticNative Condition="'$(PublishAot)' == 'true'">true</PodishStaticNative>
+        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">..\Fiberish.X86\build_native\host</PodishNativeBuildDir>
+        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' != '' and '$(RuntimeIdentifier)' != 'osx-arm64'">..\Fiberish.X86\build_native\$(RuntimeIdentifier)</PodishNativeBuildDir>
+        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">..\Fiberish.X86\build_native\host</PodishNativeBuildDir>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</PodishNetstackTarget>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</PodishNetstackTarget>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</PodishNetstackTarget>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</PodishNetstackTarget>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</PodishNetstackTarget>
+        <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</PodishNetstackTarget>
+        <PodishNetstackLibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">fiberish_netstack.lib</PodishNetstackLibName>
+        <PodishNetstackLibName Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true'">libfiberish_netstack.a</PodishNetstackLibName>
+        <PodishNetstackStaticLibPath Condition="'$(PodishNetstackTarget)' != ''">..\Fiberish.Netstack\target\$(PodishNetstackTarget)\release\$(PodishNetstackLibName)</PodishNetstackStaticLibPath>
+        <PodishNetstackStaticLibPath Condition="'$(PodishNetstackTarget)' == ''">..\Fiberish.Netstack\target\release\$(PodishNetstackLibName)</PodishNetstackStaticLibPath>
     </PropertyGroup>
+
+    <ItemGroup Condition="'$(PublishAot)' == 'true'">
+        <DirectPInvoke Include="fibercpu"/>
+        <DirectPInvoke Include="fiberish_netstack"/>
+        <NativeLibrary Include="$(PodishNativeBuildDir)\libfibercpu.a" Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true'"/>
+        <NativeLibrary Include="$(PodishNativeBuildDir)\Release\fibercpu.lib" Condition="$([MSBuild]::IsOsPlatform('Windows'))"/>
+        <NativeLibrary Include="$(PodishNetstackStaticLibPath)"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('OSX'))">
+        <NativeSystemLibrary Include="c++"/>
+    </ItemGroup>
 
 </Project>
