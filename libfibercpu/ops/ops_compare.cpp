@@ -6,15 +6,15 @@ void RegisterCompareOps() {
 
     g_Handlers[0x38] = DispatchWrapper<OpCmp_EbGb>;
 
-#define REGISTER_OPSIZE(opcode, func_base)                                         \
-    {                                                                              \
-        g_Handlers[opcode] = DispatchWrapper<func_base>;                           \
-        SpecCriteria c;                                                            \
-        c.prefix_mask = 0x40;                                                      \
-        c.prefix_val = 0x40;                                                       \
-        DispatchRegistrar<func_base##_16>::RegisterSpecializedAutoBoth(opcode, c); \
-        c.prefix_val = 0x00;                                                       \
-        DispatchRegistrar<func_base##_32>::RegisterSpecializedAutoBoth(opcode, c); \
+#define REGISTER_OPSIZE(opcode, func_base)                                 \
+    {                                                                      \
+        g_Handlers[opcode] = DispatchWrapper<func_base>;                   \
+        SpecCriteria c;                                                    \
+        c.prefix_mask = 0x40;                                              \
+        c.prefix_val = 0x40;                                               \
+        DispatchRegistrar<func_base##_16>::RegisterSpecialized(opcode, c); \
+        c.prefix_val = 0x00;                                               \
+        DispatchRegistrar<func_base##_32>::RegisterSpecialized(opcode, c); \
     }
 
     // 39: CMP r/m16/32, r16/32
@@ -36,9 +36,9 @@ void RegisterCompareOps() {
         SpecCriteria c;
         c.prefix_mask = 0x40;
         c.prefix_val = 0x40;
-        DispatchRegistrar<OpCmpxchg_EvGv_16>::RegisterSpecializedAutoBoth(0x1B1, c);
+        DispatchRegistrar<OpCmpxchg_EvGv_16>::RegisterSpecialized(0x1B1, c);
         c.prefix_val = 0x00;
-        DispatchRegistrar<OpCmpxchg_EvGv_32>::RegisterSpecializedAutoBoth(0x1B1, c);
+        DispatchRegistrar<OpCmpxchg_EvGv_32>::RegisterSpecialized(0x1B1, c);
     }
 #undef REGISTER_OPSIZE
 

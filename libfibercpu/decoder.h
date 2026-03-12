@@ -44,19 +44,12 @@
 #endif
 
 namespace fiberish {
-
 struct EmuState;
 struct DecodedOp;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb, uint32_t branch);
-
-enum class CurrentOpSize : uint8_t {
-    Dynamic = 0,
-    S16 = 1,
-    S32 = 2,
-};
 
 enum class LogicFlow : uint8_t {
     Continue = 0,
@@ -112,18 +105,6 @@ union Meta {
     } flags;
 };
 
-struct alignas(16) DecodedOp {
-    HandlerFunc handler;
-    uint32_t next_eip;
-    uint8_t len;
-    uint8_t modrm;
-    Prefixes prefixes;
-    Meta meta;
-
-    uint8_t GetLength() const { return len; }
-    void SetLength(uint8_t l) { len = l; }
-};
-
 struct DecodedMemData {
     uint32_t imm = 0;
     uint32_t disp = 0;
@@ -134,32 +115,41 @@ struct DecodedMemData {
     uint32_t reserved1 = 0;
 };
 
-struct alignas(16) DecodedOpExt {
+struct alignas(16) DecodedOp {
+    HandlerFunc handler;
+    uint32_t next_eip;
+    uint8_t len;
+    uint8_t modrm;
+    Prefixes prefixes;
+    Meta meta;
     union {
         DecodedMemData data;
         struct {
             BasicBlock* next_block;
             uint64_t reserved;
         } link;
-    };
+    } ext;
+
+    uint8_t GetLength() const { return len; }
+    void SetLength(uint8_t l) { len = l; }
 };
 
 struct alignas(16) DecodedInstTmp {
     DecodedOp head{};
-    DecodedOpExt ext{};
 };
 
-static_assert(sizeof(DecodedOp) == 16, "DecodedOp must be exactly 16 bytes");
+static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
-static_assert(sizeof(DecodedOpExt) == 16, "DecodedOpExt must be exactly 16 bytes");
 static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
 static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
 static_assert(offsetof(DecodedOp, meta) == 15, "DecodedOp: meta must start at offset 15");
+static_assert(offsetof(DecodedOp, ext) == 16, "DecodedOp: ext must start at offset 16");
 
 template <typename OpT>
 FORCE_INLINE bool HasExt(const OpT* op) {
-    return op->meta.flags.has_ext;
+    (void)op;
+    return true;
 }
 
 template <typename OpT>
@@ -173,13 +163,13 @@ FORCE_INLINE bool HasImm(const OpT* op) {
 }
 
 template <typename OpT>
-FORCE_INLINE const DecodedOpExt* GetExt(const OpT* op) {
-    return reinterpret_cast<const DecodedOpExt*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp));
+FORCE_INLINE const auto* GetExt(const OpT* op) {
+    return &op->ext;
 }
 
 template <typename OpT>
-FORCE_INLINE DecodedOpExt* GetExt(OpT* op) {
-    return reinterpret_cast<DecodedOpExt*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp));
+FORCE_INLINE auto* GetExt(OpT* op) {
+    return &op->ext;
 }
 
 template <typename OpT>
@@ -187,30 +177,9 @@ FORCE_INLINE uint32_t GetImm(const OpT* op) {
     return HasImm(op) ? GetExt(op)->data.imm : 0;
 }
 
-FORCE_INLINE CurrentOpSize GetCurrentOpSize(const DecodedOp* op) {
-    return HasExt(op) ? CurrentOpSize::S32 : CurrentOpSize::S16;
-}
+FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return op + 1; }
 
-FORCE_INLINE const DecodedOp* NextOp16(const DecodedOp* op) {
-    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp));
-}
-
-FORCE_INLINE DecodedOp* NextOp16(DecodedOp* op) {
-    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp));
-}
-
-FORCE_INLINE const DecodedOp* NextOp32(const DecodedOp* op) {
-    return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(op) + sizeof(DecodedOp) +
-                                              sizeof(DecodedOpExt));
-}
-
-FORCE_INLINE DecodedOp* NextOp32(DecodedOp* op) {
-    return reinterpret_cast<DecodedOp*>(reinterpret_cast<std::byte*>(op) + sizeof(DecodedOp) + sizeof(DecodedOpExt));
-}
-
-FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return HasExt(op) ? NextOp32(op) : NextOp16(op); }
-
-FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return HasExt(op) ? NextOp32(op) : NextOp16(op); }
+FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return op + 1; }
 
 template <typename OpT>
 FORCE_INLINE BasicBlock* GetNextBlock(const OpT* op) {
@@ -226,15 +195,15 @@ struct alignas(16) BasicBlock {
     uint32_t start_eip;
     uint32_t end_eip;
     uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
-    uint32_t slot_count;           // Total 16-byte slots including ext slots and sentinel
-    uint32_t sentinel_slot_index;  // Slot index where sentinel head starts
+    uint32_t slot_count;           // Total decoded ops including sentinel
+    uint32_t sentinel_slot_index;  // Index where sentinel starts
     uint32_t padding0 = 0;
     bool is_valid = true;
     uint8_t padding1[7] = {};
     uint64_t exec_count = 0;  // Number of times block was executed
     HandlerFunc entry = nullptr;
 
-    // Flexible Array Member - 16-byte slot stream.
+    // Flexible Array Member - fixed-size decoded op stream.
     alignas(16) std::byte slots[sizeof(DecodedOp)];
 
     static size_t CalculateSize(size_t slot_count) {

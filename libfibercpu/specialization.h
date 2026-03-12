@@ -110,13 +110,11 @@ struct SpecCriteria {
 struct SpecializedEntry {
     uint16_t opcode;
     SpecCriteria criteria;
-    CurrentOpSize current_op_size = CurrentOpSize::Dynamic;
     HandlerFunc handler;  // Wrapper pointer
 };
 
 // Global Registration
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler,
-                                CurrentOpSize current_op_size = CurrentOpSize::Dynamic);
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler);
 
 // Lookup
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op);

@@ -652,29 +652,18 @@ int X86_Step(EmuState* state) {
 
     inst.head.next_eip = state->ctx.eip + inst.head.GetLength();
 
-    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2 + sizeof(DecodedOpExt) * 2];
+    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2];
     std::memset(op_storage, 0, sizeof(op_storage));
-    std::byte* slot_ptr = op_storage;
-
-    std::memcpy(slot_ptr, &inst.head, sizeof(inst.head));
-    DecodedOp* head = reinterpret_cast<DecodedOp*>(slot_ptr);
-    slot_ptr += sizeof(inst.head);
-
-    if (inst.head.meta.flags.has_ext) {
-        std::memcpy(slot_ptr, &inst.ext, sizeof(inst.ext));
-        slot_ptr += sizeof(inst.ext);
-    }
+    auto* head = reinterpret_cast<DecodedOp*>(op_storage);
+    std::memcpy(head, &inst.head, sizeof(inst.head));
 
     DecodedOp sentinel{};
-    DecodedOpExt sentinel_ext{};
     HandlerFunc exit_h = g_ExitHandlers[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
     sentinel.meta.flags.has_ext = 1;
-    sentinel_ext.link.next_block = state->dummy_invalid_block;
-    std::memcpy(slot_ptr, &sentinel, sizeof(sentinel));
-    slot_ptr += sizeof(sentinel);
-    std::memcpy(slot_ptr, &sentinel_ext, sizeof(sentinel_ext));
+    sentinel.ext.link.next_block = state->dummy_invalid_block;
+    std::memcpy(head + 1, &sentinel, sizeof(sentinel));
 
     // Run first op
     HandlerFunc h = head->handler;

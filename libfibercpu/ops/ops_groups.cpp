@@ -26,19 +26,19 @@ void RegisterGroupOps() {
     // Specializations (Call macros defined above)
     // Re-invoke macros to register specialized handlers
 
-#define REG_G1_EB(opcode, subop, name)                                             \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        DispatchRegistrar<name##_Flags>::RegisterSpecializedAutoBoth(opcode, c);   \
-    }                                                                              \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        c.no_flags = true;                                                         \
-        DispatchRegistrar<name##_NoFlags>::RegisterSpecializedAutoBoth(opcode, c); \
+#define REG_G1_EB(opcode, subop, name)                                     \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        DispatchRegistrar<name##_Flags>::RegisterSpecialized(opcode, c);   \
+    }                                                                      \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        c.no_flags = true;                                                 \
+        DispatchRegistrar<name##_NoFlags>::RegisterSpecialized(opcode, c); \
     }
 
     REG_G1_EB(0x80, 0, OpGroup1_EbIb_Add);
@@ -50,44 +50,44 @@ void RegisterGroupOps() {
     REG_G1_EB(0x80, 6, OpGroup1_EbIb_Xor);
     REG_G1_EB(0x80, 7, OpGroup1_EbIb_Cmp);
 
-#define REG_EV_SPEC(opcode, subop, name)                                              \
-    /* 32-bit Normal */                                                               \
-    {                                                                                 \
-        SpecCriteria c;                                                               \
-        c.reg_mask = 7;                                                               \
-        c.reg_val = subop;                                                            \
-        c.prefix_mask = 0x40;                                                         \
-        c.prefix_val = 0;                                                             \
-        DispatchRegistrar<name##_32_Flags>::RegisterSpecializedAutoBoth(opcode, c);   \
-    }                                                                                 \
-    /* 32-bit NF */                                                                   \
-    {                                                                                 \
-        SpecCriteria c;                                                               \
-        c.reg_mask = 7;                                                               \
-        c.reg_val = subop;                                                            \
-        c.prefix_mask = 0x40;                                                         \
-        c.prefix_val = 0;                                                             \
-        c.no_flags = true;                                                            \
-        DispatchRegistrar<name##_32_NoFlags>::RegisterSpecializedAutoBoth(opcode, c); \
-    }                                                                                 \
-    /* 16-bit Normal */                                                               \
-    {                                                                                 \
-        SpecCriteria c;                                                               \
-        c.reg_mask = 7;                                                               \
-        c.reg_val = subop;                                                            \
-        c.prefix_mask = 0x40;                                                         \
-        c.prefix_val = 0x40;                                                          \
-        DispatchRegistrar<name##_16_Flags>::RegisterSpecializedAutoBoth(opcode, c);   \
-    }                                                                                 \
-    /* 16-bit NF */                                                                   \
-    {                                                                                 \
-        SpecCriteria c;                                                               \
-        c.reg_mask = 7;                                                               \
-        c.reg_val = subop;                                                            \
-        c.prefix_mask = 0x40;                                                         \
-        c.prefix_val = 0x40;                                                          \
-        c.no_flags = true;                                                            \
-        DispatchRegistrar<name##_16_NoFlags>::RegisterSpecializedAutoBoth(opcode, c); \
+#define REG_EV_SPEC(opcode, subop, name)                                      \
+    /* 32-bit Normal */                                                       \
+    {                                                                         \
+        SpecCriteria c;                                                       \
+        c.reg_mask = 7;                                                       \
+        c.reg_val = subop;                                                    \
+        c.prefix_mask = 0x40;                                                 \
+        c.prefix_val = 0;                                                     \
+        DispatchRegistrar<name##_32_Flags>::RegisterSpecialized(opcode, c);   \
+    }                                                                         \
+    /* 32-bit NF */                                                           \
+    {                                                                         \
+        SpecCriteria c;                                                       \
+        c.reg_mask = 7;                                                       \
+        c.reg_val = subop;                                                    \
+        c.prefix_mask = 0x40;                                                 \
+        c.prefix_val = 0;                                                     \
+        c.no_flags = true;                                                    \
+        DispatchRegistrar<name##_32_NoFlags>::RegisterSpecialized(opcode, c); \
+    }                                                                         \
+    /* 16-bit Normal */                                                       \
+    {                                                                         \
+        SpecCriteria c;                                                       \
+        c.reg_mask = 7;                                                       \
+        c.reg_val = subop;                                                    \
+        c.prefix_mask = 0x40;                                                 \
+        c.prefix_val = 0x40;                                                  \
+        DispatchRegistrar<name##_16_Flags>::RegisterSpecialized(opcode, c);   \
+    }                                                                         \
+    /* 16-bit NF */                                                           \
+    {                                                                         \
+        SpecCriteria c;                                                       \
+        c.reg_mask = 7;                                                       \
+        c.reg_val = subop;                                                    \
+        c.prefix_mask = 0x40;                                                 \
+        c.prefix_val = 0x40;                                                  \
+        c.no_flags = true;                                                    \
+        DispatchRegistrar<name##_16_NoFlags>::RegisterSpecialized(opcode, c); \
     }
 
     // Group 1: 0x83 (Mostly used)
@@ -100,19 +100,19 @@ void RegisterGroupOps() {
     REG_EV_SPEC(0x81, 5, OpGroup1_EvIz_Sub);
     REG_EV_SPEC(0x81, 7, OpGroup1_EvIz_Cmp);
 
-#define REG_G3_EB(opcode, subop, name)                                             \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        DispatchRegistrar<name##_Flags>::RegisterSpecializedAutoBoth(opcode, c);   \
-    }                                                                              \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        c.no_flags = true;                                                         \
-        DispatchRegistrar<name##_NoFlags>::RegisterSpecializedAutoBoth(opcode, c); \
+#define REG_G3_EB(opcode, subop, name)                                     \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        DispatchRegistrar<name##_Flags>::RegisterSpecialized(opcode, c);   \
+    }                                                                      \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        c.no_flags = true;                                                 \
+        DispatchRegistrar<name##_NoFlags>::RegisterSpecialized(opcode, c); \
     }
 
     REG_G3_EB(0xF6, 2, OpGroup3_Eb_Not);
@@ -129,19 +129,19 @@ void RegisterGroupOps() {
     REG_EV_SPEC(0xF7, 7, OpGroup3_Ev_Idiv);  // Only Size relevant
 
 // Group 4: 0xFE (Eb) - INC/DEC
-#define REG_G4_EB(opcode, subop, name)                                             \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        DispatchRegistrar<name##_Flags>::RegisterSpecializedAutoBoth(opcode, c);   \
-    }                                                                              \
-    {                                                                              \
-        SpecCriteria c;                                                            \
-        c.reg_mask = 7;                                                            \
-        c.reg_val = subop;                                                         \
-        c.no_flags = true;                                                         \
-        DispatchRegistrar<name##_NoFlags>::RegisterSpecializedAutoBoth(opcode, c); \
+#define REG_G4_EB(opcode, subop, name)                                     \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        DispatchRegistrar<name##_Flags>::RegisterSpecialized(opcode, c);   \
+    }                                                                      \
+    {                                                                      \
+        SpecCriteria c;                                                    \
+        c.reg_mask = 7;                                                    \
+        c.reg_val = subop;                                                 \
+        c.no_flags = true;                                                 \
+        DispatchRegistrar<name##_NoFlags>::RegisterSpecialized(opcode, c); \
     }
 
     REG_G4_EB(0xFE, 0, OpGroup4_Eb_Inc);

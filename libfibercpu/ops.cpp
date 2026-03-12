@@ -160,24 +160,17 @@ static std::vector<SpecializedEntry> g_OpSpecializations[1024];
 // Thread-local for lock-free access
 static thread_local ankerl::unordered_dense::map<uint64_t, HandlerFunc> g_SpecCache;
 
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler,
-                                CurrentOpSize current_op_size) {
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
     if (opcode >= 1024) return;
     auto& list = g_OpSpecializations[opcode];
-    list.push_back({opcode, criteria, current_op_size, handler});
+    list.push_back({opcode, criteria, handler});
 
     // Sort by specificity (Descending Score)
     // Most specific first
     std::sort(list.begin(), list.end(), [](const SpecializedEntry& a, const SpecializedEntry& b) {
         int a_score = a.criteria.GetScore();
         int b_score = b.criteria.GetScore();
-        if (a_score != b_score) return a_score > b_score;
-
-        bool a_exact = a.current_op_size != CurrentOpSize::Dynamic;
-        bool b_exact = b.current_op_size != CurrentOpSize::Dynamic;
-        if (a_exact != b_exact) return a_exact;
-
-        return (uint8_t)a.current_op_size < (uint8_t)b.current_op_size;
+        return a_score > b_score;
     });
 
     // Clear cache on registration?
@@ -188,7 +181,6 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
 
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     if (handler_index >= 1024) return nullptr;
-    CurrentOpSize current_size = GetCurrentOpSize(op);
 
     // Construct Cache Key
     // Layout:
@@ -197,7 +189,6 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     // [18-33] Prefixes (16 bits)
     // [34]    HasModRM (1 bit)
     // [35]    NoFlags (1 bit)
-    // [36-37] CurrentOpSize (2 bits)
     uint64_t key = handler_index;
 
     if (op->meta.flags.has_modrm) {
@@ -206,7 +197,6 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     }
     key |= ((uint64_t)op->prefixes.all << 18);
     if (op->meta.flags.no_flags) key |= (1ULL << 35);
-    key |= ((uint64_t)current_size << 36);
 
     // Check Cache
     auto it = g_SpecCache.find(key);
@@ -218,8 +208,6 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
 
     for (const auto& entry : list) {
         // Opcode check implicit by array index
-
-        if (entry.current_op_size != CurrentOpSize::Dynamic && entry.current_op_size != current_size) continue;
 
         // 1. Prefix Check always
         if (entry.criteria.prefix_mask) {

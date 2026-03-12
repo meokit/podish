@@ -66,8 +66,8 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 // Returns true on success, false on failure/invalid instruction
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
     std::memset(inst, 0, sizeof(*inst));
-    inst->ext.data.base_offset = kNoRegOffset;
-    inst->ext.data.index_offset = kNoRegOffset;
+    inst->head.ext.data.base_offset = kNoRegOffset;
+    inst->head.ext.data.index_offset = kNoRegOffset;
 
     DecodedOp* op = &inst->head;
 
@@ -184,10 +184,10 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
             if (disp_size > 0) {
                 if (disp_size == 1) {
                     int8_t d8 = (int8_t)*ptr;
-                    inst->ext.data.disp = (uint32_t)(int32_t)d8;  // Sign extend!
+                    inst->head.ext.data.disp = (uint32_t)(int32_t)d8;  // Sign extend!
                     ptr += 1;
                 } else {
-                    inst->ext.data.disp = *reinterpret_cast<const uint32_t*>(ptr);
+                    inst->head.ext.data.disp = *reinterpret_cast<const uint32_t*>(ptr);
                     ptr += 4;
                 }
             }
@@ -198,20 +198,20 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
                 uint8_t index = (sib_byte >> 3) & 7;
                 uint8_t base_reg = sib_byte & 7;
 
-                if (index != 4) inst->ext.data.index_offset = index * 4;
-                inst->ext.data.scale = scale;
+                if (index != 4) inst->head.ext.data.index_offset = index * 4;
+                inst->head.ext.data.scale = scale;
 
                 if (mod == 0 && base_reg == 5) {
                     // Base is None (Disp32) - already initialized to kNoRegOffset
                 } else {
-                    inst->ext.data.base_offset = base_reg * 4;
+                    inst->head.ext.data.base_offset = base_reg * 4;
                 }
             } else {
                 // No SIB
                 if (mod == 0 && rm == 5) {
                     // Base is None (Disp32) - already initialized to kNoRegOffset
                 } else {
-                    inst->ext.data.base_offset = rm * 4;
+                    inst->head.ext.data.base_offset = rm * 4;
                 }
             }
         }
@@ -237,16 +237,16 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         op->meta.flags.has_imm = 1;
         op->meta.flags.has_ext = 1;
         if (imm_len == 1)
-            inst->ext.data.imm = *reinterpret_cast<const uint8_t*>(ptr);
+            inst->head.ext.data.imm = *reinterpret_cast<const uint8_t*>(ptr);
         else if (imm_len == 2)
-            inst->ext.data.imm = *reinterpret_cast<const uint16_t*>(ptr);
+            inst->head.ext.data.imm = *reinterpret_cast<const uint16_t*>(ptr);
         else if (imm_len == 4)
-            inst->ext.data.imm = *reinterpret_cast<const uint32_t*>(ptr);
+            inst->head.ext.data.imm = *reinterpret_cast<const uint32_t*>(ptr);
         else if (imm_len == 3) {
             // Special Case for ENTER (Iw Ib)
             uint16_t iw = *reinterpret_cast<const uint16_t*>(ptr);
             uint8_t ib = *(ptr + 2);
-            inst->ext.data.imm = iw | (ib << 16);
+            inst->head.ext.data.imm = iw | (ib << 16);
         }
         ptr += imm_len;
     }
@@ -625,10 +625,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 finalize:
     if (!success || temp_ops.empty()) return nullptr;
 
-    size_t slot_count = 0;
-    for (const auto& inst : temp_ops) {
-        slot_count += 1 + (inst.head.meta.flags.has_ext ? 1 : 0);
-    }
+    size_t slot_count = temp_ops.size();
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
     void* mem = state->block_pool.allocate(alloc_size);
@@ -642,23 +639,13 @@ finalize:
     block->is_valid = true;
     block->sentinel_slot_index = 0;
 
-    std::byte* slot_ptr = block->slots;
-    uint32_t slot_index = 0;
+    DecodedOp* dst = block->FirstOp();
     for (size_t i = 0; i < temp_ops.size(); ++i) {
         const auto& inst = temp_ops[i];
         if (i == temp_ops.size() - 1) {
-            block->sentinel_slot_index = slot_index;
+            block->sentinel_slot_index = static_cast<uint32_t>(i);
         }
-
-        std::memcpy(slot_ptr, &inst.head, sizeof(inst.head));
-        slot_ptr += sizeof(inst.head);
-        slot_index += 1;
-
-        if (inst.head.meta.flags.has_ext) {
-            std::memcpy(slot_ptr, &inst.ext, sizeof(inst.ext));
-            slot_ptr += sizeof(inst.ext);
-            slot_index += 1;
-        }
+        dst[i] = inst.head;
     }
 
     // JIT Entry or First Op Handler Fallback
