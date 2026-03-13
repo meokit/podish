@@ -62,6 +62,14 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
     }
 }
 
+static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
+    if (handler_index == 0xE8 || handler_index == 0xE9 || handler_index == 0xEB || handler_index == 0xC2 ||
+        handler_index == 0xC3 || (handler_index >= 0xE0 && handler_index <= 0xE3)) {
+        return true;
+    }
+    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
+}
+
 // Decoder Logic
 // Returns true on success, false on failure/invalid instruction
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
@@ -141,6 +149,9 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 
     // Set Handler Index (Map 0 or 1) - Local, not stored in op
     *handler_index = (map << 8) | opcode;
+    if (UsesControlFlowCacheStorage(*handler_index)) {
+        SetExtKind(op, ExtKind::ControlFlow);
+    }
 
     // 3. ModRM
     uint8_t has_modrm = kHasModRM[map][opcode];
@@ -163,7 +174,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         uint8_t disp_size = 0;
         if (is_mem_operand) {
             op->meta.flags.has_mem = 1;
-            op->meta.flags.has_ext = 1;
 
             if (mod == 0) {
                 if (rm == 5) disp_size = 4;  // Disp32 (EBP replaced by Disp32)
@@ -235,19 +245,20 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 
     if (imm_len > 0) {
         op->meta.flags.has_imm = 1;
-        op->meta.flags.has_ext = 1;
+        uint32_t decoded_imm = 0;
         if (imm_len == 1)
-            inst->head.ext.data.imm = *reinterpret_cast<const uint8_t*>(ptr);
+            decoded_imm = *reinterpret_cast<const uint8_t*>(ptr);
         else if (imm_len == 2)
-            inst->head.ext.data.imm = *reinterpret_cast<const uint16_t*>(ptr);
+            decoded_imm = *reinterpret_cast<const uint16_t*>(ptr);
         else if (imm_len == 4)
-            inst->head.ext.data.imm = *reinterpret_cast<const uint32_t*>(ptr);
+            decoded_imm = *reinterpret_cast<const uint32_t*>(ptr);
         else if (imm_len == 3) {
             // Special Case for ENTER (Iw Ib)
             uint16_t iw = *reinterpret_cast<const uint16_t*>(ptr);
             uint8_t ib = *(ptr + 2);
-            inst->head.ext.data.imm = iw | (ib << 16);
+            decoded_imm = iw | (ib << 16);
         }
+        inst->head.ext.data.imm = decoded_imm;
         ptr += imm_len;
     }
 
@@ -310,8 +321,20 @@ static bool IsDirectRelativeJmpHandlerIndex(uint16_t handler_index) {
     return handler_index == 0xE9 || handler_index == 0xEB;
 }
 
+static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
+    return (handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F) ||
+           (handler_index >= 0x180 && handler_index <= 0x18F);
+}
+
 static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const DecodedOp& op) {
     if (handler_index == 0xEB) {
+        return op.next_eip + static_cast<int8_t>(GetImm(&op));
+    }
+    return op.next_eip + static_cast<int32_t>(GetImm(&op));
+}
+
+static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const DecodedOp& op) {
+    if ((handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F)) {
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
     }
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
@@ -431,7 +454,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
             HandlerFunc exit_h = g_ExitHandlers[0];
             sentinel.head.handler = exit_h;
-            sentinel.head.meta.flags.has_ext = 1;
 
             // Sentinel next_block initialization to dummy
             SetNextBlock(&sentinel.head, state->dummy_invalid_block);
@@ -473,6 +495,10 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &inst.head);
         if (specialized_h) {
             inst.head.handler = specialized_h;
+        }
+
+        if (GetExtKind(&inst.head) == ExtKind::ControlFlow) {
+            SetCachedTarget(&inst.head, state->dummy_invalid_block);
         }
 
         // Recover index logic (to keep op_indices in sync)
@@ -556,7 +582,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
         sentinel.head.handler = exit_h;
-        sentinel.head.meta.flags.has_ext = 1;
         sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
         SetNextBlock(&sentinel.head, state->dummy_invalid_block);
         temp_ops.push_back(sentinel);
@@ -663,8 +688,9 @@ finalize:
     block->exec_count = 0;
     block->is_valid = true;
     block->sentinel_slot_index = 0;
-    block->direct_jmp_target = 0;
-    block->ends_with_direct_rel_jmp = false;
+    block->branch_target_eip = 0;
+    block->fallthrough_eip = end_eip;
+    block->terminal_kind = BlockTerminalKind::None;
 
     DecodedOp* dst = block->FirstOp();
     for (size_t i = 0; i < temp_ops.size(); ++i) {
@@ -678,8 +704,13 @@ finalize:
     if (inst_count != 0 && op_indices.size() >= inst_count) {
         const uint16_t last_handler_index = op_indices[inst_count - 1];
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
-            block->ends_with_direct_rel_jmp = true;
-            block->direct_jmp_target = GetDirectRelativeJmpTarget(last_handler_index, dst[inst_count - 1]);
+            block->terminal_kind = BlockTerminalKind::DirectJmpRel;
+            block->branch_target_eip = GetDirectRelativeJmpTarget(last_handler_index, dst[inst_count - 1]);
+        } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
+            block->terminal_kind = BlockTerminalKind::DirectJccRel;
+            block->branch_target_eip = GetDirectRelativeJccTarget(last_handler_index, dst[inst_count - 1]);
+        } else if (dst[inst_count - 1].meta.flags.is_control_flow) {
+            block->terminal_kind = BlockTerminalKind::OtherControlFlow;
         }
     }
 

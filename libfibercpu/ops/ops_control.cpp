@@ -36,6 +36,9 @@ void RegisterControlOps() {
     g_Handlers[0x9D] = DispatchWrapper<OpPopf>;
     g_Handlers[0xE9] = DispatchWrapper<OpJmp_Rel32>;  // JMP rel32
     g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel8>;   // JMP rel8
+    g_Handlers[0xE0] = DispatchWrapper<OpLoopne>;     // LOOPNE rel8
+    g_Handlers[0xE1] = DispatchWrapper<OpLoope>;      // LOOPE rel8
+    g_Handlers[0xE2] = DispatchWrapper<OpLoop>;       // LOOP rel8
     g_Handlers[0xE3] = DispatchWrapper<OpJecxz>;      // JECXZ rel8
     g_Handlers[0xE8] = DispatchWrapper<OpCall_Rel>;   // CALL rel32
     g_Handlers[0xC3] = DispatchWrapper<OpRet>;        // RET

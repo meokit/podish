@@ -58,6 +58,7 @@ enum class LogicFlow : uint8_t {
     ExitWithoutSyncEIP = 3,
     RestartMemoryOp = 4,
     RetryMemoryOp = 5,
+    ExitToBranch = 6,
 };
 
 #define LogicFuncParams \
@@ -69,6 +70,13 @@ enum class LogicFlow : uint8_t {
 using LogicFunc = LogicFlow (*)(LogicFuncParams);  // Always inlined, no restrict needed
 
 struct BasicBlock;
+
+enum class BlockTerminalKind : uint8_t {
+    None = 0,
+    DirectJmpRel,
+    DirectJccRel,
+    OtherControlFlow,
+};
 
 namespace prefix {
 constexpr uint8_t LOCK = 1 << 0;
@@ -96,13 +104,19 @@ union Meta {
     uint8_t all;
     struct {
         uint8_t has_modrm : 1;
-        uint8_t has_ext : 1;
         uint8_t has_mem : 1;
         uint8_t has_imm : 1;
         uint8_t is_control_flow : 1;
         uint8_t no_flags : 1;
-        uint8_t reserved : 2;
+        uint8_t reserved : 1;
+        uint8_t ext_kind : 2;
     } flags;
+};
+
+enum class ExtKind : uint8_t {
+    Data = 0,
+    Link = 1,
+    ControlFlow = 2,
 };
 
 struct DecodedMemData {
@@ -113,6 +127,12 @@ struct DecodedMemData {
     uint8_t scale = 0;
     uint8_t reserved0 = 0;
     uint32_t reserved1 = 0;
+};
+
+struct DecodedControlFlowData {
+    uint32_t imm = 0;
+    uint32_t reserved = 0;
+    BasicBlock* cached_target = nullptr;
 };
 
 struct alignas(16) DecodedOp {
@@ -128,6 +148,7 @@ struct alignas(16) DecodedOp {
             BasicBlock* next_block;
             uint64_t reserved;
         } link;
+        DecodedControlFlowData control;
     } ext;
 
     uint8_t GetLength() const { return len; }
@@ -140,6 +161,7 @@ struct alignas(16) DecodedInstTmp {
 
 static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
+static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
 static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
 static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
@@ -150,6 +172,16 @@ template <typename OpT>
 FORCE_INLINE bool HasExt(const OpT* op) {
     (void)op;
     return true;
+}
+
+template <typename OpT>
+FORCE_INLINE ExtKind GetExtKind(const OpT* op) {
+    return static_cast<ExtKind>(op->meta.flags.ext_kind);
+}
+
+template <typename OpT>
+FORCE_INLINE void SetExtKind(OpT* op, ExtKind kind) {
+    op->meta.flags.ext_kind = static_cast<uint8_t>(kind);
 }
 
 template <typename OpT>
@@ -174,7 +206,8 @@ FORCE_INLINE auto* GetExt(OpT* op) {
 
 template <typename OpT>
 FORCE_INLINE uint32_t GetImm(const OpT* op) {
-    return HasImm(op) ? GetExt(op)->data.imm : 0;
+    if (!HasImm(op)) return 0;
+    return GetExt(op)->data.imm;
 }
 
 FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return op + 1; }
@@ -188,7 +221,19 @@ FORCE_INLINE BasicBlock* GetNextBlock(const OpT* op) {
 
 template <typename OpT>
 FORCE_INLINE void SetNextBlock(OpT* op, BasicBlock* block) {
+    SetExtKind(op, ExtKind::Link);
     GetExt(op)->link.next_block = block;
+}
+
+template <typename OpT>
+FORCE_INLINE BasicBlock* GetCachedTarget(const OpT* op) {
+    return GetExt(op)->control.cached_target;
+}
+
+template <typename OpT>
+FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
+    SetExtKind(op, ExtKind::ControlFlow);
+    GetExt(op)->control.cached_target = block;
 }
 
 struct alignas(16) BasicBlock {
@@ -197,10 +242,11 @@ struct alignas(16) BasicBlock {
     uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
-    uint32_t direct_jmp_target = 0;
+    uint32_t branch_target_eip = 0;
+    uint32_t fallthrough_eip = 0;
     bool is_valid = true;
-    bool ends_with_direct_rel_jmp = false;
-    uint8_t padding1[6] = {};
+    BlockTerminalKind terminal_kind = BlockTerminalKind::None;
+    uint8_t padding1[2] = {};
     uint64_t exec_count = 0;  // Number of times block was executed
     HandlerFunc entry = nullptr;
 

@@ -56,7 +56,9 @@ struct BlockStats {
     uint64_t inst_histogram[65] = {};
     uint64_t fusion_attempts = 0;
     uint64_t fusion_success = 0;
-    uint64_t fusion_reject_not_direct_rel_jmp = 0;
+    uint64_t fusion_success_direct_jmp = 0;
+    uint64_t fusion_success_jcc_fallthrough = 0;
+    uint64_t fusion_reject_not_fusible_terminal = 0;
     uint64_t fusion_reject_cross_page = 0;
     uint64_t fusion_reject_size_limit = 0;
     uint64_t fusion_reject_loop = 0;

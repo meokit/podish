@@ -70,99 +70,6 @@ static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, in
     }
 }
 
-static void WriteBlockStatsLog(const EmuState* state) {
-    FILE* fp = std::fopen("/tmp/fibercpu_block_stats.log", "w");
-    if (!fp) return;
-
-    const auto& stats = state->block_stats;
-    const double avg_block_insts =
-        stats.block_count == 0 ? 0.0
-                               : static_cast<double>(stats.total_block_insts) / static_cast<double>(stats.block_count);
-
-    std::fprintf(fp, "block_count=%llu\n", static_cast<unsigned long long>(stats.block_count));
-    std::fprintf(fp, "total_block_insts=%llu\n", static_cast<unsigned long long>(stats.total_block_insts));
-    std::fprintf(fp, "avg_block_insts=%.6f\n", avg_block_insts);
-
-    static constexpr const char* kReasonNames[] = {
-        "unknown",          "limit_eip",    "fetch_fault", "decode_fault",
-        "cross_page_fault", "control_flow", "page_cross",  "max_insts",
-    };
-
-    for (size_t i = 0; i < std::size(kReasonNames); ++i) {
-        std::fprintf(fp, "stop_reason.%s=%llu\n", kReasonNames[i],
-                     static_cast<unsigned long long>(stats.stop_reason_counts[i]));
-    }
-
-    std::fprintf(fp, "fusion_attempts=%llu\n", static_cast<unsigned long long>(stats.fusion_attempts));
-    std::fprintf(fp, "fusion_success=%llu\n", static_cast<unsigned long long>(stats.fusion_success));
-    std::fprintf(fp, "fusion_reject.not_direct_rel_jmp=%llu\n",
-                 static_cast<unsigned long long>(stats.fusion_reject_not_direct_rel_jmp));
-    std::fprintf(fp, "fusion_reject.cross_page=%llu\n",
-                 static_cast<unsigned long long>(stats.fusion_reject_cross_page));
-    std::fprintf(fp, "fusion_reject.size_limit=%llu\n",
-                 static_cast<unsigned long long>(stats.fusion_reject_size_limit));
-    std::fprintf(fp, "fusion_reject.loop=%llu\n", static_cast<unsigned long long>(stats.fusion_reject_loop));
-    std::fprintf(fp, "fusion_reject.target_missing=%llu\n",
-                 static_cast<unsigned long long>(stats.fusion_reject_target_missing));
-
-    for (size_t i = 0; i < std::size(stats.inst_histogram); ++i) {
-        if (stats.inst_histogram[i] == 0) continue;
-        std::fprintf(fp, "inst_histogram.%zu=%llu\n", i, static_cast<unsigned long long>(stats.inst_histogram[i]));
-    }
-
-    uint64_t executed_block_entries = 0;
-    uint64_t executed_inst_total = 0;
-    uint64_t exec_weighted_histogram[65] = {};
-    struct HotBlock {
-        uint32_t start_eip;
-        uint32_t inst_count;
-        uint64_t exec_count;
-    };
-    HotBlock top_blocks[8] = {};
-
-    auto try_insert_top = [&](uint32_t start_eip, uint32_t inst_count, uint64_t exec_count) {
-        for (auto& slot : top_blocks) {
-            if (exec_count > slot.exec_count) {
-                for (auto it = top_blocks + 7; it != &slot; --it) {
-                    *it = *(it - 1);
-                }
-                slot = HotBlock{start_eip, inst_count, exec_count};
-                break;
-            }
-        }
-    };
-
-    for (const auto& [eip, block] : state->block_cache) {
-        if (!block || block == state->dummy_invalid_block || block->inst_count == 0) continue;
-        executed_block_entries += block->exec_count;
-        executed_inst_total += block->exec_count * block->inst_count;
-        exec_weighted_histogram[std::min<uint32_t>(block->inst_count, 64)] += block->exec_count;
-        try_insert_top(block->start_eip, block->inst_count, block->exec_count);
-    }
-
-    const double exec_weighted_avg =
-        executed_block_entries == 0 ? 0.0 : static_cast<double>(executed_inst_total) / executed_block_entries;
-    std::fprintf(fp, "executed_block_entries=%llu\n", static_cast<unsigned long long>(executed_block_entries));
-    std::fprintf(fp, "executed_inst_total=%llu\n", static_cast<unsigned long long>(executed_inst_total));
-    std::fprintf(fp, "exec_weighted_avg_block_insts=%.6f\n", exec_weighted_avg);
-
-    for (size_t i = 0; i < std::size(exec_weighted_histogram); ++i) {
-        if (exec_weighted_histogram[i] == 0) continue;
-        std::fprintf(fp, "exec_weighted_histogram.%zu=%llu\n", i,
-                     static_cast<unsigned long long>(exec_weighted_histogram[i]));
-    }
-
-    for (size_t i = 0; i < std::size(top_blocks); ++i) {
-        if (top_blocks[i].exec_count == 0) continue;
-        std::fprintf(fp, "top_block.%zu.start_eip=%08x\n", i, top_blocks[i].start_eip);
-        std::fprintf(fp, "top_block.%zu.inst_count=%u\n", i, top_blocks[i].inst_count);
-        std::fprintf(fp, "top_block.%zu.exec_count=%llu\n", i,
-                     static_cast<unsigned long long>(top_blocks[i].exec_count));
-    }
-
-    std::fclose(fp);
-}
-
 // Invalidate all translated blocks linked to one guest page.
 static void X86_InvalidateCodeCacheByPage(EmuState* state, uint32_t page_addr) {
     uint32_t page_idx = page_addr >> 12;
@@ -199,6 +106,18 @@ static bool BlockCrossesPage(const BasicBlock* block) {
     return ((block->start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
+static bool BlockIsFusibleTerminal(const BasicBlock* block) {
+    if (!block) return false;
+    return block->terminal_kind == BlockTerminalKind::DirectJmpRel ||
+           block->terminal_kind == BlockTerminalKind::DirectJccRel;
+}
+
+static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
+    if (!source || !target) return false;
+    if (source->start_eip == target->start_eip) return true;
+    return target->branch_target_eip == source->start_eip;
+}
+
 static void RegisterBlockPages(EmuState* state, uint32_t cache_eip, const BasicBlock* block) {
     uint32_t page_addr = cache_eip & 0xFFFFF000u;
     state->page_to_blocks[page_addr].push_back(cache_eip);
@@ -232,7 +151,8 @@ static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_
     return CacheDecodedBlock(state, eip, block);
 }
 
-static bool CanFuseDirectJmp(const BasicBlock* a, const BasicBlock* b, BlockStats* stats) {
+static bool CanFuseWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
+                                 BlockStats* stats) {
     if (!a || !b || !a->is_valid || !b->is_valid || a->inst_count == 0 || b->inst_count == 0) {
         stats->fusion_reject_target_missing++;
         return false;
@@ -243,19 +163,15 @@ static bool CanFuseDirectJmp(const BasicBlock* a, const BasicBlock* b, BlockStat
         return false;
     }
 
-    if (a->start_eip == b->start_eip || a->direct_jmp_target == a->start_eip ||
-        (b->ends_with_direct_rel_jmp && b->direct_jmp_target == a->start_eip)) {
+    if (BlockFormsSmallLoopWith(a, b)) {
         stats->fusion_reject_loop++;
         return false;
     }
 
-    const uint32_t fused_inst_count = a->inst_count - 1 + b->inst_count;
-    const uint32_t guest_bytes_a = a->end_eip - a->start_eip;
-    const uint32_t guest_bytes_b = b->end_eip - b->start_eip;
-    const uint32_t jmp_len = a->FirstOp()[a->inst_count - 1].len;
-    const uint32_t fused_guest_bytes = guest_bytes_a + guest_bytes_b - jmp_len;
+    const uint32_t removed_inst_count = remove_source_terminal_inst ? 1u : 0u;
+    const uint32_t fused_inst_count = a->inst_count - removed_inst_count + b->inst_count;
 
-    if (fused_inst_count > 64 || fused_guest_bytes > 64) {
+    if (fused_inst_count > 64) {
         stats->fusion_reject_size_limit++;
         return false;
     }
@@ -274,8 +190,9 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
     fused->inst_count = fused_inst_count;
     fused->slot_count = fused_slot_count;
     fused->sentinel_slot_index = fused_inst_count;
-    fused->direct_jmp_target = b->direct_jmp_target;
-    fused->ends_with_direct_rel_jmp = b->ends_with_direct_rel_jmp;
+    fused->branch_target_eip = b->branch_target_eip;
+    fused->fallthrough_eip = b->fallthrough_eip;
+    fused->terminal_kind = b->terminal_kind;
     fused->is_valid = true;
     fused->exec_count = 0;
 
@@ -285,6 +202,41 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
 
     uint32_t out = 0;
     for (uint32_t i = 0; i + 1 < a->inst_count; ++i) {
+        dst[out++] = a_ops[i];
+    }
+    for (uint32_t i = 0; i < b->inst_count; ++i) {
+        dst[out++] = b_ops[i];
+    }
+    dst[out] = *b->Sentinel();
+
+    fused->entry = FindJitBlock(fused->FirstOp());
+    fused->entry = fused->entry ? fused->entry : fused->FirstOp()->handler;
+    return fused;
+}
+
+static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
+    const uint32_t fused_inst_count = a->inst_count + b->inst_count;
+    const uint32_t fused_slot_count = fused_inst_count + 1;
+    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(fused_slot_count));
+    BasicBlock* fused = new (mem) BasicBlock;
+
+    fused->start_eip = a->start_eip;
+    fused->end_eip = b->end_eip;
+    fused->inst_count = fused_inst_count;
+    fused->slot_count = fused_slot_count;
+    fused->sentinel_slot_index = fused_inst_count;
+    fused->branch_target_eip = b->branch_target_eip;
+    fused->fallthrough_eip = b->fallthrough_eip;
+    fused->terminal_kind = b->terminal_kind;
+    fused->is_valid = true;
+    fused->exec_count = 0;
+
+    DecodedOp* dst = fused->FirstOp();
+    const DecodedOp* a_ops = a->FirstOp();
+    const DecodedOp* b_ops = b->FirstOp();
+
+    uint32_t out = 0;
+    for (uint32_t i = 0; i < a->inst_count; ++i) {
         dst[out++] = a_ops[i];
     }
     for (uint32_t i = 0; i < b->inst_count; ++i) {
@@ -727,23 +679,33 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 break;
             }
 
-            if (!new_block->ends_with_direct_rel_jmp) {
-                state->block_stats.fusion_reject_not_direct_rel_jmp++;
+            if (!BlockIsFusibleTerminal(new_block)) {
+                state->block_stats.fusion_reject_not_fusible_terminal++;
                 new_block = CacheDecodedBlock(state, eip, new_block);
             } else {
                 state->block_stats.fusion_attempts++;
-                if (new_block->direct_jmp_target == eip) {
+                const bool is_direct_jmp = new_block->terminal_kind == BlockTerminalKind::DirectJmpRel;
+                const uint32_t successor_eip =
+                    is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
+                if (successor_eip == eip) {
                     state->block_stats.fusion_reject_loop++;
                     new_block = CacheDecodedBlock(state, eip, new_block);
                 } else {
-                    BasicBlock* target_block = LookupOrDecodeRawBlock(state, new_block->direct_jmp_target, end_eip);
-                    if (!target_block) {
+                    BasicBlock* successor_block = LookupOrDecodeRawBlock(state, successor_eip, end_eip);
+                    if (!successor_block) {
                         state->block_stats.fusion_reject_target_missing++;
                         new_block = CacheDecodedBlock(state, eip, new_block);
-                    } else if (CanFuseDirectJmp(new_block, target_block, &state->block_stats)) {
-                        BasicBlock* fused_block = BuildFusedDirectJmpBlock(state, new_block, target_block);
+                    } else if (CanFuseWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
+                        BasicBlock* fused_block =
+                            is_direct_jmp ? BuildFusedDirectJmpBlock(state, new_block, successor_block)
+                                          : BuildFusedJccFallthroughBlock(state, new_block, successor_block);
                         new_block = CacheDecodedBlock(state, eip, fused_block);
                         state->block_stats.fusion_success++;
+                        if (is_direct_jmp) {
+                            state->block_stats.fusion_success_direct_jmp++;
+                        } else {
+                            state->block_stats.fusion_success_jcc_fallthrough++;
+                        }
                     } else {
                         new_block = CacheDecodedBlock(state, eip, new_block);
                     }
@@ -804,7 +766,57 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Sync FPU state back
     f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
-    WriteBlockStatsLog(state);
+}
+
+void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
+    if (!state || !stats) return;
+
+    const auto& src = state->block_stats;
+    stats->block_count = src.block_count;
+    stats->total_block_insts = src.total_block_insts;
+    std::memcpy(stats->stop_reason_counts, src.stop_reason_counts, sizeof(stats->stop_reason_counts));
+    std::memcpy(stats->inst_histogram, src.inst_histogram, sizeof(stats->inst_histogram));
+    stats->fusion_attempts = src.fusion_attempts;
+    stats->fusion_success = src.fusion_success;
+    stats->fusion_success_direct_jmp = src.fusion_success_direct_jmp;
+    stats->fusion_success_jcc_fallthrough = src.fusion_success_jcc_fallthrough;
+    stats->fusion_reject_not_fusible_terminal = src.fusion_reject_not_fusible_terminal;
+    stats->fusion_reject_cross_page = src.fusion_reject_cross_page;
+    stats->fusion_reject_size_limit = src.fusion_reject_size_limit;
+    stats->fusion_reject_loop = src.fusion_reject_loop;
+    stats->fusion_reject_target_missing = src.fusion_reject_target_missing;
+}
+
+void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
+    if (!state || !stats) return;
+
+    std::memset(stats, 0, sizeof(*stats));
+
+    auto try_insert_top = [&](uint32_t start_eip, uint32_t inst_count, uint64_t exec_count) {
+        for (auto& slot : stats->top_blocks) {
+            if (exec_count > slot.exec_count) {
+                for (auto it = stats->top_blocks + 7; it != &slot; --it) {
+                    *it = *(it - 1);
+                }
+                slot = X86_HotBlock{start_eip, inst_count, exec_count};
+                break;
+            }
+        }
+    };
+
+    for (const auto& [eip, block] : state->block_cache) {
+        (void)eip;
+        if (!block || block == state->dummy_invalid_block || block->inst_count == 0) continue;
+        stats->executed_block_entries += block->exec_count;
+        stats->executed_inst_total += block->exec_count * block->inst_count;
+        stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count, 64)] += block->exec_count;
+        try_insert_top(block->start_eip, block->inst_count, block->exec_count);
+    }
+
+    stats->exec_weighted_avg_block_insts =
+        stats->executed_block_entries == 0
+            ? 0.0
+            : static_cast<double>(stats->executed_inst_total) / static_cast<double>(stats->executed_block_entries);
 }
 
 void X86_EmuStop(EmuState* state) {
@@ -857,8 +869,7 @@ int X86_Step(EmuState* state) {
     HandlerFunc exit_h = g_ExitHandlers[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
-    sentinel.meta.flags.has_ext = 1;
-    sentinel.ext.link.next_block = state->dummy_invalid_block;
+    SetNextBlock(&sentinel, state->dummy_invalid_block);
     std::memcpy(head + 1, &sentinel, sizeof(sentinel));
 
     // Run first op

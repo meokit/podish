@@ -25,7 +25,7 @@ FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
         offset = (int32_t)imm;
     }
     *branch = op->next_eip + offset;
-    return LogicFlow::Continue;
+    return LogicFlow::ExitToBranch;
 }
 
 template <uint8_t Cond, bool IsRel8>
@@ -39,6 +39,7 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
             offset = (int32_t)imm;
         }
         *branch = op->next_eip + offset;
+        return LogicFlow::ExitToBranch;
     }
     return LogicFlow::Continue;
 }
@@ -122,9 +123,40 @@ FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
     if (jump) {
         int32_t offset = (int32_t)(int8_t)(imm & 0xFF);
         *branch = op->next_eip + offset;
+        return LogicFlow::ExitToBranch;
     }
     return LogicFlow::Continue;
 }
+
+template <bool CheckZF, bool ExpectedZF>
+FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
+    uint32_t count;
+    if (op->prefixes.flags.addrsize) {
+        count = GetReg(state, ECX) & 0xFFFF;
+        count = (count - 1) & 0xFFFF;
+        uint32_t current = GetReg(state, ECX);
+        SetReg(state, ECX, (current & 0xFFFF0000u) | count);
+    } else {
+        count = GetReg(state, ECX) - 1;
+        SetReg(state, ECX, count);
+    }
+
+    bool jump = count != 0;
+    if constexpr (CheckZF) {
+        jump = jump && (((state->ctx.eflags & ZF_MASK) != 0) == ExpectedZF);
+    }
+
+    if (jump) {
+        const int32_t offset = static_cast<int8_t>(imm & 0xFF);
+        *branch = op->next_eip + offset;
+        return LogicFlow::ExitToBranch;
+    }
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpLoopne(LogicFuncParams) { return OpLoop_Internal<true, false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpLoope(LogicFuncParams) { return OpLoop_Internal<true, true>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpLoop(LogicFuncParams) { return OpLoop_Internal<false, false>(LogicPassParams); }
 
 // Named wrappers for Jcc specializations
 #define JCC_WRAPPERS(cond, name)                                   \
@@ -162,7 +194,7 @@ FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
 
     // Jump relative to Next Insn
     *branch = op->next_eip + (int32_t)imm;
-    return LogicFlow::Continue;
+    return LogicFlow::ExitToBranch;
 }
 
 FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
@@ -171,7 +203,7 @@ FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
     auto val_res = Pop<uint32_t, true>(state, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     *branch = *val_res;
-    return LogicFlow::Continue;
+    return LogicFlow::ExitToBranch;
 }
 
 FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
@@ -184,7 +216,7 @@ FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     uint32_t esp = GetReg(state, ESP);
     esp += (uint16_t)imm;
     SetReg(state, ESP, esp);
-    return LogicFlow::Continue;
+    return LogicFlow::ExitToBranch;
 }
 
 FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {

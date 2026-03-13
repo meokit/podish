@@ -146,6 +146,40 @@ void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats);
 void X86_ResetTlbStats(EmuState* state);
 int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size);
 
+typedef struct {
+    uint64_t block_count;
+    uint64_t total_block_insts;
+    uint64_t stop_reason_counts[8];
+    uint64_t inst_histogram[65];
+    uint64_t fusion_attempts;
+    uint64_t fusion_success;
+    uint64_t fusion_success_direct_jmp;
+    uint64_t fusion_success_jcc_fallthrough;
+    uint64_t fusion_reject_not_fusible_terminal;
+    uint64_t fusion_reject_cross_page;
+    uint64_t fusion_reject_size_limit;
+    uint64_t fusion_reject_loop;
+    uint64_t fusion_reject_target_missing;
+} X86_BlockStats;
+
+void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats);
+
+typedef struct {
+    uint32_t start_eip;
+    uint32_t inst_count;
+    uint64_t exec_count;
+} X86_HotBlock;
+
+typedef struct {
+    uint64_t executed_block_entries;
+    uint64_t executed_inst_total;
+    uint64_t exec_weighted_histogram[65];
+    double exec_weighted_avg_block_insts;
+    X86_HotBlock top_blocks[8];
+} X86_BlockExecStats;
+
+void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats);
+
 // Block Coverage
 // Returns pointer to internal BasicBlock structures
 // C# must match the struct layout to read them.
