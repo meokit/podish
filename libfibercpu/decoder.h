@@ -236,14 +236,16 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
     GetExt(op)->control.cached_target = block;
 }
 
+struct BasicBlockChainPrefix {
+    uint32_t start_eip;
+    uint8_t is_valid;
+    uint8_t terminal_kind_raw;
+    uint16_t chain_padding;
+};
+
 struct alignas(16) BasicBlock {
     union {
-        struct {
-            uint32_t start_eip;
-            uint8_t is_valid;
-            uint8_t terminal_kind_raw;
-            uint16_t chain_padding;
-        };
+        BasicBlockChainPrefix chain;
         uint64_t chain_word;
     };
     uint32_t end_eip;
@@ -271,8 +273,8 @@ struct alignas(16) BasicBlock {
         return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
     }
 
-    BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
-    void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
+    BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(chain.terminal_kind_raw); }
+    void set_terminal_kind(BlockTerminalKind kind) { chain.terminal_kind_raw = static_cast<uint8_t>(kind); }
 
     static constexpr uint64_t kChainCompareMask = (uint64_t{1} << 40) - 1;
     static constexpr uint64_t MakeExpectedChainWord(uint32_t target_eip) {

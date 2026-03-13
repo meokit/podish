@@ -102,8 +102,8 @@ static void X86_ResetCodeCache(EmuState* state) {
 }
 
 static bool BlockCrossesPage(const BasicBlock* block) {
-    if (!block || block->inst_count == 0 || block->end_eip <= block->start_eip) return false;
-    return ((block->start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
+    if (!block || block->inst_count == 0 || block->end_eip <= block->chain.start_eip) return false;
+    return ((block->chain.start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
 static bool BlockIsFusibleTerminal(const BasicBlock* block) {
@@ -114,14 +114,14 @@ static bool BlockIsFusibleTerminal(const BasicBlock* block) {
 
 static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
     if (!source || !target) return false;
-    if (source->start_eip == target->start_eip) return true;
-    return target->branch_target_eip == source->start_eip;
+    if (source->chain.start_eip == target->chain.start_eip) return true;
+    return target->branch_target_eip == source->chain.start_eip;
 }
 
 static void RegisterBlockPages(EmuState* state, uint32_t cache_eip, const BasicBlock* block) {
     uint32_t page_addr = cache_eip & 0xFFFFF000u;
     state->page_to_blocks[page_addr].push_back(cache_eip);
-    if (block && block->end_eip > block->start_eip && ((block->end_eip - 1) & 0xFFFFF000u) != page_addr) {
+    if (block && block->end_eip > block->chain.start_eip && ((block->end_eip - 1) & 0xFFFFF000u) != page_addr) {
         uint32_t page2 = (block->end_eip - 1) & 0xFFFFF000u;
         state->page_to_blocks[page2].push_back(cache_eip);
     }
@@ -153,12 +153,12 @@ static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_
 
 static bool CanFuseWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
                                  BlockStats* stats) {
-    if (!a || !b || !a->is_valid || !b->is_valid || a->inst_count == 0 || b->inst_count == 0) {
+    if (!a || !b || !a->chain.is_valid || !b->chain.is_valid || a->inst_count == 0 || b->inst_count == 0) {
         stats->fusion_reject_target_missing++;
         return false;
     }
 
-    if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->start_eip ^ b->start_eip) & 0xFFFFF000u) != 0) {
+    if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->chain.start_eip ^ b->chain.start_eip) & 0xFFFFF000u) != 0) {
         stats->fusion_reject_cross_page++;
         return false;
     }
@@ -185,7 +185,7 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(fused_slot_count));
     BasicBlock* fused = new (mem) BasicBlock;
 
-    fused->start_eip = a->start_eip;
+    fused->chain.start_eip = a->chain.start_eip;
     fused->end_eip = b->end_eip;
     fused->inst_count = fused_inst_count;
     fused->slot_count = fused_slot_count;
@@ -193,7 +193,7 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
     fused->branch_target_eip = b->branch_target_eip;
     fused->fallthrough_eip = b->fallthrough_eip;
     fused->set_terminal_kind(b->terminal_kind());
-    fused->is_valid = true;
+    fused->chain.is_valid = true;
     fused->exec_count = 0;
 
     DecodedOp* dst = fused->FirstOp();
@@ -220,7 +220,7 @@ static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlo
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(fused_slot_count));
     BasicBlock* fused = new (mem) BasicBlock;
 
-    fused->start_eip = a->start_eip;
+    fused->chain.start_eip = a->chain.start_eip;
     fused->end_eip = b->end_eip;
     fused->inst_count = fused_inst_count;
     fused->slot_count = fused_slot_count;
@@ -228,7 +228,7 @@ static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlo
     fused->branch_target_eip = b->branch_target_eip;
     fused->fallthrough_eip = b->fallthrough_eip;
     fused->set_terminal_kind(b->terminal_kind());
-    fused->is_valid = true;
+    fused->chain.is_valid = true;
     fused->exec_count = 0;
 
     DecodedOp* dst = fused->FirstOp();
@@ -288,7 +288,7 @@ EmuState* X86_Create() {
     // Initialize Dummy Invalid Block.
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
     state->dummy_invalid_block = new (mem) BasicBlock;
-    state->dummy_invalid_block->is_valid = false;
+    state->dummy_invalid_block->chain.is_valid = false;
     state->dummy_invalid_block->inst_count = 0;
     state->dummy_invalid_block->slot_count = 0;
     state->dummy_invalid_block->sentinel_slot_index = 0;
@@ -371,7 +371,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
     state->dummy_invalid_block = new (mem) BasicBlock;
-    state->dummy_invalid_block->is_valid = false;
+    state->dummy_invalid_block->chain.is_valid = false;
     state->dummy_invalid_block->inst_count = 0;
     state->dummy_invalid_block->slot_count = 0;
     state->dummy_invalid_block->sentinel_slot_index = 0;
@@ -723,7 +723,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         // Skip invalid blocks (shouldn't happen if we erase them on invalidation,
         // but safe to check if we change logic)
-        if (!block_ptr->is_valid) {
+        if (!block_ptr->chain.is_valid) {
             // Re-decode? Or Fault?
             // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
             // Let's treat it as a miss and re-decode.
@@ -823,7 +823,7 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
         stats->executed_block_entries += block->exec_count;
         stats->executed_inst_total += block->exec_count * block->inst_count;
         stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count, 64)] += block->exec_count;
-        try_insert_top(block->start_eip, block->inst_count, block->exec_count);
+        try_insert_top(block->chain.start_eip, block->inst_count, block->exec_count);
     }
 
     stats->exec_weighted_avg_block_insts =

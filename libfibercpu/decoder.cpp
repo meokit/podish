@@ -681,12 +681,12 @@ finalize:
     void* mem = state->block_pool.allocate(alloc_size);
     BasicBlock* block = new (mem) BasicBlock;
 
-    block->start_eip = start_eip;
+    block->chain.start_eip = start_eip;
     block->end_eip = end_eip;
     block->inst_count = inst_count;
     block->slot_count = (uint32_t)slot_count;
     block->exec_count = 0;
-    block->is_valid = 1;
+    block->chain.is_valid = 1;
     block->sentinel_slot_index = 0;
     block->branch_target_eip = 0;
     block->fallthrough_eip = end_eip;
@@ -726,9 +726,9 @@ finalize:
 // ----------------------------------------------------------------------------
 
 void BasicBlock::Invalidate() {
-    if (!is_valid) return;
-    is_valid = false;
-    // No unlinking needed because OpExitBlock checks is_valid
+    if (!chain.is_valid) return;
+    chain.is_valid = false;
+    // No unlinking needed because OpExitBlock checks chain.is_valid
 }
 
 }  // namespace fiberish
