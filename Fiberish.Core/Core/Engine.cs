@@ -676,6 +676,35 @@ public class Engine : IDisposable
         }
     }
 
+    public unsafe HandlerProfileStat[] GetHandlerProfileStats()
+    {
+        var count = (int)X86Native.GetHandlerProfileCount(State);
+        if (count <= 0) return Array.Empty<HandlerProfileStat>();
+
+        var buffer = new X86Native.HandlerProfileEntry[count];
+        fixed (X86Native.HandlerProfileEntry* p = buffer)
+        {
+            var actual = (int)X86Native.GetHandlerProfileStats(State, p, (nuint)buffer.Length);
+            if (actual <= 0) return Array.Empty<HandlerProfileStat>();
+            if (actual < buffer.Length) Array.Resize(ref buffer, actual);
+        }
+
+        var result = new HandlerProfileStat[buffer.Length];
+        for (var i = 0; i < buffer.Length; i++)
+        {
+            result[i] = new HandlerProfileStat(
+                buffer[i].Handler,
+                buffer[i].ExecCount);
+        }
+
+        return result;
+    }
+
+    public IntPtr GetNativeImageBase()
+    {
+        return X86Native.GetLibAddress();
+    }
+
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -716,3 +745,5 @@ public class Engine : IDisposable
         Dispose(false);
     }
 }
+
+public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);

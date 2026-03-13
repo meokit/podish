@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using Fiberish.Core;
@@ -402,6 +403,8 @@ public sealed class ContainerRuntimeService
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
                 request.Image,
                 mainTask.ExitStatus));
+            if (ShouldPrintHandlerProfile())
+                PrintHandlerProfile(runtime.Engine);
             return mainTask.ExitStatus;
         }
         catch (OutOfMemoryException ex)
@@ -1106,5 +1109,26 @@ public sealed class ContainerRuntimeService
         public void SignalForegroundTask(int signal)
         {
         }
+    }
+
+    private static bool ShouldPrintHandlerProfile()
+    {
+        var value = Environment.GetEnvironmentVariable("PODISH_HANDLER_PROFILE");
+        return !string.IsNullOrWhiteSpace(value) && value != "0";
+    }
+
+    private static void PrintHandlerProfile(Engine engine)
+    {
+        var stats = engine.GetHandlerProfileStats()
+            .Where(static x => x.ExecCount != 0)
+            .OrderByDescending(static x => x.ExecCount)
+            .ToArray();
+        var imageBase = engine.GetNativeImageBase();
+
+        Console.Error.WriteLine("[Podish.HandlerProfile.Begin]");
+        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
+        foreach (var stat in stats)
+            Console.Error.WriteLine($"{stat.ExecCount}\t0x{stat.Handler.ToInt64():x}");
+        Console.Error.WriteLine("[Podish.HandlerProfile.End]");
     }
 }

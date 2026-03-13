@@ -20,6 +20,9 @@
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphoneos</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('iossimulator-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphonesimulator</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
+            <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
+            <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
         </PropertyGroup>
         <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
         <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
