@@ -237,16 +237,21 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
 }
 
 struct alignas(16) BasicBlock {
-    uint32_t start_eip;
+    union {
+        struct {
+            uint32_t start_eip;
+            uint8_t is_valid;
+            uint8_t terminal_kind_raw;
+            uint16_t chain_padding;
+        };
+        uint64_t chain_word;
+    };
     uint32_t end_eip;
     uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = 0;
-    bool is_valid = true;
-    BlockTerminalKind terminal_kind = BlockTerminalKind::None;
-    uint8_t padding1[2] = {};
     uint64_t exec_count = 0;  // Number of times block was executed
     HandlerFunc entry = nullptr;
 
@@ -264,6 +269,17 @@ struct alignas(16) BasicBlock {
     DecodedOp* Sentinel() { return reinterpret_cast<DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp)); }
     const DecodedOp* Sentinel() const {
         return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
+    }
+
+    BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
+    void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
+
+    static constexpr uint64_t kChainCompareMask = (uint64_t{1} << 40) - 1;
+    static constexpr uint64_t MakeExpectedChainWord(uint32_t target_eip) {
+        return static_cast<uint64_t>(target_eip) | (uint64_t{1} << 32);
+    }
+    bool MatchesChainTarget(uint32_t target_eip) const {
+        return (chain_word & kChainCompareMask) == MakeExpectedChainWord(target_eip);
     }
 
     // Mark block as invalid

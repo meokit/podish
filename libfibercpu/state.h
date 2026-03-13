@@ -116,6 +116,10 @@ struct EmuState {
 
     bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
     BlockStats block_stats;
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    ankerl::unordered_dense::map<uintptr_t, uint64_t> handler_exec_counts;
+    DecodedOp* current_block_head = nullptr;
+#endif
 
     // TSC State
     uint64_t tsc_frequency = 1000000000;  // Default 1GHz

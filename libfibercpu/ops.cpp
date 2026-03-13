@@ -1,7 +1,5 @@
 #include "ops.h"
 #include <algorithm>
-#include <unordered_map>
-#include <vector>
 #include "dispatch.h"
 #include "ops/ops_mmx.h"
 
@@ -102,6 +100,69 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* 
 ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                          mem::MicroTLB utlb, uint32_t branch) {
     ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb, branch);
+}
+
+static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                    int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
+    (void)op;
+    (void)branch;
+    BasicBlock* next_block = state->last_block;
+    instr_limit -= next_block->inst_count;
+    next_block->exec_count++;
+    DecodedOp* next_head = next_block->FirstOp();
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = next_head;
+#endif
+    if (next_block->entry != nullptr) {
+        ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb,
+                                               std::numeric_limits<uint32_t>::max());
+    }
+    return instr_limit;
+}
+
+template <ExtKind Kind>
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                       int64_t instr_limit, mem::MicroTLB utlb,
+                                                                       uint32_t branch) {
+    // Sync EIP to the branch target and clear any pending memory restart state before chaining.
+    const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
+    state->ctx.eip = target_eip;
+    state->mem_op.emplace<0>();
+    if (instr_limit <= 0) return instr_limit;
+
+    BasicBlock* next_block;
+    if constexpr (Kind == ExtKind::Link) {
+        next_block = GetNextBlock(op);
+    } else {
+        static_assert(Kind == ExtKind::ControlFlow);
+        next_block = GetCachedTarget(op);
+    }
+
+    // The chaining fast path compares the packed start_eip + valid byte in one 64-bit load.
+    if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
+        auto it = state->block_cache.find(target_eip);
+        next_block = it == state->block_cache.end() ? nullptr : it->second;
+        if (!(next_block && next_block->MatchesChainTarget(target_eip))) return instr_limit;
+
+        if constexpr (Kind == ExtKind::Link) {
+            SetNextBlock(op, next_block);
+        } else {
+            SetCachedTarget(op, next_block);
+        }
+    }
+
+    state->last_block = next_block;
+    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch);
+}
+
+ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                 mem::MicroTLB utlb, uint32_t branch) {
+    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch);
+}
+
+ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                               mem::MicroTLB utlb, uint32_t branch) {
+    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch);
 }
 
 // Sentinel Handler

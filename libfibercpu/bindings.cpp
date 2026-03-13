@@ -108,8 +108,8 @@ static bool BlockCrossesPage(const BasicBlock* block) {
 
 static bool BlockIsFusibleTerminal(const BasicBlock* block) {
     if (!block) return false;
-    return block->terminal_kind == BlockTerminalKind::DirectJmpRel ||
-           block->terminal_kind == BlockTerminalKind::DirectJccRel;
+    return block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
+           block->terminal_kind() == BlockTerminalKind::DirectJccRel;
 }
 
 static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
@@ -192,7 +192,7 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
     fused->sentinel_slot_index = fused_inst_count;
     fused->branch_target_eip = b->branch_target_eip;
     fused->fallthrough_eip = b->fallthrough_eip;
-    fused->terminal_kind = b->terminal_kind;
+    fused->set_terminal_kind(b->terminal_kind());
     fused->is_valid = true;
     fused->exec_count = 0;
 
@@ -227,7 +227,7 @@ static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlo
     fused->sentinel_slot_index = fused_inst_count;
     fused->branch_target_eip = b->branch_target_eip;
     fused->fallthrough_eip = b->fallthrough_eip;
-    fused->terminal_kind = b->terminal_kind;
+    fused->set_terminal_kind(b->terminal_kind());
     fused->is_valid = true;
     fused->exec_count = 0;
 
@@ -643,6 +643,10 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->status = EmuStatus::Running;
     state->block_stats = {};
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->handler_exec_counts.clear();
+    state->current_block_head = nullptr;
+#endif
     uint64_t total_run_insts = 0;
 
     // Reset chaining state for this run
@@ -684,7 +688,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 new_block = CacheDecodedBlock(state, eip, new_block);
             } else {
                 state->block_stats.fusion_attempts++;
-                const bool is_direct_jmp = new_block->terminal_kind == BlockTerminalKind::DirectJmpRel;
+                const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
                 const uint32_t successor_eip =
                     is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
                 if (successor_eip == eip) {
@@ -737,6 +741,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         state->last_block = block_ptr;
         if (block_ptr->inst_count > 0) {
             DecodedOp* head = block_ptr->FirstOp();
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+            state->current_block_head = head;
+#endif
 
             if (block_ptr->entry) {
                 int64_t batch_limit = 1000;
@@ -754,6 +761,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 int64_t remaining =
                     block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max());
                 total_run_insts += (initial_batch_limit - remaining);
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+                state->current_block_head = nullptr;
+#endif
             } else {
                 if (!state->hooks.on_invalid_opcode(state)) {
                     state->status = EmuStatus::Fault;
@@ -765,6 +775,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     }
 
     // Sync FPU state back
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = nullptr;
+#endif
     f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 }
 
@@ -817,6 +830,36 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
         stats->executed_block_entries == 0
             ? 0.0
             : static_cast<double>(stats->executed_inst_total) / static_cast<double>(stats->executed_block_entries);
+}
+
+size_t X86_GetHandlerProfileCount(EmuState* state) {
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    return state ? state->handler_exec_counts.size() : 0;
+#else
+    (void)state;
+    return 0;
+#endif
+}
+
+size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count) {
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    const size_t total = state ? state->handler_exec_counts.size() : 0;
+    if (!state || !buffer || max_count == 0) return total;
+
+    size_t i = 0;
+    for (const auto& [handler, exec_count] : state->handler_exec_counts) {
+        if (i == max_count) break;
+        buffer[i].handler = reinterpret_cast<void*>(handler);
+        buffer[i].exec_count = exec_count;
+        i++;
+    }
+    return total;
+#else
+    (void)state;
+    (void)buffer;
+    (void)max_count;
+    return 0;
+#endif
 }
 
 void X86_EmuStop(EmuState* state) {
@@ -874,6 +917,9 @@ int X86_Step(EmuState* state) {
 
     // Run first op
     HandlerFunc h = head->handler;
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = head;
+#endif
 
     if (h) {
         MicroTLB utlb;
@@ -887,6 +933,9 @@ int X86_Step(EmuState* state) {
     }
 
     // Sync FPU state back
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = nullptr;
+#endif
     f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 
     return (int)state->status;

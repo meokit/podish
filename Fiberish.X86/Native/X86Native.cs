@@ -236,6 +236,14 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_DumpStats")]
     public static partial int DumpStats(IntPtr state, byte* buffer, nuint bufferSize);
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerProfileCount")]
+    [SuppressGCTransition]
+    public static partial nuint GetHandlerProfileCount(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerProfileStats")]
+    [SuppressGCTransition]
+    public static partial nuint GetHandlerProfileStats(IntPtr state, HandlerProfileEntry* buffer, nuint maxCount);
+
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockCount")]
     [SuppressGCTransition]
     public static partial int GetBlockCount(IntPtr state);
@@ -263,16 +271,18 @@ public unsafe partial class X86Native
     public struct BasicBlock
     {
         public uint start_eip;
+        public byte is_valid;
+        public byte terminal_kind;
+        private ushort chain_padding;
         public uint end_eip;
         public uint inst_count;
-        private ushort padding0; // align to 8 bytes for exec_count
-        private byte padding1;
-        public byte is_valid;
+        public uint slot_count;
+        public uint sentinel_slot_index;
+        public uint branch_target_eip;
+        public uint fallthrough_eip;
         public ulong exec_count;
-
-        public IntPtr jit_func;
-        // Padding to 32 bytes implied before ops
-        // DecodedOp ops[1] follows at offset 32
+        public IntPtr entry;
+        // DecodedOp ops[1] follows at offset 48
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -283,5 +293,12 @@ public unsafe partial class X86Native
         public PageMappingFlags Flags;
         public ushort Reserved;
         public IntPtr HostPage;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HandlerProfileEntry
+    {
+        public IntPtr Handler;
+        public ulong ExecCount;
     }
 }

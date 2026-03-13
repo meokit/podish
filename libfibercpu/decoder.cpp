@@ -686,11 +686,11 @@ finalize:
     block->inst_count = inst_count;
     block->slot_count = (uint32_t)slot_count;
     block->exec_count = 0;
-    block->is_valid = true;
+    block->is_valid = 1;
     block->sentinel_slot_index = 0;
     block->branch_target_eip = 0;
     block->fallthrough_eip = end_eip;
-    block->terminal_kind = BlockTerminalKind::None;
+    block->set_terminal_kind(BlockTerminalKind::None);
 
     DecodedOp* dst = block->FirstOp();
     for (size_t i = 0; i < temp_ops.size(); ++i) {
@@ -704,13 +704,13 @@ finalize:
     if (inst_count != 0 && op_indices.size() >= inst_count) {
         const uint16_t last_handler_index = op_indices[inst_count - 1];
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
-            block->terminal_kind = BlockTerminalKind::DirectJmpRel;
+            block->set_terminal_kind(BlockTerminalKind::DirectJmpRel);
             block->branch_target_eip = GetDirectRelativeJmpTarget(last_handler_index, dst[inst_count - 1]);
         } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
-            block->terminal_kind = BlockTerminalKind::DirectJccRel;
+            block->set_terminal_kind(BlockTerminalKind::DirectJccRel);
             block->branch_target_eip = GetDirectRelativeJccTarget(last_handler_index, dst[inst_count - 1]);
         } else if (dst[inst_count - 1].meta.flags.is_control_flow) {
-            block->terminal_kind = BlockTerminalKind::OtherControlFlow;
+            block->set_terminal_kind(BlockTerminalKind::OtherControlFlow);
         }
     }
 

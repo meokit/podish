@@ -180,6 +180,14 @@ typedef struct {
 
 void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats);
 
+typedef struct {
+    void* handler;
+    uint64_t exec_count;
+} X86_HandlerProfileEntry;
+
+size_t X86_GetHandlerProfileCount(EmuState* state);
+size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
+
 // Block Coverage
 // Returns pointer to internal BasicBlock structures
 // C# must match the struct layout to read them.

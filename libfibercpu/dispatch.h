@@ -11,46 +11,34 @@ namespace fiberish {
 extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
 
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+FORCE_INLINE void RecordBlockHandlersUntil(EmuState* state, const DecodedOp* stop_op) {
+    if (!state->current_block_head) return;
+    for (const DecodedOp* current = state->current_block_head; current != stop_op; current = NextOp(current)) {
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
+    }
+}
+
+FORCE_INLINE void RecordBlockHandlersThrough(EmuState* state, const DecodedOp* stop_op) {
+    if (!state->current_block_head) return;
+    for (const DecodedOp* current = state->current_block_head;; current = NextOp(current)) {
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
+        if (current == stop_op) break;
+    }
+}
+#else
+FORCE_INLINE void RecordBlockHandlersUntil(EmuState*, const DecodedOp*) {}
+FORCE_INLINE void RecordBlockHandlersThrough(EmuState*, const DecodedOp*) {}
+#endif
+
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                   mem::MicroTLB utlb, uint32_t branch);
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                 mem::MicroTLB utlb, uint32_t branch);
-
-static inline ATTR_PRESERVE_NONE int64_t TryChainToBranch(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                          int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
-    const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
-    state->ctx.eip = target_eip;
-    state->mem_op.emplace<0>();
-
-    if (instr_limit <= 0) return instr_limit;
-
-    BasicBlock* next_block = nullptr;
-    if (GetExtKind(op) == ExtKind::Link) {
-        next_block = GetNextBlock(op);
-    } else if (GetExtKind(op) == ExtKind::ControlFlow) {
-        next_block = GetCachedTarget(op);
-    }
-
-    if (!next_block || !next_block->is_valid || next_block->start_eip != target_eip) {
-        auto it = state->block_cache.find(target_eip);
-        next_block = it == state->block_cache.end() ? nullptr : it->second;
-        if (next_block && next_block->is_valid && next_block->start_eip == target_eip &&
-            GetExtKind(op) == ExtKind::ControlFlow) {
-            SetCachedTarget(op, next_block);
-        }
-    }
-    if (!next_block || !next_block->is_valid || next_block->start_eip != target_eip) return instr_limit;
-
-    instr_limit -= next_block->inst_count;
-    state->last_block = next_block;
-    next_block->exec_count++;
-    DecodedOp* next_head = next_block->FirstOp();
-    if (next_block->entry != nullptr) {
-        ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb,
-                                               std::numeric_limits<uint32_t>::max());
-    }
-    return instr_limit;
-}
+extern ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                        int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);
+extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);
 
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -72,19 +60,25 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             }
             __builtin_unreachable();
         case LogicFlow::ExitOnCurrentEIP:
+            RecordBlockHandlersThrough(state, op);
             if (!state->eip_dirty) state->sync_eip_to_op_start(op);
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
+            RecordBlockHandlersThrough(state, op);
             if (!state->eip_dirty) state->sync_eip_to_op_end(op);
             return instr_limit;
         case LogicFlow::ExitWithoutSyncEIP:
+            RecordBlockHandlersThrough(state, op);
             return instr_limit;
         case LogicFlow::RestartMemoryOp:
+            RecordBlockHandlersThrough(state, op);
             ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch);
         case LogicFlow::RetryMemoryOp:
+            RecordBlockHandlersThrough(state, op);
             ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch);
         case LogicFlow::ExitToBranch:
-            ATTR_MUSTTAIL return TryChainToBranch(state, op, instr_limit, utlb, branch);
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch);
         default:
             return instr_limit;
     }
