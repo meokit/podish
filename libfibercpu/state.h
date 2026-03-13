@@ -38,6 +38,38 @@ struct alignas(16) MemWriteOperation {
     bool done;
 };
 
+enum class BlockStopReason : uint8_t {
+    Unknown = 0,
+    LimitEip,
+    FetchFault,
+    DecodeFault,
+    CrossPageFault,
+    ControlFlow,
+    PageCross,
+    MaxInsts,
+};
+
+struct BlockStats {
+    uint64_t block_count = 0;
+    uint64_t total_block_insts = 0;
+    uint64_t stop_reason_counts[8] = {};
+    uint64_t inst_histogram[65] = {};
+    uint64_t fusion_attempts = 0;
+    uint64_t fusion_success = 0;
+    uint64_t fusion_reject_not_direct_rel_jmp = 0;
+    uint64_t fusion_reject_cross_page = 0;
+    uint64_t fusion_reject_size_limit = 0;
+    uint64_t fusion_reject_loop = 0;
+    uint64_t fusion_reject_target_missing = 0;
+
+    void Record(uint32_t inst_count, BlockStopReason reason) {
+        block_count++;
+        total_block_insts += inst_count;
+        stop_reason_counts[static_cast<size_t>(reason)]++;
+        inst_histogram[std::min<uint32_t>(inst_count, 64)]++;
+    }
+};
+
 struct EmuState {
     Context ctx;
     mem::Mmu mmu;
@@ -81,6 +113,7 @@ struct EmuState {
     void* log_userdata = nullptr;
 
     bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
+    BlockStats block_stats;
 
     // TSC State
     uint64_t tsc_frequency = 1000000000;  // Default 1GHz

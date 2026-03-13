@@ -197,9 +197,10 @@ struct alignas(16) BasicBlock {
     uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
-    uint32_t padding0 = 0;
+    uint32_t direct_jmp_target = 0;
     bool is_valid = true;
-    uint8_t padding1[7] = {};
+    bool ends_with_direct_rel_jmp = false;
+    uint8_t padding1[6] = {};
     uint64_t exec_count = 0;  // Number of times block was executed
     HandlerFunc entry = nullptr;
 

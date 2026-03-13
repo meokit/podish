@@ -306,6 +306,17 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 // Helper to check if opcode is Control Flow
 static bool IsControlFlow(const DecodedInstTmp& inst) { return inst.head.meta.flags.is_control_flow; }
 
+static bool IsDirectRelativeJmpHandlerIndex(uint16_t handler_index) {
+    return handler_index == 0xE9 || handler_index == 0xEB;
+}
+
+static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const DecodedOp& op) {
+    if (handler_index == 0xEB) {
+        return op.next_eip + static_cast<int8_t>(GetImm(&op));
+    }
+    return op.next_eip + static_cast<int32_t>(GetImm(&op));
+}
+
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts) {
     // 1. Decode into temporary storage
     // Use a small buffer on stack to avoid heap allocation for common small blocks?
@@ -333,10 +344,12 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     uint32_t end_eip = start_eip;
     bool success = true;
+    BlockStopReason stop_reason = BlockStopReason::Unknown;
 
     while (temp_ops.size() < effective_limit) {
         // 0. Check Limit
         if (limit_eip != 0 && current_eip >= limit_eip) {
+            stop_reason = BlockStopReason::LimitEip;
             break;
         }
         // 1. Fetch with Probe
@@ -391,6 +404,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 // Original code returned false.
                 success = false;
             }
+            stop_reason = BlockStopReason::FetchFault;
             break;
         }
 
@@ -426,6 +440,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             temp_ops.push_back(sentinel);
 
             end_eip = current_eip + 1;
+            stop_reason = BlockStopReason::DecodeFault;
             goto finalize;
         }
 
@@ -449,6 +464,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
                 if (temp_ops.empty()) success = false;
                 state->status = EmuStatus::Fault;
+                stop_reason = BlockStopReason::CrossPageFault;
                 break;
             }
         }
@@ -505,6 +521,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // Stop if Control Flow
         if (IsControlFlow(inst)) {
             current_eip += inst_len;
+            stop_reason = BlockStopReason::ControlFlow;
             break;
         }
 
@@ -513,13 +530,19 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
         // Stop if Control Flow (checked again on last op? redundancy from original code)
         if (IsControlFlow(temp_ops.back())) {
+            stop_reason = BlockStopReason::ControlFlow;
             break;
         }
 
         // Stop if Page Cross
         if (is_page_cross(current_eip, 1)) {
+            stop_reason = BlockStopReason::PageCross;
             break;
         }
+    }
+
+    if (stop_reason == BlockStopReason::Unknown && temp_ops.size() >= effective_limit) {
+        stop_reason = BlockStopReason::MaxInsts;
     }
 
     // Append Sentinel Op
@@ -625,6 +648,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 finalize:
     if (!success || temp_ops.empty()) return nullptr;
 
+    state->block_stats.Record(inst_count, stop_reason);
+
     size_t slot_count = temp_ops.size();
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
@@ -638,6 +663,8 @@ finalize:
     block->exec_count = 0;
     block->is_valid = true;
     block->sentinel_slot_index = 0;
+    block->direct_jmp_target = 0;
+    block->ends_with_direct_rel_jmp = false;
 
     DecodedOp* dst = block->FirstOp();
     for (size_t i = 0; i < temp_ops.size(); ++i) {
@@ -646,6 +673,14 @@ finalize:
             block->sentinel_slot_index = static_cast<uint32_t>(i);
         }
         dst[i] = inst.head;
+    }
+
+    if (inst_count != 0 && op_indices.size() >= inst_count) {
+        const uint16_t last_handler_index = op_indices[inst_count - 1];
+        if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
+            block->ends_with_direct_rel_jmp = true;
+            block->direct_jmp_target = GetDirectRelativeJmpTarget(last_handler_index, dst[inst_count - 1]);
+        }
     }
 
     // JIT Entry or First Op Handler Fallback
