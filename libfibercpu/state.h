@@ -72,6 +72,13 @@ struct BlockStats {
     }
 };
 
+struct JccProfileCounters {
+    uint64_t taken = 0;
+    uint64_t not_taken = 0;
+    uint64_t cache_hit = 0;
+    uint64_t cache_miss = 0;
+};
+
 struct EmuState {
     Context ctx;
     mem::Mmu mmu;
@@ -119,6 +126,9 @@ struct EmuState {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     ankerl::unordered_dense::map<uintptr_t, uint64_t> handler_exec_counts;
     DecodedOp* current_block_head = nullptr;
+#endif
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+    ankerl::unordered_dense::map<uintptr_t, JccProfileCounters> jcc_profile_counts;
 #endif
 
     // TSC State

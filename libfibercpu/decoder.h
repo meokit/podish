@@ -1,4 +1,5 @@
 #pragma once
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -108,7 +109,7 @@ union Meta {
         uint8_t has_imm : 1;
         uint8_t is_control_flow : 1;
         uint8_t no_flags : 1;
-        uint8_t reserved : 1;
+        uint8_t is_conditional_branch : 1;
         uint8_t ext_kind : 2;
     } flags;
 };
@@ -238,16 +239,19 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
 
 struct BasicBlockChainPrefix {
     uint32_t start_eip;
-    uint8_t is_valid;
+    uint32_t is_valid;
     uint8_t terminal_kind_raw;
-    uint16_t chain_padding;
+    uint8_t chain_padding0;
+    uint16_t chain_padding1;
+};
+
+struct BasicBlockChainMatch {
+    uint32_t start_eip;
+    uint32_t is_valid;
 };
 
 struct alignas(16) BasicBlock {
-    union {
-        BasicBlockChainPrefix chain;
-        uint64_t chain_word;
-    };
+    BasicBlockChainPrefix chain;
     uint32_t end_eip;
     uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
     uint32_t slot_count;           // Total decoded ops including sentinel
@@ -276,12 +280,12 @@ struct alignas(16) BasicBlock {
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(chain.terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { chain.terminal_kind_raw = static_cast<uint8_t>(kind); }
 
-    static constexpr uint64_t kChainCompareMask = (uint64_t{1} << 40) - 1;
-    static constexpr uint64_t MakeExpectedChainWord(uint32_t target_eip) {
-        return static_cast<uint64_t>(target_eip) | (uint64_t{1} << 32);
-    }
     bool MatchesChainTarget(uint32_t target_eip) const {
-        return (chain_word & kChainCompareMask) == MakeExpectedChainWord(target_eip);
+        // The chaining fast path only cares about start_eip + valid word.
+        const auto actual =
+            std::bit_cast<uint64_t>(BasicBlockChainMatch{.start_eip = chain.start_eip, .is_valid = chain.is_valid});
+        const auto expected = std::bit_cast<uint64_t>(BasicBlockChainMatch{.start_eip = target_eip, .is_valid = 1});
+        return actual == expected;
     }
 
     // Mark block as invalid

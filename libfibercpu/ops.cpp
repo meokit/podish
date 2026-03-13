@@ -5,6 +5,20 @@
 
 namespace fiberish {
 
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+static FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState* state, const DecodedOp* op, bool cache_hit) {
+    if (!op->meta.flags.is_conditional_branch) return;
+    auto& counters = state->jcc_profile_counts[reinterpret_cast<uintptr_t>(op->handler)];
+    if (cache_hit) {
+        counters.cache_hit++;
+    } else {
+        counters.cache_miss++;
+    }
+}
+#else
+static FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState*, const DecodedOp*, bool) {}
+#endif
+
 template <bool restart>
 ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch) {
@@ -104,8 +118,6 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RE
 
 static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                     int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
-    (void)op;
-    (void)branch;
     BasicBlock* next_block = state->last_block;
     instr_limit -= next_block->inst_count;
     next_block->exec_count++;
@@ -117,6 +129,7 @@ static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, De
         ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb,
                                                std::numeric_limits<uint32_t>::max());
     }
+    state->ctx.eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
     return instr_limit;
 }
 
@@ -124,11 +137,12 @@ template <ExtKind Kind>
 static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                        int64_t instr_limit, mem::MicroTLB utlb,
                                                                        uint32_t branch) {
-    // Sync EIP to the branch target and clear any pending memory restart state before chaining.
     const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
-    state->ctx.eip = target_eip;
     state->mem_op.emplace<0>();
-    if (instr_limit <= 0) return instr_limit;
+    if (instr_limit <= 0) {
+        state->ctx.eip = target_eip;
+        return instr_limit;
+    }
 
     BasicBlock* next_block;
     if constexpr (Kind == ExtKind::Link) {
@@ -138,17 +152,23 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
         next_block = GetCachedTarget(op);
     }
 
-    // The chaining fast path compares the packed start_eip + valid byte in one 64-bit load.
+    // The chaining fast path compares the packed start_eip + valid word in one 64-bit load.
     if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
+        RecordConditionalBranchCacheResult(state, op, false);
         auto it = state->block_cache.find(target_eip);
         next_block = it == state->block_cache.end() ? nullptr : it->second;
-        if (!(next_block && next_block->MatchesChainTarget(target_eip))) return instr_limit;
+        if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
+            state->ctx.eip = target_eip;
+            return instr_limit;
+        }
 
         if constexpr (Kind == ExtKind::Link) {
             SetNextBlock(op, next_block);
         } else {
             SetCachedTarget(op, next_block);
         }
+    } else {
+        RecordConditionalBranchCacheResult(state, op, true);
     }
 
     state->last_block = next_block;

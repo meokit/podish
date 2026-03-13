@@ -70,6 +70,11 @@ static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
     return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
+static bool IsConditionalBranchHandlerIndex(uint16_t handler_index) {
+    if (handler_index >= 0xE0 && handler_index <= 0xE3) return true;
+    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
+}
+
 // Decoder Logic
 // Returns true on success, false on failure/invalid instruction
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
@@ -310,6 +315,8 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         HandlerFunc ud2 = g_Handlers[0x10B];
         op->handler = ud2;
     }
+
+    op->meta.flags.is_conditional_branch = IsConditionalBranchHandlerIndex(*handler_index);
 
     return true;
 }

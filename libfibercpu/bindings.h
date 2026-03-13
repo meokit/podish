@@ -188,6 +188,17 @@ typedef struct {
 size_t X86_GetHandlerProfileCount(EmuState* state);
 size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
 
+typedef struct {
+    void* handler;
+    uint64_t taken;
+    uint64_t not_taken;
+    uint64_t cache_hit;
+    uint64_t cache_miss;
+} X86_JccProfileEntry;
+
+size_t X86_GetJccProfileCount(EmuState* state);
+size_t X86_GetJccProfileStats(EmuState* state, X86_JccProfileEntry* buffer, size_t max_count);
+
 // Block Coverage
 // Returns pointer to internal BasicBlock structures
 // C# must match the struct layout to read them.

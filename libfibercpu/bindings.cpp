@@ -647,6 +647,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->handler_exec_counts.clear();
     state->current_block_head = nullptr;
 #endif
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+    state->jcc_profile_counts.clear();
+#endif
     uint64_t total_run_insts = 0;
 
     // Reset chaining state for this run
@@ -851,6 +854,39 @@ size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buff
         if (i == max_count) break;
         buffer[i].handler = reinterpret_cast<void*>(handler);
         buffer[i].exec_count = exec_count;
+        i++;
+    }
+    return total;
+#else
+    (void)state;
+    (void)buffer;
+    (void)max_count;
+    return 0;
+#endif
+}
+
+size_t X86_GetJccProfileCount(EmuState* state) {
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+    return state ? state->jcc_profile_counts.size() : 0;
+#else
+    (void)state;
+    return 0;
+#endif
+}
+
+size_t X86_GetJccProfileStats(EmuState* state, X86_JccProfileEntry* buffer, size_t max_count) {
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+    const size_t total = state ? state->jcc_profile_counts.size() : 0;
+    if (!state || !buffer || max_count == 0) return total;
+
+    size_t i = 0;
+    for (const auto& [handler, counters] : state->jcc_profile_counts) {
+        if (i == max_count) break;
+        buffer[i].handler = reinterpret_cast<void*>(handler);
+        buffer[i].taken = counters.taken;
+        buffer[i].not_taken = counters.not_taken;
+        buffer[i].cache_hit = counters.cache_hit;
+        buffer[i].cache_miss = counters.cache_miss;
         i++;
     }
     return total;

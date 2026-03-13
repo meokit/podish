@@ -13,6 +13,19 @@
 
 namespace fiberish {
 
+#ifdef FIBERCPU_ENABLE_JCC_PROFILE
+FORCE_INLINE void RecordConditionalBranchDecision(EmuState* state, const DecodedOp* op, bool taken) {
+    auto& counters = state->jcc_profile_counts[reinterpret_cast<uintptr_t>(op->handler)];
+    if (taken) {
+        counters.taken++;
+    } else {
+        counters.not_taken++;
+    }
+}
+#else
+FORCE_INLINE void RecordConditionalBranchDecision(EmuState*, const DecodedOp*, bool) {}
+#endif
+
 template <bool IsRel8>
 FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
     // E9: JMP rel32, EB: JMP rel8
@@ -32,6 +45,7 @@ template <uint8_t Cond, bool IsRel8>
 FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     if (CheckConditionFixed<Cond>(state)) {
+        RecordConditionalBranchDecision(state, op, true);
         int32_t offset;
         if constexpr (IsRel8) {
             offset = (int32_t)(int8_t)(imm & 0xFF);
@@ -41,6 +55,7 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
         *branch = op->next_eip + offset;
         return LogicFlow::ExitToBranch;
     }
+    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 
@@ -121,10 +136,12 @@ FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
     }
 
     if (jump) {
+        RecordConditionalBranchDecision(state, op, true);
         int32_t offset = (int32_t)(int8_t)(imm & 0xFF);
         *branch = op->next_eip + offset;
         return LogicFlow::ExitToBranch;
     }
+    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 
@@ -147,10 +164,12 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
     }
 
     if (jump) {
+        RecordConditionalBranchDecision(state, op, true);
         const int32_t offset = static_cast<int8_t>(imm & 0xFF);
         *branch = op->next_eip + offset;
         return LogicFlow::ExitToBranch;
     }
+    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 
