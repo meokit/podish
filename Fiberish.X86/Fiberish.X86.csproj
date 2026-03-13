@@ -22,7 +22,10 @@
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
             <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
+            <CMakeJccProfile Condition="'$(EnableJccProfile)' == 'true'">ON</CMakeJccProfile>
+            <CMakeJccProfile Condition="'$(CMakeJccProfile)' == ''">OFF</CMakeJccProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JCC_PROFILE=$(CMakeJccProfile)</CMakeArgs>
         </PropertyGroup>
         <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
         <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>

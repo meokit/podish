@@ -700,6 +700,33 @@ public class Engine : IDisposable
         return result;
     }
 
+    public unsafe JccProfileStat[] GetJccProfileStats()
+    {
+        var count = (int)X86Native.GetJccProfileCount(State);
+        if (count <= 0) return Array.Empty<JccProfileStat>();
+
+        var buffer = new X86Native.JccProfileEntry[count];
+        fixed (X86Native.JccProfileEntry* p = buffer)
+        {
+            var actual = (int)X86Native.GetJccProfileStats(State, p, (nuint)buffer.Length);
+            if (actual <= 0) return Array.Empty<JccProfileStat>();
+            if (actual < buffer.Length) Array.Resize(ref buffer, actual);
+        }
+
+        var result = new JccProfileStat[buffer.Length];
+        for (var i = 0; i < buffer.Length; i++)
+        {
+            result[i] = new JccProfileStat(
+                buffer[i].Handler,
+                buffer[i].Taken,
+                buffer[i].NotTaken,
+                buffer[i].CacheHit,
+                buffer[i].CacheMiss);
+        }
+
+        return result;
+    }
+
     public IntPtr GetNativeImageBase()
     {
         return X86Native.GetLibAddress();
@@ -747,3 +774,4 @@ public class Engine : IDisposable
 }
 
 public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);
+public readonly record struct JccProfileStat(IntPtr Handler, ulong Taken, ulong NotTaken, ulong CacheHit, ulong CacheMiss);

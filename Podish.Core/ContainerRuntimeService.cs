@@ -405,6 +405,8 @@ public sealed class ContainerRuntimeService
                 mainTask.ExitStatus));
             if (ShouldPrintHandlerProfile())
                 PrintHandlerProfile(runtime.Engine);
+            if (ShouldPrintJccProfile())
+                PrintJccProfile(runtime.Engine);
             return mainTask.ExitStatus;
         }
         catch (OutOfMemoryException ex)
@@ -1117,6 +1119,12 @@ public sealed class ContainerRuntimeService
         return !string.IsNullOrWhiteSpace(value) && value != "0";
     }
 
+    private static bool ShouldPrintJccProfile()
+    {
+        var value = Environment.GetEnvironmentVariable("PODISH_JCC_PROFILE");
+        return !string.IsNullOrWhiteSpace(value) && value != "0";
+    }
+
     private static void PrintHandlerProfile(Engine engine)
     {
         var stats = engine.GetHandlerProfileStats()
@@ -1130,5 +1138,23 @@ public sealed class ContainerRuntimeService
         foreach (var stat in stats)
             Console.Error.WriteLine($"{stat.ExecCount}\t0x{stat.Handler.ToInt64():x}");
         Console.Error.WriteLine("[Podish.HandlerProfile.End]");
+    }
+
+    private static void PrintJccProfile(Engine engine)
+    {
+        var stats = engine.GetJccProfileStats()
+            .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
+            .OrderByDescending(static x => x.Taken + x.NotTaken)
+            .ToArray();
+        var imageBase = engine.GetNativeImageBase();
+
+        Console.Error.WriteLine("[Podish.JccProfile.Begin]");
+        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
+        foreach (var stat in stats)
+        {
+            Console.Error.WriteLine(
+                $"{stat.Taken}\t{stat.NotTaken}\t{stat.CacheHit}\t{stat.CacheMiss}\t0x{stat.Handler.ToInt64():x}");
+        }
+        Console.Error.WriteLine("[Podish.JccProfile.End]");
     }
 }

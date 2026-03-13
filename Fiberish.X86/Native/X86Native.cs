@@ -244,6 +244,14 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial nuint GetHandlerProfileStats(IntPtr state, HandlerProfileEntry* buffer, nuint maxCount);
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetJccProfileCount")]
+    [SuppressGCTransition]
+    public static partial nuint GetJccProfileCount(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetJccProfileStats")]
+    [SuppressGCTransition]
+    public static partial nuint GetJccProfileStats(IntPtr state, JccProfileEntry* buffer, nuint maxCount);
+
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockCount")]
     [SuppressGCTransition]
     public static partial int GetBlockCount(IntPtr state);
@@ -271,9 +279,10 @@ public unsafe partial class X86Native
     public struct BasicBlock
     {
         public uint start_eip;
-        public byte is_valid;
+        public uint is_valid;
         public byte terminal_kind;
-        private ushort chain_padding;
+        private byte chain_padding0;
+        private ushort chain_padding1;
         public uint end_eip;
         public uint inst_count;
         public uint slot_count;
@@ -300,5 +309,15 @@ public unsafe partial class X86Native
     {
         public IntPtr Handler;
         public ulong ExecCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JccProfileEntry
+    {
+        public IntPtr Handler;
+        public ulong Taken;
+        public ulong NotTaken;
+        public ulong CacheHit;
+        public ulong CacheMiss;
     }
 }
