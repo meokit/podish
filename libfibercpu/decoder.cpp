@@ -79,8 +79,6 @@ static bool IsConditionalBranchHandlerIndex(uint16_t handler_index) {
 // Returns true on success, false on failure/invalid instruction
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
     std::memset(inst, 0, sizeof(*inst));
-    inst->head.ext.data.base_offset = kNoRegOffset;
-    inst->head.ext.data.index_offset = kNoRegOffset;
 
     DecodedOp* op = &inst->head;
 
@@ -168,6 +166,9 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         uint8_t mod = (modrm >> 6) & 3;
         uint8_t rm = modrm & 7;
         bool is_mem_operand = mod != 3;
+        uint8_t base_offset = kNoRegOffset;
+        uint8_t index_offset = kNoRegOffset;
+        uint8_t scale = 0;
 
         // SIB? (If Mod != 3 and RM == 4)
         uint8_t sib_byte = 0;
@@ -209,26 +210,27 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 
             // Pre-calculate EA components for faster execution
             if (rm == 4) {
-                uint8_t scale = (sib_byte >> 6) & 3;
+                scale = (sib_byte >> 6) & 3;
                 uint8_t index = (sib_byte >> 3) & 7;
                 uint8_t base_reg = sib_byte & 7;
 
-                if (index != 4) inst->head.ext.data.index_offset = index * 4;
-                inst->head.ext.data.scale = scale;
+                if (index != 4) index_offset = index * 4;
 
                 if (mod == 0 && base_reg == 5) {
                     // Base is None (Disp32) - already initialized to kNoRegOffset
                 } else {
-                    inst->head.ext.data.base_offset = base_reg * 4;
+                    base_offset = base_reg * 4;
                 }
             } else {
                 // No SIB
                 if (mod == 0 && rm == 5) {
                     // Base is None (Disp32) - already initialized to kNoRegOffset
                 } else {
-                    inst->head.ext.data.base_offset = rm * 4;
+                    base_offset = rm * 4;
                 }
             }
+
+            inst->head.ext.data.ea_desc = memdesc::PackEA(base_offset, index_offset, scale, op->prefixes.flags.segment);
         }
     } else {
         // No ModRM: Use modrm field to store opcode low bits (for Reg index in

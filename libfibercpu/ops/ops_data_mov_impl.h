@@ -519,12 +519,15 @@ FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
     // 8D: LEA r16/32, m
     const auto* ext = GetExt(op);
+    uint32_t ea_desc = ext->data.ea_desc;
     uint32_t offset = ext->data.disp;
-    if (ext->data.base_offset != kNoRegOffset) {
-        offset += state->ctx.regs[ext->data.base_offset >> 2];
+    uint8_t base_offset = memdesc::BaseOffset(ea_desc);
+    if (base_offset != kNoRegOffset) {
+        offset += state->ctx.regs[base_offset >> 2];
     }
-    if (ext->data.index_offset != kNoRegOffset) {
-        offset += state->ctx.regs[ext->data.index_offset >> 2] << ext->data.scale;
+    uint8_t index_offset = memdesc::IndexOffset(ea_desc);
+    if (index_offset != kNoRegOffset) {
+        offset += state->ctx.regs[index_offset >> 2] << memdesc::Scale(ea_desc);
     }
 
     uint8_t reg = (op->modrm >> 3) & 7;

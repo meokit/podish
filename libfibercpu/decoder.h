@@ -124,12 +124,36 @@ enum class ExtKind : uint8_t {
 struct DecodedMemData {
     uint32_t imm = 0;
     uint32_t disp = 0;
-    uint8_t base_offset = kNoRegOffset;
-    uint8_t index_offset = kNoRegOffset;
-    uint8_t scale = 0;
-    uint8_t reserved0 = 0;
-    uint32_t reserved1 = 0;
+    uint32_t ea_desc = 0;
+    uint32_t reserved = 0;
 };
+
+namespace memdesc {
+constexpr uint32_t kOffsetMask = 0x3f;
+constexpr uint32_t kBaseShift = 0;
+constexpr uint32_t kIndexShift = 6;
+constexpr uint32_t kScaleShift = 12;
+constexpr uint32_t kSegmentShift = 14;
+
+FORCE_INLINE constexpr uint32_t PackEA(uint8_t base_offset, uint8_t index_offset, uint8_t scale, uint8_t segment) {
+    return (static_cast<uint32_t>(base_offset) << kBaseShift) | (static_cast<uint32_t>(index_offset) << kIndexShift) |
+           (static_cast<uint32_t>(scale) << kScaleShift) | (static_cast<uint32_t>(segment) << kSegmentShift);
+}
+
+FORCE_INLINE constexpr uint8_t BaseOffset(uint32_t ea_desc) {
+    return static_cast<uint8_t>((ea_desc >> kBaseShift) & kOffsetMask);
+}
+
+FORCE_INLINE constexpr uint8_t IndexOffset(uint32_t ea_desc) {
+    return static_cast<uint8_t>((ea_desc >> kIndexShift) & kOffsetMask);
+}
+
+FORCE_INLINE constexpr uint8_t Scale(uint32_t ea_desc) { return static_cast<uint8_t>((ea_desc >> kScaleShift) & 0x3); }
+
+FORCE_INLINE constexpr uint8_t Segment(uint32_t ea_desc) {
+    return static_cast<uint8_t>((ea_desc >> kSegmentShift) & 0x7);
+}
+}  // namespace memdesc
 
 struct DecodedControlFlowData {
     uint32_t imm = 0;
