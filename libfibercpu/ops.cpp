@@ -181,7 +181,8 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
         next_block = GetCachedTarget(op);
     }
 
-    if (next_block && next_block->MatchesChainTarget(target_eip)) [[likely]] {
+    // Decode pre-fills control-flow caches with dummy_invalid_block, so cached pointers are never null here.
+    if (next_block->MatchesChainTarget(target_eip)) [[likely]] {
         RecordConditionalBranchCacheResult(state, op, true);
         state->last_block = next_block;
         ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
