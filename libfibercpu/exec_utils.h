@@ -64,8 +64,7 @@ FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache);
 FORCE_INLINE uint32_t GetFlags32NoPF(uint64_t flags_cache);
 FORCE_INLINE uint8_t PeekPFState(uint64_t flags_cache);
 FORCE_INLINE bool IsKnownPFState(uint8_t pf_state);
-FORCE_INLINE bool PeekPFNoUpdate(uint64_t flags_cache);
-FORCE_INLINE bool ResolvePF(uint64_t& flags_cache);
+FORCE_INLINE bool EvaluatePF(uint64_t flags_cache);
 
 FORCE_INLINE uint64_t GetStateFlagsCache(const EmuState* state) { return state->ctx.flags_state; }
 
@@ -73,8 +72,13 @@ FORCE_INLINE void SetStateFlagsCache(EmuState* state, uint64_t flags_cache) { st
 
 FORCE_INLINE uint32_t GetArchitecturalEflags(const EmuState* state) {
     uint64_t flags_cache = GetStateFlagsCache(state);
-    ResolvePF(flags_cache);
-    return GetFlags32(flags_cache);
+    const bool pf = EvaluatePF(flags_cache);
+    uint32_t flags = GetFlags32(flags_cache);
+    if (pf)
+        flags |= PF_MASK;
+    else
+        flags &= ~PF_MASK;
+    return flags;
 }
 
 FORCE_INLINE void SetArchitecturalEflags(EmuState* state, uint32_t eflags) {
@@ -167,9 +171,9 @@ inline bool CheckConditionFixed(uint64_t& flags_cache) {
     else if constexpr (Cond == 9)
         return !ReadSF(flags_cache);  // JNS
     else if constexpr (Cond == 10)
-        return PeekPFNoUpdate(flags_cache);  // JP/JPE
+        return EvaluatePF(flags_cache);  // JP/JPE
     else if constexpr (Cond == 11)
-        return !PeekPFNoUpdate(flags_cache);  // JNP/JPO
+        return !EvaluatePF(flags_cache);  // JNP/JPO
     else if constexpr (Cond == 12)
         return ReadSF(flags_cache) != ReadOF(flags_cache);  // JL
     else if constexpr (Cond == 13)
@@ -183,8 +187,8 @@ inline bool CheckConditionFixed(uint64_t& flags_cache) {
 }
 
 inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
-    if ((cond & 0xF) == 10) return PeekPFNoUpdate(flags_cache);
-    if ((cond & 0xF) == 11) return !PeekPFNoUpdate(flags_cache);
+    if ((cond & 0xF) == 10) return EvaluatePF(flags_cache);
+    if ((cond & 0xF) == 11) return !EvaluatePF(flags_cache);
 
     static const uint32_t g_ConditionLUT[16] = {
         0xFFFF0000,  // cond 0: JO
@@ -535,10 +539,6 @@ inline bool CalcPflag(uint8_t res_byte) {
 // Backward compatibility for other ops files
 inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
 
-FORCE_INLINE bool CalcPFlagsFastPath(uint8_t pf_state) {
-    return pf_state < 2 ? static_cast<bool>(~pf_state & 1) : CalcPflag(pf_state);
-}
-
 FORCE_INLINE void SetParityState(uint64_t& flags_cache, uint8_t res_byte) {
     flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
     flags_cache |= (static_cast<uint64_t>(res_byte) << FLAGS_CACHE_PF_STATE_SHIFT);
@@ -552,24 +552,12 @@ FORCE_INLINE bool IsKnownPFState(uint8_t pf_state) {
     return pf_state == FLAGS_CACHE_PF_KNOWN_TRUE || pf_state == FLAGS_CACHE_PF_KNOWN_FALSE;
 }
 
-FORCE_INLINE bool PeekPFNoUpdate(uint64_t flags_cache) {
+FORCE_INLINE bool EvaluatePF(uint64_t flags_cache) {
     const uint8_t pf_state = PeekPFState(flags_cache);
-    return CalcPFlagsFastPath(pf_state);
+    return CalcPflag(pf_state);
 }
 
-FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) {
-    ResolvePF(flags_cache);
-    SetStateFlagsCache(state, flags_cache);
-}
-
-FORCE_INLINE bool ResolvePF(uint64_t& flags_cache) {
-    const uint8_t pf_state = PeekPFState(flags_cache);
-    const bool pf = CalcPFlagsFastPath(pf_state);
-    SetFlags32(flags_cache, pf ? (GetFlags32(flags_cache) | PF_MASK) : (GetFlags32(flags_cache) & ~PF_MASK));
-    flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
-    flags_cache |= (static_cast<uint64_t>(EncodeKnownParityState(pf)) << FLAGS_CACHE_PF_STATE_SHIFT);
-    return pf;
-}
+FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) { SetStateFlagsCache(state, flags_cache); }
 
 template <typename T, bool UpdateFlags = true>
 inline T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {

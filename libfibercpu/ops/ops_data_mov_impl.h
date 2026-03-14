@@ -796,7 +796,7 @@ FORCE_INLINE LogicFlow OpLahf(LogicFuncParams) {
     uint8_t ah = 0x02;
     if (ReadSF(flags_cache)) ah |= SF_MASK;
     if (ReadZF(flags_cache)) ah |= ZF_MASK;
-    if (PeekPFNoUpdate(flags_cache)) ah |= PF_MASK;
+    if (EvaluatePF(flags_cache)) ah |= PF_MASK;
     if (ReadAF(flags_cache)) ah |= AF_MASK;
     if (ReadCF(flags_cache)) ah |= CF_MASK;
     uint32_t eax = GetReg(state, EAX);

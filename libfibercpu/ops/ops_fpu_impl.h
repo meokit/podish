@@ -489,7 +489,7 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
                     pass = ReadCF(flags_cache) || ReadZF(flags_cache);
                     break;  // FCMOVBE
                 case 3:
-                    pass = PeekPFNoUpdate(flags_cache);
+                    pass = EvaluatePF(flags_cache);
                     break;  // FCMOVU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -574,7 +574,7 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                     pass = !ReadCF(flags_cache) && !ReadZF(flags_cache);
                     break;  // FCMOVNBE
                 case 3:
-                    pass = !PeekPFNoUpdate(flags_cache);
+                    pass = !EvaluatePF(flags_cache);
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
