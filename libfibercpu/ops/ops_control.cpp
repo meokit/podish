@@ -32,8 +32,8 @@ void RegisterControlOps() {
     g_Handlers[0x90] = DispatchWrapper<OpNop>;
     g_Handlers[0x9B] = DispatchWrapper<OpWait>;
     g_Handlers[0xF4] = DispatchWrapper<OpHlt>;
-    g_Handlers[0x9C] = DispatchWrapper<OpPushf>;
-    g_Handlers[0x9D] = DispatchWrapper<OpPopf>;
+    g_Handlers[0x9C] = DispatchWrapper<OpPushf32>;
+    g_Handlers[0x9D] = DispatchWrapper<OpPopf32>;
     g_Handlers[0xE9] = DispatchWrapper<OpJmp_Rel32>;  // JMP rel32
     g_Handlers[0xEB] = DispatchWrapper<OpJmp_Rel8>;   // JMP rel8
     g_Handlers[0xE0] = DispatchWrapper<OpLoopne>;     // LOOPNE rel8
@@ -83,6 +83,12 @@ void RegisterControlOps() {
     REG_CMOV_SPEC(0x14F, G);
 
 #undef REG_CMOV_SPEC
+
+    SpecCriteria c16;
+    c16.prefix_mask = prefix::OPSIZE;
+    c16.prefix_val = prefix::OPSIZE;
+    DispatchRegistrar<OpPushf16>::RegisterSpecialized(0x9C, c16);
+    DispatchRegistrar<OpPopf16>::RegisterSpecialized(0x9D, c16);
 
     g_Handlers[0xCE] = DispatchWrapper<OpInto>;
     g_Handlers[0x131] = DispatchWrapper<OpRdtsc>;       // 0F 31

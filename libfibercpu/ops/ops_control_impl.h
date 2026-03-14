@@ -238,10 +238,10 @@ FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     return LogicFlow::ExitToBranch;
 }
 
-FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
-    // 9C: PUSHF/PUSHFD
+template <Specialized SizeSpec>
+FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
     CommitFlagsCache(state, flags_cache);
-    if (op->prefixes.flags.opsize) {
+    if constexpr (SizeSpec == Specialized::Opsize16) {
         if (!Push<uint16_t, true>(state, (uint16_t)GetArchitecturalEflags(state), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -251,10 +251,9 @@ FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
-    // 9D: POPF/POPFD
-    if (op->prefixes.flags.opsize) {
-        // POPF (16-bit)
+template <Specialized SizeSpec>
+FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
+    if constexpr (SizeSpec == Specialized::Opsize16) {
         auto val_res = Pop<uint16_t, true>(state, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint16_t val = *val_res;
@@ -266,7 +265,6 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         SetArchitecturalEflags(state, new_flags);
         flags_cache = InitFlagsCache(new_flags);
     } else {
-        // POPFD (32-bit)
         auto val_res = Pop<uint32_t, true>(state, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint32_t val = *val_res;
@@ -279,6 +277,19 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         flags_cache = InitFlagsCache(new_flags);
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpPushf16(LogicFuncParams) { return OpPushf_Internal<Specialized::Opsize16>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpPushf32(LogicFuncParams) { return OpPushf_Internal<Specialized::Opsize32>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpPopf16(LogicFuncParams) { return OpPopf_Internal<Specialized::Opsize16>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpPopf32(LogicFuncParams) { return OpPopf_Internal<Specialized::Opsize32>(LogicPassParams); }
+
+FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
+    return op->prefixes.flags.opsize ? OpPushf16(LogicPassParams) : OpPushf32(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
+    return op->prefixes.flags.opsize ? OpPopf16(LogicPassParams) : OpPopf32(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpStc(LogicFuncParams) {

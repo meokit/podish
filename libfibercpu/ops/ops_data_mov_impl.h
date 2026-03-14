@@ -540,11 +540,64 @@ FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
 // Stack Operations (Simple)
 // ------------------------------------------------------------------------------------------------
 
+template <Specialized RegSpec, Specialized SizeSpec>
+FORCE_INLINE LogicFlow OpPush_Reg_Internal(LogicFuncParams) {
+    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(Specialized::Reg0);
+    if constexpr (SizeSpec == Specialized::Opsize16) {
+        if (!Push<uint16_t, true>(state, static_cast<uint16_t>(GetReg(state, FixedReg)), utlb, op))
+            return LogicFlow::RestartMemoryOp;
+    } else {
+        if (!Push<uint32_t, true>(state, GetReg(state, FixedReg), utlb, op)) return LogicFlow::RestartMemoryOp;
+    }
+    return LogicFlow::Continue;
+}
+
+template <Specialized RegSpec, Specialized SizeSpec>
+FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams) {
+    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(Specialized::Reg0);
+    if constexpr (SizeSpec == Specialized::Opsize16) {
+        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        SetReg(state, FixedReg, (GetReg(state, FixedReg) & 0xFFFF0000) | *val_res);
+    } else {
+        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        SetReg(state, FixedReg, *val_res);
+    }
+    return LogicFlow::Continue;
+}
+
+#define STACK_REG_WRAPPERS(RegName, Spec)                                         \
+    FORCE_INLINE LogicFlow OpPush_Reg32_##RegName(LogicFuncParams) {              \
+        return OpPush_Reg_Internal<Spec, Specialized::Opsize32>(LogicPassParams); \
+    }                                                                             \
+    FORCE_INLINE LogicFlow OpPush_Reg16_##RegName(LogicFuncParams) {              \
+        return OpPush_Reg_Internal<Spec, Specialized::Opsize16>(LogicPassParams); \
+    }                                                                             \
+    FORCE_INLINE LogicFlow OpPop_Reg32_##RegName(LogicFuncParams) {               \
+        return OpPop_Reg_Internal<Spec, Specialized::Opsize32>(LogicPassParams);  \
+    }                                                                             \
+    FORCE_INLINE LogicFlow OpPop_Reg16_##RegName(LogicFuncParams) {               \
+        return OpPop_Reg_Internal<Spec, Specialized::Opsize16>(LogicPassParams);  \
+    }
+
+STACK_REG_WRAPPERS(Eax, Specialized::RegEax)
+STACK_REG_WRAPPERS(Ecx, Specialized::RegEcx)
+STACK_REG_WRAPPERS(Edx, Specialized::RegEdx)
+STACK_REG_WRAPPERS(Ebx, Specialized::RegEbx)
+STACK_REG_WRAPPERS(Esp, Specialized::RegEsp)
+STACK_REG_WRAPPERS(Ebp, Specialized::RegEbp)
+STACK_REG_WRAPPERS(Esi, Specialized::RegEsi)
+STACK_REG_WRAPPERS(Edi, Specialized::RegEdi)
+
+#undef STACK_REG_WRAPPERS
+
 FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
-    // 50+rd: PUSH r16/32
+    // Generic fallback; opcode-specialized handlers should handle the hot path.
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
-        if (!Push<uint16_t, true>(state, (uint16_t)GetReg(state, reg), utlb, op)) return LogicFlow::RestartMemoryOp;
+        if (!Push<uint16_t, true>(state, static_cast<uint16_t>(GetReg(state, reg)), utlb, op))
+            return LogicFlow::RestartMemoryOp;
     } else {
         if (!Push<uint32_t, true>(state, GetReg(state, reg), utlb, op)) return LogicFlow::RestartMemoryOp;
     }
@@ -565,7 +618,7 @@ FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) {
-    // POP r16/32 (0x58+rd)
+    // Generic fallback; opcode-specialized handlers should handle the hot path.
     uint8_t reg = op->modrm & 7;
     if (op->prefixes.flags.opsize) {
         auto val_res = Pop<uint16_t, true>(state, utlb, op);

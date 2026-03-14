@@ -248,10 +248,24 @@ void RegisterDataMovOps() {
     g_Handlers[0x9F] = DispatchWrapper<OpLahf>;
     g_Handlers[0x9E] = DispatchWrapper<OpSahf>;
     g_Handlers[0x8D] = DispatchWrapper<OpLea>;
-    for (int i = 0; i < 8; ++i) g_Handlers[0x50 + i] = DispatchWrapper<OpPush_Reg>;
+    g_Handlers[0x50] = DispatchWrapper<OpPush_Reg32_Eax>;
+    g_Handlers[0x51] = DispatchWrapper<OpPush_Reg32_Ecx>;
+    g_Handlers[0x52] = DispatchWrapper<OpPush_Reg32_Edx>;
+    g_Handlers[0x53] = DispatchWrapper<OpPush_Reg32_Ebx>;
+    g_Handlers[0x54] = DispatchWrapper<OpPush_Reg32_Esp>;
+    g_Handlers[0x55] = DispatchWrapper<OpPush_Reg32_Ebp>;
+    g_Handlers[0x56] = DispatchWrapper<OpPush_Reg32_Esi>;
+    g_Handlers[0x57] = DispatchWrapper<OpPush_Reg32_Edi>;
     g_Handlers[0x68] = DispatchWrapper<OpPush_Imm32>;
     g_Handlers[0x6A] = DispatchWrapper<OpPush_Imm8>;
-    for (int i = 0; i < 8; ++i) g_Handlers[0x58 + i] = DispatchWrapper<OpPop_Reg>;
+    g_Handlers[0x58] = DispatchWrapper<OpPop_Reg32_Eax>;
+    g_Handlers[0x59] = DispatchWrapper<OpPop_Reg32_Ecx>;
+    g_Handlers[0x5A] = DispatchWrapper<OpPop_Reg32_Edx>;
+    g_Handlers[0x5B] = DispatchWrapper<OpPop_Reg32_Ebx>;
+    g_Handlers[0x5C] = DispatchWrapper<OpPop_Reg32_Esp>;
+    g_Handlers[0x5D] = DispatchWrapper<OpPop_Reg32_Ebp>;
+    g_Handlers[0x5E] = DispatchWrapper<OpPop_Reg32_Esi>;
+    g_Handlers[0x5F] = DispatchWrapper<OpPop_Reg32_Edi>;
     g_Handlers[0x8C] = DispatchWrapper<OpMov_Rm_Sreg>;
     g_Handlers[0x8E] = DispatchWrapper<OpMov_Sreg_Rm>;
     g_Handlers[0x8F] = DispatchWrapper<OpPop_Ev>;
@@ -260,6 +274,28 @@ void RegisterDataMovOps() {
     g_Handlers[0x1BE] = DispatchWrapper<OpMovsx_Byte>;
     g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
     g_Handlers[0xD7] = DispatchWrapper<OpXlat>;
+
+    SpecCriteria c16;
+    c16.prefix_mask = prefix::OPSIZE;
+    c16.prefix_val = prefix::OPSIZE;
+
+    DispatchRegistrar<OpPush_Reg16_Eax>::RegisterSpecialized(0x50, c16);
+    DispatchRegistrar<OpPush_Reg16_Ecx>::RegisterSpecialized(0x51, c16);
+    DispatchRegistrar<OpPush_Reg16_Edx>::RegisterSpecialized(0x52, c16);
+    DispatchRegistrar<OpPush_Reg16_Ebx>::RegisterSpecialized(0x53, c16);
+    DispatchRegistrar<OpPush_Reg16_Esp>::RegisterSpecialized(0x54, c16);
+    DispatchRegistrar<OpPush_Reg16_Ebp>::RegisterSpecialized(0x55, c16);
+    DispatchRegistrar<OpPush_Reg16_Esi>::RegisterSpecialized(0x56, c16);
+    DispatchRegistrar<OpPush_Reg16_Edi>::RegisterSpecialized(0x57, c16);
+
+    DispatchRegistrar<OpPop_Reg16_Eax>::RegisterSpecialized(0x58, c16);
+    DispatchRegistrar<OpPop_Reg16_Ecx>::RegisterSpecialized(0x59, c16);
+    DispatchRegistrar<OpPop_Reg16_Edx>::RegisterSpecialized(0x5A, c16);
+    DispatchRegistrar<OpPop_Reg16_Ebx>::RegisterSpecialized(0x5B, c16);
+    DispatchRegistrar<OpPop_Reg16_Esp>::RegisterSpecialized(0x5C, c16);
+    DispatchRegistrar<OpPop_Reg16_Ebp>::RegisterSpecialized(0x5D, c16);
+    DispatchRegistrar<OpPop_Reg16_Esi>::RegisterSpecialized(0x5E, c16);
+    DispatchRegistrar<OpPop_Reg16_Edi>::RegisterSpecialized(0x5F, c16);
 }
 
 }  // namespace fiberish
