@@ -555,23 +555,24 @@ FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(LogicFuncParams) {
     if (op->prefixes.flags.rep) {
         // TZCNT (F3 Prefix)
         if (src == 0) {
-            SetFlagBits(flags_cache, CF_MASK);
-            ClearFlagBits(flags_cache, ZF_MASK);
+            SetCF(flags_cache);
+            ClearZF(flags_cache);
             SetReg(state, reg, op->prefixes.flags.opsize ? 16 : 32);  // Operand Size
         } else {
-            SetFlags32(flags_cache, GetFlags32(flags_cache) & ~(CF_MASK | ZF_MASK));  // CF cleared
+            ClearCF(flags_cache);
+            ClearZF(flags_cache);
             // __builtin_ctz is undefined for 0, but we checked src==0
             int count = __builtin_ctz(src);
             SetReg(state, reg, count);
-            if (count == 0) SetFlagBits(flags_cache, ZF_MASK);
+            if (count == 0) SetZF(flags_cache);
         }
     } else {
         // BSF (No F3 Prefix)
         if (src == 0) {
-            SetFlagBits(flags_cache, ZF_MASK);
+            SetZF(flags_cache);
             // Dest undefined.
         } else {
-            ClearFlagBits(flags_cache, ZF_MASK);
+            ClearZF(flags_cache);
             int count = __builtin_ctz(src);
             SetReg(state, reg, count);
             // Flags: ZF cleared (done above).

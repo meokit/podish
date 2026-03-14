@@ -283,19 +283,19 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpStc(LogicFuncParams) {
     // F9: STC
-    SetFlagBits(flags_cache, CF_MASK);
+    SetCF(flags_cache);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpClc(LogicFuncParams) {
     // F8: CLC
-    ClearFlagBits(flags_cache, CF_MASK);
+    ClearCF(flags_cache);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpCmc(LogicFuncParams) {
     // F5: CMC (Complement Carry)
-    SetFlags32(flags_cache, GetFlags32(flags_cache) ^ CF_MASK);
+    AssignCF(flags_cache, !ReadCF(flags_cache));
     return LogicFlow::Continue;
 }
 

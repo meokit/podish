@@ -347,17 +347,17 @@ FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams) {
     uint8_t reg = op->modrm & 7;
 
     // INC does not affect CF
-    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
+    bool old_cf = ReadCF(flags_cache);
 
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
+        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
+        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
         SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
@@ -369,17 +369,17 @@ FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams) {
     uint8_t reg = op->modrm & 7;
 
     // DEC does not affect CF
-    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
+    bool old_cf = ReadCF(flags_cache);
 
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
+        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
+        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
         SetReg(state, reg, res);
     }
     return LogicFlow::Continue;

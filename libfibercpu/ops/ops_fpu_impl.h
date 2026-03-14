@@ -480,13 +480,13 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
             bool pass = false;
             switch ((op->modrm >> 3) & 7) {
                 case 0:
-                    pass = (GetFlags32(flags_cache) & fiberish::CF_MASK);
+                    pass = ReadCF(flags_cache);
                     break;  // FCMOVB
                 case 1:
-                    pass = (GetFlags32(flags_cache) & fiberish::ZF_MASK);
+                    pass = ReadZF(flags_cache);
                     break;  // FCMOVE
                 case 2:
-                    pass = (GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
+                    pass = ReadCF(flags_cache) || ReadZF(flags_cache);
                     break;  // FCMOVBE
                 case 3:
                     pass = PeekPFNoUpdate(flags_cache);
@@ -565,13 +565,13 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
             bool pass = false;
             switch (mode) {
                 case 0:
-                    pass = !(GetFlags32(flags_cache) & fiberish::CF_MASK);
+                    pass = !ReadCF(flags_cache);
                     break;  // FCMOVNB
                 case 1:
-                    pass = !(GetFlags32(flags_cache) & fiberish::ZF_MASK);
+                    pass = !ReadZF(flags_cache);
                     break;  // FCMOVNE
                 case 2:
-                    pass = !(GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
+                    pass = !ReadCF(flags_cache) && !ReadZF(flags_cache);
                     break;  // FCMOVNBE
                 case 3:
                     pass = !PeekPFNoUpdate(flags_cache);

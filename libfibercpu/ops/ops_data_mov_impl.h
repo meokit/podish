@@ -793,8 +793,12 @@ FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
 // ------------------------------------------------------------------------------------------------
 FORCE_INLINE LogicFlow OpLahf(LogicFuncParams) {
     // 9F: LAHF
-    uint32_t flags = GetFlags32(flags_cache);
-    uint8_t ah = (flags & 0xD5) | 0x02;  // 0xD5 = 1101 0101 (Mask valid flags)
+    uint8_t ah = 0x02;
+    if (ReadSF(flags_cache)) ah |= SF_MASK;
+    if (ReadZF(flags_cache)) ah |= ZF_MASK;
+    if (PeekPFNoUpdate(flags_cache)) ah |= PF_MASK;
+    if (ReadAF(flags_cache)) ah |= AF_MASK;
+    if (ReadCF(flags_cache)) ah |= CF_MASK;
     uint32_t eax = GetReg(state, EAX);
     eax = (eax & 0xFFFF00FF) | (ah << 8);
     SetReg(state, EAX, eax);
@@ -805,7 +809,7 @@ FORCE_INLINE LogicFlow OpSahf(LogicFuncParams) {
     // 9E: SAHF
     uint32_t eax = GetReg(state, EAX);
     uint8_t ah = (eax >> 8) & 0xFF;
-    uint32_t flags = GetFlags32(flags_cache);
+    uint32_t flags = GetFlags32NoPF(flags_cache);
     flags = (flags & ~0xFF) | (ah & 0xD5) | 0x02;
     SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
