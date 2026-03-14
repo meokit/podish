@@ -87,6 +87,15 @@ python3 benchmark/podish_perf/profile_xctrace.py record-and-analyze \
   --name coremark-current
 ```
 
+Profile the gcc compile workload instead of the CoreMark run workload:
+
+```bash
+python3 benchmark/podish_perf/profile_xctrace.py record-and-analyze \
+  --binary build/nativeaot/podish-cli-static/Podish.Cli \
+  --bench-case gcc_compile \
+  --name coremark-gcc-compile
+```
+
 Analyze an existing trace:
 
 ```bash

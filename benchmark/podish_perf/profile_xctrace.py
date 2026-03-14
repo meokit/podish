@@ -23,6 +23,7 @@ DEFAULT_RECORD_NAME = "coremark-profile"
 DEFAULT_AOT_BINARY = Path("build/nativeaot/podish-cli-static/Podish.Cli")
 DEFAULT_ROOTFS = Path("benchmark/podish_perf/rootfs/coremark_i386_alpine")
 DEFAULT_RENAMED_BINARY = "PodishCliXcTraceProfile"
+DEFAULT_BENCH_CASE = "run"
 
 
 @dataclass
@@ -68,15 +69,46 @@ def results_dir() -> Path:
     return repo_root() / "benchmark" / "podish_perf" / "results"
 
 
-def default_guest_command(iterations: int) -> list[str]:
-    return [
-        "/bin/sh",
-        "-lc",
-        (
-            f"/coremark/coremark.exe 0x0 0x0 0x66 2000 >/dev/null 2>&1; "
-            f"/coremark/coremark.exe 0x0 0x0 0x66 {iterations}"
-        ),
-    ]
+def build_guest_script(case: str, iterations: int) -> str:
+    compile_cmd = (
+        f'make PORT_DIR=linux ITERATIONS={iterations} '
+        'XCFLAGS="-O3 -DPERFORMANCE_RUN=1" REBUILD=1 compile'
+    )
+
+    if case == "compress":
+        return f"""
+set -eu
+rm -rf /tmp/coremark.tar /tmp/coremark.tar.gz /tmp/coremark-restored.tar /tmp/coremark-unpack
+mkdir -p /tmp/coremark-unpack
+sync >/dev/null 2>&1 || true
+tar -C / -cf /tmp/coremark.tar coremark
+gzip -1 -c /tmp/coremark.tar > /tmp/coremark.tar.gz
+gzip -dc /tmp/coremark.tar.gz > /tmp/coremark-restored.tar
+tar -C /tmp/coremark-unpack -xf /tmp/coremark-restored.tar
+test -f /tmp/coremark-unpack/coremark/Makefile
+"""
+    if case in ("compile", "gcc_compile"):
+        return f"""
+set -eu
+cd /coremark
+make clean >/dev/null 2>&1 || true
+sync >/dev/null 2>&1 || true
+{compile_cmd}
+test -x /coremark/coremark.exe
+"""
+    if case == "run":
+        return f"""
+set -eu
+cd /coremark
+test -x ./coremark.exe || {compile_cmd} >/dev/null
+/coremark/coremark.exe 0x0 0x0 0x66 2000 >/dev/null 2>&1
+./coremark.exe 0x0 0x0 0x66 {iterations}
+"""
+    raise ValueError(f"unknown bench case: {case}")
+
+
+def default_guest_command(case: str, iterations: int) -> list[str]:
+    return ["/bin/sh", "-lc", build_guest_script(case, iterations)]
 
 
 def shell_join(parts: Iterable[str]) -> str:
@@ -108,8 +140,10 @@ def make_unique_binary(src_binary: Path, out_dir: Path, renamed_binary: str) -> 
     return dst
 
 
-def build_record_command(binary: Path, rootfs: Path, time_limit: int, output_trace: Path, iterations: int) -> list[str]:
-    guest_cmd = default_guest_command(iterations)
+def build_record_command(
+    binary: Path, rootfs: Path, time_limit: int, output_trace: Path, iterations: int, bench_case: str
+) -> list[str]:
+    guest_cmd = default_guest_command(bench_case, iterations)
     return [
         "xcrun",
         "xctrace",
@@ -389,7 +423,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
     trace_path = out_dir / f"{args.name}.trace"
-    cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations)
+    cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations, args.bench_case)
     (out_dir / "record-command.txt").write_text(shell_join(cmd) + "\n", encoding="utf-8")
     run_checked(cmd)
     print(trace_path)
@@ -429,7 +463,7 @@ def cmd_record_and_analyze(args: argparse.Namespace) -> int:
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
     trace_path = out_dir / f"{args.name}.trace"
-    cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations)
+    cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations, args.bench_case)
     (out_dir / "record-command.txt").write_text(shell_join(cmd) + "\n", encoding="utf-8")
     run_checked(cmd)
 
@@ -463,7 +497,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Record and analyze xctrace profiles for Podish/CoreMark.")
+    parser = argparse.ArgumentParser(description="Record and analyze xctrace profiles for Podish benchmark workloads.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_common_record(subparser: argparse.ArgumentParser) -> None:
@@ -473,6 +507,12 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--name", default=DEFAULT_RECORD_NAME)
         subparser.add_argument("--time-limit", type=int, default=DEFAULT_TIME_LIMIT)
         subparser.add_argument("--iterations", type=int, default=30000)
+        subparser.add_argument(
+            "--bench-case",
+            choices=("run", "compile", "compress", "gcc_compile"),
+            default=DEFAULT_BENCH_CASE,
+            help="Guest workload to run while recording. 'gcc_compile' is an explicit alias for the CoreMark gcc build workload.",
+        )
         subparser.add_argument("--renamed-binary", default=DEFAULT_RENAMED_BINARY)
 
     def add_common_analyze(subparser: argparse.ArgumentParser) -> None:
