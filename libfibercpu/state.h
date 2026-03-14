@@ -93,9 +93,10 @@ struct EmuState {
     ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
 
     // Optimization: Dummy "Invalid" block.
-    // next_block pointers are initialized to this instead of nullptr.
-    // This allows removing the "if (next_block)" check in OpExitBlock.
-    BasicBlock* dummy_invalid_block = nullptr;
+    // next_block pointers are initialized to the address of this object instead of nullptr.
+    // Keeping the storage inline avoids an extra pool allocation and makes the sentinel pointer
+    // a simple address within EmuState.
+    BasicBlock dummy_invalid_block;
 
     // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
     // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.

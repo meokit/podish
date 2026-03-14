@@ -463,7 +463,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             sentinel.head.handler = exit_h;
 
             // Sentinel next_block initialization to dummy
-            SetNextBlock(&sentinel.head, state->dummy_invalid_block);
+            SetNextBlock(&sentinel.head, &state->dummy_invalid_block);
             sentinel.head.next_eip = current_eip;
 
             temp_ops.push_back(sentinel);
@@ -505,7 +505,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         }
 
         if (GetExtKind(&inst.head) == ExtKind::ControlFlow) {
-            SetCachedTarget(&inst.head, state->dummy_invalid_block);
+            SetCachedTarget(&inst.head, &state->dummy_invalid_block);
         }
 
         // Recover index logic (to keep op_indices in sync)
@@ -590,7 +590,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         HandlerFunc exit_h = g_ExitHandlers[exit_idx];
         sentinel.head.handler = exit_h;
         sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
-        SetNextBlock(&sentinel.head, state->dummy_invalid_block);
+        SetNextBlock(&sentinel.head, &state->dummy_invalid_block);
         temp_ops.push_back(sentinel);
     }
     end_eip = current_eip;

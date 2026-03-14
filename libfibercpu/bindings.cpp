@@ -261,6 +261,20 @@ void SignalHandler(int sig) {
 
 static bool g_SignalRegistered = false;
 
+static void InitializeDummyInvalidBlock(EmuState* state) {
+    BasicBlock& block = state->dummy_invalid_block;
+    block.chain = {};
+    block.chain.is_valid = false;
+    block.end_eip = 0;
+    block.inst_count = 0;
+    block.slot_count = 0;
+    block.sentinel_slot_index = 0;
+    block.branch_target_eip = 0;
+    block.fallthrough_eip = 0;
+    block.exec_count = 0;
+    block.entry = nullptr;
+}
+
 // ----------------------------------------------------------------------------
 // Creation / Destruction
 // ----------------------------------------------------------------------------
@@ -285,13 +299,7 @@ EmuState* X86_Create() {
     state->ctx.fpu_cw = 0x037F;
     // Hooks initialized by default constructor of HookManager
 
-    // Initialize Dummy Invalid Block.
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
-    state->dummy_invalid_block = new (mem) BasicBlock;
-    state->dummy_invalid_block->chain.is_valid = false;
-    state->dummy_invalid_block->inst_count = 0;
-    state->dummy_invalid_block->slot_count = 0;
-    state->dummy_invalid_block->sentinel_slot_index = 0;
+    InitializeDummyInvalidBlock(state);
     state->ctx.fpu_sw = 0x0000;
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
@@ -369,12 +377,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 
     // Initialize Dummy Invalid Block (same as X86_Create)
     // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(0));
-    state->dummy_invalid_block = new (mem) BasicBlock;
-    state->dummy_invalid_block->chain.is_valid = false;
-    state->dummy_invalid_block->inst_count = 0;
-    state->dummy_invalid_block->slot_count = 0;
-    state->dummy_invalid_block->sentinel_slot_index = 0;
+    InitializeDummyInvalidBlock(state);
 
     return state;
 }
@@ -653,7 +656,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     uint64_t total_run_insts = 0;
 
     // Reset chaining state for this run
-    state->last_block = nullptr;
+    state->last_block = &state->dummy_invalid_block;
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
@@ -738,7 +741,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         block_ptr->exec_count++;
 
         // Link previous block to this one for chaining
-        if (state->last_block && state->last_block->inst_count > 0) {
+        if (state->last_block->inst_count > 0) {
             SetNextBlock(state->last_block->Sentinel(), block_ptr);
         }
         state->last_block = block_ptr;
@@ -823,7 +826,7 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
 
     for (const auto& [eip, block] : state->block_cache) {
         (void)eip;
-        if (!block || block == state->dummy_invalid_block || block->inst_count == 0) continue;
+        if (!block || block == &state->dummy_invalid_block || block->inst_count == 0) continue;
         stats->executed_block_entries += block->exec_count;
         stats->executed_inst_total += block->exec_count * block->inst_count;
         stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count, 64)] += block->exec_count;
@@ -913,6 +916,7 @@ void X86_EmuYield(EmuState* state) {
 
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
+    state->last_block = &state->dummy_invalid_block;
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
@@ -949,7 +953,7 @@ int X86_Step(EmuState* state) {
     HandlerFunc exit_h = g_ExitHandlers[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
-    SetNextBlock(&sentinel, state->dummy_invalid_block);
+    SetNextBlock(&sentinel, &state->dummy_invalid_block);
     std::memcpy(head + 1, &sentinel, sizeof(sentinel));
 
     // Run first op

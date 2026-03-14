@@ -143,9 +143,9 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
 
     RecordConditionalBranchCacheResult(state, op, false);
     auto it = state->block_cache.find(target_eip);
-    BasicBlock* next_block = it == state->block_cache.end() ? nullptr : it->second;
+    BasicBlock* next_block = it == state->block_cache.end() ? &state->dummy_invalid_block : it->second;
 
-    if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
+    if (!next_block->MatchesChainTarget(target_eip)) {
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
         return instr_limit;

@@ -280,7 +280,7 @@ public unsafe partial class X86Native
     {
         public uint start_eip;
         public uint is_valid;
-        public byte terminal_kind;
+        public byte terminal_kind_raw;
         private byte chain_padding0;
         private ushort chain_padding1;
         public uint end_eip;
@@ -291,7 +291,7 @@ public unsafe partial class X86Native
         public uint fallthrough_eip;
         public ulong exec_count;
         public IntPtr entry;
-        // DecodedOp ops[1] follows at offset 48
+        // DecodedOp ops[1] follows at offset 56 on 64-bit hosts.
     }
 
     [StructLayout(LayoutKind.Sequential)]
