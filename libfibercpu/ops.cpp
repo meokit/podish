@@ -121,9 +121,9 @@ static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, De
                                                     uint64_t flags_cache) {
     BasicBlock* next_block = state->last_block;
     instr_limit -= next_block->inst_count;
-    next_block->exec_count++;
     DecodedOp* next_head = next_block->FirstOp();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    next_block->exec_count++;
     state->current_block_head = next_head;
 #endif
     if (next_block->entry != nullptr) {
@@ -133,6 +133,32 @@ static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, De
     CommitFlagsCache(state, flags_cache);
     state->ctx.eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
     return instr_limit;
+}
+
+template <ExtKind Kind>
+static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                              uint64_t flags_cache) {
+    const uint32_t target_eip = branch;
+
+    RecordConditionalBranchCacheResult(state, op, false);
+    auto it = state->block_cache.find(target_eip);
+    BasicBlock* next_block = it == state->block_cache.end() ? nullptr : it->second;
+
+    if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
+        CommitFlagsCache(state, flags_cache);
+        state->ctx.eip = target_eip;
+        return instr_limit;
+    }
+
+    if constexpr (Kind == ExtKind::Link) {
+        SetNextBlock(op, next_block);
+    } else {
+        SetCachedTarget(op, next_block);
+    }
+
+    state->last_block = next_block;
+    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
 template <ExtKind Kind>
@@ -155,28 +181,13 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
         next_block = GetCachedTarget(op);
     }
 
-    // The chaining fast path compares the packed start_eip + valid word in one 64-bit load.
-    if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
-        RecordConditionalBranchCacheResult(state, op, false);
-        auto it = state->block_cache.find(target_eip);
-        next_block = it == state->block_cache.end() ? nullptr : it->second;
-        if (!(next_block && next_block->MatchesChainTarget(target_eip))) {
-            CommitFlagsCache(state, flags_cache);
-            state->ctx.eip = target_eip;
-            return instr_limit;
-        }
-
-        if constexpr (Kind == ExtKind::Link) {
-            SetNextBlock(op, next_block);
-        } else {
-            SetCachedTarget(op, next_block);
-        }
-    } else {
+    if (next_block && next_block->MatchesChainTarget(target_eip)) [[likely]] {
         RecordConditionalBranchCacheResult(state, op, true);
+        state->last_block = next_block;
+        ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
     }
 
-    state->last_block = next_block;
-    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<Kind>(state, op, instr_limit, utlb, target_eip, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
