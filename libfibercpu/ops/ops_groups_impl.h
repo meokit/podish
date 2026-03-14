@@ -122,6 +122,57 @@ FORCE_INLINE LogicFlow OpGroup5_Ev_T_Internal(LogicFuncParams) {
     return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, val, utlb, branch);
 }
 
+template <typename T, bool UpdateFlags, uint8_t FixedSubOp>
+FORCE_INLINE LogicFlow OpGroup5_Ev_Control_Internal(LogicFuncParams) {
+    static_assert(FixedSubOp == 2 || FixedSubOp == 4 || FixedSubOp == 6);
+
+    T val;
+    if constexpr (sizeof(T) == 2) {
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+        if (!res) return LogicFlow::ExitOnCurrentEIP;
+        val = *res;
+    } else {
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+        if (!res) return LogicFlow::ExitOnCurrentEIP;
+        val = *res;
+    }
+
+    if constexpr (FixedSubOp == 2) {  // CALL Ev (Near Indirect)
+        if constexpr (sizeof(T) == 2) {
+            uint32_t esp = GetReg(state, ESP) - 2;
+            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, static_cast<uint16_t>(op->next_eip), utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
+            SetReg(state, ESP, esp);
+            *branch = val & 0xFFFF;
+        } else {
+            uint32_t esp = GetReg(state, ESP) - 4;
+            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, op->next_eip, utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
+            SetReg(state, ESP, esp);
+            *branch = val;
+        }
+    } else if constexpr (FixedSubOp == 4) {  // JMP Ev (Near Indirect)
+        if constexpr (sizeof(T) == 2)
+            *branch = val & 0xFFFF;
+        else
+            *branch = val;
+    } else {  // PUSH Ev
+        if constexpr (sizeof(T) == 2) {
+            uint32_t esp = GetReg(state, ESP) - 2;
+            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, static_cast<uint16_t>(val), utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
+            SetReg(state, ESP, esp);
+        } else {
+            uint32_t esp = GetReg(state, ESP) - 4;
+            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, val, utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
+            SetReg(state, ESP, esp);
+        }
+    }
+
+    return LogicFlow::Continue;
+}
+
 template <typename T>
 FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
     // Restart on read fail
@@ -285,9 +336,9 @@ IMPL_EV_SPEC_SIMPLE(7, OpGroup3_Ev_Idiv, OpGroup3_Ev_T_Internal)
 // Group 5
 IMPL_EV_SPEC_SIMPLE(0, OpGroup5_Ev_Inc, OpGroup5_Ev_T_Internal)
 IMPL_EV_SPEC_SIMPLE(1, OpGroup5_Ev_Dec, OpGroup5_Ev_T_Internal)
-IMPL_EV_SPEC_SIMPLE(2, OpGroup5_Ev_Call, OpGroup5_Ev_T_Internal)
-IMPL_EV_SPEC_SIMPLE(4, OpGroup5_Ev_Jmp, OpGroup5_Ev_T_Internal)
-IMPL_EV_SPEC_SIMPLE(6, OpGroup5_Ev_Push, OpGroup5_Ev_T_Internal)
+IMPL_EV_SPEC_SIMPLE(2, OpGroup5_Ev_Call, OpGroup5_Ev_Control_Internal)
+IMPL_EV_SPEC_SIMPLE(4, OpGroup5_Ev_Jmp, OpGroup5_Ev_Control_Internal)
+IMPL_EV_SPEC_SIMPLE(6, OpGroup5_Ev_Push, OpGroup5_Ev_Control_Internal)
 
 // Group 3 Eb
 #define IMPL_G3_EB(subop, name)                                     \
