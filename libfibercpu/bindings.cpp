@@ -278,7 +278,7 @@ EmuState* X86_Create() {
     std::memset(&state->ctx, 0, sizeof(state->ctx));
 
     // Set default EFLAGS and Mask
-    state->ctx.eflags = 0x202;  // IF=1, Reserved=1
+    SetStateFlagsCache(state, InitFlagsCache(0x202));  // IF=1, Reserved=1
     state->ctx.eflags_mask = 0x240DD5;
 
     // Default FPU State
@@ -411,9 +411,14 @@ void X86_SetEIP(EmuState* state, uint32_t eip) {
     state->eip_dirty = true;
 }
 
-uint32_t X86_GetEFLAGS(EmuState* state) { return state->ctx.eflags; }
+uint32_t X86_GetEFLAGS(EmuState* state) {
+    auto flags_cache = GetStateFlagsCache(state);
+    MaterializePF(flags_cache);
+    SetStateFlagsCache(state, flags_cache);
+    return GetArchitecturalEflags(state);
+}
 
-void X86_SetEFLAGS(EmuState* state, uint32_t val) { state->ctx.eflags = val; }
+void X86_SetEFLAGS(EmuState* state, uint32_t val) { SetArchitecturalEflags(state, val); }
 
 // ----------------------------------------------------------------------------
 // XMM Access
@@ -761,10 +766,9 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 if (state->eip_dirty) state->eip_dirty = false;
 
                 MicroTLB utlb;
-                uint64_t flags_cache = InitFlagsCache(state->ctx.eflags);
+                uint64_t flags_cache = GetStateFlagsCache(state);
                 int64_t remaining =
                     block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max(), flags_cache);
-                CommitFlagsCache(state, flags_cache);
                 total_run_insts += (initial_batch_limit - remaining);
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
                 state->current_block_head = nullptr;
@@ -961,10 +965,9 @@ int X86_Step(EmuState* state) {
 
     if (h) {
         MicroTLB utlb;
-        uint64_t flags_cache = InitFlagsCache(state->ctx.eflags);
+        uint64_t flags_cache = GetStateFlagsCache(state);
         h(state, head, 0, utlb, std::numeric_limits<uint32_t>::max(),
           flags_cache);  // Limit 0 ensures it returns after 1 inst + sentinel
-        CommitFlagsCache(state, flags_cache);
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;

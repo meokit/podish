@@ -347,17 +347,17 @@ FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams) {
     uint8_t reg = op->modrm & 7;
 
     // INC does not affect CF
-    uint32_t old_cf = state->ctx.eflags & CF_MASK;
+    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
 
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
         SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
@@ -369,17 +369,17 @@ FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams) {
     uint8_t reg = op->modrm & 7;
 
     // DEC does not affect CF
-    uint32_t old_cf = state->ctx.eflags & CF_MASK;
+    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
 
     if (op->prefixes.flags.opsize) {
         uint16_t val = (uint16_t)GetReg(state, reg);
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+        if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
         SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
@@ -1103,7 +1103,7 @@ FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
     UpdateResultFlags<uint8_t>(al, flags);  // Updates SF, ZF, PF
 
     SetReg8(state, EAX, al);
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 
@@ -1146,7 +1146,7 @@ FORCE_INLINE LogicFlow OpDas(LogicFuncParams) {
     UpdateResultFlags<uint8_t>(al, flags);
 
     SetReg8(state, EAX, al);
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 
@@ -1183,7 +1183,7 @@ FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
     eax |= (uint16_t)((ah << 8) | al);
     SetReg(state, EAX, eax);
 
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 
@@ -1216,7 +1216,7 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
     eax |= (uint16_t)((ah << 8) | al);
     SetReg(state, EAX, eax);
 
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 
@@ -1245,7 +1245,7 @@ FORCE_INLINE LogicFlow OpAam(LogicFuncParams) {
     uint32_t flags = GetFlags32(flags_cache);
     flags &= ~(SF_MASK | ZF_MASK | PF_MASK);
     UpdateResultFlags<uint8_t>(new_al, flags);
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
 
     return LogicFlow::Continue;
 }
@@ -1268,7 +1268,7 @@ FORCE_INLINE LogicFlow OpAad(LogicFuncParams) {
     uint32_t flags = GetFlags32(flags_cache);
     flags &= ~(SF_MASK | ZF_MASK | PF_MASK);
     UpdateResultFlags<uint8_t>(temp_al, flags);
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
 
     return LogicFlow::Continue;
 }

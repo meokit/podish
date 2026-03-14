@@ -156,7 +156,7 @@ struct EmuState {
             }
         }
 
-        mem_op = MemReadOperation{.addr = addr, .size = sizeof(T), .data = {}, .done = false, .eip = eip};
+        mem_op = MemReadOperation{.data = {}, .addr = addr, .size = sizeof(T), .eip = eip, .done = false};
 
         return std::unexpected(mem::FaultCode::PageFault);
     }

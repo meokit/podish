@@ -51,7 +51,7 @@ enum Seg {
 struct alignas(64) Context {
     uint32_t regs[9];      // General Purpose Registers, the 9th is zero register
     uint32_t eip;          // Instruction Pointer
-    uint32_t eflags;       // EFLAGS Register
+    uint64_t flags_state;  // Canonical flags state; architectural EFLAGS live in lower32
     uint32_t eflags_mask;  // Mask for user-modifiable flags (1=modifiable)
 
     // SSE/SSE2 Registers

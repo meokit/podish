@@ -46,18 +46,52 @@ constexpr uint32_t ZF_MASK = 0x0040;
 constexpr uint32_t SF_MASK = 0x0080;
 constexpr uint32_t OF_MASK = 0x0800;
 
-constexpr uint64_t FLAGS_CACHE_PF_PENDING = 1ull << 32;
-constexpr uint64_t FLAGS_CACHE_PF_INPUT_SHIFT = 40;
-constexpr uint64_t FLAGS_CACHE_PF_INPUT_MASK = 0xFFull << FLAGS_CACHE_PF_INPUT_SHIFT;
+constexpr uint64_t FLAGS_CACHE_PF_STATE_SHIFT = 40;
+constexpr uint64_t FLAGS_CACHE_PF_STATE_MASK = 0xFFull << FLAGS_CACHE_PF_STATE_SHIFT;
+constexpr uint8_t FLAGS_CACHE_PF_KNOWN_TRUE = 0;
+constexpr uint8_t FLAGS_CACHE_PF_KNOWN_FALSE = 1;
 
-static_assert(sizeof(uintptr_t) == 8, "flags_cache ABI requires 64-bit host");
+FORCE_INLINE uint8_t EncodeKnownParityState(bool pf_set) {
+    return pf_set ? FLAGS_CACHE_PF_KNOWN_TRUE : FLAGS_CACHE_PF_KNOWN_FALSE;
+}
 
-FORCE_INLINE uint64_t InitFlagsCache(uint32_t eflags) { return static_cast<uint64_t>(eflags); }
+FORCE_INLINE uint64_t InitFlagsCache(uint32_t eflags) {
+    return static_cast<uint64_t>(eflags) |
+           (static_cast<uint64_t>(EncodeKnownParityState((eflags & PF_MASK) != 0)) << FLAGS_CACHE_PF_STATE_SHIFT);
+}
+
+FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache);
+FORCE_INLINE void MaterializePF(uint64_t& flags_cache);
+
+FORCE_INLINE uint64_t GetStateFlagsCache(const EmuState* state) { return state->ctx.flags_state; }
+
+FORCE_INLINE void SetStateFlagsCache(EmuState* state, uint64_t flags_cache) { state->ctx.flags_state = flags_cache; }
+
+FORCE_INLINE uint32_t GetArchitecturalEflags(const EmuState* state) {
+    uint64_t flags_cache = GetStateFlagsCache(state);
+    MaterializePF(flags_cache);
+    return GetFlags32(flags_cache);
+}
+
+FORCE_INLINE void SetArchitecturalEflags(EmuState* state, uint32_t eflags) {
+    SetStateFlagsCache(state, InitFlagsCache(eflags));
+}
 
 FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache) { return static_cast<uint32_t>(flags_cache); }
 
 FORCE_INLINE void SetFlags32(uint64_t& flags_cache, uint32_t eflags) {
     flags_cache = (flags_cache & ~0xFFFFFFFFull) | eflags;
+}
+
+FORCE_INLINE void SyncParityStateFromFlags(uint64_t& flags_cache) {
+    flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
+    flags_cache |= (static_cast<uint64_t>(EncodeKnownParityState((GetFlags32(flags_cache) & PF_MASK) != 0))
+                    << FLAGS_CACHE_PF_STATE_SHIFT);
+}
+
+FORCE_INLINE void SetFlags32AndSyncParityState(uint64_t& flags_cache, uint32_t eflags) {
+    SetFlags32(flags_cache, eflags);
+    SyncParityStateFromFlags(flags_cache);
 }
 
 FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache);
@@ -74,6 +108,7 @@ FORCE_INLINE bool TestFlagBits(uint64_t flags_cache, uint32_t mask) { return (Ge
 FORCE_INLINE void MaterializePF(uint64_t& flags_cache);
 FORCE_INLINE void RequirePF(uint64_t& flags_cache);
 FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond);
+FORCE_INLINE bool ReadPF(uint64_t& flags_cache);
 
 // ------------------------------------------------------------------------------------------------
 // Condition Checking (for Jcc, CMOVcc)
@@ -468,24 +503,36 @@ inline bool CalcPflag(uint8_t res_byte) {
 // Backward compatibility for other ops files
 inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
 
-FORCE_INLINE void SetPendingParity(uint64_t& flags_cache, uint8_t res_byte) {
-    flags_cache &= ~FLAGS_CACHE_PF_INPUT_MASK;
-    flags_cache |= (static_cast<uint64_t>(res_byte) << FLAGS_CACHE_PF_INPUT_SHIFT);
-    flags_cache |= FLAGS_CACHE_PF_PENDING;
+FORCE_INLINE void SetParityState(uint64_t& flags_cache, uint8_t res_byte) {
+    uint8_t pf_state = res_byte;
+    if (res_byte == 0) {
+        pf_state = FLAGS_CACHE_PF_KNOWN_TRUE;
+    } else if (res_byte == 1) {
+        pf_state = FLAGS_CACHE_PF_KNOWN_FALSE;
+    }
+    flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
+    flags_cache |= (static_cast<uint64_t>(pf_state) << FLAGS_CACHE_PF_STATE_SHIFT);
 }
 
 FORCE_INLINE void MaterializePF(uint64_t& flags_cache) {
-    if ((flags_cache & FLAGS_CACHE_PF_PENDING) == 0) return;
-    const uint8_t pf_input =
-        static_cast<uint8_t>((flags_cache & FLAGS_CACHE_PF_INPUT_MASK) >> FLAGS_CACHE_PF_INPUT_SHIFT);
+    const uint8_t pf_state =
+        static_cast<uint8_t>((flags_cache & FLAGS_CACHE_PF_STATE_MASK) >> FLAGS_CACHE_PF_STATE_SHIFT);
     uint32_t flags = GetFlags32(flags_cache);
     flags &= ~PF_MASK;
-    if (CalcPflag(pf_input)) flags |= PF_MASK;
-    SetFlags32(flags_cache, flags);
-    flags_cache &= ~FLAGS_CACHE_PF_PENDING;
+    if (pf_state == FLAGS_CACHE_PF_KNOWN_TRUE) {
+        flags |= PF_MASK;
+    } else if (pf_state != FLAGS_CACHE_PF_KNOWN_FALSE && CalcPflag(pf_state)) {
+        flags |= PF_MASK;
+    }
+    SetFlags32AndSyncParityState(flags_cache, flags);
 }
 
 FORCE_INLINE void RequirePF(uint64_t& flags_cache) { MaterializePF(flags_cache); }
+
+FORCE_INLINE bool ReadPF(uint64_t& flags_cache) {
+    RequirePF(flags_cache);
+    return (GetFlags32(flags_cache) & PF_MASK) != 0;
+}
 
 FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond) {
     const uint8_t normalized = cond & 0xF;
@@ -495,7 +542,7 @@ FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t co
 
 FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) {
     MaterializePF(flags_cache);
-    state->ctx.eflags = GetFlags32(flags_cache);
+    SetStateFlagsCache(state, flags_cache);
 }
 
 template <typename T, bool UpdateFlags = true>
@@ -524,7 +571,7 @@ inline T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 
         if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -552,7 +599,7 @@ inline T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 
         if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -585,7 +632,7 @@ inline T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 
         if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -618,7 +665,7 @@ inline T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 
         if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -633,7 +680,7 @@ inline T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -648,7 +695,7 @@ inline T AluOr(EmuState* state, uint64_t& flags_cache, T dest, T src) {
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -663,7 +710,7 @@ inline T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -697,7 +744,7 @@ inline T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
         }
 
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -725,7 +772,7 @@ inline T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
         }
 
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -757,7 +804,7 @@ inline T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
         }
 
         SetFlags32(flags_cache, flags);
-        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
+        SetParityState(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }

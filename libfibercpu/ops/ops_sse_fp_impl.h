@@ -630,7 +630,7 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
     }
     // Else (Greater): All Clear
 
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 

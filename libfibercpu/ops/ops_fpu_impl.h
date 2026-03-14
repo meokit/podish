@@ -480,16 +480,16 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
             bool pass = false;
             switch ((op->modrm >> 3) & 7) {
                 case 0:
-                    pass = (state->ctx.eflags & fiberish::CF_MASK);
+                    pass = (GetFlags32(flags_cache) & fiberish::CF_MASK);
                     break;  // FCMOVB
                 case 1:
-                    pass = (state->ctx.eflags & fiberish::ZF_MASK);
+                    pass = (GetFlags32(flags_cache) & fiberish::ZF_MASK);
                     break;  // FCMOVE
                 case 2:
-                    pass = (state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
+                    pass = (GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
                     break;  // FCMOVBE
                 case 3:
-                    pass = (state->ctx.eflags & fiberish::PF_MASK);
+                    pass = ReadPF(flags_cache);
                     break;  // FCMOVU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -565,16 +565,16 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
             bool pass = false;
             switch (mode) {
                 case 0:
-                    pass = !(state->ctx.eflags & fiberish::CF_MASK);
+                    pass = !(GetFlags32(flags_cache) & fiberish::CF_MASK);
                     break;  // FCMOVNB
                 case 1:
-                    pass = !(state->ctx.eflags & fiberish::ZF_MASK);
+                    pass = !(GetFlags32(flags_cache) & fiberish::ZF_MASK);
                     break;  // FCMOVNE
                 case 2:
-                    pass = !(state->ctx.eflags & (fiberish::CF_MASK | fiberish::ZF_MASK));
+                    pass = !(GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
                     break;  // FCMOVNBE
                 case 3:
-                    pass = !(state->ctx.eflags & fiberish::PF_MASK);
+                    pass = !ReadPF(flags_cache);
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -593,29 +593,31 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
-                                   fiberish::SF_MASK | fiberish::AF_MASK);
+            uint32_t flags = GetFlags32(flags_cache) & ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK |
+                                                         fiberish::OF_MASK | fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
+                flags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= fiberish::ZF_MASK;
+                flags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= fiberish::CF_MASK;
+                flags |= fiberish::CF_MASK;
             }
+            SetFlags32AndSyncParityState(flags_cache, flags);
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
-                                   fiberish::SF_MASK | fiberish::AF_MASK);
+            uint32_t flags = GetFlags32(flags_cache) & ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK |
+                                                         fiberish::OF_MASK | fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
+                flags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= fiberish::ZF_MASK;
+                flags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= fiberish::CF_MASK;
+                flags |= fiberish::CF_MASK;
             }
+            SetFlags32AndSyncParityState(flags_cache, flags);
         } else {
             state->fault_vector = 6;
             if (!state->hooks.on_invalid_opcode(state)) {
@@ -1064,30 +1066,32 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
-                                   fiberish::SF_MASK | fiberish::AF_MASK);
+            uint32_t flags = GetFlags32(flags_cache) & ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK |
+                                                         fiberish::OF_MASK | fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
+                flags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= fiberish::ZF_MASK;
+                flags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= fiberish::CF_MASK;
+                flags |= fiberish::CF_MASK;
             }
+            SetFlags32AndSyncParityState(flags_cache, flags);
             FpuPop(state);
         } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMIP
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
 
-            state->ctx.eflags &= ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK | fiberish::OF_MASK |
-                                   fiberish::SF_MASK | fiberish::AF_MASK);
+            uint32_t flags = GetFlags32(flags_cache) & ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK |
+                                                         fiberish::OF_MASK | fiberish::SF_MASK | fiberish::AF_MASK);
             if (f80_uncomparable(st0, sti)) {
-                state->ctx.eflags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
+                flags |= (fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK);
             } else if (f80_eq(st0, sti)) {
-                state->ctx.eflags |= fiberish::ZF_MASK;
+                flags |= fiberish::ZF_MASK;
             } else if (f80_lt(st0, sti)) {
-                state->ctx.eflags |= fiberish::CF_MASK;
+                flags |= fiberish::CF_MASK;
             }
+            SetFlags32AndSyncParityState(flags_cache, flags);
             FpuPop(state);
         } else {
             state->fault_vector = 6;

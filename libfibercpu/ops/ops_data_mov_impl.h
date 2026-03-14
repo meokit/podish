@@ -807,7 +807,7 @@ FORCE_INLINE LogicFlow OpSahf(LogicFuncParams) {
     uint8_t ah = (eax >> 8) & 0xFF;
     uint32_t flags = GetFlags32(flags_cache);
     flags = (flags & ~0xFF) | (ah & 0xD5) | 0x02;
-    SetFlags32(flags_cache, flags);
+    SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
 

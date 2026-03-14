@@ -4,7 +4,6 @@
 
 #include <simde/x86/sse.h>
 #include <chrono>
-
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
@@ -44,7 +43,8 @@ FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
 template <uint8_t Cond, bool IsRel8>
 FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
-    if (CheckConditionFixed<Cond>(flags_cache)) {
+    bool taken = CheckConditionFixed<Cond>(flags_cache);
+    if (taken) {
         RecordConditionalBranchDecision(state, op, true);
         int32_t offset;
         if constexpr (IsRel8) {
@@ -242,9 +242,11 @@ FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
     // 9C: PUSHF/PUSHFD
     CommitFlagsCache(state, flags_cache);
     if (op->prefixes.flags.opsize) {
-        if (!Push<uint16_t, true>(state, (uint16_t)state->ctx.eflags, utlb, op)) return LogicFlow::RestartMemoryOp;
+        if (!Push<uint16_t, true>(state, (uint16_t)GetArchitecturalEflags(state), utlb, op))
+            return LogicFlow::RestartMemoryOp;
     } else {
-        if (!Push<uint32_t, true>(state, state->ctx.eflags & 0x00FCFFFF, utlb, op)) return LogicFlow::RestartMemoryOp;
+        if (!Push<uint32_t, true>(state, GetArchitecturalEflags(state) & 0x00FCFFFF, utlb, op))
+            return LogicFlow::RestartMemoryOp;
     }
     return LogicFlow::Continue;
 }
@@ -258,10 +260,10 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         uint16_t val = *val_res;
 
         uint32_t mask = state->ctx.eflags_mask & 0xFFFF;
-        uint32_t original = state->ctx.eflags;
+        uint32_t original = GetArchitecturalEflags(state);
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
-        state->ctx.eflags = new_flags;
+        SetArchitecturalEflags(state, new_flags);
         flags_cache = InitFlagsCache(new_flags);
     } else {
         // POPFD (32-bit)
@@ -270,10 +272,10 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         uint32_t val = *val_res;
 
         uint32_t mask = state->ctx.eflags_mask;
-        uint32_t original = state->ctx.eflags;
+        uint32_t original = GetArchitecturalEflags(state);
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
-        state->ctx.eflags = new_flags;
+        SetArchitecturalEflags(state, new_flags);
         flags_cache = InitFlagsCache(new_flags);
     }
     return LogicFlow::Continue;
