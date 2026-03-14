@@ -67,3 +67,47 @@ By default the runner copies the prepared rootfs into a disposable work
 directory for each sample, so `--rootfs` does not get dirtied by benchmark
 writes. Logs and `summary.json` are written under
 `benchmark/podish_perf/results/`.
+
+## Record and analyze `xctrace`
+
+Use [profile_xctrace.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/profile_xctrace.py) to:
+
+- copy the NativeAOT binary to a unique name to avoid clashing with a local Swift app
+- record a `Time Profiler` trace
+- export the raw `time-profile` XML
+- aggregate steady-state hotspots after a warmup cutoff
+- dump disassembly for the top symbols
+- compare multiple runs with a markdown table
+
+Record and analyze in one step:
+
+```bash
+python3 benchmark/podish_perf/profile_xctrace.py record-and-analyze \
+  --binary build/nativeaot/podish-cli-static/Podish.Cli \
+  --name coremark-current
+```
+
+Analyze an existing trace:
+
+```bash
+python3 benchmark/podish_perf/profile_xctrace.py analyze \
+  --trace benchmark/podish_perf/results/coremark-flags-cache-retuned-v2.trace \
+  --binary build/nativeaot/podish-cli-static/PodishCliFlagsRetuned \
+  --name coremark-flags-cache-retuned-v2
+```
+
+Compare saved reports:
+
+```bash
+python3 benchmark/podish_perf/profile_xctrace.py compare \
+  --report benchmark/podish_perf/results/run-a/run-a.report.json \
+  --report benchmark/podish_perf/results/run-b/run-b.report.json
+```
+
+Outputs:
+
+- `<name>.trace`
+- `<name>.xml`
+- `<name>.report.json`
+- `<name>.report.md`
+- `disasm-*.txt`
