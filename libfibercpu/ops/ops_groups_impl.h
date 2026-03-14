@@ -25,7 +25,7 @@ FORCE_INLINE LogicFlow OpGroup1_EbIb_Internal(LogicFuncParams) {
     uint8_t dest = *dest_res;
 
     uint8_t src = (uint8_t)imm;
-    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
+    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
 }
 
 // Fixed Size Templates for Ev operations
@@ -51,7 +51,7 @@ FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
         src = (T)imm;
     }
 
-    return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, dest, src, utlb);
+    return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
 }
 
 // =========================================================================================
@@ -65,7 +65,7 @@ FORCE_INLINE LogicFlow OpGroup3_Eb_Internal(LogicFuncParams) {
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t val = *val_res;
 
-    return Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb, imm);
+    return Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, op, flags_cache, val, utlb, imm);
 }
 
 template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
@@ -82,7 +82,7 @@ FORCE_INLINE LogicFlow OpGroup3_Ev_T_Internal(LogicFuncParams) {
         val = *res;
     }
 
-    return Helper_Group3<T, UpdateFlags, FixedSubOp>(state, op, val, utlb, imm);
+    return Helper_Group3<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, val, utlb, imm);
 }
 
 // =========================================================================================
@@ -96,7 +96,7 @@ FORCE_INLINE LogicFlow OpGroup4_Eb_Internal(LogicFuncParams) {
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t val = *val_res;
 
-    return Helper_Group4<uint8_t, UpdateFlags, FixedSubOp>(state, op, val, utlb);
+    return Helper_Group4<uint8_t, UpdateFlags, FixedSubOp>(state, op, flags_cache, val, utlb);
 }
 
 // =========================================================================================
@@ -119,7 +119,7 @@ FORCE_INLINE LogicFlow OpGroup5_Ev_T_Internal(LogicFuncParams) {
         val = *res;
     }
 
-    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, op, val, utlb, branch);
+    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, val, utlb, branch);
 }
 
 template <typename T>
@@ -149,7 +149,7 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
     else
         src_val = (T)GetReg(state, reg);
 
-    T res = AluAdd(state, dest_val, src_val);
+    T res = AluAdd(state, flags_cache, dest_val, src_val);
 
     // Swap: Original Dest -> Src Reg
     if constexpr (sizeof(T) == 1) {
@@ -367,7 +367,7 @@ FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
         uint32_t edx = GetReg(state, EDX);
         uint64_t edx_eax = ((uint64_t)edx << 32) | eax;
         if (mem_val == edx_eax) {
-            state->ctx.eflags |= ZF_MASK;
+            SetFlagBits(flags_cache, ZF_MASK);
             uint32_t ebx = GetReg(state, EBX);
             uint32_t ecx = GetReg(state, ECX);
             uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
@@ -376,7 +376,7 @@ FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
             if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, addr, ecx_ebx, utlb, op))
                 return LogicFlow::RetryMemoryOp;
         } else {
-            state->ctx.eflags &= ~ZF_MASK;
+            ClearFlagBits(flags_cache, ZF_MASK);
             SetReg(state, EAX, (uint32_t)mem_val);
             SetReg(state, EDX, (uint32_t)(mem_val >> 32));
         }

@@ -44,7 +44,7 @@ FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
 template <uint8_t Cond, bool IsRel8>
 FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
-    if (CheckConditionFixed<Cond>(state)) {
+    if (CheckConditionFixed<Cond>(flags_cache)) {
         RecordConditionalBranchDecision(state, op, true);
         int32_t offset;
         if constexpr (IsRel8) {
@@ -65,7 +65,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
     // If condition is FALSE, NOP (no memory read).
 
-    if (CheckConditionFixed<Cond>(state)) {
+    if (CheckConditionFixed<Cond>(flags_cache)) {
         uint8_t reg = (op->modrm >> 3) & 7;
 
         if constexpr (S == Specialized::ModReg) {
@@ -160,7 +160,7 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
 
     bool jump = count != 0;
     if constexpr (CheckZF) {
-        jump = jump && (((state->ctx.eflags & ZF_MASK) != 0) == ExpectedZF);
+        jump = jump && (TestFlagBits(flags_cache, ZF_MASK) == ExpectedZF);
     }
 
     if (jump) {
@@ -240,6 +240,7 @@ FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
     // 9C: PUSHF/PUSHFD
+    CommitFlagsCache(state, flags_cache);
     if (op->prefixes.flags.opsize) {
         if (!Push<uint16_t, true>(state, (uint16_t)state->ctx.eflags, utlb, op)) return LogicFlow::RestartMemoryOp;
     } else {
@@ -261,6 +262,7 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
         state->ctx.eflags = new_flags;
+        flags_cache = InitFlagsCache(new_flags);
     } else {
         // POPFD (32-bit)
         auto val_res = Pop<uint32_t, true>(state, utlb, op);
@@ -272,37 +274,38 @@ FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
         uint32_t new_flags = (original & ~mask) | (val & mask);
         new_flags |= 2;  // Reserved bit 1 is always 1
         state->ctx.eflags = new_flags;
+        flags_cache = InitFlagsCache(new_flags);
     }
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpStc(LogicFuncParams) {
     // F9: STC
-    state->ctx.eflags |= CF_MASK;
+    SetFlagBits(flags_cache, CF_MASK);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpClc(LogicFuncParams) {
     // F8: CLC
-    state->ctx.eflags &= ~CF_MASK;
+    ClearFlagBits(flags_cache, CF_MASK);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpCmc(LogicFuncParams) {
     // F5: CMC (Complement Carry)
-    state->ctx.eflags ^= CF_MASK;
+    SetFlags32(flags_cache, GetFlags32(flags_cache) ^ CF_MASK);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpStd(LogicFuncParams) {
     // FD: STD (Set Direction Flag)
-    state->ctx.eflags |= 0x400;  // DF Mask
+    SetFlagBits(flags_cache, 0x400);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpCld(LogicFuncParams) {
     // FC: CLD (Clear Direction Flag)
-    state->ctx.eflags &= ~0x400;
+    ClearFlagBits(flags_cache, 0x400);
     return LogicFlow::Continue;
 }
 
@@ -483,6 +486,7 @@ FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
     uint8_t vector = (uint8_t)imm;
     utlb->invalidate();
 
+    CommitFlagsCache(state, flags_cache);
     // Set EIP to next instruction (return address)
     state->ctx.eip = op->next_eip;
 
@@ -498,6 +502,7 @@ FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
     // CC: INT 3
     utlb->invalidate();
+    CommitFlagsCache(state, flags_cache);
     RaiseInterrupt(state, 3, op);
     if (state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
@@ -507,8 +512,9 @@ FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpInto(LogicFuncParams) {
     // CE: INTO
-    if (state->ctx.eflags & OF_MASK) {
+    if (TestFlagBits(flags_cache, OF_MASK)) {
         utlb->invalidate();
+        CommitFlagsCache(state, flags_cache);
         RaiseInterrupt(state, 4, op);
     }
     if (state->eip_dirty || state->status != EmuStatus::Running) {

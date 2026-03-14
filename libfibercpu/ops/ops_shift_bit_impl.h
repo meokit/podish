@@ -15,7 +15,7 @@ namespace fiberish {
 // Returns LogicFlow to propagate Restart/Retry
 template <uint8_t FixedSubOp = 0xFF>
 FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, uint32_t dest, uint8_t count,
-                                              bool is_byte, mem::MicroTLB* utlb) {
+                                              bool is_byte, mem::MicroTLB* utlb, uint64_t& flags_cache) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -33,60 +33,60 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, ui
     switch (subop) {
         case 0:  // ROL
             if (is_byte)
-                res = AluRol<uint8_t>(state, (uint8_t)dest, count);
+                res = AluRol<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluRol<uint16_t>(state, (uint16_t)dest, count);
+                res = AluRol<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluRol<uint32_t>(state, dest, count);
+                res = AluRol<uint32_t>(state, flags_cache, dest, count);
             break;
         case 1:  // ROR
             if (is_byte)
-                res = AluRor<uint8_t>(state, (uint8_t)dest, count);
+                res = AluRor<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluRor<uint16_t>(state, (uint16_t)dest, count);
+                res = AluRor<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluRor<uint32_t>(state, dest, count);
+                res = AluRor<uint32_t>(state, flags_cache, dest, count);
             break;
         case 2:  // RCL
             if (is_byte)
-                res = AluRcl<uint8_t>(state, (uint8_t)dest, count);
+                res = AluRcl<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluRcl<uint16_t>(state, (uint16_t)dest, count);
+                res = AluRcl<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluRcl<uint32_t>(state, dest, count);
+                res = AluRcl<uint32_t>(state, flags_cache, dest, count);
             break;
         case 3:  // RCR
             if (is_byte)
-                res = AluRcr<uint8_t>(state, (uint8_t)dest, count);
+                res = AluRcr<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluRcr<uint16_t>(state, (uint16_t)dest, count);
+                res = AluRcr<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluRcr<uint32_t>(state, dest, count);
+                res = AluRcr<uint32_t>(state, flags_cache, dest, count);
             break;
         case 4:  // SHL/SAL
         case 6:  // SAL alias
             if (is_byte)
-                res = AluShl<uint8_t>(state, (uint8_t)dest, count);
+                res = AluShl<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluShl<uint16_t>(state, (uint16_t)dest, count);
+                res = AluShl<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluShl<uint32_t>(state, dest, count);
+                res = AluShl<uint32_t>(state, flags_cache, dest, count);
             break;
         case 5:  // SHR
             if (is_byte)
-                res = AluShr<uint8_t>(state, (uint8_t)dest, count);
+                res = AluShr<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluShr<uint16_t>(state, (uint16_t)dest, count);
+                res = AluShr<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluShr<uint32_t>(state, dest, count);
+                res = AluShr<uint32_t>(state, flags_cache, dest, count);
             break;
         case 7:  // SAR
             if (is_byte)
-                res = AluSar<uint8_t>(state, (uint8_t)dest, count);
+                res = AluSar<uint8_t>(state, flags_cache, (uint8_t)dest, count);
             else if (is_opsize)
-                res = AluSar<uint16_t>(state, (uint16_t)dest, count);
+                res = AluSar<uint16_t>(state, flags_cache, (uint16_t)dest, count);
             else
-                res = AluSar<uint32_t>(state, dest, count);
+                res = AluSar<uint32_t>(state, flags_cache, dest, count);
             break;
         default:
             state->fault_vector = 6;
@@ -168,7 +168,7 @@ FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(LogicFuncParams) {
     }
 
     uint8_t count = (uint8_t)imm;
-    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb, flags_cache);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
@@ -199,7 +199,7 @@ FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(LogicFuncParams) {
             }
         }
     }
-    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, 1, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, 1, IsByte, utlb, flags_cache);
 }
 
 template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
@@ -241,7 +241,7 @@ FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
     }
 
     uint8_t count = GetReg(state, ECX) & 0xFF;
-    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb);
+    return Helper_Group2_Internal<FixedSubOp>(state, op, dest, count, IsByte, utlb, flags_cache);
 }
 
 namespace op {
@@ -316,9 +316,9 @@ FORCE_INLINE LogicFlow OpBt_Reg(LogicFuncParams) {
     }
 
     if (bit_val)
-        state->ctx.eflags |= CF_MASK;
+        SetFlagBits(flags_cache, CF_MASK);
     else
-        state->ctx.eflags &= ~CF_MASK;
+        ClearFlagBits(flags_cache, CF_MASK);
     return LogicFlow::Continue;
 }
 
@@ -362,9 +362,9 @@ FORCE_INLINE LogicFlow OpGroup8_EvIb(LogicFuncParams) {
 
     // Update CF
     if (bit_val)
-        state->ctx.eflags |= CF_MASK;
+        SetFlagBits(flags_cache, CF_MASK);
     else
-        state->ctx.eflags &= ~CF_MASK;
+        ClearFlagBits(flags_cache, CF_MASK);
 
     // Write Back if needed
     if (subop >= 5 && subop <= 7) {
@@ -410,9 +410,9 @@ FORCE_INLINE LogicFlow OpBtr_Reg(LogicFuncParams) {
         uint32_t bit_to_test = bit_idx & mask_val;
 
         if ((base >> bit_to_test) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
         *rptr = base & ~(1 << bit_to_test);
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -424,9 +424,9 @@ FORCE_INLINE LogicFlow OpBtr_Reg(LogicFuncParams) {
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
 
         // Retry on write fail
         if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte & ~(1 << byte_idx), utlb, op))
@@ -447,9 +447,9 @@ FORCE_INLINE LogicFlow OpBts_Reg(LogicFuncParams) {
         uint32_t bit_to_test = bit_idx & mask_val;
 
         if ((base >> bit_to_test) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
         *rptr = base | (1 << bit_to_test);
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -461,9 +461,9 @@ FORCE_INLINE LogicFlow OpBts_Reg(LogicFuncParams) {
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
 
         // Retry on write fail
         if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte | (1 << byte_idx), utlb, op))
@@ -484,9 +484,9 @@ FORCE_INLINE LogicFlow OpBtc_Reg(LogicFuncParams) {
         uint32_t bit_to_test = bit_idx & mask_val;
 
         if ((base >> bit_to_test) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
         *rptr = base ^ (1 << bit_to_test);
     } else {
         uint32_t addr = ComputeLinearAddress(state, op);
@@ -498,9 +498,9 @@ FORCE_INLINE LogicFlow OpBtc_Reg(LogicFuncParams) {
         uint8_t byte = *byte_res;
 
         if ((byte >> byte_idx) & 1)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
 
         // Retry on write fail
         if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, addr, byte ^ (1 << byte_idx), utlb, op))
@@ -525,9 +525,9 @@ FORCE_INLINE LogicFlow OpBsr_GvEv(LogicFuncParams) {
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (val == 0) {
-        state->ctx.eflags |= ZF_MASK;
+        SetFlagBits(flags_cache, ZF_MASK);
     } else {
-        state->ctx.eflags &= ~ZF_MASK;
+        ClearFlagBits(flags_cache, ZF_MASK);
         int count = 31;
         while (((val >> count) & 1) == 0) count--;
         SetReg(state, reg, count);
@@ -555,23 +555,23 @@ FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(LogicFuncParams) {
     if (op->prefixes.flags.rep) {
         // TZCNT (F3 Prefix)
         if (src == 0) {
-            state->ctx.eflags |= CF_MASK;
-            state->ctx.eflags &= ~ZF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
+            ClearFlagBits(flags_cache, ZF_MASK);
             SetReg(state, reg, op->prefixes.flags.opsize ? 16 : 32);  // Operand Size
         } else {
             state->ctx.eflags &= ~(CF_MASK | ZF_MASK);  // CF cleared
             // __builtin_ctz is undefined for 0, but we checked src==0
             int count = __builtin_ctz(src);
             SetReg(state, reg, count);
-            if (count == 0) state->ctx.eflags |= ZF_MASK;
+            if (count == 0) SetFlagBits(flags_cache, ZF_MASK);
         }
     } else {
         // BSF (No F3 Prefix)
         if (src == 0) {
-            state->ctx.eflags |= ZF_MASK;
+            SetFlagBits(flags_cache, ZF_MASK);
             // Dest undefined.
         } else {
-            state->ctx.eflags &= ~ZF_MASK;
+            ClearFlagBits(flags_cache, ZF_MASK);
             int count = __builtin_ctz(src);
             SetReg(state, reg, count);
             // Flags: ZF cleared (done above).

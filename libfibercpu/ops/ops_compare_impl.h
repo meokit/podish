@@ -34,13 +34,13 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, reg);
-        AluCmp<uint16_t>(state, dest, src);
+        AluCmp<uint16_t>(state, flags_cache, dest, src);
     } else {
         auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, reg);
-        AluCmp<uint32_t>(state, dest, src);
+        AluCmp<uint32_t>(state, flags_cache, dest, src);
     }
     return LogicFlow::Continue;
 }
@@ -67,13 +67,13 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
         auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
-        AluCmp<uint16_t>(state, dest, src);
+        AluCmp<uint16_t>(state, flags_cache, dest, src);
     } else {
         uint32_t dest = GetReg(state, reg);
         auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
-        AluCmp<uint32_t>(state, dest, src);
+        AluCmp<uint32_t>(state, flags_cache, dest, src);
     }
     return LogicFlow::Continue;
 }
@@ -100,13 +100,13 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
         uint16_t src = (uint16_t)GetReg(state, reg);
-        AluAnd<uint16_t>(state, dest, src);
+        AluAnd<uint16_t>(state, flags_cache, dest, src);
     } else {
         auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, reg);
-        AluAnd<uint32_t>(state, dest, src);
+        AluAnd<uint32_t>(state, flags_cache, dest, src);
     }
     return LogicFlow::Continue;
 }
@@ -127,7 +127,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
         uint8_t dest = *dest_res;
         uint8_t al = state->ctx.regs[EAX] & 0xFF;
         uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-        AluCmp<uint8_t>(state, al, dest);
+        AluCmp<uint8_t>(state, flags_cache, al, dest);
         if (al == dest) {
             if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
         } else {
@@ -149,7 +149,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
             uint16_t dest = *dest_res;
             uint16_t ax = state->ctx.regs[EAX] & 0xFFFF;
             uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
-            AluCmp<uint16_t>(state, ax, dest);
+            AluCmp<uint16_t>(state, flags_cache, ax, dest);
             if (ax == dest) {
                 if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
             } else {
@@ -161,7 +161,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
             uint32_t dest = *dest_res;
             uint32_t eax = state->ctx.regs[EAX];
             uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
-            AluCmp<uint32_t>(state, eax, dest);
+            AluCmp<uint32_t>(state, flags_cache, eax, dest);
             if (eax == dest) {
                 if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
             } else {
@@ -175,7 +175,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
 template <uint8_t Cond>
 FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
     // 0F 9x: SETcc r/m8
-    uint8_t val = CheckCondition(state, Cond) ? 1 : 0;
+    uint8_t val = CheckCondition(flags_cache, Cond) ? 1 : 0;
     if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) {
         return LogicFlow::RetryMemoryOp;
     }
@@ -227,7 +227,7 @@ FORCE_INLINE LogicFlow OpCmp_EbGb(LogicFuncParams) {
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-    AluCmp<uint8_t>(state, dest, src);
+    AluCmp<uint8_t>(state, flags_cache, dest, src);
     return LogicFlow::Continue;
 }
 
@@ -237,7 +237,7 @@ FORCE_INLINE LogicFlow OpCmp_GbEb(LogicFuncParams) {
     auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
-    AluCmp<uint8_t>(state, dest, src);
+    AluCmp<uint8_t>(state, flags_cache, dest, src);
     return LogicFlow::Continue;
 }
 

@@ -27,13 +27,13 @@ FORCE_INLINE LogicFlow OpShld_EvGvIb(LogicFuncParams) {
         if (count == 0) return LogicFlow::Continue;
 
         uint16_t res = (dest << count) | (src >> (16 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (16 - count)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x8000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
@@ -42,13 +42,13 @@ FORCE_INLINE LogicFlow OpShld_EvGvIb(LogicFuncParams) {
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (32 - count)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x80000000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
@@ -69,13 +69,13 @@ FORCE_INLINE LogicFlow OpShld_EvGvCl(LogicFuncParams) {
         if (count == 0) return LogicFlow::Continue;
 
         uint16_t res = (dest << count) | (src >> (16 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (16 - count)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x8000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
@@ -84,13 +84,13 @@ FORCE_INLINE LogicFlow OpShld_EvGvCl(LogicFuncParams) {
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest << count) | (src >> (32 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (32 - count)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x80000000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
@@ -113,13 +113,13 @@ FORCE_INLINE LogicFlow OpShrd_EvGvIb(LogicFuncParams) {
         if (count == 0) return LogicFlow::Continue;
 
         uint16_t res = (dest >> count) | (src << (16 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x8000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
@@ -128,13 +128,13 @@ FORCE_INLINE LogicFlow OpShrd_EvGvIb(LogicFuncParams) {
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x80000000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
@@ -155,13 +155,13 @@ FORCE_INLINE LogicFlow OpShrd_EvGvCl(LogicFuncParams) {
         if (count == 0) return LogicFlow::Continue;
 
         uint16_t res = (dest >> count) | (src << (16 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x8000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     } else {
@@ -170,13 +170,13 @@ FORCE_INLINE LogicFlow OpShrd_EvGvCl(LogicFuncParams) {
         uint32_t dest = *dest_res;
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = (dest >> count) | (src << (32 - count));
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
         if (res == 0) flags |= ZF_MASK;
         if (res & 0x80000000) flags |= SF_MASK;
         if (Parity(res & 0xFF)) flags |= PF_MASK;
         if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
 
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }

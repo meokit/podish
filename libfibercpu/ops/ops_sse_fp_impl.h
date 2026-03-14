@@ -574,7 +574,7 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
     // 66 0F 2E: UCOMISD
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint32_t flags = state->ctx.eflags & ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | AF_MASK | SF_MASK);
+    uint32_t flags = GetFlags32(flags_cache) & ~(ZF_MASK | PF_MASK | CF_MASK | OF_MASK | AF_MASK | SF_MASK);
 
     bool is_unordered = false;
     bool is_less = false;
@@ -630,7 +630,7 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
     }
     // Else (Greater): All Clear
 
-    state->ctx.eflags = flags;
+    SetFlags32(flags_cache, flags);
     return LogicFlow::Continue;
 }
 

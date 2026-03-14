@@ -761,8 +761,10 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 if (state->eip_dirty) state->eip_dirty = false;
 
                 MicroTLB utlb;
+                uint64_t flags_cache = InitFlagsCache(state->ctx.eflags);
                 int64_t remaining =
-                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max());
+                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max(), flags_cache);
+                CommitFlagsCache(state, flags_cache);
                 total_run_insts += (initial_batch_limit - remaining);
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
                 state->current_block_head = nullptr;
@@ -959,8 +961,10 @@ int X86_Step(EmuState* state) {
 
     if (h) {
         MicroTLB utlb;
-        h(state, head, 0, utlb,
-          std::numeric_limits<uint32_t>::max());  // Limit 0 ensures it returns after 1 inst + sentinel
+        uint64_t flags_cache = InitFlagsCache(state->ctx.eflags);
+        h(state, head, 0, utlb, std::numeric_limits<uint32_t>::max(),
+          flags_cache);  // Limit 0 ensures it returns after 1 inst + sentinel
+        CommitFlagsCache(state, flags_cache);
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {
             state->status = EmuStatus::Fault;

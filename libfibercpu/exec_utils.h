@@ -46,13 +46,42 @@ constexpr uint32_t ZF_MASK = 0x0040;
 constexpr uint32_t SF_MASK = 0x0080;
 constexpr uint32_t OF_MASK = 0x0800;
 
+constexpr uint64_t FLAGS_CACHE_PF_PENDING = 1ull << 32;
+constexpr uint64_t FLAGS_CACHE_PF_INPUT_SHIFT = 40;
+constexpr uint64_t FLAGS_CACHE_PF_INPUT_MASK = 0xFFull << FLAGS_CACHE_PF_INPUT_SHIFT;
+
+static_assert(sizeof(uintptr_t) == 8, "flags_cache ABI requires 64-bit host");
+
+FORCE_INLINE uint64_t InitFlagsCache(uint32_t eflags) { return static_cast<uint64_t>(eflags); }
+
+FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache) { return static_cast<uint32_t>(flags_cache); }
+
+FORCE_INLINE void SetFlags32(uint64_t& flags_cache, uint32_t eflags) {
+    flags_cache = (flags_cache & ~0xFFFFFFFFull) | eflags;
+}
+
+FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache);
+
+FORCE_INLINE void SetFlagBits(uint64_t& flags_cache, uint32_t mask) {
+    SetFlags32(flags_cache, GetFlags32(flags_cache) | mask);
+}
+
+FORCE_INLINE void ClearFlagBits(uint64_t& flags_cache, uint32_t mask) {
+    SetFlags32(flags_cache, GetFlags32(flags_cache) & ~mask);
+}
+
+FORCE_INLINE bool TestFlagBits(uint64_t flags_cache, uint32_t mask) { return (GetFlags32(flags_cache) & mask) != 0; }
+FORCE_INLINE void MaterializePF(uint64_t& flags_cache);
+FORCE_INLINE void RequirePF(uint64_t& flags_cache);
+FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond);
+
 // ------------------------------------------------------------------------------------------------
 // Condition Checking (for Jcc, CMOVcc)
 // ------------------------------------------------------------------------------------------------
 
 template <uint8_t Cond>
-inline bool CheckConditionFixed(EmuState* state) {
-    uint32_t f = state->ctx.eflags;
+inline bool CheckConditionFixed(uint64_t& flags_cache) {
+    uint32_t f = RequireFlagsForCondition(flags_cache, Cond);
     if constexpr (Cond == 0)
         return (f & OF_MASK) != 0;  // JO
     else if constexpr (Cond == 1)
@@ -89,7 +118,7 @@ inline bool CheckConditionFixed(EmuState* state) {
         return false;
 }
 
-inline bool CheckCondition(EmuState* state, uint8_t cond) {
+inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
     static const uint32_t g_ConditionLUT[16] = {
         0xFFFF0000,  // cond 0: JO
         0x0000FFFF,  // cond 1: JNO
@@ -109,7 +138,7 @@ inline bool CheckCondition(EmuState* state, uint8_t cond) {
         0x0F00000F,  // cond 15: JG
     };
 
-    uint32_t f = state->ctx.eflags;
+    uint32_t f = RequireFlagsForCondition(flags_cache, cond);
     // Index bits: OF(bit 11) SF(bit 7) ZF(bit 6) PF(bit 2) CF(bit 0)
     // We map them to: OF:4, SF:3, ZF:2, PF:1, CF:0
     uint32_t index = (f & 0x1) | ((f >> 1) & 0x2) | ((f >> 4) & 0x4) | ((f >> 4) & 0x8) | ((f >> 7) & 0x10);
@@ -439,14 +468,42 @@ inline bool CalcPflag(uint8_t res_byte) {
 // Backward compatibility for other ops files
 inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
 
+FORCE_INLINE void SetPendingParity(uint64_t& flags_cache, uint8_t res_byte) {
+    flags_cache &= ~FLAGS_CACHE_PF_INPUT_MASK;
+    flags_cache |= (static_cast<uint64_t>(res_byte) << FLAGS_CACHE_PF_INPUT_SHIFT);
+    flags_cache |= FLAGS_CACHE_PF_PENDING;
+}
+
+FORCE_INLINE void MaterializePF(uint64_t& flags_cache) {
+    if ((flags_cache & FLAGS_CACHE_PF_PENDING) == 0) return;
+    const uint8_t pf_input =
+        static_cast<uint8_t>((flags_cache & FLAGS_CACHE_PF_INPUT_MASK) >> FLAGS_CACHE_PF_INPUT_SHIFT);
+    uint32_t flags = GetFlags32(flags_cache);
+    flags &= ~PF_MASK;
+    if (CalcPflag(pf_input)) flags |= PF_MASK;
+    SetFlags32(flags_cache, flags);
+    flags_cache &= ~FLAGS_CACHE_PF_PENDING;
+}
+
+FORCE_INLINE void RequirePF(uint64_t& flags_cache) { MaterializePF(flags_cache); }
+
+FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond) {
+    const uint8_t normalized = cond & 0xF;
+    if (normalized == 10 || normalized == 11) MaterializePF(flags_cache);
+    return GetFlags32(flags_cache);
+}
+
+FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) {
+    MaterializePF(flags_cache);
+    state->ctx.eflags = GetFlags32(flags_cache);
+}
+
 template <typename T, bool UpdateFlags = true>
-inline T AluAdd(EmuState* state, T dest, T src) {
+inline T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest + src;
 
     if constexpr (UpdateFlags) {
-        // PF, ZF, SF
-        // Clear all relevant flags first
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         // ZF: Zero Flag
         if (res == 0) flags |= ZF_MASK;
@@ -454,9 +511,6 @@ inline T AluAdd(EmuState* state, T dest, T src) {
         // SF: Sign Flag (MSB)
         uint32_t msb_idx = sizeof(T) * 8 - 1;
         if ((res >> msb_idx) & 1) flags |= SF_MASK;
-
-        // PF: Parity Flag (Low 8 bits have even number of 1s)
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF: Unsigned Overflow (Carry)
         // res < dest implies overflow for ADD
@@ -468,28 +522,24 @@ inline T AluAdd(EmuState* state, T dest, T src) {
         T sign_mask = (T)1 << msb_idx;
         if (!((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        // AF: Auxiliary Carry (Carry from bit 3 to 4)
-        // Branchless: (dest ^ src ^ res) & 0x10 means there was a carry/borrow into bit 4
-        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
-
-        state->ctx.eflags = flags;
+        if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSub(EmuState* state, T dest, T src) {
+inline T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest - src;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
 
         uint32_t msb_idx = sizeof(T) * 8 - 1;
         if ((res >> msb_idx) & 1) flags |= SF_MASK;
-
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF: Borrow
         if (dest < src) flags |= CF_MASK;
@@ -500,18 +550,16 @@ inline T AluSub(EmuState* state, T dest, T src) {
         T sign_mask = (T)1 << msb_idx;
         if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        // AF: Borrow from bit 3
-        // For SUB, similar branchless formula: (dest ^ src ^ res) & 0x10
-        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
-
-        state->ctx.eflags = flags;
+        if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluAdc(EmuState* state, T dest, T src) {
-    uint32_t cf_in = (state->ctx.eflags & CF_MASK);  // 0 or 1 (CF_MASK is 1)
+inline T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    uint32_t cf_in = (GetFlags32(flags_cache) & CF_MASK);
 
     using UT = std::make_unsigned_t<T>;
     unsigned long long wdest = (UT)dest;
@@ -521,14 +569,12 @@ inline T AluAdc(EmuState* state, T dest, T src) {
     T res = (T)wres;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
 
         uint32_t msb_idx = sizeof(T) * 8 - 1;
         if ((res >> msb_idx) & 1) flags |= SF_MASK;
-
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF
         if (wres >> (sizeof(T) * 8)) flags |= CF_MASK;
@@ -537,17 +583,16 @@ inline T AluAdc(EmuState* state, T dest, T src) {
         T sign_mask = (T)1 << msb_idx;
         if (!((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        // AF
-        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
-
-        state->ctx.eflags = flags;
+        if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSbb(EmuState* state, T dest, T src) {
-    uint32_t cf_in = (state->ctx.eflags & CF_MASK);  // 0 or 1
+inline T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    uint32_t cf_in = (GetFlags32(flags_cache) & CF_MASK);
 
     using UT = std::make_unsigned_t<T>;
     unsigned long long wdest = (UT)dest;
@@ -557,14 +602,12 @@ inline T AluSbb(EmuState* state, T dest, T src) {
     T res = (T)wres;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
 
         uint32_t msb_idx = sizeof(T) * 8 - 1;
         if ((res >> msb_idx) & 1) flags |= SF_MASK;
-
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 
         // CF: Borrow
         if (wdest < (wsrc + cf_in)) flags |= CF_MASK;
@@ -573,59 +616,54 @@ inline T AluSbb(EmuState* state, T dest, T src) {
         T sign_mask = (T)1 << msb_idx;
         if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
 
-        // AF
-        if ((dest ^ src ^ res) & AF_MASK) flags |= AF_MASK;
-
-        state->ctx.eflags = flags;
+        if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluAnd(EmuState* state, T dest, T src) {
+inline T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest & src;
 
     if constexpr (UpdateFlags) {
-        // CF=0, OF=0, AF undefined (cleared)
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
-
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluOr(EmuState* state, T dest, T src) {
+inline T AluOr(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest | src;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
-
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluXor(EmuState* state, T dest, T src) {
+inline T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest ^ src;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
 
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
-
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
@@ -635,7 +673,7 @@ inline T AluXor(EmuState* state, T dest, T src) {
 // ------------------------------------------------------------------------------------------------
 
 template <typename T, bool UpdateFlags = true>
-inline T AluShl(EmuState* state, T dest, uint8_t count) {
+inline T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -647,10 +685,9 @@ inline T AluShl(EmuState* state, T dest, uint8_t count) {
     T res = dest << count;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (width - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = MSB(Res) ^ CF
@@ -659,13 +696,14 @@ inline T AluShl(EmuState* state, T dest, uint8_t count) {
             if (msb_res != cf) flags |= OF_MASK;
         }
 
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluShr(EmuState* state, T dest, uint8_t count) {
+inline T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -676,10 +714,9 @@ inline T AluShr(EmuState* state, T dest, uint8_t count) {
     T res = dest >> count;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = MSB(Original)
@@ -687,13 +724,14 @@ inline T AluShr(EmuState* state, T dest, uint8_t count) {
             if ((dest >> (sizeof(T) * 8 - 1)) & 1) flags |= OF_MASK;
         }
 
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSar(EmuState* state, T dest, uint8_t count) {
+inline T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -708,10 +746,9 @@ inline T AluSar(EmuState* state, T dest, uint8_t count) {
     bool cf = (dest >> (count - 1)) & 1;
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if (res == 0) flags |= ZF_MASK;
         if ((res >> (sizeof(T) * 8 - 1)) & 1) flags |= SF_MASK;
-        if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
         if (cf) flags |= CF_MASK;
 
         // OF: For 1-bit, OF = 0
@@ -719,13 +756,14 @@ inline T AluSar(EmuState* state, T dest, uint8_t count) {
             // Clear OF (already cleared)
         }
 
-        state->ctx.eflags = flags;
+        SetFlags32(flags_cache, flags);
+        SetPendingParity(flags_cache, static_cast<uint8_t>(res));
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRol(EmuState* state, T dest, uint8_t count) {
+inline T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
     count &= 0x1F;
@@ -735,7 +773,8 @@ inline T AluRol(EmuState* state, T dest, uint8_t count) {
     T res = (dest << count) | (dest >> (width - count));
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK);
+        MaterializePF(flags_cache);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | OF_MASK);
         // SF/ZF/PF/AF unaffected
 
         // CF: LSB of result
@@ -748,13 +787,13 @@ inline T AluRol(EmuState* state, T dest, uint8_t count) {
             if (msb != cf) flags |= OF_MASK;
         }
 
-        state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
+        SetFlags32(flags_cache, (GetFlags32(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRor(EmuState* state, T dest, uint8_t count) {
+inline T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
     count &= 0x1F;
@@ -764,7 +803,8 @@ inline T AluRor(EmuState* state, T dest, uint8_t count) {
     T res = (dest >> count) | (dest << (width - count));
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = state->ctx.eflags & ~(CF_MASK | OF_MASK);
+        MaterializePF(flags_cache);
+        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | OF_MASK);
 
         // CF: MSB of result
         bool cf = (res >> (width - 1)) & 1;
@@ -777,19 +817,19 @@ inline T AluRor(EmuState* state, T dest, uint8_t count) {
             if (msb != smsb) flags |= OF_MASK;
         }
 
-        state->ctx.eflags = (state->ctx.eflags & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags;
+        SetFlags32(flags_cache, (GetFlags32(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRcl(EmuState* state, T dest, uint8_t count) {
+inline T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
     count %= (width + 1);
     if (count == 0) return dest;
 
     uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
-    if (state->ctx.eflags & CF_MASK) val |= (1ULL << width);
+    if (GetFlags32(flags_cache) & CF_MASK) val |= (1ULL << width);
 
     uint64_t mask = (1ULL << (width + 1)) - 1;
     uint64_t res64 = ((val << count) | (val >> (width + 1 - count))) & mask;
@@ -799,29 +839,29 @@ inline T AluRcl(EmuState* state, T dest, uint8_t count) {
 
     if constexpr (UpdateFlags) {
         if (new_cf)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
 
         if (count == 1) {
             bool msb = (res >> (width - 1)) & 1;
             if (msb != new_cf)
-                state->ctx.eflags |= OF_MASK;
+                SetFlagBits(flags_cache, OF_MASK);
             else
-                state->ctx.eflags &= ~OF_MASK;
+                ClearFlagBits(flags_cache, OF_MASK);
         }
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRcr(EmuState* state, T dest, uint8_t count) {
+inline T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
     count %= (width + 1);
     if (count == 0) return dest;
 
     uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
-    if (state->ctx.eflags & CF_MASK) val |= (1ULL << width);
+    if (GetFlags32(flags_cache) & CF_MASK) val |= (1ULL << width);
 
     uint64_t mask = (1ULL << (width + 1)) - 1;
     uint64_t res64 = ((val >> count) | (val << (width + 1 - count))) & mask;
@@ -831,30 +871,30 @@ inline T AluRcr(EmuState* state, T dest, uint8_t count) {
 
     if constexpr (UpdateFlags) {
         if (new_cf)
-            state->ctx.eflags |= CF_MASK;
+            SetFlagBits(flags_cache, CF_MASK);
         else
-            state->ctx.eflags &= ~CF_MASK;
+            ClearFlagBits(flags_cache, CF_MASK);
 
         if (count == 1) {
             bool msb = (res >> (width - 1)) & 1;
             bool smsb = (res >> (width - 2)) & 1;
             if (msb != smsb)
-                state->ctx.eflags |= OF_MASK;
+                SetFlagBits(flags_cache, OF_MASK);
             else
-                state->ctx.eflags &= ~OF_MASK;
+                ClearFlagBits(flags_cache, OF_MASK);
         }
     }
     return res;
 }
 
 template <typename T>
-inline void AluCmp(EmuState* state, T dest, T src) {
-    AluSub<T, true>(state, dest, src);
+inline void AluCmp(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    AluSub<T, true>(state, flags_cache, dest, src);
 }
 
 template <typename T>
-inline void AluTest(EmuState* state, T dest, T src) {
-    AluAnd<T, true>(state, dest, src);
+inline void AluTest(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    AluAnd<T, true>(state, flags_cache, dest, src);
 }
 
 }  // namespace fiberish

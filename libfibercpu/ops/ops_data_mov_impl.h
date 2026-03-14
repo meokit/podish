@@ -793,7 +793,7 @@ FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
 // ------------------------------------------------------------------------------------------------
 FORCE_INLINE LogicFlow OpLahf(LogicFuncParams) {
     // 9F: LAHF
-    uint32_t flags = state->ctx.eflags;
+    uint32_t flags = GetFlags32(flags_cache);
     uint8_t ah = (flags & 0xD5) | 0x02;  // 0xD5 = 1101 0101 (Mask valid flags)
     uint32_t eax = GetReg(state, EAX);
     eax = (eax & 0xFFFF00FF) | (ah << 8);
@@ -805,9 +805,9 @@ FORCE_INLINE LogicFlow OpSahf(LogicFuncParams) {
     // 9E: SAHF
     uint32_t eax = GetReg(state, EAX);
     uint8_t ah = (eax >> 8) & 0xFF;
-    uint32_t flags = state->ctx.eflags;
+    uint32_t flags = GetFlags32(flags_cache);
     flags = (flags & ~0xFF) | (ah & 0xD5) | 0x02;
-    state->ctx.eflags = flags;
+    SetFlags32(flags_cache, flags);
     return LogicFlow::Continue;
 }
 
@@ -859,7 +859,7 @@ FORCE_INLINE LogicFlow OpXchg_EvGv(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Movs(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);  // DF
+    bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&](uint32_t& ecx_ref) -> bool {
@@ -910,7 +910,7 @@ FORCE_INLINE LogicFlow OpMovs_Word(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);
+    bool df = TestFlagBits(flags_cache, 0x400);
     int32_t step = df ? -1 : 1;
     auto perform = [&]() -> bool {
         uint32_t edi = GetReg(state, EDI);
@@ -934,7 +934,7 @@ FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);
+    bool df = TestFlagBits(flags_cache, 0x400);
     int32_t step = (op->prefixes.flags.opsize ? 2 : 4);
     if (df) step = -step;
 
@@ -966,7 +966,7 @@ FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Lods(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);  // DF
+    bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&](uint32_t& ecx_ref) -> bool {
@@ -1021,7 +1021,7 @@ FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Scas(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);  // DF
+    bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() -> bool {
@@ -1039,7 +1039,7 @@ bool Helper_Scas(LogicFuncParams) {
         else
             acc = (T)GetReg(state, EAX);
 
-        AluSub<T>(state, acc, mem_val);  // CMP uses Sub.
+        AluSub<T>(state, flags_cache, acc, mem_val);  // CMP uses Sub.
 
         SetReg(state, EDI, edi + step);
         return true;
@@ -1054,7 +1054,7 @@ bool Helper_Scas(LogicFuncParams) {
             ecx--;
             SetReg(state, ECX, ecx);
 
-            bool zf = (state->ctx.eflags & ZF_MASK);
+            bool zf = TestFlagBits(flags_cache, ZF_MASK);
             if (op->prefixes.flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0
@@ -1085,7 +1085,7 @@ FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Cmps(LogicFuncParams) {
-    bool df = (state->ctx.eflags & 0x400);  // DF
+    bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() -> bool {
@@ -1101,7 +1101,7 @@ bool Helper_Cmps(LogicFuncParams) {
         if (!dst_val_res) return false;
         T dst_val = *dst_val_res;
 
-        AluSub<T>(state, src_val, dst_val);
+        AluSub<T>(state, flags_cache, src_val, dst_val);
 
         SetReg(state, ESI, esi + step);
         SetReg(state, EDI, edi + step);
@@ -1117,7 +1117,7 @@ bool Helper_Cmps(LogicFuncParams) {
             ecx--;
             SetReg(state, ECX, ecx);
 
-            bool zf = (state->ctx.eflags & ZF_MASK);
+            bool zf = TestFlagBits(flags_cache, ZF_MASK);
             if (op->prefixes.flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0

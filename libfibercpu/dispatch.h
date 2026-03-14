@@ -1,6 +1,7 @@
 #pragma once
 #include <limits>
 #include "decoder.h"
+#include "exec_utils.h"
 #include "logger.h"
 #include "specialization.h"
 #include "state.h"
@@ -32,23 +33,25 @@ FORCE_INLINE void RecordBlockHandlersThrough(EmuState*, const DecodedOp*) {}
 #endif
 
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                  mem::MicroTLB utlb, uint32_t branch);
+                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                mem::MicroTLB utlb, uint32_t branch);
+                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                        int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);
+                                                        int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                        uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);
+                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                      uint64_t flags_cache);
 
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb, uint32_t branch) {
+                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
     // Prefetch further ops
     PREFETCH(reinterpret_cast<const std::byte*>(op) + 128);
     PREFETCH(reinterpret_cast<const std::byte*>(op) + 256);
 
     // Execute Logic
-    auto flow = Target(state, op, &utlb, GetImm(op), &branch);
+    auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache);
 
     switch (flow) {
         case LogicFlow::Continue:
@@ -56,30 +59,34 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
             if (auto* next_op = NextOp(op)) {
-                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch);
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
             }
             __builtin_unreachable();
         case LogicFlow::ExitOnCurrentEIP:
             RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
             if (!state->eip_dirty) state->sync_eip_to_op_start(op);
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
             RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
             if (!state->eip_dirty) state->sync_eip_to_op_end(op);
             return instr_limit;
         case LogicFlow::ExitWithoutSyncEIP:
             RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
             return instr_limit;
         case LogicFlow::RestartMemoryOp:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch);
+            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch, flags_cache);
         case LogicFlow::RetryMemoryOp:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch);
+            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch, flags_cache);
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch);
+            ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch, flags_cache);
         default:
+            CommitFlagsCache(state, flags_cache);
             return instr_limit;
     }
 }

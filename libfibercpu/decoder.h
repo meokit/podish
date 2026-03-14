@@ -50,7 +50,7 @@ struct DecodedOp;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                 mem::MicroTLB utlb, uint32_t branch);
+                                                 mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
 
 enum class LogicFlow : uint8_t {
     Continue = 0,
@@ -62,9 +62,10 @@ enum class LogicFlow : uint8_t {
     ExitToBranch = 6,
 };
 
-#define LogicFuncParams \
-    EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch
-#define LogicPassParams state, op, utlb, imm, branch
+#define LogicFuncParams                                                                                    \
+    EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch, \
+        uint64_t &flags_cache
+#define LogicPassParams state, op, utlb, imm, branch, flags_cache
 
 // Logic Function (Standard ABI, implementation)
 // It may modify op and next_handler to control flow!

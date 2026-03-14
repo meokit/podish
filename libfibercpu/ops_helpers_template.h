@@ -9,7 +9,8 @@ namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T dest, T src,
+                                     mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -21,28 +22,28 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, T dest, T s
 
     switch (subop) {
         case 0:
-            res = AluAdd<T, UpdateFlags>(state, dest, src);
+            res = AluAdd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 1:
-            res = AluOr<T, UpdateFlags>(state, dest, src);
+            res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            res = AluAdc<T, UpdateFlags>(state, dest, src);
+            res = AluAdc<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 3:
-            res = AluSbb<T, UpdateFlags>(state, dest, src);
+            res = AluSbb<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 4:
-            res = AluAnd<T, UpdateFlags>(state, dest, src);
+            res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 5:
-            res = AluSub<T, UpdateFlags>(state, dest, src);
+            res = AluSub<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 6:
-            res = AluXor<T, UpdateFlags>(state, dest, src);
+            res = AluXor<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 7:
-            AluSub<T, UpdateFlags>(state, dest, src);
+            AluSub<T, UpdateFlags>(state, flags_cache, dest, src);
             return LogicFlow::Continue;  // CMP (No writeback)
         default:
             state->fault_vector = 6;
@@ -64,7 +65,8 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, T dest, T s
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb, uint32_t imm) {
+FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val, mem::MicroTLB* utlb,
+                                     uint32_t imm) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -76,7 +78,7 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
         case 0:  // TEST imm
         case 1:  // TEST imm
         {
-            AluAnd<T, UpdateFlags>(state, val, (T)imm);
+            AluAnd<T, UpdateFlags>(state, flags_cache, val, (T)imm);
             break;
         }
         case 2:  // NOT
@@ -90,12 +92,12 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
             return LogicFlow::Continue;
         case 3:  // NEG
         {
-            T res = AluSub<T, UpdateFlags>(state, (T)0, val);
+            T res = AluSub<T, UpdateFlags>(state, flags_cache, (T)0, val);
             if constexpr (UpdateFlags) {
                 if (val != 0)
-                    state->ctx.eflags |= CF_MASK;
+                    SetFlagBits(flags_cache, CF_MASK);
                 else
-                    state->ctx.eflags &= ~CF_MASK;
+                    ClearFlagBits(flags_cache, CF_MASK);
             }
 
             if constexpr (sizeof(T) == 1) {
@@ -121,9 +123,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if ((res & 0xFF00) != 0)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
                 uint16_t ax = (uint16_t)(GetReg(state, EAX) & 0xFFFF);
@@ -136,9 +138,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if ((res >> 16) != 0)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else {  // Dword: EDX:EAX = EAX * r/m32
                 uint32_t eax = GetReg(state, EAX);
@@ -148,9 +150,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if ((res >> 32) != 0)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             }
             break;
@@ -166,9 +168,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if (res != (int16_t)(int8_t)res)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
                 int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
@@ -181,9 +183,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if (res != (int32_t)(int16_t)res)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else {  // Dword: EDX:EAX = EAX * r/m32
                 int32_t eax = (int32_t)GetReg(state, EAX);
@@ -193,9 +195,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
                 if constexpr (UpdateFlags) {
                     if (res != (int64_t)(int32_t)res)
-                        state->ctx.eflags |= (OF_MASK | CF_MASK);
+                        SetFlagBits(flags_cache, OF_MASK | CF_MASK);
                     else
-                        state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+                        ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             }
             break;
@@ -363,7 +365,8 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, T val, mem:
 
 // Template Helper for Group 4 (INC, DEC)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val,
+                                     mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -371,13 +374,13 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem:
         subop = (op->modrm >> 3) & 7;
     }
 
-    uint32_t old_cf = state->ctx.eflags & CF_MASK;
+    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
 
     switch (subop) {
         case 0:  // INC
         {
-            T res = AluAdd<T, UpdateFlags>(state, val, (T)1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            T res = AluAdd<T, UpdateFlags>(state, flags_cache, val, (T)1);
+            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 1) {
                 if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb))
@@ -393,8 +396,8 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem:
         }
         case 1:  // DEC
         {
-            T res = AluSub<T, UpdateFlags>(state, val, (T)1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            T res = AluSub<T, UpdateFlags>(state, flags_cache, val, (T)1);
+            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 1) {
                 if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb))
@@ -420,7 +423,8 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, T val, mem:
 
 // Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb, uint32_t* branch) {
+FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val, mem::MicroTLB* utlb,
+                                     uint32_t* branch) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -431,9 +435,9 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, T val, mem:
     switch (subop) {
         case 0:  // INC Ev
         {
-            uint32_t old_cf = state->ctx.eflags & CF_MASK;
-            T res = AluAdd<T, UpdateFlags>(state, val, 1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
+            T res = AluAdd<T, UpdateFlags>(state, flags_cache, val, 1);
+            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 2) {
                 if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))
@@ -446,9 +450,9 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, T val, mem:
         }
         case 1:  // DEC Ev
         {
-            uint32_t old_cf = state->ctx.eflags & CF_MASK;
-            T res = AluSub<T, UpdateFlags>(state, val, 1);
-            if constexpr (UpdateFlags) state->ctx.eflags = (state->ctx.eflags & ~CF_MASK) | old_cf;
+            uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
+            T res = AluSub<T, UpdateFlags>(state, flags_cache, val, 1);
+            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 2) {
                 if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))

@@ -57,9 +57,10 @@ void RegisterSseMovOps();
 
 // Sentinel Handler (Inline)
 static inline ATTR_PRESERVE_NONE int64_t ExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                   int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {
+                                                   int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                   uint64_t flags_cache) {
     RecordBlockHandlersUntil(state, op);
-    ATTR_MUSTTAIL return ResolveSentinelTarget(state, op, instr_limit, utlb, branch);
+    ATTR_MUSTTAIL return ResolveSentinelTarget(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
 }  // namespace fiberish

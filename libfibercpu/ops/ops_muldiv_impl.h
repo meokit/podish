@@ -41,17 +41,17 @@ FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
 
         if (res != (int32_t)(int16_t)res)
-            state->ctx.eflags |= (OF_MASK | CF_MASK);
+            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
         else
-            state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     } else {
         int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
         SetReg(state, reg, (uint32_t)res);
 
         if (res != (int64_t)(int32_t)res)
-            state->ctx.eflags |= (OF_MASK | CF_MASK);
+            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
         else
-            state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     }
     return LogicFlow::Continue;
 }
@@ -85,17 +85,17 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
 
         if (res != (int32_t)(int16_t)res)
-            state->ctx.eflags |= (OF_MASK | CF_MASK);
+            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
         else
-            state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     } else {
         int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
         SetReg(state, reg, (uint32_t)res);
 
         if (res != (int64_t)(int32_t)res)
-            state->ctx.eflags |= (OF_MASK | CF_MASK);
+            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
         else
-            state->ctx.eflags &= ~(OF_MASK | CF_MASK);
+            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     }
     return LogicFlow::Continue;
 }
