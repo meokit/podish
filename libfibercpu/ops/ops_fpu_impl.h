@@ -489,7 +489,7 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
                     pass = (GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
                     break;  // FCMOVBE
                 case 3:
-                    pass = ReadPF(flags_cache);
+                    pass = PeekPFNoUpdate(flags_cache);
                     break;  // FCMOVU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
@@ -574,7 +574,7 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                     pass = !(GetFlags32(flags_cache) & (fiberish::CF_MASK | fiberish::ZF_MASK));
                     break;  // FCMOVNBE
                 case 3:
-                    pass = !ReadPF(flags_cache);
+                    pass = !PeekPFNoUpdate(flags_cache);
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);

@@ -411,12 +411,7 @@ void X86_SetEIP(EmuState* state, uint32_t eip) {
     state->eip_dirty = true;
 }
 
-uint32_t X86_GetEFLAGS(EmuState* state) {
-    auto flags_cache = GetStateFlagsCache(state);
-    MaterializePF(flags_cache);
-    SetStateFlagsCache(state, flags_cache);
-    return GetArchitecturalEflags(state);
-}
+uint32_t X86_GetEFLAGS(EmuState* state) { return GetArchitecturalEflags(state); }
 
 void X86_SetEFLAGS(EmuState* state, uint32_t val) { SetArchitecturalEflags(state, val); }
 

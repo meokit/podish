@@ -61,7 +61,11 @@ FORCE_INLINE uint64_t InitFlagsCache(uint32_t eflags) {
 }
 
 FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache);
-FORCE_INLINE void MaterializePF(uint64_t& flags_cache);
+FORCE_INLINE uint32_t GetFlags32NoPF(uint64_t flags_cache);
+FORCE_INLINE uint8_t PeekPFState(uint64_t flags_cache);
+FORCE_INLINE bool IsKnownPFState(uint8_t pf_state);
+FORCE_INLINE bool PeekPFNoUpdate(uint64_t flags_cache);
+FORCE_INLINE bool ResolvePF(uint64_t& flags_cache);
 
 FORCE_INLINE uint64_t GetStateFlagsCache(const EmuState* state) { return state->ctx.flags_state; }
 
@@ -69,7 +73,7 @@ FORCE_INLINE void SetStateFlagsCache(EmuState* state, uint64_t flags_cache) { st
 
 FORCE_INLINE uint32_t GetArchitecturalEflags(const EmuState* state) {
     uint64_t flags_cache = GetStateFlagsCache(state);
-    MaterializePF(flags_cache);
+    ResolvePF(flags_cache);
     return GetFlags32(flags_cache);
 }
 
@@ -78,6 +82,8 @@ FORCE_INLINE void SetArchitecturalEflags(EmuState* state, uint32_t eflags) {
 }
 
 FORCE_INLINE uint32_t GetFlags32(uint64_t flags_cache) { return static_cast<uint32_t>(flags_cache); }
+
+FORCE_INLINE uint32_t GetFlags32NoPF(uint64_t flags_cache) { return static_cast<uint32_t>(flags_cache); }
 
 FORCE_INLINE void SetFlags32(uint64_t& flags_cache, uint32_t eflags) {
     flags_cache = (flags_cache & ~0xFFFFFFFFull) | eflags;
@@ -98,17 +104,20 @@ FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache);
 
 FORCE_INLINE void SetFlagBits(uint64_t& flags_cache, uint32_t mask) {
     SetFlags32(flags_cache, GetFlags32(flags_cache) | mask);
+    if (mask & PF_MASK) SyncParityStateFromFlags(flags_cache);
 }
 
 FORCE_INLINE void ClearFlagBits(uint64_t& flags_cache, uint32_t mask) {
     SetFlags32(flags_cache, GetFlags32(flags_cache) & ~mask);
+    if (mask & PF_MASK) SyncParityStateFromFlags(flags_cache);
 }
 
 FORCE_INLINE bool TestFlagBits(uint64_t flags_cache, uint32_t mask) { return (GetFlags32(flags_cache) & mask) != 0; }
-FORCE_INLINE void MaterializePF(uint64_t& flags_cache);
-FORCE_INLINE void RequirePF(uint64_t& flags_cache);
-FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond);
-FORCE_INLINE bool ReadPF(uint64_t& flags_cache);
+FORCE_INLINE bool ReadCF(uint64_t flags_cache) { return TestFlagBits(flags_cache, CF_MASK); }
+FORCE_INLINE bool ReadZF(uint64_t flags_cache) { return TestFlagBits(flags_cache, ZF_MASK); }
+FORCE_INLINE bool ReadSF(uint64_t flags_cache) { return TestFlagBits(flags_cache, SF_MASK); }
+FORCE_INLINE bool ReadOF(uint64_t flags_cache) { return TestFlagBits(flags_cache, OF_MASK); }
+FORCE_INLINE bool ReadAF(uint64_t flags_cache) { return TestFlagBits(flags_cache, AF_MASK); }
 
 // ------------------------------------------------------------------------------------------------
 // Condition Checking (for Jcc, CMOVcc)
@@ -116,44 +125,46 @@ FORCE_INLINE bool ReadPF(uint64_t& flags_cache);
 
 template <uint8_t Cond>
 inline bool CheckConditionFixed(uint64_t& flags_cache) {
-    uint32_t f = RequireFlagsForCondition(flags_cache, Cond);
     if constexpr (Cond == 0)
-        return (f & OF_MASK) != 0;  // JO
+        return ReadOF(flags_cache);  // JO
     else if constexpr (Cond == 1)
-        return (f & OF_MASK) == 0;  // JNO
+        return !ReadOF(flags_cache);  // JNO
     else if constexpr (Cond == 2)
-        return (f & CF_MASK) != 0;  // JB/JC
+        return ReadCF(flags_cache);  // JB/JC
     else if constexpr (Cond == 3)
-        return (f & CF_MASK) == 0;  // JNB/JNC
+        return !ReadCF(flags_cache);  // JNB/JNC
     else if constexpr (Cond == 4)
-        return (f & ZF_MASK) != 0;  // JZ/JE
+        return ReadZF(flags_cache);  // JZ/JE
     else if constexpr (Cond == 5)
-        return (f & ZF_MASK) == 0;  // JNZ/JNE
+        return !ReadZF(flags_cache);  // JNZ/JNE
     else if constexpr (Cond == 6)
-        return (f & (CF_MASK | ZF_MASK)) != 0;  // JBE
+        return ReadCF(flags_cache) || ReadZF(flags_cache);  // JBE
     else if constexpr (Cond == 7)
-        return (f & (CF_MASK | ZF_MASK)) == 0;  // JA
+        return !ReadCF(flags_cache) && !ReadZF(flags_cache);  // JA
     else if constexpr (Cond == 8)
-        return (f & SF_MASK) != 0;  // JS
+        return ReadSF(flags_cache);  // JS
     else if constexpr (Cond == 9)
-        return (f & SF_MASK) == 0;  // JNS
+        return !ReadSF(flags_cache);  // JNS
     else if constexpr (Cond == 10)
-        return (f & PF_MASK) != 0;  // JP/JPE
+        return PeekPFNoUpdate(flags_cache);  // JP/JPE
     else if constexpr (Cond == 11)
-        return (f & PF_MASK) == 0;  // JNP/JPO
+        return !PeekPFNoUpdate(flags_cache);  // JNP/JPO
     else if constexpr (Cond == 12)
-        return ((f & SF_MASK) != 0) != ((f & OF_MASK) != 0);  // JL
+        return ReadSF(flags_cache) != ReadOF(flags_cache);  // JL
     else if constexpr (Cond == 13)
-        return ((f & SF_MASK) != 0) == ((f & OF_MASK) != 0);  // JGE
+        return ReadSF(flags_cache) == ReadOF(flags_cache);  // JGE
     else if constexpr (Cond == 14)
-        return (f & ZF_MASK) || (((f & SF_MASK) != 0) != ((f & OF_MASK) != 0));  // JLE
+        return ReadZF(flags_cache) || (ReadSF(flags_cache) != ReadOF(flags_cache));  // JLE
     else if constexpr (Cond == 15)
-        return !(f & ZF_MASK) && (((f & SF_MASK) != 0) == ((f & OF_MASK) != 0));  // JG
+        return !ReadZF(flags_cache) && (ReadSF(flags_cache) == ReadOF(flags_cache));  // JG
     else
         return false;
 }
 
 inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
+    if ((cond & 0xF) == 10) return PeekPFNoUpdate(flags_cache);
+    if ((cond & 0xF) == 11) return !PeekPFNoUpdate(flags_cache);
+
     static const uint32_t g_ConditionLUT[16] = {
         0xFFFF0000,  // cond 0: JO
         0x0000FFFF,  // cond 1: JNO
@@ -173,7 +184,7 @@ inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
         0x0F00000F,  // cond 15: JG
     };
 
-    uint32_t f = RequireFlagsForCondition(flags_cache, cond);
+    uint32_t f = GetFlags32NoPF(flags_cache);
     // Index bits: OF(bit 11) SF(bit 7) ZF(bit 6) PF(bit 2) CF(bit 0)
     // We map them to: OF:4, SF:3, ZF:2, PF:1, CF:0
     uint32_t index = (f & 0x1) | ((f >> 1) & 0x2) | ((f >> 4) & 0x4) | ((f >> 4) & 0x8) | ((f >> 7) & 0x10);
@@ -503,6 +514,10 @@ inline bool CalcPflag(uint8_t res_byte) {
 // Backward compatibility for other ops files
 inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
 
+FORCE_INLINE bool CalcPFlagsFastPath(uint8_t pf_state) {
+    return pf_state < 2 ? static_cast<bool>(~pf_state & 1) : CalcPflag(pf_state);
+}
+
 FORCE_INLINE void SetParityState(uint64_t& flags_cache, uint8_t res_byte) {
     uint8_t pf_state = res_byte;
     if (res_byte == 0) {
@@ -514,35 +529,31 @@ FORCE_INLINE void SetParityState(uint64_t& flags_cache, uint8_t res_byte) {
     flags_cache |= (static_cast<uint64_t>(pf_state) << FLAGS_CACHE_PF_STATE_SHIFT);
 }
 
-FORCE_INLINE void MaterializePF(uint64_t& flags_cache) {
-    const uint8_t pf_state =
-        static_cast<uint8_t>((flags_cache & FLAGS_CACHE_PF_STATE_MASK) >> FLAGS_CACHE_PF_STATE_SHIFT);
-    uint32_t flags = GetFlags32(flags_cache);
-    flags &= ~PF_MASK;
-    if (pf_state == FLAGS_CACHE_PF_KNOWN_TRUE) {
-        flags |= PF_MASK;
-    } else if (pf_state != FLAGS_CACHE_PF_KNOWN_FALSE && CalcPflag(pf_state)) {
-        flags |= PF_MASK;
-    }
-    SetFlags32AndSyncParityState(flags_cache, flags);
+FORCE_INLINE uint8_t PeekPFState(uint64_t flags_cache) {
+    return static_cast<uint8_t>((flags_cache & FLAGS_CACHE_PF_STATE_MASK) >> FLAGS_CACHE_PF_STATE_SHIFT);
 }
 
-FORCE_INLINE void RequirePF(uint64_t& flags_cache) { MaterializePF(flags_cache); }
-
-FORCE_INLINE bool ReadPF(uint64_t& flags_cache) {
-    RequirePF(flags_cache);
-    return (GetFlags32(flags_cache) & PF_MASK) != 0;
+FORCE_INLINE bool IsKnownPFState(uint8_t pf_state) {
+    return pf_state == FLAGS_CACHE_PF_KNOWN_TRUE || pf_state == FLAGS_CACHE_PF_KNOWN_FALSE;
 }
 
-FORCE_INLINE uint32_t RequireFlagsForCondition(uint64_t& flags_cache, uint8_t cond) {
-    const uint8_t normalized = cond & 0xF;
-    if (normalized == 10 || normalized == 11) MaterializePF(flags_cache);
-    return GetFlags32(flags_cache);
+FORCE_INLINE bool PeekPFNoUpdate(uint64_t flags_cache) {
+    const uint8_t pf_state = PeekPFState(flags_cache);
+    return CalcPFlagsFastPath(pf_state);
 }
 
 FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) {
-    MaterializePF(flags_cache);
+    ResolvePF(flags_cache);
     SetStateFlagsCache(state, flags_cache);
+}
+
+FORCE_INLINE bool ResolvePF(uint64_t& flags_cache) {
+    const uint8_t pf_state = PeekPFState(flags_cache);
+    const bool pf = CalcPFlagsFastPath(pf_state);
+    SetFlags32(flags_cache, pf ? (GetFlags32(flags_cache) | PF_MASK) : (GetFlags32(flags_cache) & ~PF_MASK));
+    flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
+    flags_cache |= (static_cast<uint64_t>(EncodeKnownParityState(pf)) << FLAGS_CACHE_PF_STATE_SHIFT);
+    return pf;
 }
 
 template <typename T, bool UpdateFlags = true>
@@ -820,8 +831,7 @@ inline T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     T res = (dest << count) | (dest >> (width - count));
 
     if constexpr (UpdateFlags) {
-        MaterializePF(flags_cache);
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32NoPF(flags_cache) & ~(CF_MASK | OF_MASK);
         // SF/ZF/PF/AF unaffected
 
         // CF: LSB of result
@@ -834,7 +844,7 @@ inline T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
             if (msb != cf) flags |= OF_MASK;
         }
 
-        SetFlags32(flags_cache, (GetFlags32(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
+        SetFlags32(flags_cache, (GetFlags32NoPF(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
@@ -850,8 +860,7 @@ inline T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     T res = (dest >> count) | (dest << (width - count));
 
     if constexpr (UpdateFlags) {
-        MaterializePF(flags_cache);
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | OF_MASK);
+        uint32_t flags = GetFlags32NoPF(flags_cache) & ~(CF_MASK | OF_MASK);
 
         // CF: MSB of result
         bool cf = (res >> (width - 1)) & 1;
@@ -864,7 +873,7 @@ inline T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
             if (msb != smsb) flags |= OF_MASK;
         }
 
-        SetFlags32(flags_cache, (GetFlags32(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
+        SetFlags32(flags_cache, (GetFlags32NoPF(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
