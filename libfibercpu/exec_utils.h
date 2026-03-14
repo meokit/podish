@@ -497,44 +497,15 @@ FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp*
 // ALU Operations & Flags
 // ------------------------------------------------------------------------------------------------
 
-// Use compiler builtins where possible
-#if defined(__GNUC__) || defined(__clang__)
-#define FIBER_POPCOUNT32(x) __builtin_popcount(x)
-#define FIBER_PARITY32(x) __builtin_parity(x)
-#elif defined(_MSC_VER)
-#include <intrin.h>
-#define FIBER_POPCOUNT32(x) __popcnt(x)
-// MSVC doesn't have a direct parity builtin, use popcount & 1
-#define FIBER_PARITY32(x) (__popcnt(x) & 1)
-#else
-// Fallback
-#define FIBER_POPCOUNT32(x) std::bitset<32>(x).count()
-#define FIBER_PARITY32(x) (FIBER_POPCOUNT32(x) & 1)
-#endif
-
-// 256-entry Parity Lookup Table (1 = Odd Parity i.e. odd number of 1s)
-static const uint8_t g_ParityLUT[256] = {
-    1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
-    0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0,
-    0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0,
-    1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1,
-    0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1,
-    0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1,
-    1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
-};
+FORCE_INLINE bool CalcParityOdd(uint8_t v) {
+    v ^= static_cast<uint8_t>(v >> 4);
+    v ^= static_cast<uint8_t>(v >> 2);
+    v ^= static_cast<uint8_t>(v >> 1);
+    return static_cast<bool>(v & 1);
+}
 
 // Returns true if PF should be set (even number of 1s in low 8 bits)
-inline bool CalcPflag(uint8_t res_byte) {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-    // On x86, we can use builtins which map to efficient instructions or use a small sequence
-    // __builtin_parity returns 1 for odd, 0 for even.
-    // PF wants 1 for even, 0 for odd.
-    return !FIBER_PARITY32(res_byte);
-#else
-    // On non-x86 (like ARM64), use LUT to avoid bit-twiddling overhead
-    return g_ParityLUT[res_byte];
-#endif
-}
+inline bool CalcPflag(uint8_t res_byte) { return !CalcParityOdd(res_byte); }
 
 // Backward compatibility for other ops files
 inline uint8_t Parity(uint8_t v) { return CalcPflag(v) ? 1 : 0; }
