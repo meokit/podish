@@ -249,6 +249,55 @@ static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlo
     return fused;
 }
 
+static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
+                                                                          uint32_t end_eip) {
+    BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
+
+    if (!new_block) {
+        if (FaultTraceEnabled()) {
+            fprintf(stderr, "[RunDbg] DecodeBlock returned null eip=%08X status=%d fault_vector=%u fault_addr=%08X\n",
+                    eip, (int)state->status, (unsigned)state->fault_vector, state->fault_addr);
+        }
+        if (state->status == EmuStatus::Running) {
+            state->status = EmuStatus::Fault;
+        }
+        return nullptr;
+    }
+
+    if (!BlockIsFusibleTerminal(new_block)) {
+        state->block_stats.fusion_reject_not_fusible_terminal++;
+        return CacheDecodedBlock(state, eip, new_block);
+    }
+
+    state->block_stats.fusion_attempts++;
+    const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
+    const uint32_t successor_eip = is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
+    if (successor_eip == eip) {
+        state->block_stats.fusion_reject_loop++;
+        return CacheDecodedBlock(state, eip, new_block);
+    }
+
+    BasicBlock* successor_block = LookupOrDecodeRawBlock(state, successor_eip, end_eip);
+    if (!successor_block) {
+        state->block_stats.fusion_reject_target_missing++;
+        return CacheDecodedBlock(state, eip, new_block);
+    }
+
+    if (!CanFuseWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
+        return CacheDecodedBlock(state, eip, new_block);
+    }
+
+    BasicBlock* fused_block = is_direct_jmp ? BuildFusedDirectJmpBlock(state, new_block, successor_block)
+                                            : BuildFusedJccFallthroughBlock(state, new_block, successor_block);
+    state->block_stats.fusion_success++;
+    if (is_direct_jmp) {
+        state->block_stats.fusion_success_direct_jmp++;
+    } else {
+        state->block_stats.fusion_success_jcc_fallthrough++;
+    }
+    return CacheDecodedBlock(state, eip, fused_block);
+}
+
 // Signal Handler for safety
 void SignalHandler(int sig) {
     void* array[20];
@@ -746,58 +795,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         }
 
         auto it = state->block_cache.find(eip);
-        if (it == state->block_cache.end()) {
-            BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
-
-            if (!new_block) {
-                if (FaultTraceEnabled()) {
-                    fprintf(stderr,
-                            "[RunDbg] DecodeBlock returned null eip=%08X status=%d fault_vector=%u fault_addr=%08X\n",
-                            eip, (int)state->status, (unsigned)state->fault_vector, state->fault_addr);
-                }
-                if (state->status == EmuStatus::Running) {
-                    state->status = EmuStatus::Fault;
-                }
-                break;
-            }
-
-            if (!BlockIsFusibleTerminal(new_block)) {
-                state->block_stats.fusion_reject_not_fusible_terminal++;
-                new_block = CacheDecodedBlock(state, eip, new_block);
-            } else {
-                state->block_stats.fusion_attempts++;
-                const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
-                const uint32_t successor_eip =
-                    is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
-                if (successor_eip == eip) {
-                    state->block_stats.fusion_reject_loop++;
-                    new_block = CacheDecodedBlock(state, eip, new_block);
-                } else {
-                    BasicBlock* successor_block = LookupOrDecodeRawBlock(state, successor_eip, end_eip);
-                    if (!successor_block) {
-                        state->block_stats.fusion_reject_target_missing++;
-                        new_block = CacheDecodedBlock(state, eip, new_block);
-                    } else if (CanFuseWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
-                        BasicBlock* fused_block =
-                            is_direct_jmp ? BuildFusedDirectJmpBlock(state, new_block, successor_block)
-                                          : BuildFusedJccFallthroughBlock(state, new_block, successor_block);
-                        new_block = CacheDecodedBlock(state, eip, fused_block);
-                        state->block_stats.fusion_success++;
-                        if (is_direct_jmp) {
-                            state->block_stats.fusion_success_direct_jmp++;
-                        } else {
-                            state->block_stats.fusion_success_jcc_fallthrough++;
-                        }
-                    } else {
-                        new_block = CacheDecodedBlock(state, eip, new_block);
-                    }
-                }
-            }
-            it = state->block_cache.find(eip);
+        BasicBlock* block_ptr =
+            it == state->block_cache.end() ? ResolveBlockForRunSlow(state, eip, end_eip) : it->second;
+        if (!block_ptr) {
+            break;
         }
-
-        // Get raw pointer
-        BasicBlock* block_ptr = it->second;
 
         // Skip invalid blocks (shouldn't happen if we erase them on invalidation,
         // but safe to check if we change logic)
@@ -805,7 +807,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             // Re-decode? Or Fault?
             // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
             // Let's treat it as a miss and re-decode.
-            state->block_cache.erase(it);
+            if (it != state->block_cache.end()) {
+                state->block_cache.erase(it);
+            } else {
+                state->block_cache.erase(eip);
+            }
             continue;
         }
 

@@ -184,6 +184,46 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
 
 namespace op {
 
+template <bool JumpOnEqual, bool IsRel8>
+FORCE_INLINE LogicFlow OpFusedCmpEvGvJcc_Internal(LogicFuncParams) {
+    auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
+
+    const DecodedOp* jcc_op = NextOp(op);
+    const uint8_t reg = (op->modrm >> 3) & 7;
+    const uint32_t src = GetReg(state, reg);
+    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, *dest_res, src);
+    const bool equal = res == 0;
+    const bool taken = JumpOnEqual ? equal : !equal;
+
+    if (taken) {
+        *branch = jcc_op->next_eip + (IsRel8 ? static_cast<int32_t>(static_cast<int8_t>(GetImm(jcc_op) & 0xFF))
+                                             : static_cast<int32_t>(GetImm(jcc_op)));
+        return LogicFlow::ExitToNextOpBranch;
+    }
+    return LogicFlow::ContinueSkipOne;
+}
+
+template <bool JumpOnEqual, bool IsRel8>
+FORCE_INLINE LogicFlow OpFusedCmpGvEvJcc_Internal(LogicFuncParams) {
+    const uint8_t reg = (op->modrm >> 3) & 7;
+    const uint32_t dest = GetReg(state, reg);
+    auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    if (!src_res) return LogicFlow::RestartMemoryOp;
+
+    const DecodedOp* jcc_op = NextOp(op);
+    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, dest, *src_res);
+    const bool equal = res == 0;
+    const bool taken = JumpOnEqual ? equal : !equal;
+
+    if (taken) {
+        *branch = jcc_op->next_eip + (IsRel8 ? static_cast<int32_t>(static_cast<int8_t>(GetImm(jcc_op) & 0xFF))
+                                             : static_cast<int32_t>(GetImm(jcc_op)));
+        return LogicFlow::ExitToNextOpBranch;
+    }
+    return LogicFlow::ContinueSkipOne;
+}
+
 FORCE_INLINE LogicFlow OpCmp_EvGv_16(LogicFuncParams) {
     return OpCmp_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);
 }
@@ -191,6 +231,18 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_32(LogicFuncParams) {
     return OpCmp_EvGv_Internal<Specialized::Opsize32>(LogicPassParams);
 }
 FORCE_INLINE LogicFlow OpCmp_EvGv(LogicFuncParams) { return OpCmp_EvGv_Internal<Specialized::None>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel8(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<true, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel8(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<false, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel32(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<true, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel32(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<false, false>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpCmp_GvEv_16(LogicFuncParams) {
     return OpCmp_GvEv_Internal<Specialized::Opsize16>(LogicPassParams);
@@ -199,6 +251,18 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_32(LogicFuncParams) {
     return OpCmp_GvEv_Internal<Specialized::Opsize32>(LogicPassParams);
 }
 FORCE_INLINE LogicFlow OpCmp_GvEv(LogicFuncParams) { return OpCmp_GvEv_Internal<Specialized::None>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel8(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<true, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel8(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<false, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel32(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<true, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel32(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<false, false>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpTest_EvGv_16(LogicFuncParams) {
     return OpTest_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);

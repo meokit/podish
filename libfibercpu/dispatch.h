@@ -62,6 +62,11 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
             }
             __builtin_unreachable();
+        case LogicFlow::ContinueSkipOne:
+            if (auto* next_op = NextOp(NextOp(op))) {
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+            }
+            __builtin_unreachable();
         case LogicFlow::ExitOnCurrentEIP:
             RecordBlockHandlersThrough(state, op);
             CommitFlagsCache(state, flags_cache);
@@ -85,6 +90,9 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
             ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch, flags_cache);
+        case LogicFlow::ExitToNextOpBranch:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return ResolveBranchTarget(state, NextOp(op), instr_limit, utlb, branch, flags_cache);
         default:
             CommitFlagsCache(state, flags_cache);
             return instr_limit;
@@ -115,6 +123,13 @@ struct DispatchRegistrar {
         // Wait, SpecializedEntry stores LogicFunc? No, it should store HandlerFunc.
         // Let's cast DispatchWrapper<Target> to HandlerFunc (which it is compatible with).
         RegisterSpecializedHandler(opcode, criteria, (HandlerFunc)DispatchWrapper<Target>);
+    }
+};
+
+template <LogicFunc Target>
+struct FusedDispatchRegistrar {
+    static void RegisterSpecialized(int opcode, FusedSpecCriteria criteria) {
+        RegisterFusedSpecializedHandler(opcode, criteria, (HandlerFunc)DispatchWrapper<Target>);
     }
 };
 

@@ -24,6 +24,7 @@ DEFAULT_AOT_BINARY = Path("build/nativeaot/podish-cli-static/Podish.Cli")
 DEFAULT_ROOTFS = Path("benchmark/podish_perf/rootfs/coremark_i386_alpine")
 DEFAULT_RENAMED_BINARY = "PodishCliXcTraceProfile"
 DEFAULT_BENCH_CASE = "run"
+DEFAULT_AOT_RUNTIME = "osx-arm64"
 
 
 @dataclass
@@ -67,6 +68,29 @@ def default_rootfs() -> Path:
 
 def results_dir() -> Path:
     return repo_root() / "benchmark" / "podish_perf" / "results"
+
+
+def refresh_default_binary(binary: Path) -> None:
+    default = default_binary().resolve()
+    if binary.resolve() != default:
+        return
+
+    project_root = repo_root()
+    run_checked(
+        [
+            "dotnet",
+            "publish",
+            "Podish.Cli/Podish.Cli.csproj",
+            "-c",
+            "Release",
+            "-r",
+            DEFAULT_AOT_RUNTIME,
+            "-p:PublishAot=true",
+            "-o",
+            str(default.parent),
+        ],
+        cwd=project_root,
+    )
 
 
 def build_guest_script(case: str, iterations: int) -> str:
@@ -419,6 +443,7 @@ def compare_reports(report_paths: list[Path], top: int, out_path: Path | None) -
 
 def cmd_record(args: argparse.Namespace) -> int:
     src_binary = args.binary.resolve()
+    refresh_default_binary(src_binary)
     rootfs = args.rootfs.resolve()
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
@@ -459,6 +484,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 def cmd_record_and_analyze(args: argparse.Namespace) -> int:
     src_binary = args.binary.resolve()
+    refresh_default_binary(src_binary)
     rootfs = args.rootfs.resolve()
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
