@@ -516,27 +516,33 @@ FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
-    // 8D: LEA r16/32, m
+template <Specialized SizeSpec>
+FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
     const auto* ext = GetExt(op);
     uint32_t ea_desc = ext->data.ea_desc;
+    const uintptr_t regs_base = reinterpret_cast<uintptr_t>(state->ctx.regs);
     uint32_t offset = ext->data.disp;
-    uint8_t base_offset = memdesc::BaseOffset(ea_desc);
-    if (base_offset != kNoRegOffset) {
-        offset += state->ctx.regs[base_offset >> 2];
-    }
-    uint8_t index_offset = memdesc::IndexOffset(ea_desc);
-    if (index_offset != kNoRegOffset) {
-        offset += state->ctx.regs[index_offset >> 2] << memdesc::Scale(ea_desc);
-    }
+    offset += *reinterpret_cast<const uint32_t*>(regs_base + memdesc::BaseOffset(ea_desc));
+    offset += *reinterpret_cast<const uint32_t*>(regs_base + memdesc::IndexOffset(ea_desc)) << memdesc::Scale(ea_desc);
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
+    if constexpr (SizeSpec == Specialized::Opsize16) {
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (offset & 0xFFFF));
     } else {
         SetReg(state, reg, offset);
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpLea_16(LogicFuncParams) { return OpLea_Impl<Specialized::Opsize16>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpLea_32(LogicFuncParams) { return OpLea_Impl<Specialized::Opsize32>(LogicPassParams); }
+
+FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
+    // 8D: LEA r16/32, m
+    if (op->prefixes.flags.opsize) {
+        return OpLea_16(LogicPassParams);
+    }
+    return OpLea_32(LogicPassParams);
 }
 
 // ------------------------------------------------------------------------------------------------
