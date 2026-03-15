@@ -106,15 +106,6 @@ static bool BlockCrossesPage(const BasicBlock* block) {
     return ((block->chain.start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
-static bool BlockTouchesMemory(const BasicBlock* block) {
-    if (!block || block->inst_count == 0) return false;
-    const DecodedOp* ops = block->FirstOp();
-    for (uint32_t i = 0; i < block->inst_count; ++i) {
-        if (ops[i].meta.flags.has_mem) return true;
-    }
-    return false;
-}
-
 static bool BlockIsFusibleTerminal(const BasicBlock* block) {
     if (!block) return false;
     return block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
@@ -163,14 +154,6 @@ static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_
 static bool CanFuseWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
                                  BlockStats* stats) {
     if (!a || !b || !a->chain.is_valid || !b->chain.is_valid || a->inst_count == 0 || b->inst_count == 0) {
-        stats->fusion_reject_target_missing++;
-        return false;
-    }
-
-    // Conservative safety rule: if the source block touches memory at all,
-    // don't pre-compose it with a decoded successor. This avoids stale-code
-    // execution when the source performs SMC before transferring control.
-    if (BlockTouchesMemory(a)) {
         stats->fusion_reject_target_missing++;
         return false;
     }
@@ -674,20 +657,92 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Reset chaining state for this run
     state->last_block = &state->dummy_invalid_block;
+    state->smc_write_to_exec = false;
+    state->allow_write_exec_page = false;
+    state->intercept_exec_write_for_smc = false;
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
+        const bool smc_single_step = state->smc_write_to_exec;
 
         if (end_eip != 0 && eip == end_eip) {
             state->status = EmuStatus::Stopped;
             break;
         }
-        if (max_insts != 0 && total_run_insts >= max_insts) {
+        if (!smc_single_step && max_insts != 0 && total_run_insts >= max_insts) {
             state->status = EmuStatus::Stopped;
             break;
+        }
+        auto execute_block = [&](BasicBlock* block_ptr) {
+            block_ptr->exec_count++;
+
+            if (state->last_block->inst_count > 0) {
+                SetNextBlock(state->last_block->Sentinel(), block_ptr);
+            }
+            state->last_block = block_ptr;
+            if (block_ptr->inst_count == 0) return;
+
+            DecodedOp* head = block_ptr->FirstOp();
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+            state->current_block_head = head;
+#endif
+
+            if (block_ptr->entry) {
+                state->mem_op.emplace<0>();
+                state->intercept_exec_write_for_smc = true;
+                int64_t batch_limit = 100000;
+                if (max_insts != 0) {
+                    uint64_t remaining_budget = max_insts - total_run_insts;
+                    if (remaining_budget < (uint64_t)batch_limit) {
+                        batch_limit = (int64_t)remaining_budget;
+                    }
+                }
+                int64_t initial_batch_limit = batch_limit;
+                batch_limit -= block_ptr->inst_count;
+                if (state->eip_dirty) state->eip_dirty = false;
+
+                MicroTLB utlb;
+                uint64_t flags_cache = GetStateFlagsCache(state);
+                int64_t remaining =
+                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max(), flags_cache);
+                state->intercept_exec_write_for_smc = false;
+                total_run_insts += (initial_batch_limit - remaining);
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+                state->current_block_head = nullptr;
+#endif
+            } else {
+                state->intercept_exec_write_for_smc = false;
+                if (!state->hooks.on_invalid_opcode(state)) {
+                    state->status = EmuStatus::Fault;
+                    state->fault_vector = 6;
+                }
+            }
+        };
+
+        if (smc_single_step) {
+            // The previous attempt yielded before the guest instruction committed.
+            // Refund that speculative instruction budget before re-executing it.
+            if (total_run_insts > 0) {
+                total_run_insts--;
+            }
+            state->smc_write_to_exec = false;
+            state->allow_write_exec_page = true;
+            state->last_block = &state->dummy_invalid_block;
+            BasicBlock* single_block = DecodeBlock(state, eip, end_eip, 1);
+            if (!single_block) {
+                state->allow_write_exec_page = false;
+                if (state->status == EmuStatus::Running) {
+                    state->status = EmuStatus::Fault;
+                }
+                break;
+            }
+            execute_block(single_block);
+            state->allow_write_exec_page = false;
+            state->last_block = &state->dummy_invalid_block;
+            continue;
         }
 
         auto it = state->block_cache.find(eip);
@@ -754,48 +809,8 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             continue;
         }
 
-        // Increment execution count
-        block_ptr->exec_count++;
-
-        // Link previous block to this one for chaining
-        if (state->last_block->inst_count > 0) {
-            SetNextBlock(state->last_block->Sentinel(), block_ptr);
-        }
-        state->last_block = block_ptr;
-        if (block_ptr->inst_count > 0) {
-            DecodedOp* head = block_ptr->FirstOp();
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-            state->current_block_head = head;
-#endif
-
-            if (block_ptr->entry) {
-                int64_t batch_limit = 1000;
-                if (max_insts != 0) {
-                    uint64_t remaining_budget = max_insts - total_run_insts;
-                    if (remaining_budget < (uint64_t)batch_limit) {
-                        batch_limit = (int64_t)remaining_budget;
-                    }
-                }
-                int64_t initial_batch_limit = batch_limit;
-                batch_limit -= block_ptr->inst_count;
-                if (state->eip_dirty) state->eip_dirty = false;
-
-                MicroTLB utlb;
-                uint64_t flags_cache = GetStateFlagsCache(state);
-                int64_t remaining =
-                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max(), flags_cache);
-                total_run_insts += (initial_batch_limit - remaining);
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-                state->current_block_head = nullptr;
-#endif
-            } else {
-                if (!state->hooks.on_invalid_opcode(state)) {
-                    state->status = EmuStatus::Fault;
-                    state->fault_vector = 6;
-                }
-                break;
-            }
-        }
+        execute_block(block_ptr);
+        if (state->status != EmuStatus::Running) break;
     }
 
     // Sync FPU state back
@@ -934,6 +949,10 @@ void X86_EmuYield(EmuState* state) {
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
     state->last_block = &state->dummy_invalid_block;
+    const bool prev_allow_write_exec_page = state->allow_write_exec_page;
+    const bool prev_intercept_exec_write_for_smc = state->intercept_exec_write_for_smc;
+    state->allow_write_exec_page = true;
+    state->intercept_exec_write_for_smc = true;
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
@@ -943,6 +962,8 @@ int X86_Step(EmuState* state) {
         auto res = state->mmu.read_no_utlb<uint8_t>(state->ctx.eip + i);
         buf[i] = res.value_or(0);
         if (state->status != EmuStatus::Running) {
+            state->allow_write_exec_page = prev_allow_write_exec_page;
+            state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
             f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
             return (int)state->status;
         }
@@ -980,6 +1001,7 @@ int X86_Step(EmuState* state) {
 #endif
 
     if (h) {
+        state->mem_op.emplace<0>();
         MicroTLB utlb;
         uint64_t flags_cache = GetStateFlagsCache(state);
         h(state, head, 0, utlb, std::numeric_limits<uint32_t>::max(),
@@ -995,6 +1017,8 @@ int X86_Step(EmuState* state) {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = nullptr;
 #endif
+    state->allow_write_exec_page = prev_allow_write_exec_page;
+    state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
     f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 
     return (int)state->status;

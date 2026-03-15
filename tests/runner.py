@@ -19,21 +19,14 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BUILD_PATH = os.path.join(PROJECT_ROOT, "build")
 SRC_PATH = os.path.join(PROJECT_ROOT, "libfibercpu")
 SIMDE_PATH = os.path.join(BUILD_PATH, "_deps/simde-src")
+HOST_LIB_PATH = os.path.join(PROJECT_ROOT, "Fiberish.X86", "build_native", "host", "libfibercpu.dylib")
 
 def _find_lib():
-    search_paths = [
-        os.path.join(PROJECT_ROOT, "Fiberish.X86", "build_native"),
-        os.path.join(PROJECT_ROOT, "build", "bin"),
-        os.path.join(PROJECT_ROOT, "cmake-build-release", "bin"),
-        os.path.join(PROJECT_ROOT, "cmake-build-debug", "bin")
-    ]
-    exts = [".dylib", ".so", ".dll"]
-    for path in search_paths:
-        for ext in exts:
-            lib_path = os.path.join(path, "libfibercpu" + ext)
-            if os.path.exists(lib_path):
-                return lib_path
-    return os.path.join(BUILD_PATH, "bin", "libfibercpu.dylib") # default fallback
+    if os.path.exists(HOST_LIB_PATH):
+        return HOST_LIB_PATH
+    raise FileNotFoundError(
+        f"Expected test dylib at {HOST_LIB_PATH}. Build Fiberish.X86 native host library before running pytest."
+    )
 
 LIB_PATH = _find_lib()
 

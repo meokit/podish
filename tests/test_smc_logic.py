@@ -1,51 +1,30 @@
-import pytest
-from tests.runner import X86EmuBackend, Runner
+from tests.runner import Runner
 
 def test_smc_direct_nop():
     """
-    Test Case 1: Direct SMC (Same Block)
-    Modifies the immediately following instruction to NOP.
-    Expectation: Old code executes (EAX=2) because of stale fetch/no invalidation of current block.
+    Same-block SMC should invalidate the current stream and re-execute safely.
+    The patched INC becomes a NOP, so EAX must stay unchanged.
     """
     runner = Runner()
-    # MOV BYTE [0x100A], 0x90  ; 7 bytes (C6 05 0A 10 00 00 90)
-    # NOP                      ; 1 byte
-    # NOP                      ; 1 byte
-    # INC EAX                  ; 1 byte (40) -> at 0x1009 (offset 9)
-    #
-    # Wait, 7+1+1 = 9. So 0x1009.
-    
     asm = """
         mov byte [0x1009], 0x90
         nop
         nop
         inc eax
     """
-    
-    # Expected: EAX = 2 (Old code executes)
+
     runner.run_test(
         "SMC Direct NOP",
         asm,
-        expected_regs={'EAX': 2},
-        check_unicorn=False # Unicorn might handle this differently (invalidation)
+        expected_regs={'EAX': 1},
+        check_unicorn=False,
     )
 
 def test_smc_cross_block_uaf():
     """
-    Test Case 2: Cross-Block SMC
-    Block A modifies Block B then jumps to it.
-    Expectation: New code (NOP) executes (EAX=1).
+    Cross-block SMC should see the modified target block on the jump.
     """
     runner = Runner()
-    # Layout:
-    # 0x1000: MOV BYTE [0x1020], 0x90  (7 bytes)
-    # 0x1007: JMP 0x1020               (5 bytes)
-    # 0x100C: Padding...
-    # 0x1020: INC EAX                  (1 byte)
-    # 0x1021: HLT
-    
-    # Gap from 0x100C to 0x1020 is 20 (0x14) bytes.
-    
     asm = """
         mov byte [0x1020], 0x90
         jmp 0x1020
@@ -53,18 +32,76 @@ def test_smc_cross_block_uaf():
         inc eax
         hlt
     """
-    
-    # Expected: EAX = 1 (INC EAX becomes NOP)
+
     runner.run_test(
         "SMC Cross Block",
         asm,
         expected_regs={'EAX': 1},
-        check_unicorn=False
+        check_unicorn=False,
     )
 
-def test_smc_self_modification():
+def test_smc_same_block_farther_target():
     """
-    Test Case 3: Modifying the CURRENT block.
+    Same-block SMC should also work when the modified instruction is not
+    immediately adjacent to the write.
     """
-    # Just repeating Case 1 but explicit
-    pass
+    runner = Runner()
+    asm = """
+        mov byte [0x100a], 0x90
+        nop
+        nop
+        nop
+        inc eax
+    """
+
+    runner.run_test(
+        "SMC Same Block Farther Target",
+        asm,
+        expected_regs={'EAX': 1},
+        check_unicorn=False,
+    )
+
+
+def test_smc_double_patch_same_page():
+    """
+    Two SMC writes in sequence should not leave the engine stuck in rerun mode.
+    Both patched INC instructions become NOPs.
+    """
+    runner = Runner()
+    asm = """
+        mov byte [0x1010], 0x90
+        mov byte [0x1011], 0x90
+        nop
+        nop
+        inc eax
+        inc eax
+    """
+
+    runner.run_test(
+        "SMC Double Patch Same Page",
+        asm,
+        expected_regs={'EAX': 1},
+        check_unicorn=False,
+    )
+
+
+def test_smc_patched_instruction_runs_once_after_rerun():
+    """
+    Re-executing the current write must not duplicate earlier side effects.
+    The write changes the following INC into a NOP, but the later INC still runs.
+    """
+    runner = Runner()
+    asm = """
+        mov byte [0x1009], 0x90
+        nop
+        nop
+        inc eax
+        inc eax
+    """
+
+    runner.run_test(
+        "SMC Patched Instruction Runs Once After Rerun",
+        asm,
+        expected_regs={'EAX': 2},
+        check_unicorn=False,
+    )

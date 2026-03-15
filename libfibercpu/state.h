@@ -123,6 +123,17 @@ struct EmuState {
     void* log_userdata = nullptr;
 
     bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
+    // Set when a write targets an executable guest page while exec writes are
+    // disallowed. X86_Run consumes this and re-executes the current instruction
+    // in a safe single-instruction mode.
+    bool smc_write_to_exec = false;
+    // Temporary override used by X86_Run to permit exactly one instruction to
+    // write an executable page after an SMC-triggered yield.
+    bool allow_write_exec_page = false;
+    // True only while guest instructions are actively executing. External API
+    // memory writes (program loading, tests, patching) must not trigger the
+    // SMC rerun path.
+    bool intercept_exec_write_for_smc = false;
     BlockStats block_stats;
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     ankerl::unordered_dense::map<uintptr_t, uint64_t> handler_exec_counts;

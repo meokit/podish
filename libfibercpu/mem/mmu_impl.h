@@ -8,6 +8,14 @@
 
 namespace fiberish::mem {
 
+static FORCE_INLINE bool ShouldInterceptExecWriteForSmc(EmuState* state, GuestAddr addr) {
+    if (!state->intercept_exec_write_for_smc || state->allow_write_exec_page) return false;
+
+    const uint32_t current_page = state->ctx.eip >> 12;
+    const uint32_t target_page = addr >> 12;
+    return target_page == current_page || target_page == (current_page + 1);
+}
+
 inline EmuState* Mmu::get_state() {
     const intptr_t offset = reinterpret_cast<intptr_t>(&(static_cast<EmuState*>(nullptr)->mmu));
     return reinterpret_cast<EmuState*>(reinterpret_cast<char*>(this) - offset);
@@ -316,6 +324,18 @@ template <typename T>
 // Write Slow
 template <typename T>
 [[nodiscard]] MemResult<void> Mmu::write_slow(GuestAddr addr, T val) {
+    if (smc_handler) {
+        Property p = get_property(addr);
+        if (has_property(p, Property::Exec)) {
+            EmuState* state = get_state();
+            if (ShouldInterceptExecWriteForSmc(state, addr)) {
+                state->smc_write_to_exec = true;
+                return std::unexpected(FaultCode::PageFault);
+            }
+            smc_handler(smc_opaque, addr);
+        }
+    }
+
     if (mem_hook) {
         uint64_t hook_val = 0;
         if constexpr (sizeof(T) <= 8) {
@@ -337,13 +357,6 @@ template <typename T>
     auto res = resolve_slow(addr, Property::Write);
     if (!res) return std::unexpected(res.error());
     HostAddr ptr = *res;
-
-    if (ptr && smc_handler) {
-        Property p = get_property(addr);  // Assuming get_property exists elsewhere
-        if (has_property(p, Property::Exec)) {
-            smc_handler(smc_opaque, addr);
-        }
-    }
 
     if (ptr) {
         // Safe copy for unaligned slow-path access
@@ -387,6 +400,20 @@ template <typename T>
     uint32_t len2 = sizeof(T) - len1;
 
     GuestAddr addr2 = addr + len1;
+
+    if (smc_handler) {
+        Property prop1 = get_property(addr);
+        Property prop2 = get_property(addr2);
+        const bool touches_exec = has_property(prop1, Property::Exec) || has_property(prop2, Property::Exec);
+        if (touches_exec) {
+            EmuState* state = get_state();
+            if ((has_property(prop1, Property::Exec) && ShouldInterceptExecWriteForSmc(state, addr)) ||
+                (has_property(prop2, Property::Exec) && ShouldInterceptExecWriteForSmc(state, addr2))) {
+                state->smc_write_to_exec = true;
+                return std::unexpected(FaultCode::PageFault);
+            }
+        }
+    }
 
     auto res1 = resolve_ptr(addr, Property::Write);
     if (!res1) return std::unexpected(res1.error());
