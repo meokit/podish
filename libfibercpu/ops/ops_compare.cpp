@@ -19,75 +19,11 @@ void RegisterCompareOps() {
 
     // 39: CMP r/m16/32, r16/32
     REGISTER_OPSIZE(0x39, OpCmp_EvGv);
-    g_Handlers[OP_FUSED_CMP_EVGV_JE_REL8] = DispatchWrapper<OpFusedCmp_EvGv_JE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_EVGV_JNE_REL8] = DispatchWrapper<OpFusedCmp_EvGv_JNE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_EVGV_JE_REL32] = DispatchWrapper<OpFusedCmp_EvGv_JE_Rel32>;
-    g_Handlers[OP_FUSED_CMP_EVGV_JNE_REL32] = DispatchWrapper<OpFusedCmp_EvGv_JNE_Rel32>;
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x74;
-        FusedDispatchRegistrar<OpFusedCmp_EvGv_JE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_CMP_EVGV_JE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x75;
-        FusedDispatchRegistrar<OpFusedCmp_EvGv_JNE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_CMP_EVGV_JNE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x184;
-        FusedDispatchRegistrar<OpFusedCmp_EvGv_JE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_CMP_EVGV_JE_REL32, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x185;
-        FusedDispatchRegistrar<OpFusedCmp_EvGv_JNE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_CMP_EVGV_JNE_REL32, c);
-    }
 
     g_Handlers[0x3A] = DispatchWrapper<OpCmp_GbEb>;
 
     // 3B: CMP r16/32, r/m16/32
     REGISTER_OPSIZE(0x3B, OpCmp_GvEv);
-    g_Handlers[OP_FUSED_CMP_GVEV_JE_REL8] = DispatchWrapper<OpFusedCmp_GvEv_JE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_GVEV_JNE_REL8] = DispatchWrapper<OpFusedCmp_GvEv_JNE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_GVEV_JE_REL32] = DispatchWrapper<OpFusedCmp_GvEv_JE_Rel32>;
-    g_Handlers[OP_FUSED_CMP_GVEV_JNE_REL32] = DispatchWrapper<OpFusedCmp_GvEv_JNE_Rel32>;
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x74;
-        FusedDispatchRegistrar<OpFusedCmp_GvEv_JE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_CMP_GVEV_JE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x75;
-        FusedDispatchRegistrar<OpFusedCmp_GvEv_JNE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_CMP_GVEV_JNE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x184;
-        FusedDispatchRegistrar<OpFusedCmp_GvEv_JE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_CMP_GVEV_JE_REL32, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x185;
-        FusedDispatchRegistrar<OpFusedCmp_GvEv_JNE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_CMP_GVEV_JNE_REL32, c);
-    }
 
     // 85: TEST r/m16/32, r16/32
     REGISTER_OPSIZE(0x85, OpTest_EvGv);

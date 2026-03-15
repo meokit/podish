@@ -126,13 +126,6 @@ struct DispatchRegistrar {
     }
 };
 
-template <LogicFunc Target>
-struct FusedDispatchRegistrar {
-    static void RegisterSpecialized(int opcode, FusedSpecCriteria criteria) {
-        RegisterFusedSpecializedHandler(opcode, criteria, (HandlerFunc)DispatchWrapper<Target>);
-    }
-};
-
 // Simplified Macro for ops registration
 // Replaces the old g_Handlers[idx] = DispatchWrapper<Func>;
 // Usage: DispatchRegistrar<Func>::Register(idx);

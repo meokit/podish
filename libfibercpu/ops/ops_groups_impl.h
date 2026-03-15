@@ -54,50 +54,6 @@ FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
     return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
 }
 
-template <bool JumpOnEqual, bool IsRel8>
-FORCE_INLINE LogicFlow OpFusedCmpEvIbJcc_Internal(LogicFuncParams) {
-    auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-
-    const DecodedOp* jcc_op = NextOp(op);
-    const uint32_t cmp_val = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(imm & 0xFF)));
-    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, *dest_res, cmp_val);
-    const bool equal = res == 0;
-    const bool taken = JumpOnEqual ? equal : !equal;
-
-    if (taken) {
-        *branch = jcc_op->next_eip + (IsRel8 ? static_cast<int32_t>(static_cast<int8_t>(GetImm(jcc_op) & 0xFF))
-                                             : static_cast<int32_t>(GetImm(jcc_op)));
-        return LogicFlow::ExitToNextOpBranch;
-    }
-    return LogicFlow::ContinueSkipOne;
-}
-
-template <bool JumpOnEqual, bool IsRel8, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow OpFusedTestEvGvJcc_Internal(LogicFuncParams) {
-    const DecodedOp* jcc_op = NextOp(op);
-    const uint8_t reg = (op->modrm >> 3) & 7;
-    const uint32_t src = GetReg(state, reg);
-    uint32_t dest = 0;
-    if constexpr (S == Specialized::ModReg) {
-        dest = GetReg(state, op->modrm & 7);
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        dest = *dest_res;
-    }
-    const uint32_t res = AluAnd<uint32_t>(state, flags_cache, dest, src);
-    const bool equal = res == 0;
-    const bool taken = JumpOnEqual ? equal : !equal;
-
-    if (taken) {
-        *branch = jcc_op->next_eip + (IsRel8 ? static_cast<int32_t>(static_cast<int8_t>(GetImm(jcc_op) & 0xFF))
-                                             : static_cast<int32_t>(GetImm(jcc_op)));
-        return LogicFlow::ExitToNextOpBranch;
-    }
-    return LogicFlow::ContinueSkipOne;
-}
-
 // =========================================================================================
 // Group 3: 0xF6 (Eb), 0xF7 (Ev)
 // =========================================================================================
@@ -274,54 +230,6 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
 }
 
 namespace op {
-
-FORCE_INLINE LogicFlow OpFusedCmpEvIb_JE_Rel8(LogicFuncParams) {
-    return OpFusedCmpEvIbJcc_Internal<true, true>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedCmpEvIb_JNE_Rel8(LogicFuncParams) {
-    return OpFusedCmpEvIbJcc_Internal<false, true>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedCmpEvIb_JE_Rel32(LogicFuncParams) {
-    return OpFusedCmpEvIbJcc_Internal<true, false>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedCmpEvIb_JNE_Rel32(LogicFuncParams) {
-    return OpFusedCmpEvIbJcc_Internal<false, false>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel8(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<true, true>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel8(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<false, true>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel8_ModReg(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<true, true, Specialized::ModReg>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel8_ModReg(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<false, true, Specialized::ModReg>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel32(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<true, false>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel32(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<false, false>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel32_ModReg(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<true, false, Specialized::ModReg>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel32_ModReg(LogicFuncParams) {
-    return OpFusedTestEvGvJcc_Internal<false, false, Specialized::ModReg>(LogicPassParams);
-}
 
 // Wrappers for Dispatch (Generic fallback)
 FORCE_INLINE LogicFlow OpGroup1_EvIz_Generic(LogicFuncParams) {

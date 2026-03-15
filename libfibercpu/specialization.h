@@ -113,41 +113,10 @@ struct SpecializedEntry {
     HandlerFunc handler;  // Wrapper pointer
 };
 
-struct FusedSpecCriteria {
-    SpecCriteria producer;
-    uint16_t consumer_opcode = 0;
-    uint16_t consumer_opcode_mask = 0xFFFF;
-
-    bool Matches(uint16_t actual_consumer_opcode, const DecodedOp* producer_op) const {
-        if ((actual_consumer_opcode & consumer_opcode_mask) != consumer_opcode) return false;
-        return producer.Matches(producer_op->modrm, producer_op->prefixes.all, producer_op->meta.flags.no_flags);
-    }
-
-    int GetScore() const {
-        int score = producer.GetScore();
-        if (consumer_opcode_mask) {
-            uint16_t v = consumer_opcode_mask;
-            while (v) {
-                score++;
-                v &= v - 1;
-            }
-        }
-        return score;
-    }
-};
-
-struct FusedSpecializedEntry {
-    uint16_t opcode;
-    FusedSpecCriteria criteria;
-    HandlerFunc handler;
-};
-
 // Global Registration
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler);
-void RegisterFusedSpecializedHandler(uint16_t opcode, FusedSpecCriteria criteria, HandlerFunc handler);
 
 // Lookup
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op);
-HandlerFunc FindFusedSpecializedHandler(uint16_t handler_index, DecodedOp* producer, uint16_t consumer_opcode);
 
 }  // namespace fiberish

@@ -106,7 +106,7 @@ static bool BlockCrossesPage(const BasicBlock* block) {
     return ((block->chain.start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
-static bool BlockIsFusibleTerminal(const BasicBlock* block) {
+static bool BlockIsConcatCandidateTerminal(const BasicBlock* block) {
     if (!block) return false;
     return block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
            block->terminal_kind() == BlockTerminalKind::DirectJccRel;
@@ -136,7 +136,7 @@ static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicB
     return it->second;
 }
 
-static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_t end_eip) {
+static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
     auto it = state->block_cache.find(eip);
     if (it != state->block_cache.end()) return it->second;
 
@@ -151,52 +151,52 @@ static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_
     return CacheDecodedBlock(state, eip, block);
 }
 
-static bool CanFuseWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
-                                 BlockStats* stats) {
+static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
+                                        BlockStats* stats) {
     if (!a || !b || !a->chain.is_valid || !b->chain.is_valid || a->inst_count == 0 || b->inst_count == 0) {
-        stats->fusion_reject_target_missing++;
+        stats->block_concat_reject_target_missing++;
         return false;
     }
 
     if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->chain.start_eip ^ b->chain.start_eip) & 0xFFFFF000u) != 0) {
-        stats->fusion_reject_cross_page++;
+        stats->block_concat_reject_cross_page++;
         return false;
     }
 
     if (BlockFormsSmallLoopWith(a, b)) {
-        stats->fusion_reject_loop++;
+        stats->block_concat_reject_loop++;
         return false;
     }
 
     const uint32_t removed_inst_count = remove_source_terminal_inst ? 1u : 0u;
-    const uint32_t fused_inst_count = a->inst_count - removed_inst_count + b->inst_count;
+    const uint32_t concat_inst_count = a->inst_count - removed_inst_count + b->inst_count;
 
-    if (fused_inst_count > 64) {
-        stats->fusion_reject_size_limit++;
+    if (concat_inst_count > 64) {
+        stats->block_concat_reject_size_limit++;
         return false;
     }
 
     return true;
 }
 
-static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    const uint32_t fused_inst_count = a->inst_count - 1 + b->inst_count;
-    const uint32_t fused_slot_count = fused_inst_count + 1;
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(fused_slot_count));
-    BasicBlock* fused = new (mem) BasicBlock;
+static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
+    const uint32_t concat_inst_count = a->inst_count - 1 + b->inst_count;
+    const uint32_t concat_slot_count = concat_inst_count + 1;
+    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
+    BasicBlock* concat = new (mem) BasicBlock;
 
-    fused->chain.start_eip = a->chain.start_eip;
-    fused->end_eip = b->end_eip;
-    fused->inst_count = fused_inst_count;
-    fused->slot_count = fused_slot_count;
-    fused->sentinel_slot_index = fused_inst_count;
-    fused->branch_target_eip = b->branch_target_eip;
-    fused->fallthrough_eip = b->fallthrough_eip;
-    fused->set_terminal_kind(b->terminal_kind());
-    fused->chain.is_valid = true;
-    fused->exec_count = 0;
+    concat->chain.start_eip = a->chain.start_eip;
+    concat->end_eip = b->end_eip;
+    concat->inst_count = concat_inst_count;
+    concat->slot_count = concat_slot_count;
+    concat->sentinel_slot_index = concat_inst_count;
+    concat->branch_target_eip = b->branch_target_eip;
+    concat->fallthrough_eip = b->fallthrough_eip;
+    concat->set_terminal_kind(b->terminal_kind());
+    concat->chain.is_valid = true;
+    concat->exec_count = 0;
 
-    DecodedOp* dst = fused->FirstOp();
+    DecodedOp* dst = concat->FirstOp();
     const DecodedOp* a_ops = a->FirstOp();
     const DecodedOp* b_ops = b->FirstOp();
 
@@ -209,29 +209,29 @@ static BasicBlock* BuildFusedDirectJmpBlock(EmuState* state, const BasicBlock* a
     }
     dst[out] = *b->Sentinel();
 
-    fused->entry = FindJitBlock(fused->FirstOp());
-    fused->entry = fused->entry ? fused->entry : fused->FirstOp()->handler;
-    return fused;
+    concat->entry = FindJitBlock(concat->FirstOp());
+    concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
+    return concat;
 }
 
-static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    const uint32_t fused_inst_count = a->inst_count + b->inst_count;
-    const uint32_t fused_slot_count = fused_inst_count + 1;
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(fused_slot_count));
-    BasicBlock* fused = new (mem) BasicBlock;
+static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
+    const uint32_t concat_inst_count = a->inst_count + b->inst_count;
+    const uint32_t concat_slot_count = concat_inst_count + 1;
+    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
+    BasicBlock* concat = new (mem) BasicBlock;
 
-    fused->chain.start_eip = a->chain.start_eip;
-    fused->end_eip = b->end_eip;
-    fused->inst_count = fused_inst_count;
-    fused->slot_count = fused_slot_count;
-    fused->sentinel_slot_index = fused_inst_count;
-    fused->branch_target_eip = b->branch_target_eip;
-    fused->fallthrough_eip = b->fallthrough_eip;
-    fused->set_terminal_kind(b->terminal_kind());
-    fused->chain.is_valid = true;
-    fused->exec_count = 0;
+    concat->chain.start_eip = a->chain.start_eip;
+    concat->end_eip = b->end_eip;
+    concat->inst_count = concat_inst_count;
+    concat->slot_count = concat_slot_count;
+    concat->sentinel_slot_index = concat_inst_count;
+    concat->branch_target_eip = b->branch_target_eip;
+    concat->fallthrough_eip = b->fallthrough_eip;
+    concat->set_terminal_kind(b->terminal_kind());
+    concat->chain.is_valid = true;
+    concat->exec_count = 0;
 
-    DecodedOp* dst = fused->FirstOp();
+    DecodedOp* dst = concat->FirstOp();
     const DecodedOp* a_ops = a->FirstOp();
     const DecodedOp* b_ops = b->FirstOp();
 
@@ -244,9 +244,9 @@ static BasicBlock* BuildFusedJccFallthroughBlock(EmuState* state, const BasicBlo
     }
     dst[out] = *b->Sentinel();
 
-    fused->entry = FindJitBlock(fused->FirstOp());
-    fused->entry = fused->entry ? fused->entry : fused->FirstOp()->handler;
-    return fused;
+    concat->entry = FindJitBlock(concat->FirstOp());
+    concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
+    return concat;
 }
 
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
@@ -264,38 +264,38 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return nullptr;
     }
 
-    if (!BlockIsFusibleTerminal(new_block)) {
-        state->block_stats.fusion_reject_not_fusible_terminal++;
+    if (!BlockIsConcatCandidateTerminal(new_block)) {
+        state->block_stats.block_concat_reject_not_concat_terminal++;
         return CacheDecodedBlock(state, eip, new_block);
     }
 
-    state->block_stats.fusion_attempts++;
+    state->block_stats.block_concat_attempts++;
     const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
     const uint32_t successor_eip = is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
     if (successor_eip == eip) {
-        state->block_stats.fusion_reject_loop++;
+        state->block_stats.block_concat_reject_loop++;
         return CacheDecodedBlock(state, eip, new_block);
     }
 
-    BasicBlock* successor_block = LookupOrDecodeRawBlock(state, successor_eip, end_eip);
+    BasicBlock* successor_block = LookupOrDecodeBlockConcatSuccessor(state, successor_eip, end_eip);
     if (!successor_block) {
-        state->block_stats.fusion_reject_target_missing++;
+        state->block_stats.block_concat_reject_target_missing++;
         return CacheDecodedBlock(state, eip, new_block);
     }
 
-    if (!CanFuseWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
+    if (!CanBlockConcatWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
         return CacheDecodedBlock(state, eip, new_block);
     }
 
-    BasicBlock* fused_block = is_direct_jmp ? BuildFusedDirectJmpBlock(state, new_block, successor_block)
-                                            : BuildFusedJccFallthroughBlock(state, new_block, successor_block);
-    state->block_stats.fusion_success++;
+    BasicBlock* concat_block = is_direct_jmp ? BuildDirectJmpBlockConcat(state, new_block, successor_block)
+                                             : BuildJccFallthroughBlockConcat(state, new_block, successor_block);
+    state->block_stats.block_concat_success++;
     if (is_direct_jmp) {
-        state->block_stats.fusion_success_direct_jmp++;
+        state->block_stats.block_concat_success_direct_jmp++;
     } else {
-        state->block_stats.fusion_success_jcc_fallthrough++;
+        state->block_stats.block_concat_success_jcc_fallthrough++;
     }
-    return CacheDecodedBlock(state, eip, fused_block);
+    return CacheDecodedBlock(state, eip, concat_block);
 }
 
 // Signal Handler for safety
@@ -834,15 +834,15 @@ void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     stats->total_block_insts = src.total_block_insts;
     std::memcpy(stats->stop_reason_counts, src.stop_reason_counts, sizeof(stats->stop_reason_counts));
     std::memcpy(stats->inst_histogram, src.inst_histogram, sizeof(stats->inst_histogram));
-    stats->fusion_attempts = src.fusion_attempts;
-    stats->fusion_success = src.fusion_success;
-    stats->fusion_success_direct_jmp = src.fusion_success_direct_jmp;
-    stats->fusion_success_jcc_fallthrough = src.fusion_success_jcc_fallthrough;
-    stats->fusion_reject_not_fusible_terminal = src.fusion_reject_not_fusible_terminal;
-    stats->fusion_reject_cross_page = src.fusion_reject_cross_page;
-    stats->fusion_reject_size_limit = src.fusion_reject_size_limit;
-    stats->fusion_reject_loop = src.fusion_reject_loop;
-    stats->fusion_reject_target_missing = src.fusion_reject_target_missing;
+    stats->block_concat_attempts = src.block_concat_attempts;
+    stats->block_concat_success = src.block_concat_success;
+    stats->block_concat_success_direct_jmp = src.block_concat_success_direct_jmp;
+    stats->block_concat_success_jcc_fallthrough = src.block_concat_success_jcc_fallthrough;
+    stats->block_concat_reject_not_concat_terminal = src.block_concat_reject_not_concat_terminal;
+    stats->block_concat_reject_cross_page = src.block_concat_reject_cross_page;
+    stats->block_concat_reject_size_limit = src.block_concat_reject_size_limit;
+    stats->block_concat_reject_loop = src.block_concat_reject_loop;
+    stats->block_concat_reject_target_missing = src.block_concat_reject_target_missing;
 }
 
 void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {

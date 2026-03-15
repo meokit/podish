@@ -330,22 +330,6 @@ static bool IsDirectRelativeJmpHandlerIndex(uint16_t handler_index) {
     return handler_index == 0xE9 || handler_index == 0xEB;
 }
 
-enum class FusionFamily : uint8_t {
-    None = 0,
-    CmpEvIb,
-    CmpEvGv,
-    CmpGvEv,
-    TestEvGv,
-    JccE_Rel8,
-    JccNE_Rel8,
-    JccE_Rel32,
-    JccNE_Rel32,
-};
-
-static bool IsTwoOpFusedHandlerIndex(uint16_t handler_index) {
-    return handler_index >= OP_FUSED_CMP_EVIB_JE_REL8 && handler_index <= OP_FUSED_CMP_GVEV_JNE_REL32;
-}
-
 static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
     return (handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F) ||
            (handler_index >= 0x180 && handler_index <= 0x18F);
@@ -365,141 +349,10 @@ static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const Decoded
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
 }
 
-struct NarrowFusionRule {
-    FusionFamily producer_family;
-    FusionFamily consumer_family;
-    uint16_t fused_handler_index;
-};
-
-static constexpr NarrowFusionRule kNarrowFusionRules[] = {
-    {FusionFamily::CmpEvIb, FusionFamily::JccE_Rel8, OP_FUSED_CMP_EVIB_JE_REL8},
-    {FusionFamily::CmpEvIb, FusionFamily::JccNE_Rel8, OP_FUSED_CMP_EVIB_JNE_REL8},
-    {FusionFamily::CmpEvIb, FusionFamily::JccE_Rel32, OP_FUSED_CMP_EVIB_JE_REL32},
-    {FusionFamily::CmpEvIb, FusionFamily::JccNE_Rel32, OP_FUSED_CMP_EVIB_JNE_REL32},
-    {FusionFamily::TestEvGv, FusionFamily::JccE_Rel8, OP_FUSED_TEST_EVGV_JE_REL8},
-    {FusionFamily::TestEvGv, FusionFamily::JccNE_Rel8, OP_FUSED_TEST_EVGV_JNE_REL8},
-    {FusionFamily::TestEvGv, FusionFamily::JccE_Rel32, OP_FUSED_TEST_EVGV_JE_REL32},
-    {FusionFamily::TestEvGv, FusionFamily::JccNE_Rel32, OP_FUSED_TEST_EVGV_JNE_REL32},
-    {FusionFamily::CmpEvGv, FusionFamily::JccE_Rel8, OP_FUSED_CMP_EVGV_JE_REL8},
-    {FusionFamily::CmpEvGv, FusionFamily::JccNE_Rel8, OP_FUSED_CMP_EVGV_JNE_REL8},
-    {FusionFamily::CmpEvGv, FusionFamily::JccE_Rel32, OP_FUSED_CMP_EVGV_JE_REL32},
-    {FusionFamily::CmpEvGv, FusionFamily::JccNE_Rel32, OP_FUSED_CMP_EVGV_JNE_REL32},
-    {FusionFamily::CmpGvEv, FusionFamily::JccE_Rel8, OP_FUSED_CMP_GVEV_JE_REL8},
-    {FusionFamily::CmpGvEv, FusionFamily::JccNE_Rel8, OP_FUSED_CMP_GVEV_JNE_REL8},
-    {FusionFamily::CmpGvEv, FusionFamily::JccE_Rel32, OP_FUSED_CMP_GVEV_JE_REL32},
-    {FusionFamily::CmpGvEv, FusionFamily::JccNE_Rel32, OP_FUSED_CMP_GVEV_JNE_REL32},
-};
-
-static bool IsEligibleCmpEvIbFusionProducer(const DecodedOp& op, uint16_t handler_index) {
-    if (handler_index != 0x83) return false;
-    if (op.prefixes.flags.lock || op.prefixes.flags.rep || op.prefixes.flags.repne || op.prefixes.flags.opsize) {
-        return false;
-    }
-    if (((op.modrm >> 3) & 7) != 7) return false;
-    return true;
-}
-
-static bool IsEligibleTestEvGvFusionProducer(const DecodedOp& op, uint16_t handler_index) {
-    if (handler_index != 0x85) return false;
-    if (op.prefixes.flags.lock || op.prefixes.flags.rep || op.prefixes.flags.repne || op.prefixes.flags.opsize) {
-        return false;
-    }
-    return true;
-}
-
-static bool IsEligibleCmpEvGvFusionProducer(const DecodedOp& op, uint16_t handler_index) {
-    if (handler_index != 0x39) return false;
-    if (op.prefixes.flags.lock || op.prefixes.flags.rep || op.prefixes.flags.repne || op.prefixes.flags.opsize) {
-        return false;
-    }
-    return true;
-}
-
-static bool IsEligibleCmpGvEvFusionProducer(const DecodedOp& op, uint16_t handler_index) {
-    if (handler_index != 0x3B) return false;
-    if (op.prefixes.flags.lock || op.prefixes.flags.rep || op.prefixes.flags.repne || op.prefixes.flags.opsize) {
-        return false;
-    }
-    return true;
-}
-
-static bool IsEligibleFusedJccConsumer(const DecodedOp& op, uint16_t handler_index) {
-    if (handler_index != 0x74 && handler_index != 0x75 && handler_index != 0x184 && handler_index != 0x185)
-        return false;
-    return op.prefixes.all == 0;
-}
-
-static FusionFamily GetFusionFamily(const DecodedOp& op, uint16_t handler_index) {
-    if (IsEligibleCmpEvIbFusionProducer(op, handler_index)) return FusionFamily::CmpEvIb;
-    if (IsEligibleTestEvGvFusionProducer(op, handler_index)) return FusionFamily::TestEvGv;
-    if (IsEligibleCmpEvGvFusionProducer(op, handler_index)) return FusionFamily::CmpEvGv;
-    if (IsEligibleCmpGvEvFusionProducer(op, handler_index)) return FusionFamily::CmpGvEv;
-    if (IsEligibleFusedJccConsumer(op, handler_index)) {
-        switch (handler_index) {
-            case 0x74:
-                return FusionFamily::JccE_Rel8;
-            case 0x75:
-                return FusionFamily::JccNE_Rel8;
-            case 0x184:
-                return FusionFamily::JccE_Rel32;
-            case 0x185:
-                return FusionFamily::JccNE_Rel32;
-            default:
-                break;
-        }
-    }
-    return FusionFamily::None;
-}
-
 static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
     HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
     if (specialized_h) {
         op.handler = specialized_h;
-    }
-}
-
-static void ApplyFusedSpecializedHandler(uint16_t handler_index, uint16_t consumer_handler_index, DecodedOp& op) {
-    HandlerFunc specialized_h = FindFusedSpecializedHandler(handler_index, &op, consumer_handler_index);
-    if (specialized_h) {
-        op.handler = specialized_h;
-    }
-}
-
-static void BuildFusedProducer(EmuState* state, DecodedInstTmp& producer, const DecodedInstTmp& consumer,
-                               uint16_t fused_handler_index) {
-    (void)consumer;
-    (void)state;
-    producer.head.handler = g_Handlers[fused_handler_index];
-    producer.head.meta.flags.no_flags = 0;
-}
-
-static void FuseAdjacentOps(EmuState* state, std::vector<DecodedInstTmp>& temp_ops, std::vector<uint16_t>& op_indices) {
-    if (temp_ops.size() < 2 || op_indices.size() < 2) return;
-
-    for (size_t i = 0; i + 1 < temp_ops.size() && i + 1 < op_indices.size();) {
-        auto& producer = temp_ops[i];
-        const auto& consumer = temp_ops[i + 1];
-        const uint16_t producer_idx = op_indices[i];
-        const uint16_t consumer_idx = op_indices[i + 1];
-        const FusionFamily producer_family = GetFusionFamily(producer.head, producer_idx);
-        const FusionFamily consumer_family = GetFusionFamily(consumer.head, consumer_idx);
-
-        bool fused = false;
-        if (!producer.head.meta.flags.is_control_flow && consumer.head.meta.flags.is_control_flow &&
-            producer_family != FusionFamily::None && consumer_family != FusionFamily::None) {
-            for (const auto& rule : kNarrowFusionRules) {
-                if (rule.producer_family != producer_family) continue;
-                if (rule.consumer_family != consumer_family) continue;
-                BuildFusedProducer(state, producer, consumer, rule.fused_handler_index);
-                op_indices[i] = rule.fused_handler_index;
-                fused = true;
-                break;
-            }
-        }
-
-        if (!fused) {
-            ++i;
-        }
     }
 }
 
@@ -731,15 +584,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         stop_reason = BlockStopReason::MaxInsts;
     }
 
-    FuseAdjacentOps(state, temp_ops, op_indices);
-
-    for (size_t i = 0; i < temp_ops.size() && i < op_indices.size(); ++i) {
-        if (!IsTwoOpFusedHandlerIndex(op_indices[i])) continue;
-        if (i + 1 < op_indices.size()) {
-            ApplyFusedSpecializedHandler(op_indices[i], op_indices[i + 1], temp_ops[i].head);
-        }
-    }
-
     // Append Sentinel Op
     {
         DecodedInstTmp sentinel;
@@ -767,53 +611,49 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint16_t h_idx = op_indices[i];
         uint32_t reads = 0;
         uint32_t writes = 0;
-        if (IsTwoOpFusedHandlerIndex(h_idx)) {
-            writes = DFE_ALL_FLAGS;
-        } else {
-            uint16_t flat_idx = h_idx & 0x1FF;
-            const auto& info = kOpFlagTable[flat_idx];
+        uint16_t flat_idx = h_idx & 0x1FF;
+        const auto& info = kOpFlagTable[flat_idx];
 
-            switch (info.type) {
-                case DFE_TYPE_SIMPLE:
-                    reads = info.read_mask;
-                    writes = info.write_mask;
-                    break;
-                case DFE_TYPE_GROUP1: {
-                    uint8_t reg = (op.modrm >> 3) & 7;
-                    if (reg == 2 || reg == 3) {  // ADC, SBB
-                        reads = DFE_CF_MASK;
-                        writes = DFE_ALL_FLAGS;
-                    } else if (reg == 7) {  // CMP
-                        writes = DFE_ALL_FLAGS;
-                    } else {
-                        writes = DFE_ALL_FLAGS;
-                    }
-                    break;
-                }
-                case DFE_TYPE_GROUP2:
+        switch (info.type) {
+            case DFE_TYPE_SIMPLE:
+                reads = info.read_mask;
+                writes = info.write_mask;
+                break;
+            case DFE_TYPE_GROUP1: {
+                uint8_t reg = (op.modrm >> 3) & 7;
+                if (reg == 2 || reg == 3) {  // ADC, SBB
+                    reads = DFE_CF_MASK;
                     writes = DFE_ALL_FLAGS;
-                    break;
-                case DFE_TYPE_GROUP3: {
-                    uint8_t reg = (op.modrm >> 3) & 7;
-                    if (reg == 0 || reg == 1) {  // TEST
-                        writes = DFE_ALL_FLAGS;
-                    } else if (reg == 2) {  // NOT
-                    } else {                // NEG, MUL
-                        writes = DFE_ALL_FLAGS;
-                    }
-                    break;
+                } else if (reg == 7) {  // CMP
+                    writes = DFE_ALL_FLAGS;
+                } else {
+                    writes = DFE_ALL_FLAGS;
                 }
-                case DFE_TYPE_GROUP4: {
-                    uint8_t reg = (op.modrm >> 3) & 7;
-                    if (reg == 0 || reg == 1) {  // INC, DEC
-                        writes = DFE_ALL_FLAGS & ~DFE_CF_MASK;
-                    }
-                    break;
-                }
-                default:
-                    reads = DFE_ALL_FLAGS;
-                    break;
+                break;
             }
+            case DFE_TYPE_GROUP2:
+                writes = DFE_ALL_FLAGS;
+                break;
+            case DFE_TYPE_GROUP3: {
+                uint8_t reg = (op.modrm >> 3) & 7;
+                if (reg == 0 || reg == 1) {  // TEST
+                    writes = DFE_ALL_FLAGS;
+                } else if (reg == 2) {  // NOT
+                } else {                // NEG, MUL
+                    writes = DFE_ALL_FLAGS;
+                }
+                break;
+            }
+            case DFE_TYPE_GROUP4: {
+                uint8_t reg = (op.modrm >> 3) & 7;
+                if (reg == 0 || reg == 1) {  // INC, DEC
+                    writes = DFE_ALL_FLAGS & ~DFE_CF_MASK;
+                }
+                break;
+            }
+            default:
+                reads = DFE_ALL_FLAGS;
+                break;
         }
 
         if (writes != 0 && (writes & live_flags) == 0) {

@@ -151,15 +151,15 @@ typedef struct {
     uint64_t total_block_insts;
     uint64_t stop_reason_counts[8];
     uint64_t inst_histogram[65];
-    uint64_t fusion_attempts;
-    uint64_t fusion_success;
-    uint64_t fusion_success_direct_jmp;
-    uint64_t fusion_success_jcc_fallthrough;
-    uint64_t fusion_reject_not_fusible_terminal;
-    uint64_t fusion_reject_cross_page;
-    uint64_t fusion_reject_size_limit;
-    uint64_t fusion_reject_loop;
-    uint64_t fusion_reject_target_missing;
+    uint64_t block_concat_attempts;
+    uint64_t block_concat_success;
+    uint64_t block_concat_success_direct_jmp;
+    uint64_t block_concat_success_jcc_fallthrough;
+    uint64_t block_concat_reject_not_concat_terminal;
+    uint64_t block_concat_reject_cross_page;
+    uint64_t block_concat_reject_size_limit;
+    uint64_t block_concat_reject_loop;
+    uint64_t block_concat_reject_target_missing;
 } X86_BlockStats;
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats);

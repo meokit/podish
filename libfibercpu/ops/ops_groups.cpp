@@ -22,43 +22,6 @@ void RegisterGroupOps() {
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Word>;
     g_Handlers[0x118] = DispatchWrapper<OpPrefetch>;
     g_Handlers[0x10B] = DispatchWrapper<OpUd2_Groups>;
-    g_Handlers[OP_FUSED_CMP_EVIB_JE_REL8] = DispatchWrapper<OpFusedCmpEvIb_JE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_EVIB_JNE_REL8] = DispatchWrapper<OpFusedCmpEvIb_JNE_Rel8>;
-    g_Handlers[OP_FUSED_CMP_EVIB_JE_REL32] = DispatchWrapper<OpFusedCmpEvIb_JE_Rel32>;
-    g_Handlers[OP_FUSED_CMP_EVIB_JNE_REL32] = DispatchWrapper<OpFusedCmpEvIb_JNE_Rel32>;
-    g_Handlers[OP_FUSED_TEST_EVGV_JE_REL8] = DispatchWrapper<OpFusedTestEvGv_JE_Rel8>;
-    g_Handlers[OP_FUSED_TEST_EVGV_JNE_REL8] = DispatchWrapper<OpFusedTestEvGv_JNE_Rel8>;
-    g_Handlers[OP_FUSED_TEST_EVGV_JE_REL32] = DispatchWrapper<OpFusedTestEvGv_JE_Rel32>;
-    g_Handlers[OP_FUSED_TEST_EVGV_JNE_REL32] = DispatchWrapper<OpFusedTestEvGv_JNE_Rel32>;
-
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x74;
-        FusedDispatchRegistrar<OpFusedTestEvGv_JE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_TEST_EVGV_JE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x75;
-        FusedDispatchRegistrar<OpFusedTestEvGv_JNE_Rel8_ModReg>::RegisterSpecialized(OP_FUSED_TEST_EVGV_JNE_REL8, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x184;
-        FusedDispatchRegistrar<OpFusedTestEvGv_JE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_TEST_EVGV_JE_REL32, c);
-    }
-    {
-        FusedSpecCriteria c;
-        c.producer.mod_mask = 0x3;
-        c.producer.mod_val = 0x3;
-        c.consumer_opcode = 0x185;
-        FusedDispatchRegistrar<OpFusedTestEvGv_JNE_Rel32_ModReg>::RegisterSpecialized(OP_FUSED_TEST_EVGV_JNE_REL32, c);
-    }
 
     // Specializations (Call macros defined above)
     // Re-invoke macros to register specialized handlers
