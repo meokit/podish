@@ -184,15 +184,20 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
 
 namespace op {
 
-template <bool JumpOnEqual, bool IsRel8>
+template <bool JumpOnEqual, bool IsRel8, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpFusedCmpEvGvJcc_Internal(LogicFuncParams) {
-    auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-
     const DecodedOp* jcc_op = NextOp(op);
     const uint8_t reg = (op->modrm >> 3) & 7;
     const uint32_t src = GetReg(state, reg);
-    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, *dest_res, src);
+    uint32_t dest = 0;
+    if constexpr (S == Specialized::ModReg) {
+        dest = GetReg(state, op->modrm & 7);
+    } else {
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
+        dest = *dest_res;
+    }
+    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, dest, src);
     const bool equal = res == 0;
     const bool taken = JumpOnEqual ? equal : !equal;
 
@@ -204,15 +209,20 @@ FORCE_INLINE LogicFlow OpFusedCmpEvGvJcc_Internal(LogicFuncParams) {
     return LogicFlow::ContinueSkipOne;
 }
 
-template <bool JumpOnEqual, bool IsRel8>
+template <bool JumpOnEqual, bool IsRel8, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpFusedCmpGvEvJcc_Internal(LogicFuncParams) {
     const uint8_t reg = (op->modrm >> 3) & 7;
     const uint32_t dest = GetReg(state, reg);
-    auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-    if (!src_res) return LogicFlow::RestartMemoryOp;
-
     const DecodedOp* jcc_op = NextOp(op);
-    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, dest, *src_res);
+    uint32_t src = 0;
+    if constexpr (S == Specialized::ModReg) {
+        src = GetReg(state, op->modrm & 7);
+    } else {
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!src_res) return LogicFlow::RestartMemoryOp;
+        src = *src_res;
+    }
+    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, dest, src);
     const bool equal = res == 0;
     const bool taken = JumpOnEqual ? equal : !equal;
 
@@ -237,11 +247,23 @@ FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel8(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel8(LogicFuncParams) {
     return OpFusedCmpEvGvJcc_Internal<false, true>(LogicPassParams);
 }
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<true, true, Specialized::ModReg>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<false, true, Specialized::ModReg>(LogicPassParams);
+}
 FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel32(LogicFuncParams) {
     return OpFusedCmpEvGvJcc_Internal<true, false>(LogicPassParams);
 }
 FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel32(LogicFuncParams) {
     return OpFusedCmpEvGvJcc_Internal<false, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<true, false, Specialized::ModReg>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_EvGv_JNE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedCmpEvGvJcc_Internal<false, false, Specialized::ModReg>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpCmp_GvEv_16(LogicFuncParams) {
@@ -257,11 +279,23 @@ FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel8(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel8(LogicFuncParams) {
     return OpFusedCmpGvEvJcc_Internal<false, true>(LogicPassParams);
 }
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<true, true, Specialized::ModReg>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<false, true, Specialized::ModReg>(LogicPassParams);
+}
 FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel32(LogicFuncParams) {
     return OpFusedCmpGvEvJcc_Internal<true, false>(LogicPassParams);
 }
 FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel32(LogicFuncParams) {
     return OpFusedCmpGvEvJcc_Internal<false, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<true, false, Specialized::ModReg>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpFusedCmp_GvEv_JNE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedCmpGvEvJcc_Internal<false, false, Specialized::ModReg>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpTest_EvGv_16(LogicFuncParams) {

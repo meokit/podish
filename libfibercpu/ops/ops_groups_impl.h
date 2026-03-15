@@ -73,15 +73,20 @@ FORCE_INLINE LogicFlow OpFusedCmpEvIbJcc_Internal(LogicFuncParams) {
     return LogicFlow::ContinueSkipOne;
 }
 
-template <bool JumpOnEqual, bool IsRel8>
+template <bool JumpOnEqual, bool IsRel8, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpFusedTestEvGvJcc_Internal(LogicFuncParams) {
-    auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-
     const DecodedOp* jcc_op = NextOp(op);
     const uint8_t reg = (op->modrm >> 3) & 7;
     const uint32_t src = GetReg(state, reg);
-    const uint32_t res = AluAnd<uint32_t>(state, flags_cache, *dest_res, src);
+    uint32_t dest = 0;
+    if constexpr (S == Specialized::ModReg) {
+        dest = GetReg(state, op->modrm & 7);
+    } else {
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
+        dest = *dest_res;
+    }
+    const uint32_t res = AluAnd<uint32_t>(state, flags_cache, dest, src);
     const bool equal = res == 0;
     const bool taken = JumpOnEqual ? equal : !equal;
 
@@ -294,12 +299,28 @@ FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel8(LogicFuncParams) {
     return OpFusedTestEvGvJcc_Internal<false, true>(LogicPassParams);
 }
 
+FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedTestEvGvJcc_Internal<true, true, Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel8_ModReg(LogicFuncParams) {
+    return OpFusedTestEvGvJcc_Internal<false, true, Specialized::ModReg>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel32(LogicFuncParams) {
     return OpFusedTestEvGvJcc_Internal<true, false>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel32(LogicFuncParams) {
     return OpFusedTestEvGvJcc_Internal<false, false>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpFusedTestEvGv_JE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedTestEvGvJcc_Internal<true, false, Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpFusedTestEvGv_JNE_Rel32_ModReg(LogicFuncParams) {
+    return OpFusedTestEvGvJcc_Internal<false, false, Specialized::ModReg>(LogicPassParams);
 }
 
 // Wrappers for Dispatch (Generic fallback)

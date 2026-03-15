@@ -458,6 +458,13 @@ static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
     }
 }
 
+static void ApplyFusedSpecializedHandler(uint16_t handler_index, uint16_t consumer_handler_index, DecodedOp& op) {
+    HandlerFunc specialized_h = FindFusedSpecializedHandler(handler_index, &op, consumer_handler_index);
+    if (specialized_h) {
+        op.handler = specialized_h;
+    }
+}
+
 static void BuildFusedProducer(EmuState* state, DecodedInstTmp& producer, const DecodedInstTmp& consumer,
                                uint16_t fused_handler_index) {
     (void)consumer;
@@ -728,7 +735,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     for (size_t i = 0; i < temp_ops.size() && i < op_indices.size(); ++i) {
         if (!IsTwoOpFusedHandlerIndex(op_indices[i])) continue;
-        ApplySpecializedHandler(op_indices[i], temp_ops[i].head);
+        if (i + 1 < op_indices.size()) {
+            ApplyFusedSpecializedHandler(op_indices[i], op_indices[i + 1], temp_ops[i].head);
+        }
     }
 
     // Append Sentinel Op

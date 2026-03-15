@@ -254,9 +254,11 @@ static HandlerInit _init;
 // Specialization Registry
 // Array of vectors for O(1) opcode lookup
 static std::vector<SpecializedEntry> g_OpSpecializations[1024];
+static std::vector<FusedSpecializedEntry> g_FusedOpSpecializations[1024];
 // Lookup Cache to accelerate finding specialized handlers
 // Thread-local for lock-free access
 static thread_local ankerl::unordered_dense::map<uint64_t, HandlerFunc> g_SpecCache;
+static thread_local ankerl::unordered_dense::map<uint64_t, HandlerFunc> g_FusedSpecCache;
 
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
     if (opcode >= 1024) return;
@@ -275,6 +277,15 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
     // Since cache is thread_local and registration happens at startup (main thread),
     // clearing main thread's cache is fine but others start empty anyway.
     // We can skip explicit clear here as it's unlikely to have stale entries during static init.
+}
+
+void RegisterFusedSpecializedHandler(uint16_t opcode, FusedSpecCriteria criteria, HandlerFunc handler) {
+    if (opcode >= 1024) return;
+    auto& list = g_FusedOpSpecializations[opcode];
+    list.push_back({opcode, criteria, handler});
+    std::sort(list.begin(), list.end(), [](const FusedSpecializedEntry& a, const FusedSpecializedEntry& b) {
+        return a.criteria.GetScore() > b.criteria.GetScore();
+    });
 }
 
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
@@ -331,6 +342,33 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
 
     // Update Cache
     g_SpecCache[key] = found;
+    return found;
+}
+
+HandlerFunc FindFusedSpecializedHandler(uint16_t handler_index, DecodedOp* producer, uint16_t consumer_opcode) {
+    if (handler_index >= 1024) return nullptr;
+
+    uint64_t key = handler_index;
+    if (producer->meta.flags.has_modrm) {
+        key |= (uint64_t(producer->modrm) << 10);
+        key |= (1ULL << 34);
+    }
+    key |= (uint64_t(producer->prefixes.all) << 18);
+    if (producer->meta.flags.no_flags) key |= (1ULL << 35);
+    key |= (uint64_t(consumer_opcode) << 36);
+
+    auto it = g_FusedSpecCache.find(key);
+    if (it != g_FusedSpecCache.end()) return it->second;
+
+    const auto& list = g_FusedOpSpecializations[handler_index];
+    HandlerFunc found = nullptr;
+    for (const auto& entry : list) {
+        if (!entry.criteria.Matches(consumer_opcode, producer)) continue;
+        found = entry.handler;
+        break;
+    }
+
+    g_FusedSpecCache[key] = found;
     return found;
 }
 
