@@ -252,6 +252,10 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial nuint GetJccProfileStats(IntPtr state, JccProfileEntry* buffer, nuint maxCount);
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetBlockStats")]
+    [SuppressGCTransition]
+    public static partial void GetBlockStats(IntPtr state, BlockStats* stats);
+
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockCount")]
     [SuppressGCTransition]
     public static partial int GetBlockCount(IntPtr state);
@@ -265,17 +269,20 @@ public unsafe partial class X86Native
     [StructLayout(LayoutKind.Explicit, Size = 32)]
     public struct DecodedOp
     {
-        [FieldOffset(0)] public ulong mem_packed;
+        [FieldOffset(0)] public IntPtr handler;
         [FieldOffset(8)] public uint next_eip;
         [FieldOffset(12)] public byte len;
         [FieldOffset(13)] public byte modrm;
         [FieldOffset(14)] public byte prefixes;
         [FieldOffset(15)] public byte meta;
         [FieldOffset(16)] public uint imm;
-        [FieldOffset(24)] public IntPtr handler;
+        [FieldOffset(20)] public uint ea_desc;
+        [FieldOffset(24)] public uint disp;
+        [FieldOffset(28)] public uint reserved;
+        [FieldOffset(24)] public IntPtr ext_ptr;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Size = 64)]
     public struct BasicBlock
     {
         public uint start_eip;
@@ -291,7 +298,7 @@ public unsafe partial class X86Native
         public uint fallthrough_eip;
         public ulong exec_count;
         public IntPtr entry;
-        // DecodedOp ops[1] follows at offset 56 on 64-bit hosts.
+        // Native BasicBlock::slots is alignas(16), so decoded ops start at offset 64.
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -319,5 +326,22 @@ public unsafe partial class X86Native
         public ulong NotTaken;
         public ulong CacheHit;
         public ulong CacheMiss;
+    }
+
+    public unsafe struct BlockStats
+    {
+        public ulong BlockCount;
+        public ulong TotalBlockInsts;
+        public fixed ulong StopReasonCounts[8];
+        public fixed ulong InstHistogram[65];
+        public ulong BlockConcatAttempts;
+        public ulong BlockConcatSuccess;
+        public ulong BlockConcatSuccessDirectJmp;
+        public ulong BlockConcatSuccessJccFallthrough;
+        public ulong BlockConcatRejectNotConcatTerminal;
+        public ulong BlockConcatRejectCrossPage;
+        public ulong BlockConcatRejectSizeLimit;
+        public ulong BlockConcatRejectLoop;
+        public ulong BlockConcatRejectTargetMissing;
     }
 }

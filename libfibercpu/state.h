@@ -91,6 +91,9 @@ struct EmuState {
 
     // Block Cache - Stores raw pointers. Blocks are owned by block_pool.
     ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
+    // Historical block list for stats export. Blocks are never individually freed;
+    // cache invalidation only removes reachability from block_cache/page_to_blocks.
+    std::vector<BasicBlock*> all_blocks;
 
     // Optimization: Dummy "Invalid" block.
     // next_block pointers are initialized to the address of this object instead of nullptr.
@@ -149,6 +152,10 @@ struct EmuState {
     int tsc_mode = 1;                // 0: Fixed Increment, 1: Real-time
     uint64_t tsc_fixed_counter = 0;  // For mode 0
     std::chrono::steady_clock::time_point tsc_start_time;
+
+    void RememberAllocatedBlock(BasicBlock* block) {
+        if (block != nullptr) all_blocks.push_back(block);
+    }
 
     // Helper function to sync eip
     void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->len; }

@@ -89,6 +89,10 @@ internal class Program
         {
             AllowMultipleArgumentsPerToken = false
         };
+        var guestStatsExportDirOption = new Option<string?>(
+            new[] { "--guest-stats-dir" },
+            () => null,
+            "Export guest stats before teardown into this directory");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -111,6 +115,7 @@ internal class Program
         runCommand.AddOption(hostnameOption);
         runCommand.AddOption(networkOption);
         runCommand.AddOption(publishOption);
+        runCommand.AddOption(guestStatsExportDirOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async context =>
@@ -129,6 +134,7 @@ internal class Program
             var explicitHostname = context.ParseResult.GetValueForOption(hostnameOption);
             var networkRaw = context.ParseResult.GetValueForOption(networkOption) ?? "host";
             var publishRaw = context.ParseResult.GetValueForOption(publishOption) ?? Array.Empty<string>();
+            var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -355,7 +361,8 @@ internal class Program
                 containerDir,
                 containerLogDriver,
                 eventStore,
-                publishedPorts);
+                publishedPorts,
+                guestStatsExportDir);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -377,11 +384,13 @@ internal class Program
         var startCommand = new Command("start", "Start an existing container by name or ID");
         var startContainerArgument = new Argument<string>("container", "Container name or ID");
         startCommand.AddArgument(startContainerArgument);
+        startCommand.AddOption(guestStatsExportDirOption);
         startCommand.SetHandler(async context =>
         {
             var containerId = context.ParseResult.GetValueForArgument(startContainerArgument);
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
+            var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var imagesDir = Path.Combine(fiberpodDir, "images");
@@ -504,7 +513,8 @@ internal class Program
                 containerDir,
                 containerLogDriver,
                 eventStore,
-                spec.PublishedPorts);
+                spec.PublishedPorts,
+                guestStatsExportDir);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1279,7 +1289,7 @@ internal class Program
         string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
-        ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts)
+        ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
@@ -1303,7 +1313,8 @@ internal class Program
             ContainerDir = containerDir,
             LogDriver = logDriver,
             EventStore = eventStore,
-            PublishedPorts = publishedPorts
+            PublishedPorts = publishedPorts,
+            GuestStatsExportDir = guestStatsExportDir
         });
     }
 }

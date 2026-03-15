@@ -184,6 +184,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     const uint32_t concat_slot_count = concat_inst_count + 1;
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
+    state->RememberAllocatedBlock(concat);
 
     concat->chain.start_eip = a->chain.start_eip;
     concat->end_eip = b->end_eip;
@@ -219,6 +220,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     const uint32_t concat_slot_count = concat_inst_count + 1;
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
+    state->RememberAllocatedBlock(concat);
 
     concat->chain.start_eip = a->chain.start_eip;
     concat->end_eip = b->end_eip;
@@ -1179,16 +1181,16 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
 
 size_t X86_GetBlockCount(EmuState* state) {
     if (!state) return 0;
-    return state->block_cache.size();
+    return state->all_blocks.size();
 }
 
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) {
     if (!state || !buffer || max_count == 0) return 0;
 
     size_t count = 0;
-    for (auto& pair : state->block_cache) {
+    for (BasicBlock* block : state->all_blocks) {
         if (count >= max_count) break;
-        buffer[count] = pair.second;
+        buffer[count] = block;
         count++;
     }
     return count;

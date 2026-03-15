@@ -1,68 +1,74 @@
+import argparse
+import glob
 import json
 import os
-import glob
+
+
+def read_analysis(input_path):
+    with open(input_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def get_imm_value(op):
+    imm = op.get("imm")
+    if isinstance(imm, int):
+        return f"0x{imm:x}"
+    if isinstance(imm, str):
+        return imm
+    imm_hex = op.get("imm_hex")
+    if isinstance(imm_hex, str):
+        return imm_hex
+    return "0"
+
 
 def generate_trie_node(blocks, depth=0):
-    """递归生成嵌套的 if-else 查找逻辑，解决常量值报错问题"""
-    relevant_blocks = [b for b in blocks if len(b['ops']) > depth]
-    exact_match = [b for b in blocks if len(b['ops']) == depth]
+    relevant_blocks = [b for b in blocks if len(b["ops"]) > depth]
+    exact_match = [b for b in blocks if len(b["ops"]) == depth]
 
-    indent = "    " * (depth + 2)
+    indent = "    " * (depth + 1)
     code = ""
 
     if relevant_blocks:
-        # 按照当前深度的 Op 符号和立即数进行分组
         groups = {}
-        for b in relevant_blocks:
-            op = b['ops'][depth]
-            sym = op['symbol']
-            imm = op['imm']
-            groups.setdefault((sym, imm), []).append(b)
-        
-        # 逐个生成 if / else if
+        for block in relevant_blocks:
+            op = block["ops"][depth]
+            key = (op["symbol"], get_imm_value(op))
+            groups.setdefault(key, []).append(block)
+
         first = True
-        for (sym, imm), sub_blocks in groups.items():
+        for (symbol, imm_value), sub_blocks in groups.items():
             prefix = "if" if first else "else if"
-            target = f"(void*)DispatchWrapper<fiberish::op::{sym}>"
-            
-            code += f"{indent}{prefix} ((void*)ops[{depth}].handler == {target} && ops[{depth}].imm == {imm}) {{\n"
+            target = f"(void*)DispatchWrapper<fiberish::op::{symbol}>"
+            code += (
+                f"{indent}{prefix} ((void*)ops[{depth}].handler == {target} && "
+                f"GetImm(&ops[{depth}]) == {imm_value}) {{\n"
+            )
             code += generate_trie_node(sub_blocks, depth + 1)
             code += f"{indent}}}\n"
             first = False
-        
-        # 处理如果不匹配的情况
+
         code += f"{indent}else {{ return nullptr; }}\n"
-        
     elif exact_match:
-        idx = exact_match[0]['index']
-        code += f"{indent}return JitBlock_{idx};\n"
+        code += f"{indent}return JitBlock_{exact_match[0]['index']};\n"
     else:
         code += f"{indent}return nullptr;\n"
-    
+
     return code
 
-def main():
-    if not os.path.exists('blocks_analysis.json'):
-        print("blocks_analysis.json not found")
-        return
 
-    with open('blocks_analysis.json', 'r') as f:
-        data = json.load(f)
-    
-    blocks = []
-    for i, b in enumerate(data['blocks']):
-        b['index'] = i
-        blocks.append(b)
-
-    # 2. 生成 CPP
+def build_cpp(blocks):
     impl_includes = ""
     ops_dir = os.path.join("libfibercpu", "ops")
     if os.path.exists(ops_dir):
         for file_path in sorted(glob.glob(os.path.join(ops_dir, "*_impl.h"))):
             impl_includes += f'#include "../ops/{os.path.basename(file_path)}"\n'
 
-    # 生成查找树
     trie_code = generate_trie_node(blocks)
+    declarations = "\n".join(
+        f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, "
+        f"int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);"
+        for i in range(len(blocks))
+    )
 
     cpp = f"""#include "jit_ops.h"
 #include "../ops.h"
@@ -72,56 +78,119 @@ def main():
 
 namespace fiberish {{
 
-// Flow Handler
-FORCE_INLINE int64_t JitHandleFlow(LogicFlow flow, EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {{
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t JitHandleFlow(LogicFlow flow, EmuState* state, DecodedOp* op,
+                                                             int64_t instr_limit, mem::MicroTLB utlb,
+                                                             uint32_t branch, uint64_t flags_cache) {{
     switch (flow) {{
-        case LogicFlow::ExitOnCurrentEIP: if (!state->eip_dirty) state->sync_eip_to_op_start(reinterpret_cast<ShimOp*>(op)); return instr_limit;
-        case LogicFlow::ExitOnNextEIP: if (!state->eip_dirty) state->sync_eip_to_op_end(reinterpret_cast<ShimOp*>(op)); return instr_limit;
-        case LogicFlow::ExitWithoutSyncEIP: return instr_limit;
-        case LogicFlow::RestartMemoryOp: return MemoryOpRestart(state, op, instr_limit, utlb, branch);
-        case LogicFlow::RetryMemoryOp: return MemoryOpRetry(state, op, instr_limit, utlb, branch);
-        default: return instr_limit;
+        case LogicFlow::Continue:
+            if (auto* next_op = NextOp(op)) {{
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+            }}
+            __builtin_unreachable();
+        case LogicFlow::ContinueSkipOne:
+            if (auto* next_op = NextOp(NextOp(op))) {{
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+            }}
+            __builtin_unreachable();
+        case LogicFlow::ExitOnCurrentEIP:
+            RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
+            if (!state->eip_dirty) state->sync_eip_to_op_start(op);
+            return instr_limit;
+        case LogicFlow::ExitOnNextEIP:
+            RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
+            if (!state->eip_dirty) state->sync_eip_to_op_end(op);
+            return instr_limit;
+        case LogicFlow::ExitWithoutSyncEIP:
+            RecordBlockHandlersThrough(state, op);
+            CommitFlagsCache(state, flags_cache);
+            return instr_limit;
+        case LogicFlow::RestartMemoryOp:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch, flags_cache);
+        case LogicFlow::RetryMemoryOp:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch, flags_cache);
+        case LogicFlow::ExitToBranch:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch, flags_cache);
+        case LogicFlow::ExitToNextOpBranch:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return ResolveBranchTarget(state, NextOp(op), instr_limit, utlb, branch, flags_cache);
+        default:
+            CommitFlagsCache(state, flags_cache);
+            return instr_limit;
     }}
 }}
 
-// Forward Declarations
-{" ".join([f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch);" for i in range(len(blocks))])}
+{declarations}
 
-HandlerFunc FindJitBlock(DecodedOp* ops) {{
+HandlerFunc FindJitBlock(const DecodedOp* ops) {{
     if (!ops) return nullptr;
 {trie_code}
 }}
 
 """
-    # 3. 块实现
-    for b in blocks:
-        i = b['index']
-        ops = b['ops']
-        cpp += f"// Block {i} | Exec: {b['exec_count']}\n"
-        cpp += f"ATTR_PRESERVE_NONE int64_t JitBlock_{i}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch) {{\n"
-        
+
+    for block in blocks:
+        index = block["index"]
+        ops = block["ops"]
+        cpp += f"// Block {index} | Exec: {block['exec_count']}\n"
+        cpp += (
+            f"ATTR_PRESERVE_NONE int64_t JitBlock_{index}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, "
+            f"int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {{\n"
+        )
+
         if ops:
             cpp += "    LogicFlow err_flow;\n"
             cpp += "    DecodedOp* err_op;\n"
 
-        for j, op in enumerate(ops):
-            sym = op['symbol']
-            imm_val = op['imm']
-            cpp += f"    {{ auto flow = fiberish::op::{sym}(state, reinterpret_cast<ShimOp*>(&op[{j}]), &utlb, {imm_val}, &branch);\n"
-            cpp += f"      if (flow != LogicFlow::Continue) [[unlikely]] {{ err_flow = flow; err_op = &op[{j}]; goto handle_flow; }} }}\n"
-        
-        cpp += f"    ATTR_MUSTTAIL return ExitBlock(state, op + {len(ops)}, instr_limit, utlb, branch);\n"
-        
+        for offset, op in enumerate(ops):
+            symbol = op["symbol"]
+            imm_value = get_imm_value(op)
+            cpp += (
+                f"    {{ auto flow = fiberish::op::{symbol}(state, &op[{offset}], &utlb, {imm_value}, &branch, "
+                f"flags_cache);\n"
+            )
+            cpp += (
+                f"      if (flow != LogicFlow::Continue) [[unlikely]] {{ err_flow = flow; err_op = &op[{offset}]; "
+                f"goto handle_flow; }} }}\n"
+            )
+
+        cpp += f"    ATTR_MUSTTAIL return ExitBlock(state, op + {len(ops)}, instr_limit, utlb, branch, flags_cache);\n"
+
         if ops:
             cpp += "handle_flow:\n"
-            cpp += "    return JitHandleFlow(err_flow, state, err_op, instr_limit, utlb, branch);\n"
-        
+            cpp += "    return JitHandleFlow(err_flow, state, err_op, instr_limit, utlb, branch, flags_cache);\n"
+
         cpp += "}\n\n"
 
-    cpp += "} // namespace fiberish\n"
+    cpp += "}  // namespace fiberish\n"
+    return cpp
 
-    with open('libfibercpu/generated/jit_ops.cpp', 'w') as f:
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate JIT block matcher from block analysis JSON")
+    parser.add_argument("--input", "-i", default="blocks_analysis.json", help="Path to blocks analysis JSON")
+    parser.add_argument("--output", "-o", default="libfibercpu/generated/jit_ops.cpp",
+                        help="Path to generated jit_ops.cpp")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input):
+        print(f"{args.input} not found")
+        return
+
+    data = read_analysis(args.input)
+    blocks = data.get("blocks", [])
+    for index, block in enumerate(blocks):
+        block["index"] = index
+
+    cpp = build_cpp(blocks)
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    with open(args.output, "w", encoding="utf-8") as f:
         f.write(cpp)
+
 
 if __name__ == "__main__":
     main()

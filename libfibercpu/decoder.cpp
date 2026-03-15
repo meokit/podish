@@ -692,6 +692,7 @@ finalize:
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
     void* mem = state->block_pool.allocate(alloc_size);
     BasicBlock* block = new (mem) BasicBlock;
+    state->RememberAllocatedBlock(block);
 
     block->chain.start_eip = start_eip;
     block->end_eip = end_eip;

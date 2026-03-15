@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -727,6 +728,116 @@ public class Engine : IDisposable
         return result;
     }
 
+    public unsafe BlockStatsSnapshot GetBlockStats()
+    {
+        X86Native.BlockStats native = default;
+        X86Native.GetBlockStats(State, &native);
+
+        var stopReasonCounts = new ulong[8];
+        var instHistogram = new ulong[65];
+        for (var i = 0; i < stopReasonCounts.Length; i++)
+            stopReasonCounts[i] = native.StopReasonCounts[i];
+        for (var i = 0; i < instHistogram.Length; i++)
+            instHistogram[i] = native.InstHistogram[i];
+
+        return new BlockStatsSnapshot(
+            native.BlockCount,
+            native.TotalBlockInsts,
+            stopReasonCounts,
+            instHistogram,
+            native.BlockConcatAttempts,
+            native.BlockConcatSuccess,
+            native.BlockConcatSuccessDirectJmp,
+            native.BlockConcatSuccessJccFallthrough,
+            native.BlockConcatRejectNotConcatTerminal,
+            native.BlockConcatRejectCrossPage,
+            native.BlockConcatRejectSizeLimit,
+            native.BlockConcatRejectLoop,
+            native.BlockConcatRejectTargetMissing);
+    }
+
+    public unsafe int GetBlockCount()
+    {
+        return X86Native.GetBlockCount(State);
+    }
+
+    public unsafe IntPtr[] GetBlockPointers()
+    {
+        var count = X86Native.GetBlockCount(State);
+        if (count <= 0) return Array.Empty<IntPtr>();
+
+        var buffer = new IntPtr[count];
+        fixed (IntPtr* pBuffer = buffer)
+        {
+            var actual = X86Native.GetBlockList(State, pBuffer, buffer.Length);
+            if (actual <= 0) return Array.Empty<IntPtr>();
+            if (actual < buffer.Length) Array.Resize(ref buffer, actual);
+        }
+
+        return buffer;
+    }
+
+    public unsafe void DumpBlocks(Stream output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        using var writer = new BinaryWriter(output, Encoding.UTF8, leaveOpen: true);
+        var imageBase = GetNativeImageBase().ToInt64();
+        writer.Write((ulong)imageBase);
+
+        var blocks = GetBlockPointers();
+        writer.Write(blocks.Length);
+
+        foreach (var blockPtr in blocks)
+        {
+            if (blockPtr == IntPtr.Zero) continue;
+
+            var nativeBlock = (X86Native.BasicBlock*)blockPtr;
+            writer.Write(nativeBlock->start_eip);
+            writer.Write(nativeBlock->end_eip);
+            writer.Write(nativeBlock->inst_count);
+            writer.Write(nativeBlock->exec_count);
+
+            var ops = (X86Native.DecodedOp*)((byte*)nativeBlock + sizeof(X86Native.BasicBlock));
+            for (var i = 0; i < nativeBlock->inst_count; i++)
+            {
+                var op = ops[i];
+                var memPacked = PackDumpMem(op);
+                writer.Write(memPacked);
+                writer.Write(op.next_eip);
+                writer.Write(op.len);
+                writer.Write(op.modrm);
+                writer.Write(op.prefixes);
+                writer.Write(op.meta);
+                writer.Write(ExtractDumpImm(op));
+                writer.Write(0u);
+                writer.Write(op.handler.ToInt64());
+            }
+        }
+    }
+
+    private static ulong PackDumpMem(X86Native.DecodedOp op)
+    {
+        if (!HasMem(op.meta))
+            return 0;
+        return ((ulong)op.ea_desc << 32) | op.disp;
+    }
+
+    private static uint ExtractDumpImm(X86Native.DecodedOp op)
+    {
+        return HasImm(op.meta) ? op.imm : 0u;
+    }
+
+    private static bool HasMem(byte meta)
+    {
+        return (meta & (1 << 1)) != 0;
+    }
+
+    private static bool HasImm(byte meta)
+    {
+        return (meta & (1 << 2)) != 0;
+    }
+
     public IntPtr GetNativeImageBase()
     {
         return X86Native.GetLibAddress();
@@ -775,3 +886,17 @@ public class Engine : IDisposable
 
 public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);
 public readonly record struct JccProfileStat(IntPtr Handler, ulong Taken, ulong NotTaken, ulong CacheHit, ulong CacheMiss);
+public readonly record struct BlockStatsSnapshot(
+    ulong BlockCount,
+    ulong TotalBlockInsts,
+    ulong[] StopReasonCounts,
+    ulong[] InstHistogram,
+    ulong BlockConcatAttempts,
+    ulong BlockConcatSuccess,
+    ulong BlockConcatSuccessDirectJmp,
+    ulong BlockConcatSuccessJccFallthrough,
+    ulong BlockConcatRejectNotConcatTerminal,
+    ulong BlockConcatRejectCrossPage,
+    ulong BlockConcatRejectSizeLimit,
+    ulong BlockConcatRejectLoop,
+    ulong BlockConcatRejectTargetMissing);

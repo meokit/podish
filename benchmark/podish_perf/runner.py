@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -32,6 +33,8 @@ class SampleResult:
     transcript: str
     work_rootfs: str
     coremark_score: float | None = None
+    guest_stats_dir: str | None = None
+    blocks_analysis_json: str | None = None
 
 
 def repo_root() -> Path:
@@ -44,6 +47,15 @@ def default_rootfs() -> Path:
 
 def default_aot_binary(project_root: Path) -> Path:
     return project_root / AOT_BINARY_RELATIVE
+
+
+def default_fibercpu_library(project_root: Path) -> Path:
+    host_dir = project_root / "Fiberish.X86" / "build_native" / "host"
+    for name in ("libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll"):
+        candidate = host_dir / name
+        if candidate.exists():
+            return candidate
+    return host_dir / "libfibercpu.dylib"
 
 
 def build_guest_script(case: str, iterations: int) -> str:
@@ -90,7 +102,14 @@ echo {MARKER_END}
     raise ValueError(f"unknown case: {case}")
 
 
-def build_engine_command(project_root: Path, engine: str, aot_binary: Path, rootfs: Path, script: str) -> tuple[str, list[str]]:
+def build_engine_command(
+    project_root: Path,
+    engine: str,
+    aot_binary: Path,
+    rootfs: Path,
+    script: str,
+    guest_stats_dir: Path | None = None,
+) -> tuple[str, list[str]]:
     podish_args = [
         "run",
         "--rm",
@@ -101,6 +120,8 @@ def build_engine_command(project_root: Path, engine: str, aot_binary: Path, root
         "-lc",
         script,
     ]
+    if guest_stats_dir is not None:
+        podish_args[1:1] = ["--guest-stats-dir", str(guest_stats_dir)]
 
     if engine == "jit":
         return (
@@ -124,7 +145,7 @@ def build_engine_command(project_root: Path, engine: str, aot_binary: Path, root
 
 
 def clean_env() -> dict[str, str]:
-    return {
+    env = {
         "TERM": os.environ.get("TERM", "xterm"),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "DOTNET_CLI_HOME": os.path.expanduser("~"),
@@ -132,6 +153,9 @@ def clean_env() -> dict[str, str]:
         "DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
         "DOTNET_NOLOGO": "true",
     }
+    if "PODISH_GUEST_STATS_DEBUG" in os.environ:
+        env["PODISH_GUEST_STATS_DEBUG"] = os.environ["PODISH_GUEST_STATS_DEBUG"]
+    return env
 
 
 def create_work_rootfs(base_rootfs: Path, case: str, iteration: int, work_dir: Path, reuse_rootfs: bool) -> Path:
@@ -156,6 +180,39 @@ def extract_coremark_score(output: str) -> float | None:
     return None
 
 
+def ensure_jit_handler_profile_build(project_root: Path) -> None:
+    cmd = [
+        "dotnet",
+        "build",
+        str(project_root / "Podish.Cli" / "Podish.Cli.csproj"),
+        "-c",
+        "Release",
+        "-p:EnableHandlerProfile=true",
+    ]
+    print(f"[runner] building handler-profile JIT: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"handler-profile build failed with exit code {result.returncode}")
+
+
+def run_block_analysis(project_root: Path, guest_stats_dir: Path, fibercpu_library: Path) -> Path:
+    analysis_script = project_root / "scripts" / "analyze_blocks.py"
+    output_path = guest_stats_dir / "blocks_analysis.json"
+    cmd = [
+        sys.executable,
+        str(analysis_script),
+        str(guest_stats_dir),
+        str(fibercpu_library),
+        "--output",
+        str(output_path),
+    ]
+    print(f"[runner] analyzing block dump: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"block analysis failed with exit code {result.returncode}")
+    return output_path
+
+
 def run_sample(
     project_root: Path,
     engine: str,
@@ -169,11 +226,25 @@ def run_sample(
     results_dir: Path,
     reuse_rootfs: bool,
     keep_workdirs: bool,
+    export_block_dump: bool,
+    auto_analyze_block_dump: bool,
+    fibercpu_library: Path | None,
 ) -> SampleResult:
     work_rootfs = create_work_rootfs(base_rootfs, case, iteration, work_dir, reuse_rootfs)
     transcript = results_dir / f"{engine}-{case}-{iteration:02d}.log"
+    guest_stats_dir = None
+    if export_block_dump:
+        guest_stats_dir = results_dir / "guest-stats" / f"{engine}-{case}-{iteration:02d}"
+        guest_stats_dir.mkdir(parents=True, exist_ok=True)
     script = build_guest_script(case, iterations)
-    program, args = build_engine_command(project_root, engine, aot_binary, work_rootfs, script)
+    program, args = build_engine_command(
+        project_root,
+        engine,
+        aot_binary,
+        work_rootfs,
+        script,
+        guest_stats_dir=guest_stats_dir,
+    )
     start = 0.0
     end = 0.0
 
@@ -209,6 +280,12 @@ def run_sample(
     if not keep_workdirs and not reuse_rootfs:
         shutil.rmtree(work_rootfs, ignore_errors=True)
 
+    blocks_analysis_json = None
+    if auto_analyze_block_dump and guest_stats_dir is not None:
+        if fibercpu_library is None:
+            raise RuntimeError("auto_analyze_block_dump requires a fibercpu library path")
+        blocks_analysis_json = run_block_analysis(project_root, guest_stats_dir, fibercpu_library)
+
     return SampleResult(
         engine=engine,
         case=case,
@@ -217,6 +294,8 @@ def run_sample(
         transcript=str(transcript),
         work_rootfs=str(work_rootfs),
         coremark_score=extract_coremark_score(timed_output) if case == "run" else None,
+        guest_stats_dir=str(guest_stats_dir) if guest_stats_dir is not None else None,
+        blocks_analysis_json=str(blocks_analysis_json) if blocks_analysis_json is not None else None,
     )
 
 
@@ -299,6 +378,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep copied rootfs directories after successful runs",
     )
+    parser.add_argument(
+        "--jit-handler-profile-block-dump",
+        action="store_true",
+        help="For --engine=jit, build with EnableHandlerProfile=true and export guest block dumps per sample",
+    )
     return parser.parse_args()
 
 
@@ -307,6 +391,7 @@ def main() -> int:
     project_root = Path(args.project_root).resolve()
     base_rootfs = Path(args.rootfs).resolve()
     work_dir = Path(args.work_dir).resolve()
+    fibercpu_library = default_fibercpu_library(project_root)
     aot_binary = (
         Path(args.aot_binary).resolve()
         if args.aot_binary
@@ -346,7 +431,16 @@ def main() -> int:
     print(f"[runner] engine={args.engine}")
     if args.engine == "aot":
         print(f"[runner] aot_binary={aot_binary}")
+    if args.jit_handler_profile_block_dump:
+        print("[runner] jit_handler_profile_block_dump=enabled")
+        print(f"[runner] fibercpu_library={fibercpu_library}")
     print(f"[runner] cases={','.join(selected_cases)} repeat={args.repeat} iterations={args.iterations}")
+
+    if args.jit_handler_profile_block_dump:
+        if args.engine != "jit":
+            print("--jit-handler-profile-block-dump requires --engine=jit", file=sys.stderr)
+            return 1
+        ensure_jit_handler_profile_build(project_root)
 
     for case in selected_cases:
         for iteration in range(1, args.repeat + 1):
@@ -364,6 +458,9 @@ def main() -> int:
                 results_dir=results_dir,
                 reuse_rootfs=args.reuse_rootfs,
                 keep_workdirs=args.keep_workdirs,
+                export_block_dump=args.jit_handler_profile_block_dump,
+                auto_analyze_block_dump=args.jit_handler_profile_block_dump,
+                fibercpu_library=fibercpu_library,
             )
             all_results.append(sample)
             extra = ""
