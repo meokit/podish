@@ -351,7 +351,7 @@ public class VMAManager
     }
 
     public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
-        bool invalidateCodeRange, bool releaseExternalPages)
+        bool invalidateCodeRange, bool releaseExternalPages, bool preserveOwnerBinding = false)
     {
         if (len == 0) return;
         DebugAssert(releaseExternalPages,
@@ -365,7 +365,7 @@ public class VMAManager
         if (invalidateCodeRange)
             engine.ResetCodeCacheByRange(addr, len);
         engine.MemUnmap(addr, len);
-        ExternalPages.ReleaseRange(addr, len);
+        ExternalPages.ReleaseRange(addr, len, preserveOwnerBinding);
         AssertExternalPagesReleasedForRange(addr, len, "TearDownNativeMappings");
     }
 
@@ -878,7 +878,21 @@ public class VMAManager
             }
         }
 
-        ReprotectNativeMappings(engine, addr, len, prot, resetCodeCacheRange);
+        if (prot == Protection.None)
+        {
+            TearDownNativeMappings(
+                engine,
+                addr,
+                len,
+                true,
+                resetCodeCacheRange,
+                true,
+                true);
+        }
+        else
+        {
+            ReprotectNativeMappings(engine, addr, len, prot, resetCodeCacheRange);
+        }
 
         return 0;
     }

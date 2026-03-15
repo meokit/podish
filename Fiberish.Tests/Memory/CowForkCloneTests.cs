@@ -218,6 +218,58 @@ public class CowForkCloneTests
             childVma.VmAnonVma!.GetPage(childVma.GetPageIndex(childVma.Start)));
     }
 
+    [Fact]
+    public void ForkClone_PrivateAnonymous_AfterProtNoneEviction_ChildWriteStillSplitsCow()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var parentEngine = new Engine();
+        var parentMm = new VMAManager();
+        parentEngine.PageFaultResolver =
+            (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
+
+        const uint mapAddr = 0x47500000;
+        Assert.Equal(mapAddr,
+            parentMm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "anon-cow-prot-none",
+                parentEngine));
+
+        Assert.True(parentEngine.CopyToUser(mapAddr, new[] { (byte)42 }));
+        var parentVma = Assert.Single(parentMm.VMAs);
+        var pageIndex = parentVma.GetPageIndex(parentVma.Start);
+        var sharedPrivatePage = parentVma.VmAnonVma!.GetPage(pageIndex);
+        Assert.NotEqual(IntPtr.Zero, sharedPrivatePage);
+        Assert.True(parentMm.ExternalPages.TryGet(mapAddr, out var mappedBeforeProtNone));
+        Assert.Equal(sharedPrivatePage, mappedBeforeProtNone);
+
+        Assert.Equal(0, parentMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.None, parentEngine,
+            out _));
+        Assert.False(parentMm.ExternalPages.TryGet(mapAddr, out _));
+
+        using var childEngine = parentEngine.Clone(false);
+        var childMm = parentMm.Clone();
+        childEngine.PageFaultResolver =
+            (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
+
+        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        Assert.False(childMm.ExternalPages.TryGet(mapAddr, out _));
+
+        Assert.Equal(0, childMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            childEngine, out _));
+        Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)100 }));
+
+        Assert.Equal(0, parentMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            parentEngine, out _));
+
+        var parentRead = new byte[1];
+        var childRead = new byte[1];
+        Assert.True(parentEngine.CopyFromUser(mapAddr, parentRead));
+        Assert.True(childEngine.CopyFromUser(mapAddr, childRead));
+        Assert.Equal((byte)42, parentRead[0]);
+        Assert.Equal((byte)100, childRead[0]);
+        Assert.NotEqual(parentVma.VmAnonVma!.GetPage(pageIndex),
+            Assert.Single(childMm.VMAs).VmAnonVma!.GetPage(pageIndex));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()

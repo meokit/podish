@@ -191,7 +191,7 @@ public sealed class ExternalPageManager
         return true;
     }
 
-    public void Release(uint pageAddr)
+    public void Release(uint pageAddr, bool preserveOwnerBinding = false)
     {
         if (!_pages.TryGetValue(pageAddr, out var binding)) return;
         _pages.Remove(pageAddr);
@@ -201,18 +201,19 @@ public sealed class ExternalPageManager
         if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
             ReleaseGlobalRef(binding.Ptr);
 
-        if (binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
+        if (!preserveOwnerBinding &&
+            binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
             binding.AnonVma is { } anonVma &&
             binding.Page is { MapCount: <= 0, PinCount: <= 0 } anonPage)
             anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
     }
 
-    public void ReleaseRange(uint addr, uint length)
+    public void ReleaseRange(uint addr, uint length, bool preserveOwnerBinding = false)
     {
         if (length == 0) return;
         var start = addr & LinuxConstants.PageMask;
         var end = (addr + length + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-        for (var p = start; p < end; p += LinuxConstants.PageSize) Release(p);
+        for (var p = start; p < end; p += LinuxConstants.PageSize) Release(p, preserveOwnerBinding);
     }
 
     public void Clear()
