@@ -22,6 +22,8 @@ void RegisterGroupOps() {
     g_Handlers[0x1C1] = DispatchWrapper<OpXadd_Word>;
     g_Handlers[0x118] = DispatchWrapper<OpPrefetch>;
     g_Handlers[0x10B] = DispatchWrapper<OpUd2_Groups>;
+    g_Handlers[OP_FUSED_CMP_EVIB_JE_REL8] = DispatchWrapper<OpFusedCmpEvIb_JE_Rel8>;
+    g_Handlers[OP_FUSED_CMP_EVIB_JNE_REL8] = DispatchWrapper<OpFusedCmpEvIb_JNE_Rel8>;
 
     // Specializations (Call macros defined above)
     // Re-invoke macros to register specialized handlers

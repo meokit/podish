@@ -106,6 +106,15 @@ static bool BlockCrossesPage(const BasicBlock* block) {
     return ((block->chain.start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
+static bool BlockTouchesMemory(const BasicBlock* block) {
+    if (!block || block->inst_count == 0) return false;
+    const DecodedOp* ops = block->FirstOp();
+    for (uint32_t i = 0; i < block->inst_count; ++i) {
+        if (ops[i].meta.flags.has_mem) return true;
+    }
+    return false;
+}
+
 static bool BlockIsFusibleTerminal(const BasicBlock* block) {
     if (!block) return false;
     return block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
@@ -119,10 +128,10 @@ static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* 
 }
 
 static void RegisterBlockPages(EmuState* state, uint32_t cache_eip, const BasicBlock* block) {
-    uint32_t page_addr = cache_eip & 0xFFFFF000u;
-    state->page_to_blocks[page_addr].push_back(cache_eip);
-    if (block && block->end_eip > block->chain.start_eip && ((block->end_eip - 1) & 0xFFFFF000u) != page_addr) {
-        uint32_t page2 = (block->end_eip - 1) & 0xFFFFF000u;
+    uint32_t page_idx = cache_eip >> 12;
+    state->page_to_blocks[page_idx].push_back(cache_eip);
+    if (block && block->end_eip > block->chain.start_eip && ((block->end_eip - 1) >> 12) != page_idx) {
+        uint32_t page2 = (block->end_eip - 1) >> 12;
         state->page_to_blocks[page2].push_back(cache_eip);
     }
 }
@@ -154,6 +163,14 @@ static BasicBlock* LookupOrDecodeRawBlock(EmuState* state, uint32_t eip, uint32_
 static bool CanFuseWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
                                  BlockStats* stats) {
     if (!a || !b || !a->chain.is_valid || !b->chain.is_valid || a->inst_count == 0 || b->inst_count == 0) {
+        stats->fusion_reject_target_missing++;
+        return false;
+    }
+
+    // Conservative safety rule: if the source block touches memory at all,
+    // don't pre-compose it with a decoded successor. This avoids stale-code
+    // execution when the source performs SMC before transferring control.
+    if (BlockTouchesMemory(a)) {
         stats->fusion_reject_target_missing++;
         return false;
     }

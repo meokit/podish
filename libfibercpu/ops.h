@@ -38,6 +38,8 @@ enum SpecializedOp : uint16_t {
     OP_MOV_RM_STORE = 0x201,  // MOV [mem], r32 (from 0x89)
     OP_MOV_RR_LOAD = 0x202,   // MOV r32, r32 (from 0x8B)
     OP_MOV_MR_LOAD = 0x203,   // MOV r32, [mem] (from 0x8B)
+    OP_FUSED_CMP_EVIB_JE_REL8 = 0x204,
+    OP_FUSED_CMP_EVIB_JNE_REL8 = 0x205,
 };
 
 // Initialization

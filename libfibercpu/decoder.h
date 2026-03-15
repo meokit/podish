@@ -123,8 +123,8 @@ enum class ExtKind : uint8_t {
 
 struct DecodedMemData {
     uint32_t imm = 0;
-    uint32_t disp = 0;
     uint32_t ea_desc = 0;
+    uint32_t disp = 0;
     uint32_t reserved = 0;
 };
 
@@ -161,6 +161,21 @@ struct DecodedControlFlowData {
     BasicBlock* cached_target = nullptr;
 };
 
+// Narrow fused v1 payload for:
+//   83 /7   cmp Ev, imm8
+//   74/75   je/jne rel8
+//
+// Keeps cached_target at the same offset as DecodedControlFlowData so the
+// generic cached-target helpers remain valid.
+struct FusedCmpEvIbJccRel8Data {
+    uint8_t imm8 = 0;
+    int8_t branch_disp8 = 0;
+    int8_t mem_disp8 = 0;
+    uint8_t reserved0 = 0;
+    uint32_t ea_desc = 0;
+    BasicBlock* cached_target = nullptr;
+};
+
 struct alignas(16) DecodedOp {
     HandlerFunc handler;
     uint32_t next_eip;
@@ -171,10 +186,11 @@ struct alignas(16) DecodedOp {
     union {
         DecodedMemData data;
         struct {
-            BasicBlock* next_block;
             uint64_t reserved;
+            BasicBlock* next_block;
         } link;
         DecodedControlFlowData control;
+        FusedCmpEvIbJccRel8Data fused_cmp_ev_ib_jcc_rel8;
     } ext;
 
     uint8_t GetLength() const { return len; }
@@ -188,6 +204,7 @@ struct alignas(16) DecodedInstTmp {
 static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
 static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
+static_assert(sizeof(FusedCmpEvIbJccRel8Data) == 16, "FusedCmpEvIbJccRel8Data must be exactly 16 bytes");
 static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
 static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
@@ -260,6 +277,16 @@ template <typename OpT>
 FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
     SetExtKind(op, ExtKind::ControlFlow);
     GetExt(op)->control.cached_target = block;
+}
+
+template <typename OpT>
+FORCE_INLINE const FusedCmpEvIbJccRel8Data* GetFusedCmpEvIbJccRel8Data(const OpT* op) {
+    return &GetExt(op)->fused_cmp_ev_ib_jcc_rel8;
+}
+
+template <typename OpT>
+FORCE_INLINE FusedCmpEvIbJccRel8Data* GetFusedCmpEvIbJccRel8Data(OpT* op) {
+    return &GetExt(op)->fused_cmp_ev_ib_jcc_rel8;
 }
 
 struct BasicBlockChainPrefix {

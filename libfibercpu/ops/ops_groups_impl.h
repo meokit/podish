@@ -54,6 +54,43 @@ FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
     return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
 }
 
+FORCE_INLINE MemResult<uint32_t> ReadFusedCmpEvOperand32(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+    const uint8_t mod = (op->modrm >> 6) & 3;
+    if (mod == 3) {
+        return GetReg(state, op->modrm & 7);
+    }
+
+    const auto* fused = GetFusedCmpEvIbJccRel8Data(op);
+    const uint32_t ea_desc = fused->ea_desc;
+    const uintptr_t regs_base = reinterpret_cast<uintptr_t>(state->ctx.regs);
+    uint32_t base = *reinterpret_cast<const uint32_t*>(regs_base + memdesc::BaseOffset(ea_desc));
+    uint32_t index = *reinterpret_cast<const uint32_t*>(regs_base + memdesc::IndexOffset(ea_desc));
+    uint32_t addr = base + (index << memdesc::Scale(ea_desc)) + static_cast<int32_t>(fused->mem_disp8);
+    const uint8_t seg = memdesc::Segment(ea_desc);
+    if (seg >= 5) {
+        addr += state->ctx.seg_base[seg];
+    }
+    return ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+}
+
+template <bool JumpOnEqual>
+FORCE_INLINE LogicFlow OpFusedCmpEvIbJccRel8_Internal(LogicFuncParams) {
+    auto dest_res = ReadFusedCmpEvOperand32(state, op, utlb);
+    if (!dest_res) return LogicFlow::RestartMemoryOp;
+
+    const auto* fused = GetFusedCmpEvIbJccRel8Data(op);
+    const uint32_t cmp_val = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(fused->imm8)));
+    const uint32_t res = AluSub<uint32_t, true>(state, flags_cache, *dest_res, cmp_val);
+    const bool equal = res == 0;
+    const bool taken = JumpOnEqual ? equal : !equal;
+
+    if (taken) {
+        *branch = op->next_eip + static_cast<int32_t>(fused->branch_disp8);
+        return LogicFlow::ExitToBranch;
+    }
+    return LogicFlow::Continue;
+}
+
 // =========================================================================================
 // Group 3: 0xF6 (Eb), 0xF7 (Ev)
 // =========================================================================================
@@ -230,6 +267,14 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
 }
 
 namespace op {
+
+FORCE_INLINE LogicFlow OpFusedCmpEvIb_JE_Rel8(LogicFuncParams) {
+    return OpFusedCmpEvIbJccRel8_Internal<true>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpFusedCmpEvIb_JNE_Rel8(LogicFuncParams) {
+    return OpFusedCmpEvIbJccRel8_Internal<false>(LogicPassParams);
+}
 
 // Wrappers for Dispatch (Generic fallback)
 FORCE_INLINE LogicFlow OpGroup1_EvIz_Generic(LogicFuncParams) {

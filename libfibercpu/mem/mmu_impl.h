@@ -205,8 +205,10 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
 
         utlb->tag_r = target_tag;
         utlb->addend = entry.addend;
-        utlb->tag_w =
-            has_property(entry.perm, Property::Write) ? target_tag : std::numeric_limits<decltype(utlb->tag_w)>::max();
+        // Writing to executable pages must go through the slow path so SMC invalidation can fire.
+        utlb->tag_w = (has_property(entry.perm, Property::Write) && !has_property(entry.perm, Property::Exec))
+                          ? target_tag
+                          : std::numeric_limits<decltype(utlb->tag_w)>::max();
         return val;
     }
 

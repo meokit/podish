@@ -331,7 +331,8 @@ static bool IsDirectRelativeJmpHandlerIndex(uint16_t handler_index) {
 }
 
 static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
-    return (handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F) ||
+    return handler_index == OP_FUSED_CMP_EVIB_JE_REL8 || handler_index == OP_FUSED_CMP_EVIB_JNE_REL8 ||
+           (handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F) ||
            (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
@@ -343,10 +344,102 @@ static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const Decoded
 }
 
 static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const DecodedOp& op) {
+    if (handler_index == OP_FUSED_CMP_EVIB_JE_REL8 || handler_index == OP_FUSED_CMP_EVIB_JNE_REL8) {
+        return op.next_eip + static_cast<int32_t>(GetFusedCmpEvIbJccRel8Data(&op)->branch_disp8);
+    }
     if ((handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F)) {
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
     }
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
+}
+
+struct NarrowFusionRule {
+    uint16_t consumer_handler_index;
+    uint16_t fused_handler_index;
+};
+
+static constexpr NarrowFusionRule kNarrowFusionRules[] = {
+    {0x74, OP_FUSED_CMP_EVIB_JE_REL8},
+    {0x75, OP_FUSED_CMP_EVIB_JNE_REL8},
+};
+
+static bool IsEligibleCmpEvIbFusionProducer(const DecodedOp& op, uint16_t handler_index) {
+    if (handler_index != 0x83) return false;
+    if (op.prefixes.flags.lock || op.prefixes.flags.rep || op.prefixes.flags.repne || op.prefixes.flags.opsize ||
+        op.prefixes.flags.addrsize) {
+        return false;
+    }
+    if (((op.modrm >> 3) & 7) != 7) return false;
+
+    const uint8_t mod = (op.modrm >> 6) & 3;
+    const uint8_t rm = op.modrm & 7;
+    if (mod == 2) return false;
+    if (mod != 3) {
+        if (rm == 4) return false;              // No SIB in v1
+        if (mod == 0 && rm == 5) return false;  // No disp32-only form in v1
+    }
+    return true;
+}
+
+static bool IsEligibleFusedJccConsumer(const DecodedOp& op, uint16_t handler_index) {
+    if (handler_index != 0x74 && handler_index != 0x75) return false;
+    return op.prefixes.all == 0;
+}
+
+static void BuildFusedCmpEvIbJccRel8(EmuState* state, DecodedInstTmp& producer, const DecodedInstTmp& consumer,
+                                     uint16_t fused_handler_index) {
+    const uint8_t producer_imm8 = static_cast<uint8_t>(GetImm(&producer.head));
+    const int8_t branch_disp8 = static_cast<int8_t>(GetImm(&consumer.head) & 0xFF);
+    const uint8_t mod = (producer.head.modrm >> 6) & 3;
+    const int8_t mem_disp8 = mod == 1 ? static_cast<int8_t>(producer.head.ext.data.disp) : 0;
+    const uint32_t ea_desc = producer.head.ext.data.ea_desc;
+
+    producer.head.handler = g_Handlers[fused_handler_index];
+    producer.head.next_eip = consumer.head.next_eip;
+    producer.head.SetLength(static_cast<uint8_t>(producer.head.GetLength() + consumer.head.GetLength()));
+    producer.head.meta.flags.has_imm = 0;
+    producer.head.meta.flags.is_control_flow = 1;
+    producer.head.meta.flags.is_conditional_branch = 1;
+    producer.head.meta.flags.no_flags = 0;
+    SetExtKind(&producer.head, ExtKind::ControlFlow);
+
+    auto* fused = GetFusedCmpEvIbJccRel8Data(&producer.head);
+    fused->imm8 = producer_imm8;
+    fused->branch_disp8 = branch_disp8;
+    fused->mem_disp8 = mem_disp8;
+    fused->reserved0 = 0;
+    fused->ea_desc = ea_desc;
+    fused->cached_target = &state->dummy_invalid_block;
+}
+
+static void FuseAdjacentOps(EmuState* state, std::vector<DecodedInstTmp>& temp_ops, std::vector<uint16_t>& op_indices) {
+    if (temp_ops.size() < 2 || op_indices.size() < 2) return;
+
+    for (size_t i = 0; i + 1 < temp_ops.size() && i + 1 < op_indices.size();) {
+        auto& producer = temp_ops[i];
+        const auto& consumer = temp_ops[i + 1];
+        const uint16_t producer_idx = op_indices[i];
+        const uint16_t consumer_idx = op_indices[i + 1];
+
+        bool fused = false;
+        if (!producer.head.meta.flags.is_control_flow && consumer.head.meta.flags.is_control_flow &&
+            IsEligibleCmpEvIbFusionProducer(producer.head, producer_idx) &&
+            IsEligibleFusedJccConsumer(consumer.head, consumer_idx)) {
+            for (const auto& rule : kNarrowFusionRules) {
+                if (rule.consumer_handler_index != consumer_idx) continue;
+                BuildFusedCmpEvIbJccRel8(state, producer, consumer, rule.fused_handler_index);
+                temp_ops.erase(temp_ops.begin() + static_cast<std::ptrdiff_t>(i + 1));
+                op_indices[i] = rule.fused_handler_index;
+                op_indices.erase(op_indices.begin() + static_cast<std::ptrdiff_t>(i + 1));
+                fused = true;
+                break;
+            }
+        }
+
+        if (!fused) {
+            ++i;
+        }
+    }
 }
 
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts) {
@@ -580,6 +673,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         stop_reason = BlockStopReason::MaxInsts;
     }
 
+    FuseAdjacentOps(state, temp_ops, op_indices);
+
     // Append Sentinel Op
     {
         DecodedInstTmp sentinel;
@@ -605,6 +700,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         if (i >= (int)op_indices.size()) break;
 
         uint16_t h_idx = op_indices[i];
+        if (h_idx == OP_FUSED_CMP_EVIB_JE_REL8 || h_idx == OP_FUSED_CMP_EVIB_JNE_REL8) {
+            continue;
+        }
         uint16_t flat_idx = h_idx & 0x1FF;
 
         const auto& info = kOpFlagTable[flat_idx];
@@ -710,15 +808,17 @@ finalize:
         dst[i] = inst.head;
     }
 
-    if (inst_count != 0 && op_indices.size() >= inst_count) {
-        const uint16_t last_handler_index = op_indices[inst_count - 1];
+    const uint32_t decoded_inst_count = slot_count == 0 ? 0 : static_cast<uint32_t>(slot_count - 1);
+    if (decoded_inst_count != 0 && !op_indices.empty()) {
+        const uint16_t last_handler_index = op_indices.back();
+        const DecodedOp& last_op = dst[decoded_inst_count - 1];
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
             block->set_terminal_kind(BlockTerminalKind::DirectJmpRel);
-            block->branch_target_eip = GetDirectRelativeJmpTarget(last_handler_index, dst[inst_count - 1]);
+            block->branch_target_eip = GetDirectRelativeJmpTarget(last_handler_index, last_op);
         } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
             block->set_terminal_kind(BlockTerminalKind::DirectJccRel);
-            block->branch_target_eip = GetDirectRelativeJccTarget(last_handler_index, dst[inst_count - 1]);
-        } else if (dst[inst_count - 1].meta.flags.is_control_flow) {
+            block->branch_target_eip = GetDirectRelativeJccTarget(last_handler_index, last_op);
+        } else if (last_op.meta.flags.is_control_flow) {
             block->set_terminal_kind(BlockTerminalKind::OtherControlFlow);
         }
     }
