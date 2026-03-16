@@ -119,6 +119,8 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RE
 static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                     int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                     uint64_t flags_cache) {
+    (void)op;
+    (void)branch;
     BasicBlock* next_block = state->last_block;
     instr_limit -= next_block->inst_count;
     DecodedOp* next_head = next_block->FirstOp();
@@ -126,13 +128,9 @@ static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, De
     next_block->exec_count++;
     state->current_block_head = next_head;
 #endif
-    if (next_block->entry != nullptr) {
-        ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb,
-                                               std::numeric_limits<uint32_t>::max(), flags_cache);
-    }
-    CommitFlagsCache(state, flags_cache);
-    state->ctx.eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
-    return instr_limit;
+    __builtin_assume(next_block->entry != nullptr);
+    ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max(),
+                                           flags_cache);
 }
 
 template <ExtKind Kind>
@@ -192,8 +190,17 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
 
 ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
-    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, target_eip, flags_cache);
+    (void)op;
+    if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
+    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+}
+
+ATTR_PRESERVE_NONE int64_t ResolveSentinelFallthrough(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                      uint64_t flags_cache) {
+    (void)branch;
+    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
+                                                                flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -202,23 +209,33 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, Decoded
                                                                        flags_cache);
 }
 
-// Sentinel Handler
-template <int I>
+// Sentinel Handlers
+template <int I, bool UseBranch>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                        mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ExitBlock(state, op, instr_limit, utlb, branch, flags_cache);
+    RecordBlockHandlersUntil(state, op);
+    if constexpr (UseBranch) {
+        ATTR_MUSTTAIL return ResolveSentinelTarget(state, op, instr_limit, utlb, branch, flags_cache);
+    } else {
+        ATTR_MUSTTAIL return ResolveSentinelFallthrough(state, op, instr_limit, utlb, branch, flags_cache);
+    }
 }
 
 // Instantiate variants to reduce BTB pressure
-#define INSTANTIATE_EXIT(i) OpExitBlock<i>
-HandlerFunc g_ExitHandlers[32] = {
-    INSTANTIATE_EXIT(0),  INSTANTIATE_EXIT(1),  INSTANTIATE_EXIT(2),  INSTANTIATE_EXIT(3),  INSTANTIATE_EXIT(4),
-    INSTANTIATE_EXIT(5),  INSTANTIATE_EXIT(6),  INSTANTIATE_EXIT(7),  INSTANTIATE_EXIT(8),  INSTANTIATE_EXIT(9),
-    INSTANTIATE_EXIT(10), INSTANTIATE_EXIT(11), INSTANTIATE_EXIT(12), INSTANTIATE_EXIT(13), INSTANTIATE_EXIT(14),
-    INSTANTIATE_EXIT(15), INSTANTIATE_EXIT(16), INSTANTIATE_EXIT(17), INSTANTIATE_EXIT(18), INSTANTIATE_EXIT(19),
-    INSTANTIATE_EXIT(20), INSTANTIATE_EXIT(21), INSTANTIATE_EXIT(22), INSTANTIATE_EXIT(23), INSTANTIATE_EXIT(24),
-    INSTANTIATE_EXIT(25), INSTANTIATE_EXIT(26), INSTANTIATE_EXIT(27), INSTANTIATE_EXIT(28), INSTANTIATE_EXIT(29),
-    INSTANTIATE_EXIT(30), INSTANTIATE_EXIT(31)};
+template <size_t... Is>
+static constexpr std::array<HandlerFunc, sizeof...(Is)> MakeExitHandlersFallthrough(std::index_sequence<Is...>) {
+    return {OpExitBlock<static_cast<int>(Is), false>...};
+}
+
+template <size_t... Is>
+static constexpr std::array<HandlerFunc, sizeof...(Is)> MakeExitHandlersBranch(std::index_sequence<Is...>) {
+    return {OpExitBlock<static_cast<int>(Is), true>...};
+}
+
+std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersFallthrough =
+    MakeExitHandlersFallthrough(std::make_index_sequence<kExitHandlerReplicaCount>{});
+std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersBranch =
+    MakeExitHandlersBranch(std::make_index_sequence<kExitHandlerReplicaCount>{});
 
 HandlerFunc g_Handlers[1024] = {nullptr};
 

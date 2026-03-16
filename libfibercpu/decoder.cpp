@@ -335,6 +335,14 @@ static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
            (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
+static bool IsDirectRelativeCallHandlerIndex(uint16_t handler_index) { return handler_index == 0xE8; }
+
+static bool UsesBranchCarryingSentinel(uint16_t handler_index, const DecodedOp& op) {
+    if (handler_index != 0xFF) return false;
+    const uint8_t subop = (op.modrm >> 3) & 7;
+    return subop == 2 || subop == 4;
+}
+
 static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const DecodedOp& op) {
     if (handler_index == 0xEB) {
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
@@ -347,6 +355,22 @@ static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const Decoded
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
     }
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
+}
+
+static bool TryGetDirectRelativeTargetEip(uint16_t handler_index, const DecodedOp& op, uint32_t* target_eip) {
+    if (IsDirectRelativeJmpHandlerIndex(handler_index)) {
+        *target_eip = GetDirectRelativeJmpTarget(handler_index, op);
+        return true;
+    }
+    if (IsDirectRelativeJccHandlerIndex(handler_index)) {
+        *target_eip = GetDirectRelativeJccTarget(handler_index, op);
+        return true;
+    }
+    if (IsDirectRelativeCallHandlerIndex(handler_index)) {
+        *target_eip = op.next_eip + static_cast<int32_t>(GetImm(&op));
+        return true;
+    }
+    return false;
 }
 
 static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
@@ -468,7 +492,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             DecodedInstTmp sentinel;
             std::memset(&sentinel, 0, sizeof(sentinel));
 
-            HandlerFunc exit_h = g_ExitHandlers[0];
+            HandlerFunc exit_h = g_ExitHandlersFallthrough[0];
             sentinel.head.handler = exit_h;
 
             // Sentinel next_block initialization to dummy
@@ -536,6 +560,11 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         op_indices.push_back((map << 8) | opcode);
         inst.head.next_eip = current_eip + inst.head.GetLength();
 
+        uint32_t target_eip;
+        if (TryGetDirectRelativeTargetEip(handler_index, inst.head, &target_eip)) {
+            SetControlTargetEip(&inst.head, target_eip);
+        }
+
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
         bool is_nop = (handler_index == 0x90 || handler_index == 0x11F);
@@ -592,8 +621,11 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint32_t k = (uint32_t)current_eip;
         k ^= k >> 12;
         k ^= k >> 4;
-        uint8_t exit_idx = k % (sizeof(g_ExitHandlers) / sizeof(g_ExitHandlers[0]));
-        HandlerFunc exit_h = g_ExitHandlers[exit_idx];
+        const bool branch_carrying_sentinel =
+            !op_indices.empty() && UsesBranchCarryingSentinel(op_indices.back(), temp_ops[temp_ops.size() - 1].head);
+        uint8_t exit_idx = k % kExitHandlerReplicaCount;
+        HandlerFunc exit_h =
+            branch_carrying_sentinel ? g_ExitHandlersBranch[exit_idx] : g_ExitHandlersFallthrough[exit_idx];
         sentinel.head.handler = exit_h;
         sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
         SetNextBlock(&sentinel.head, &state->dummy_invalid_block);
@@ -720,10 +752,10 @@ finalize:
         const DecodedOp& last_op = dst[decoded_inst_count - 1];
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
             block->set_terminal_kind(BlockTerminalKind::DirectJmpRel);
-            block->branch_target_eip = GetDirectRelativeJmpTarget(last_handler_index, last_op);
+            block->branch_target_eip = GetControlTargetEip(&last_op);
         } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
             block->set_terminal_kind(BlockTerminalKind::DirectJccRel);
-            block->branch_target_eip = GetDirectRelativeJccTarget(last_handler_index, last_op);
+            block->branch_target_eip = GetControlTargetEip(&last_op);
         } else if (last_op.meta.flags.is_control_flow) {
             block->set_terminal_kind(BlockTerminalKind::OtherControlFlow);
         }

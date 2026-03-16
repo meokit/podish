@@ -159,7 +159,7 @@ FORCE_INLINE constexpr uint8_t Segment(uint32_t ea_desc) {
 
 struct DecodedControlFlowData {
     uint32_t imm = 0;
-    uint32_t reserved = 0;
+    uint32_t target_eip = 0;
     BasicBlock* cached_target = nullptr;
 };
 
@@ -259,6 +259,17 @@ FORCE_INLINE BasicBlock* GetCachedTarget(const OpT* op) {
 }
 
 template <typename OpT>
+FORCE_INLINE uint32_t GetControlTargetEip(const OpT* op) {
+    return GetExt(op)->control.target_eip;
+}
+
+template <typename OpT>
+FORCE_INLINE void SetControlTargetEip(OpT* op, uint32_t target_eip) {
+    SetExtKind(op, ExtKind::ControlFlow);
+    GetExt(op)->control.target_eip = target_eip;
+}
+
+template <typename OpT>
 FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
     SetExtKind(op, ExtKind::ControlFlow);
     GetExt(op)->control.cached_target = block;
@@ -267,9 +278,6 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
 struct BasicBlockChainPrefix {
     uint32_t start_eip;
     uint32_t is_valid;
-    uint8_t terminal_kind_raw;
-    uint8_t chain_padding0;
-    uint16_t chain_padding1;
 };
 
 struct BasicBlockChainMatch {
@@ -279,14 +287,17 @@ struct BasicBlockChainMatch {
 
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain;
+    HandlerFunc entry = nullptr;
+    uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     uint32_t end_eip;
-    uint32_t inst_count;           // Number of instructions in block (excluding sentinel)
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = 0;
+    uint8_t terminal_kind_raw = 0;
+    uint8_t block_padding0 = 0;
+    uint16_t block_padding1 = 0;
     uint64_t exec_count = 0;  // Number of times block was executed
-    HandlerFunc entry = nullptr;
 
     // Flexible Array Member - fixed-size decoded op stream.
     alignas(16) std::byte slots[sizeof(DecodedOp)];
@@ -304,8 +315,8 @@ struct alignas(16) BasicBlock {
         return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
     }
 
-    BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(chain.terminal_kind_raw); }
-    void set_terminal_kind(BlockTerminalKind kind) { chain.terminal_kind_raw = static_cast<uint8_t>(kind); }
+    BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
+    void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
 
     bool MatchesChainTarget(uint32_t target_eip) const {
         // The chaining fast path only cares about start_eip + valid word.
@@ -318,6 +329,11 @@ struct alignas(16) BasicBlock {
     // Mark block as invalid
     void Invalidate();
 };
+
+static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at offset 0");
+static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at offset 8");
+static_assert(offsetof(BasicBlock, inst_count) == 16, "BasicBlock: inst_count must start at offset 16");
+static_assert(offsetof(BasicBlock, slots) == 64, "BasicBlock: slots must start at offset 64");
 
 // Decoder Logic
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);

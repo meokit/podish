@@ -21,16 +21,27 @@
 #include "ops/ops_sse_int.h"
 #include "ops/ops_sse_mov.h"
 
+#include <array>
 #include <limits>
+#include <utility>
 
 namespace fiberish {
+
+#ifndef FIBERCPU_EXIT_HANDLER_REPLICA_COUNT
+#define FIBERCPU_EXIT_HANDLER_REPLICA_COUNT 1
+#endif
+
+static_assert(FIBERCPU_EXIT_HANDLER_REPLICA_COUNT > 0);
+static_assert(FIBERCPU_EXIT_HANDLER_REPLICA_COUNT <= 64);
+inline constexpr size_t kExitHandlerReplicaCount = FIBERCPU_EXIT_HANDLER_REPLICA_COUNT;
 
 // Handler Base Anchor (Used for calculating relative offsets)
 extern void* g_HandlerBase;
 
 // Global Dispatch Table
 extern HandlerFunc g_Handlers[1024];
-extern HandlerFunc g_ExitHandlers[32];
+extern std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersFallthrough;
+extern std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersBranch;
 
 // Specialized Opcode Indices
 enum SpecializedOp : uint16_t {
@@ -54,13 +65,5 @@ void RegisterSseCvtOps();
 void RegisterSseFpOps();
 void RegisterSseIntOps();
 void RegisterSseMovOps();
-
-// Sentinel Handler (Inline)
-static inline ATTR_PRESERVE_NONE int64_t ExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                   int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-                                                   uint64_t flags_cache) {
-    RecordBlockHandlersUntil(state, op);
-    ATTR_MUSTTAIL return ResolveSentinelTarget(state, op, instr_limit, utlb, branch, flags_cache);
-}
 
 }  // namespace fiberish

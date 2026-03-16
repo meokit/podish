@@ -28,15 +28,8 @@ FORCE_INLINE void RecordConditionalBranchDecision(EmuState*, const DecodedOp*, b
 template <bool IsRel8>
 FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
     // E9: JMP rel32, EB: JMP rel8
-    int32_t offset;
-    if (IsRel8) {
-        // 8-bit relative jump
-        offset = (int32_t)(int8_t)(imm & 0xFF);
-    } else {
-        // 32-bit relative jump (E9)
-        offset = (int32_t)imm;
-    }
-    *branch = op->next_eip + offset;
+    (void)IsRel8;
+    *branch = GetControlTargetEip(op);
     return LogicFlow::ExitToBranch;
 }
 
@@ -46,13 +39,8 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     bool taken = CheckConditionFixed<Cond>(flags_cache);
     if (taken) {
         RecordConditionalBranchDecision(state, op, true);
-        int32_t offset;
-        if constexpr (IsRel8) {
-            offset = (int32_t)(int8_t)(imm & 0xFF);
-        } else {
-            offset = (int32_t)imm;
-        }
-        *branch = op->next_eip + offset;
+        (void)IsRel8;
+        *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
     RecordConditionalBranchDecision(state, op, false);
@@ -137,8 +125,7 @@ FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
 
     if (jump) {
         RecordConditionalBranchDecision(state, op, true);
-        int32_t offset = (int32_t)(int8_t)(imm & 0xFF);
-        *branch = op->next_eip + offset;
+        *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
     RecordConditionalBranchDecision(state, op, false);
@@ -165,8 +152,7 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
 
     if (jump) {
         RecordConditionalBranchDecision(state, op, true);
-        const int32_t offset = static_cast<int8_t>(imm & 0xFF);
-        *branch = op->next_eip + offset;
+        *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
     RecordConditionalBranchDecision(state, op, false);
@@ -212,7 +198,7 @@ FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
     if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
 
     // Jump relative to Next Insn
-    *branch = op->next_eip + (int32_t)imm;
+    *branch = GetControlTargetEip(op);
     return LogicFlow::ExitToBranch;
 }
 

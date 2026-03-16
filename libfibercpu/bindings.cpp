@@ -996,7 +996,7 @@ int X86_Step(EmuState* state) {
     std::memcpy(head, &inst.head, sizeof(inst.head));
 
     DecodedOp sentinel{};
-    HandlerFunc exit_h = g_ExitHandlers[0];
+    HandlerFunc exit_h = g_ExitHandlersFallthrough[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
     SetNextBlock(&sentinel, &state->dummy_invalid_block);

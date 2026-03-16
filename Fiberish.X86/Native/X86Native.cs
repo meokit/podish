@@ -287,17 +287,17 @@ public unsafe partial class X86Native
     {
         public uint start_eip;
         public uint is_valid;
-        public byte terminal_kind_raw;
-        private byte chain_padding0;
-        private ushort chain_padding1;
-        public uint end_eip;
+        public IntPtr entry;
         public uint inst_count;
+        public uint end_eip;
         public uint slot_count;
         public uint sentinel_slot_index;
         public uint branch_target_eip;
         public uint fallthrough_eip;
+        public byte terminal_kind_raw;
+        private byte block_padding0;
+        private ushort block_padding1;
         public ulong exec_count;
-        public IntPtr entry;
         // Native BasicBlock::slots is alignas(16), so decoded ops start at offset 64.
     }
 
