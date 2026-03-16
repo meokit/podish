@@ -45,9 +45,17 @@ def find_symbol(offset, symbols_map):
     if not name:
         return f"func_{offset:x}"
 
+    wrapper_match = re.search(r"DispatchWrapper<&(?:[a-zA-Z0-9_]+::)*([A-Za-z0-9_]+)\(", name)
+    if wrapper_match:
+        return wrapper_match.group(1)
+
     match = re.search(r"op::([a-zA-Z0-9_]+)", name)
     if match:
         return match.group(1)
+
+    plain_match = re.search(r"(?:^|::)(Op[A-Za-z0-9_]+)$", name)
+    if plain_match:
+        return plain_match.group(1)
     return name
 
 
@@ -234,14 +242,31 @@ def build_validation(summary, declared_block_count, parsed_blocks, parse_warning
     }
 
     if summary is not None:
-        exported_count = summary.get("block_stats", {}).get("block_count")
-        if exported_count is not None and exported_count != declared_block_count:
+        native_stats_raw = summary.get("native_stats")
+        native_all_blocks_count = None
+        if native_stats_raw:
+            try:
+                native_stats = json.loads(native_stats_raw)
+                native_all_blocks_count = native_stats.get("all_blocks_count")
+            except json.JSONDecodeError:
+                validation["warnings"].append("summary native_stats is not valid JSON")
+
+        if native_all_blocks_count is not None and native_all_blocks_count != declared_block_count:
             validation["warnings"].append(
-                f"summary block_count={exported_count} but dump declared block count={declared_block_count}"
+                "summary native_stats.all_blocks_count="
+                f"{native_all_blocks_count} but dump declared block count={declared_block_count}"
             )
-        if exported_count and parsed_blocks == 0:
+
+        recorded_block_count = summary.get("block_stats", {}).get("block_count")
+        if native_all_blocks_count is not None and native_all_blocks_count > 0 and parsed_blocks == 0:
             validation["warnings"].append(
-                "summary reports non-zero block_count but parsed blocks are empty; dump/export format likely drifted"
+                "summary reports non-zero native all_blocks_count but parsed blocks are empty; "
+                "dump/export format likely drifted"
+            )
+        elif native_all_blocks_count is None and recorded_block_count and parsed_blocks == 0:
+            validation["warnings"].append(
+                "summary reports non-zero block_stats.block_count but parsed blocks are empty; "
+                "dump/export format likely drifted"
             )
 
     return validation

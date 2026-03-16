@@ -15,6 +15,7 @@
 #include "mem/mmu.h"
 #include "ops.h"
 #include "state.h"
+#include "superopcodes.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -210,6 +211,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     }
     dst[out] = *b->Sentinel();
 
+    ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
     concat->entry = FindJitBlock(concat->FirstOp());
     concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
     return concat;
@@ -246,6 +248,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     }
     dst[out] = *b->Sentinel();
 
+    ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
     concat->entry = FindJitBlock(concat->FirstOp());
     concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
     return concat;

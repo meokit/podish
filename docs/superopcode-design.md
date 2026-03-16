@@ -471,6 +471,39 @@ N-gram 统计脚本建议输出三层视图：
 
 这会比手工翻多个 `blocks_analysis.json` 高效很多。
 
+现在这一步已经可以直接跑，建议流程是：
+
+```bash
+python3 benchmark/podish_perf/runner.py \
+  --engine jit \
+  --case run \
+  --repeat 3 \
+  --jit-handler-profile-block-dump \
+  --block-n-gram 2 \
+  --aggregate-superopcode-candidates
+```
+
+或者对已有结果目录单独聚合：
+
+```bash
+python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
+  benchmark/podish_perf/results/<timestamp>/guest-stats \
+  --n-gram 2 \
+  --top 100 \
+  --output-json benchmark/podish_perf/results/<timestamp>/superopcode_candidates.json \
+  --output-md benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
+```
+
+当前聚合脚本的职责是：
+
+- 递归发现 `blocks_analysis.json`
+- 跳过 `blocks` 为空或存在明显 schema/dump 漂移告警的样本
+- 直接从 `blocks` 重建 N-gram，而不是依赖 `top_ngrams`
+  这样不会被单样本截断影响总榜
+- 输出：
+  - `superopcode_candidates.json`
+  - `superopcode_candidates.md`
+
 ### D. 记录 build identity
 
 因为 superopcode 候选依赖 handler symbol 名和布局，建议 summary 里额外记录：

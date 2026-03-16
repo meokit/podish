@@ -10,6 +10,7 @@
 #include "ops.h"  // For g_Handlers
 #include "specialization.h"
 #include "state.h"
+#include "superopcodes.h"
 
 namespace fiberish {
 
@@ -747,6 +748,7 @@ finalize:
     }
 
     const uint32_t decoded_inst_count = slot_count == 0 ? 0 : static_cast<uint32_t>(slot_count - 1);
+    ApplySuperOpcodesToBlockOps(dst, decoded_inst_count);
     if (decoded_inst_count != 0 && !op_indices.empty()) {
         const uint16_t last_handler_index = op_indices.back();
         const DecodedOp& last_op = dst[decoded_inst_count - 1];

@@ -180,7 +180,7 @@ def extract_coremark_score(output: str) -> float | None:
     return None
 
 
-def ensure_jit_handler_profile_build(project_root: Path) -> None:
+def ensure_jit_handler_profile_build(project_root: Path, disable_superopcodes: bool) -> None:
     cmd = [
         "dotnet",
         "build",
@@ -189,6 +189,8 @@ def ensure_jit_handler_profile_build(project_root: Path) -> None:
         "Release",
         "-p:EnableHandlerProfile=true",
     ]
+    if disable_superopcodes:
+        cmd.append("-p:EnableSuperOpcodes=false")
     print(f"[runner] building handler-profile JIT: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
     if result.returncode != 0:
@@ -223,6 +225,35 @@ def run_block_analysis_with_options(
     if result.returncode != 0:
         raise RuntimeError(f"block analysis failed with exit code {result.returncode}")
     return output_path
+
+
+def run_superopcode_aggregation(
+    project_root: Path,
+    input_dir: Path,
+    output_json: Path,
+    output_md: Path,
+    n_gram: int,
+    top_candidates: int,
+) -> tuple[Path, Path]:
+    script = project_root / "benchmark" / "podish_perf" / "analyze_superopcode_candidates.py"
+    cmd = [
+        sys.executable,
+        str(script),
+        str(input_dir),
+        "--n-gram",
+        str(n_gram),
+        "--top",
+        str(top_candidates),
+        "--output-json",
+        str(output_json),
+        "--output-md",
+        str(output_md),
+    ]
+    print(f"[runner] aggregating superopcode candidates: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"superopcode aggregation failed with exit code {result.returncode}")
+    return output_json, output_md
 
 
 def run_sample(
@@ -415,6 +446,22 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Maximum number of top N-gram entries to emit per sample (default: 100)",
     )
+    parser.add_argument(
+        "--aggregate-superopcode-candidates",
+        action="store_true",
+        help="After block analysis, aggregate per-sample N-grams into a candidate manifest",
+    )
+    parser.add_argument(
+        "--disable-superopcodes",
+        action="store_true",
+        help="Build the JIT binary with EnableSuperOpcodes=false before running samples",
+    )
+    parser.add_argument(
+        "--candidate-top",
+        type=int,
+        default=100,
+        help="Maximum number of aggregate superopcode candidates to emit (default: 100)",
+    )
     return parser.parse_args()
 
 
@@ -466,15 +513,19 @@ def main() -> int:
     if args.jit_handler_profile_block_dump:
         print("[runner] jit_handler_profile_block_dump=enabled")
         print(f"[runner] fibercpu_library={fibercpu_library}")
+        if args.disable_superopcodes:
+            print("[runner] disable_superopcodes=enabled")
         if args.block_n_gram > 0:
             print(f"[runner] block_n_gram={args.block_n_gram} top_ngrams={args.block_top_ngrams}")
+        if args.aggregate_superopcode_candidates:
+            print(f"[runner] aggregate_superopcode_candidates=enabled top={args.candidate_top}")
     print(f"[runner] cases={','.join(selected_cases)} repeat={args.repeat} iterations={args.iterations}")
 
     if args.jit_handler_profile_block_dump:
         if args.engine != "jit":
             print("--jit-handler-profile-block-dump requires --engine=jit", file=sys.stderr)
             return 1
-        ensure_jit_handler_profile_build(project_root)
+        ensure_jit_handler_profile_build(project_root, disable_superopcodes=args.disable_superopcodes)
 
     for case in selected_cases:
         for iteration in range(1, args.repeat + 1):
@@ -515,6 +566,25 @@ def main() -> int:
         "results": [asdict(result) for result in all_results],
     }
     summary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    if args.aggregate_superopcode_candidates:
+        if not args.jit_handler_profile_block_dump:
+            print("--aggregate-superopcode-candidates requires --jit-handler-profile-block-dump", file=sys.stderr)
+            return 1
+        if args.block_n_gram <= 0:
+            print("--aggregate-superopcode-candidates requires --block-n-gram > 0", file=sys.stderr)
+            return 1
+        guest_stats_root = results_dir / "guest-stats"
+        output_json = results_dir / "superopcode_candidates.json"
+        output_md = results_dir / "superopcode_candidates.md"
+        run_superopcode_aggregation(
+            project_root=project_root,
+            input_dir=guest_stats_root,
+            output_json=output_json,
+            output_md=output_md,
+            n_gram=args.block_n_gram,
+            top_candidates=args.candidate_top,
+        )
 
     print_summary(all_results)
     print("")

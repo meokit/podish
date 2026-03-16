@@ -68,6 +68,60 @@ directory for each sample, so `--rootfs` does not get dirtied by benchmark
 writes. Logs and `summary.json` are written under
 `benchmark/podish_perf/results/`.
 
+## Export block dumps and aggregate SuperOpcode candidates
+
+If you want to mine handler 2-grams for `SuperOpcode` work, use the JIT
+handler-profile build and enable block analysis:
+
+```bash
+python3 benchmark/podish_perf/runner.py \
+  --engine jit \
+  --case run \
+  --repeat 3 \
+  --jit-handler-profile-block-dump \
+  --block-n-gram 2 \
+  --aggregate-superopcode-candidates
+```
+
+This writes per-sample files under:
+
+```text
+benchmark/podish_perf/results/<timestamp>/guest-stats/.../blocks_analysis.json
+```
+
+and also emits aggregate outputs:
+
+```text
+benchmark/podish_perf/results/<timestamp>/superopcode_candidates.json
+benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
+```
+
+You can also aggregate existing samples later:
+
+```bash
+python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
+  benchmark/podish_perf/results/<timestamp>/guest-stats \
+  --n-gram 2 \
+  --top 100 \
+  --output-json benchmark/podish_perf/results/<timestamp>/superopcode_candidates.json \
+  --output-md benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
+```
+
+To run the whole SuperOpcode mining flow in one command, use:
+
+```bash
+python3 benchmark/podish_perf/superopcode_pipeline.py \
+  --results-dir benchmark/podish_perf/results/superopcode-run \
+  --case run \
+  --repeat 1 \
+  --iterations 3000
+```
+
+This pipeline intentionally builds the analysis binary with `EnableSuperOpcodes=false`,
+runs the benchmark and candidate mining on raw opcode streams, then generates
+`libfibercpu/generated/superopcodes.generated.cpp`, and finally does an optional
+verification rebuild with superopcodes enabled.
+
 ## Record and analyze `xctrace`
 
 Use [profile_xctrace.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/profile_xctrace.py) to:

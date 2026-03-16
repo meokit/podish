@@ -24,8 +24,11 @@
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
             <CMakeJccProfile Condition="'$(EnableJccProfile)' == 'true'">ON</CMakeJccProfile>
             <CMakeJccProfile Condition="'$(CMakeJccProfile)' == ''">OFF</CMakeJccProfile>
+            <CMakeSuperOpcodes Condition="'$(EnableSuperOpcodes)' == 'false'">OFF</CMakeSuperOpcodes>
+            <CMakeSuperOpcodes Condition="'$(CMakeSuperOpcodes)' == ''">ON</CMakeSuperOpcodes>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JCC_PROFILE=$(CMakeJccProfile)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SUPEROPCODES=$(CMakeSuperOpcodes)</CMakeArgs>
         </PropertyGroup>
         <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
         <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
