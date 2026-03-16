@@ -791,7 +791,7 @@ internal class Program
 
             if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine(JsonSerializer.Serialize(rows));
+                Console.WriteLine(JsonSerializer.Serialize(rows, PodishCliJsonContext.Default.ListPodishContainerMetadata));
                 return;
             }
 
@@ -924,8 +924,8 @@ internal class Program
 
                 try
                 {
-                    var image = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath),
-                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    var image = JsonSerializer.Deserialize(File.ReadAllText(imagePath),
+                        PodishCliJsonContext.Default.OciStoredImage);
                     if (image == null)
                         continue;
 
@@ -1008,7 +1008,7 @@ internal class Program
                 ContainerLogEntry? entry;
                 try
                 {
-                    entry = JsonSerializer.Deserialize<ContainerLogEntry>(line);
+                    entry = JsonSerializer.Deserialize(line, PodishCliJsonContext.Default.ContainerLogEntry);
                 }
                 catch
                 {
@@ -1040,7 +1040,7 @@ internal class Program
             {
                 if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(evt));
+                    Console.WriteLine(JsonSerializer.Serialize(evt, PodishCliJsonContext.Default.ContainerEvent));
                     continue;
                 }
 
@@ -1193,8 +1193,8 @@ internal class Program
 
             try
             {
-                var image = JsonSerializer.Deserialize<OciStoredImage>(File.ReadAllText(imagePath),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var image = JsonSerializer.Deserialize(File.ReadAllText(imagePath),
+                    PodishCliJsonContext.Default.OciStoredImage);
                 if (image != null && string.Equals(image.ImageReference, imageRef, StringComparison.Ordinal))
                     return dir;
             }

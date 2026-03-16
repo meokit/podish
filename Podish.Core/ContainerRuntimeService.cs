@@ -1180,62 +1180,39 @@ public sealed class ContainerRuntimeService
             var handlerProfile = engine.GetHandlerProfileStats()
                 .Where(static x => x.ExecCount != 0)
                 .OrderByDescending(static x => x.ExecCount)
-                .Select(static x => new
-                {
-                    handler = $"0x{x.Handler.ToInt64():x}",
-                    exec_count = x.ExecCount
-                })
+                .Select(static x => new GuestStatsHandlerProfileEntry(
+                    $"0x{x.Handler.ToInt64():x}",
+                    x.ExecCount))
                 .ToArray();
             var jccProfile = engine.GetJccProfileStats()
                 .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
                 .OrderByDescending(static x => x.Taken + x.NotTaken)
-                .Select(static x => new
-                {
-                    handler = $"0x{x.Handler.ToInt64():x}",
-                    taken = x.Taken,
-                    not_taken = x.NotTaken,
-                    cache_hit = x.CacheHit,
-                    cache_miss = x.CacheMiss
-                })
+                .Select(static x => new GuestStatsJccProfileEntry(
+                    $"0x{x.Handler.ToInt64():x}",
+                    x.Taken,
+                    x.NotTaken,
+                    x.CacheHit,
+                    x.CacheMiss))
                 .ToArray();
 
-            var summary = new
-            {
-                schema_version = 1,
-                exported_at_utc = DateTimeOffset.UtcNow,
-                container_id = request.ContainerId,
-                image = request.Image,
-                image_base = $"0x{engine.GetNativeImageBase().ToInt64():x}",
-                native_stats = nativeStats,
-                block_stats = new
-                {
-                    block_count = blockStats.BlockCount,
-                    total_block_insts = blockStats.TotalBlockInsts,
-                    stop_reason_counts = blockStats.StopReasonCounts,
-                    inst_histogram = blockStats.InstHistogram,
-                    block_concat_attempts = blockStats.BlockConcatAttempts,
-                    block_concat_success = blockStats.BlockConcatSuccess,
-                    block_concat_success_direct_jmp = blockStats.BlockConcatSuccessDirectJmp,
-                    block_concat_success_jcc_fallthrough = blockStats.BlockConcatSuccessJccFallthrough,
-                    block_concat_reject_not_concat_terminal = blockStats.BlockConcatRejectNotConcatTerminal,
-                    block_concat_reject_cross_page = blockStats.BlockConcatRejectCrossPage,
-                    block_concat_reject_size_limit = blockStats.BlockConcatRejectSizeLimit,
-                    block_concat_reject_loop = blockStats.BlockConcatRejectLoop,
-                    block_concat_reject_target_missing = blockStats.BlockConcatRejectTargetMissing
-                },
-                handler_profile = handlerProfile,
-                jcc_profile = jccProfile,
-                files = new
-                {
-                    blocks = "blocks.bin"
-                }
-            };
+            var summary = new GuestStatsSummary(
+                1,
+                DateTimeOffset.UtcNow,
+                request.ContainerId,
+                request.Image,
+                $"0x{engine.GetNativeImageBase().ToInt64():x}",
+                nativeStats,
+                GuestStatsBlockStats.FromSnapshot(blockStats),
+                handlerProfile,
+                jccProfile,
+                new GuestStatsFiles("blocks.bin"));
 
             var summaryPath = Path.Combine(exportDir, "summary.json");
-            File.WriteAllText(summaryPath, JsonSerializer.Serialize(summary, new JsonSerializerOptions
+            using (var stream = File.Create(summaryPath))
+            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
             {
-                WriteIndented = true
-            }));
+                JsonSerializer.Serialize(writer, summary, PodishJsonContext.Default.GuestStatsSummary);
+            }
 
             _logger.LogInformation("Exported guest stats for container {ContainerId} to {ExportDir}",
                 request.ContainerId, exportDir);
