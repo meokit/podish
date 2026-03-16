@@ -59,6 +59,26 @@ void RegisterGroupOps() {
         DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Flags>::RegisterSpecialized(0x80, c);
         DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Flags>::RegisterSpecialized(0x82, c);
     }
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        c.rm_mask = 7;
+        c.rm_val = 0;
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg0_Flags>::RegisterSpecialized(0x80, c);
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg0_Flags>::RegisterSpecialized(0x82, c);
+        c.rm_val = 1;
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags>::RegisterSpecialized(0x80, c);
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags>::RegisterSpecialized(0x82, c);
+        c.rm_val = 2;
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags>::RegisterSpecialized(0x80, c);
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags>::RegisterSpecialized(0x82, c);
+        c.rm_val = 3;
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags>::RegisterSpecialized(0x80, c);
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags>::RegisterSpecialized(0x82, c);
+    }
 
 #define REG_EV_SPEC(opcode, subop, name)                                      \
     /* 32-bit Normal */                                                       \
@@ -109,6 +129,41 @@ void RegisterGroupOps() {
     REG_EV_SPEC(0x83, 5, OpGroup1_EvIb_Sub);
     REG_EV_SPEC(0x83, 6, OpGroup1_EvIb_Xor);
     REG_EV_SPEC(0x83, 7, OpGroup1_EvIb_Cmp);
+
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0;
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_NoFlags_ModReg>::RegisterSpecialized(0x83, c);
+    }
+
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_Flags_ModReg>::RegisterSpecialized(0x83, c);
+    }
+
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.reg_mask = 7;
+        c.reg_val = 4;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0;
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_And_32_NoFlags_ModReg>::RegisterSpecialized(0x83, c);
+    }
 
     // Group 1: 0x81 (Also used)
     REG_EV_SPEC(0x81, 0, OpGroup1_EvIz_Add);

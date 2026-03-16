@@ -23,6 +23,10 @@ FORCE_INLINE LogicFlow OpGroup1_EbIb_Internal(LogicFuncParams) {
     uint8_t dest;
     if constexpr (S == Specialized::ModReg) {
         dest = GetReg8(state, op->modrm & 7);
+    } else if constexpr (S == Specialized::Reg0 || S == Specialized::Reg1 || S == Specialized::Reg2 ||
+                         S == Specialized::Reg3) {
+        constexpr uint8_t RegIndex = static_cast<uint8_t>(S) - static_cast<uint8_t>(Specialized::Reg0);
+        dest = static_cast<uint8_t>(GetReg(state, RegIndex));
     } else {
         auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
@@ -30,16 +34,22 @@ FORCE_INLINE LogicFlow OpGroup1_EbIb_Internal(LogicFuncParams) {
     }
 
     uint8_t src = (uint8_t)imm;
-    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
+    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp, S>(state, op, flags_cache, dest, src, utlb);
 }
 
 // Fixed Size Templates for Ev operations
-template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF, bool IsImm8 = false>
+template <typename T, bool UpdateFlags, uint8_t FixedSubOp = 0xFF, bool IsImm8 = false,
+          Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
     // 81: Arith r/m, imm32 (IsImm8=false)
     // 83: Arith r/m, imm8 (IsImm8=true)
     T dest;
-    if constexpr (sizeof(T) == 2) {
+    if constexpr (S == Specialized::ModReg) {
+        if constexpr (sizeof(T) == 2)
+            dest = static_cast<T>(GetReg(state, op->modrm & 7));
+        else
+            dest = static_cast<T>(GetReg(state, op->modrm & 7));
+    } else if constexpr (sizeof(T) == 2) {
         auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
         dest = *res;
@@ -56,7 +66,7 @@ FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
         src = (T)imm;
     }
 
-    return Helper_Group1<T, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
+    return Helper_Group1<T, UpdateFlags, FixedSubOp, S>(state, op, flags_cache, dest, src, utlb);
 }
 
 // =========================================================================================
@@ -289,6 +299,34 @@ IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
 
 FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Flags(LogicFuncParams) {
     return OpGroup1_EbIb_Internal<true, 7, Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Reg0_Flags(LogicFuncParams) {
+    return OpGroup1_EbIb_Internal<true, 7, Specialized::Reg0>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags(LogicFuncParams) {
+    return OpGroup1_EbIb_Internal<true, 7, Specialized::Reg1>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags(LogicFuncParams) {
+    return OpGroup1_EbIb_Internal<true, 7, Specialized::Reg2>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags(LogicFuncParams) {
+    return OpGroup1_EbIb_Internal<true, 7, Specialized::Reg3>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EvIb_Add_32_NoFlags_ModReg(LogicFuncParams) {
+    return OpGroup1_Ev_T_Internal<uint32_t, false, 0, true, Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EvIb_Add_32_Flags_ModReg(LogicFuncParams) {
+    return OpGroup1_Ev_T_Internal<uint32_t, true, 0, true, Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpGroup1_EvIb_And_32_NoFlags_ModReg(LogicFuncParams) {
+    return OpGroup1_Ev_T_Internal<uint32_t, false, 4, true, Specialized::ModReg>(LogicPassParams);
 }
 
 // Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags

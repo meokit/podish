@@ -22,7 +22,7 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
         opsize = true;
-    } else if constexpr (S == Specialized::Opsize32) {
+    } else if constexpr (S == Specialized::Opsize32 || S == Specialized::ModReg) {
         opsize = false;
     } else {
         opsize = op->prefixes.flags.opsize;
@@ -98,7 +98,7 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
     bool opsize;
     if constexpr (S == Specialized::Opsize16) {
         opsize = true;
-    } else if constexpr (S == Specialized::Opsize32) {
+    } else if constexpr (S == Specialized::Opsize32 || S == Specialized::ModReg) {
         opsize = false;
     } else {
         opsize = op->prefixes.flags.opsize;

@@ -8,7 +8,7 @@
 namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
-template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T dest, T src,
                                      mem::MicroTLB* utlb) {
     uint8_t subop;
@@ -53,7 +53,23 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& f
             return LogicFlow::ExitOnCurrentEIP;
     }
 
-    if constexpr (sizeof(T) == 1) {
+    if constexpr (S == Specialized::ModReg) {
+        uint8_t rm = op->modrm & 7;
+        if constexpr (sizeof(T) == 1) {
+            uint32_t* rptr = GetRegPtr(state, rm & 3);
+            uint32_t curr = *rptr;
+            if (rm < 4)
+                curr = (curr & 0xFFFFFF00) | (static_cast<uint8_t>(res) & 0xFF);
+            else
+                curr = (curr & 0xFFFF00FF) | ((static_cast<uint8_t>(res) & 0xFF) << 8);
+            *rptr = curr;
+        } else if constexpr (sizeof(T) == 2) {
+            uint32_t* rptr = GetRegPtr(state, rm);
+            *rptr = (*rptr & 0xFFFF0000) | (static_cast<uint16_t>(res) & 0xFFFF);
+        } else {
+            SetReg(state, rm, static_cast<uint32_t>(res));
+        }
+    } else if constexpr (sizeof(T) == 1) {
         if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb)) return LogicFlow::RetryMemoryOp;
     } else if constexpr (sizeof(T) == 2) {
         if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb)) return LogicFlow::RetryMemoryOp;

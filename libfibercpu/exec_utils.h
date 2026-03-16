@@ -93,6 +93,11 @@ FORCE_INLINE void SetFlags32(uint64_t& flags_cache, uint32_t eflags) {
     flags_cache = (flags_cache & ~0xFFFFFFFFull) | eflags;
 }
 
+FORCE_INLINE void SetFlags32AndParityState(uint64_t& flags_cache, uint32_t eflags, uint8_t parity_state) {
+    flags_cache = (flags_cache & ~(0xFFFFFFFFull | FLAGS_CACHE_PF_STATE_MASK)) | static_cast<uint64_t>(eflags) |
+                  (static_cast<uint64_t>(parity_state) << FLAGS_CACHE_PF_STATE_SHIFT);
+}
+
 FORCE_INLINE void SyncParityStateFromFlags(uint64_t& flags_cache) {
     flags_cache &= ~FLAGS_CACHE_PF_STATE_MASK;
     flags_cache |= (static_cast<uint64_t>(EncodeKnownParityState((GetFlags32(flags_cache) & PF_MASK) != 0))
@@ -562,15 +567,28 @@ inline T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest - src;
 
     if constexpr (UpdateFlags) {
-        uint32_t msb_idx = sizeof(T) * 8 - 1;
-        T sign_mask = (T)1 << msb_idx;
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> msb_idx) & 1) != 0);
-        AssignCF(flags_cache, dest < src);
-        AssignOF(flags_cache, ((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask));
-        AssignAF(flags_cache, ((dest ^ src ^ res) & AF_MASK) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
+        if constexpr (sizeof(T) == 1) {
+            const uint32_t d = dest;
+            const uint32_t s = src;
+            const uint32_t r = res;
+            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            if (r == 0) flags |= ZF_MASK;
+            flags |= r & SF_MASK;
+            if (d < s) flags |= CF_MASK;
+            if ((((d ^ s) & (d ^ r)) & SF_MASK) != 0) flags |= OF_MASK;
+            if (((d ^ s ^ r) & AF_MASK) != 0) flags |= AF_MASK;
+            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(r));
+        } else {
+            uint32_t msb_idx = sizeof(T) * 8 - 1;
+            T sign_mask = (T)1 << msb_idx;
+            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            if (res == 0) flags |= ZF_MASK;
+            if (((res >> msb_idx) & 1) != 0) flags |= SF_MASK;
+            if (dest < src) flags |= CF_MASK;
+            if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
+            if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
+            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
+        }
     }
     return res;
 }
@@ -630,10 +648,10 @@ inline T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest & src;
 
     if constexpr (UpdateFlags) {
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
+        uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+        if (res == 0) flags |= ZF_MASK;
+        if (((res >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
+        SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
     }
     return res;
 }
