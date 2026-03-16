@@ -188,6 +188,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
 
     concat->chain.start_eip = a->chain.start_eip;
     concat->end_eip = b->end_eip;
+    concat->jit_code = nullptr;
     concat->inst_count = concat_inst_count;
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
@@ -224,6 +225,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
 
     concat->chain.start_eip = a->chain.start_eip;
     concat->end_eip = b->end_eip;
+    concat->jit_code = nullptr;
     concat->inst_count = concat_inst_count;
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
@@ -324,6 +326,7 @@ static void InitializeDummyInvalidBlock(EmuState* state) {
     block.fallthrough_eip = 0;
     block.exec_count = 0;
     block.entry = nullptr;
+    block.jit_code = nullptr;
 }
 
 // ----------------------------------------------------------------------------

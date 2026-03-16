@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -6,12 +7,34 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
-#include "ops.h"         // For g_Handlers
+#include "jit/block_builder.h"
+#include "ops.h"  // For g_Handlers
 #include "specialization.h"
 #include "state.h"
 #include "superopcodes.h"
 
 namespace fiberish {
+
+namespace {
+bool JitDebugEnabled() {
+    static bool enabled = [] {
+        const char* value = std::getenv("FIBERCPU_JIT_DEBUG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+void JitDebugLog(const char* fmt, ...) {
+    if (!JitDebugEnabled()) return;
+    FILE* fp = std::fopen("/tmp/fibercpu_jit.log", "a");
+    if (!fp) return;
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(fp, fmt, args);
+    va_end(args);
+    std::fclose(fp);
+}
+}  // namespace
 
 alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
     // Map 0: Primary opcodes (Jcc short, CALL, JMP, RET, LOOP, INT, HLT, etc.)
@@ -763,6 +786,22 @@ finalize:
     }
 
     block->entry = block->FirstOp()->handler;
+    block->jit_code = nullptr;
+
+    // Try JIT compilation
+    if constexpr (true) {
+        auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
+        if (jcb) {
+            // block->entry = reinterpret_cast<HandlerFunc>(block->jit_code);
+            if (JitDebugEnabled()) {
+                JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->chain.start_eip,
+                            reinterpret_cast<void*>(block->entry), block->jit_code, jcb->code_size);
+            }
+        } else if (JitDebugEnabled()) {
+            JitDebugLog("[jit] fallback block start=%08x entry=%p\n", block->chain.start_eip,
+                        reinterpret_cast<void*>(block->entry));
+        }
+    }
 
     return block;
 }

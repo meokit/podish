@@ -109,7 +109,7 @@ def build_cpp(candidates: list[dict[str, object]]) -> str:
     for index, candidate in enumerate(candidates):
         lines.append(emit_handler(index, candidate))
 
-    lines.append("__attribute__((used)) HandlerFunc FindSuperOpcode(const DecodedOp* ops) {")
+    lines.append("__attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops) {")
     lines.append("    if (!ops) return nullptr;")
     for index, candidate in enumerate(candidates):
         op0 = str(candidate["op0"])

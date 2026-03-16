@@ -15,6 +15,8 @@
 
 namespace fiberish {
 
+namespace op {
+
 // Shifts
 template <bool IsGroup>
 FORCE_INLINE LogicFlow OpPsllw_Sse_Internal(LogicFuncParams) {
@@ -157,8 +159,6 @@ FORCE_INLINE LogicFlow OpPsrlq_Sse_Internal(LogicFuncParams) {
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi64(dst, count));
     return LogicFlow::Continue;
 }
-
-namespace op {
 
 // Logical
 FORCE_INLINE LogicFlow OpPand_Sse(LogicFuncParams) {

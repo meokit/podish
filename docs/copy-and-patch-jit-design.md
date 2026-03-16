@@ -528,9 +528,12 @@ Because the same opcode may correspond to completely different code shapes after
 
 It is recommended to proceed in three steps.
 
-### Step 1. Manually Select a Batch of Stencil Candidates
+### Step 1. Dynamic Stencil Discovery and Generation
 
-First support the hottest and most stable register paths:
+Instead of manually selecting and writing every single stencil wrapper, dynamically scan the compiled interpreter library (`libfibercpu.dylib`):
+1. Extract all `op::*` functions that the interpreter instantiated inside `DispatchWrapper<T>`.
+2. Generate a `stencil_kernels.generated.cpp` containing an `ExtractKernel<T>` explicitly instantiated for each discovered `op::*` target.
+3. Compile this generated C++ file to an object file (`stencil_kernels.o`).
 
 - `OpTest_EvGv_32_ModReg`
 - `OpCmp_EvGv_32_ModReg`
@@ -541,12 +544,12 @@ First support the hottest and most stable register paths:
 
 ### Step 2. Build Stencil Extractor
 
-Add new scripts:
-
-- Compile stencil objects
-- Extract symbol bytes
-- Scan patch markers
-- Generate `stencils.generated.inc`
+Write Python extraction scripts attached to the build system:
+1. `gen_jit_stencils.py`: Scans `libfibercpu.dylib` using `nm`, parses the mangled `DispatchWrapper` symbols, and generates `stencil_kernels.generated.cpp`.
+2. `extract_stencils_obj.py`: Parses the disassembled `stencil_kernels.o` using `llvm-objdump` (or `objdump`).
+   - Find the boundaries and machine code bytes for each `<__ZN8fiberish3jit13ExtractKernel...>` function.
+   - Scan for the magic patch markers (e.g. `movz/movk` sequences mapping to `PatchMagic32`).
+   - Extract `stencils.generated.inc` containing byte arrays and patch descriptors.
 
 ### Step 3. Build Block Builder
 
@@ -936,3 +939,41 @@ __attribute__((always_inline)) static inline uint32_t patchable_modrm() {
 ```
 
 Extractor scans `movz`/`movk` instructions, extracting immediates as patch points.
+
+---
+
+## Appendix B: Development Checklist
+
+This checklist tracks the implementation of the JIT generation pipeline and integration:
+
+### Phase 1: JIT Framework & Stencil Extractor
+- [x] Define JIT stencil data structures (`libfibercpu/jit/stencil.h`)
+  - `PatchKind`, `PatchDesc`, `StencilDesc`, `StencilBlob`
+  - Magic immediate patch token helpers (`PatchMagic32`, `PatchMagic64`)
+- [x] Implement dynamic generation script (`scripts/gen_jit_stencils.py`)
+  - Scan `libfibercpu.dylib` using `nm` to discover `fiberish::op::*` templates from `DispatchWrapper`.
+  - Dynamically generate C++ kernels file (`stencil_kernels.generated.cpp`).
+- [x] Implement Python extraction script (`scripts/extract_stencils_obj.py`)
+  - Parse compiled kernels using `llvm-objdump` / `objdump`.
+  - Extract machine code for each stencil.
+  - Scan for magic patch markers and emit `PatchDesc` arrays.
+  - Generate `stencils.generated.inc`.
+- [x] Integrate pipeline into CMake
+  - Ensure kernels are generated, compiled, and extracted dynamically as part of `fibercpu_jit_stencils` target.
+- [ ] Fix symbol parsing and extraction bugs in `extract_stencils_obj.py` (Currently WIP).
+
+### Phase 2: Block Builder & Integration
+- [ ] Implement JIT Block Builder (`libfibercpu/jit/block_builder.h` / `.cpp`)
+  - Map `DecodedOp` fields to `StencilPatchData`.
+  - Stencil selection logic based on op `LogicFunc`.
+  - Code buffer allocation and code copying.
+  - Patch application logic (resolving magic values into code bytes).
+- [ ] Integrate into execution flow (`libfibercpu/dispatch.h` / block execution)
+  - `JitCodeBlock` structure.
+  - Fallback to interpreter when compiled stencil is unsupported or fails.
+  - Compilation attempts for entire `BasicBlock`s.
+
+### Phase 3: Verification
+- [ ] Validate generated JIT machine code using existing testing framework.
+- [ ] Test JIT execution on simple instructions (using inline tests or `podish_perf`).
+- [ ] Measure performance and verify correctness against reference interpreter.

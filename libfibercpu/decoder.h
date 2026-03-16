@@ -286,6 +286,7 @@ struct BasicBlockChainMatch {
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain;
     HandlerFunc entry = nullptr;
+    void* jit_code = nullptr;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     uint32_t end_eip;
     uint32_t slot_count;           // Total decoded ops including sentinel
@@ -330,7 +331,8 @@ struct alignas(16) BasicBlock {
 
 static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at offset 0");
 static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at offset 8");
-static_assert(offsetof(BasicBlock, inst_count) == 16, "BasicBlock: inst_count must start at offset 16");
+static_assert(offsetof(BasicBlock, jit_code) == 16, "BasicBlock: jit_code must start at offset 16");
+static_assert(offsetof(BasicBlock, inst_count) == 24, "BasicBlock: inst_count must start at offset 24");
 static_assert(offsetof(BasicBlock, slots) == 64, "BasicBlock: slots must start at offset 64");
 
 // Decoder Logic

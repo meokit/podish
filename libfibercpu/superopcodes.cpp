@@ -2,12 +2,14 @@
 
 namespace fiberish {
 
-#if !FIBERCPU_HAVE_GENERATED_SUPEROPCODES
 HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
+#if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
+    return GeneratedFindSuperOpcode(ops);
+#else
     (void)ops;
     return nullptr;
-}
 #endif
+}
 
 void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count) {
 #if !FIBERCPU_ENABLE_SUPEROPCODES

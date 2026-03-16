@@ -6,6 +6,9 @@
 namespace fiberish {
 
 HandlerFunc FindSuperOpcode(const DecodedOp* ops);
+#if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
+HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
+#endif
 void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count);
 
 FORCE_INLINE int64_t HandleSuperOpcodeFlow(LogicFlow flow, EmuState* RESTRICT state, DecodedOp* RESTRICT flow_op,
