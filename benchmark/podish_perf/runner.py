@@ -196,6 +196,16 @@ def ensure_jit_handler_profile_build(project_root: Path) -> None:
 
 
 def run_block_analysis(project_root: Path, guest_stats_dir: Path, fibercpu_library: Path) -> Path:
+    return run_block_analysis_with_options(project_root, guest_stats_dir, fibercpu_library, n_gram=0, top_ngrams=100)
+
+
+def run_block_analysis_with_options(
+    project_root: Path,
+    guest_stats_dir: Path,
+    fibercpu_library: Path,
+    n_gram: int,
+    top_ngrams: int,
+) -> Path:
     analysis_script = project_root / "scripts" / "analyze_blocks.py"
     output_path = guest_stats_dir / "blocks_analysis.json"
     cmd = [
@@ -206,6 +216,8 @@ def run_block_analysis(project_root: Path, guest_stats_dir: Path, fibercpu_libra
         "--output",
         str(output_path),
     ]
+    if n_gram > 0:
+        cmd.extend(["--n-gram", str(n_gram), "--top-ngrams", str(top_ngrams)])
     print(f"[runner] analyzing block dump: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
     if result.returncode != 0:
@@ -229,6 +241,8 @@ def run_sample(
     export_block_dump: bool,
     auto_analyze_block_dump: bool,
     fibercpu_library: Path | None,
+    block_n_gram: int,
+    block_top_ngrams: int,
 ) -> SampleResult:
     work_rootfs = create_work_rootfs(base_rootfs, case, iteration, work_dir, reuse_rootfs)
     transcript = results_dir / f"{engine}-{case}-{iteration:02d}.log"
@@ -284,7 +298,13 @@ def run_sample(
     if auto_analyze_block_dump and guest_stats_dir is not None:
         if fibercpu_library is None:
             raise RuntimeError("auto_analyze_block_dump requires a fibercpu library path")
-        blocks_analysis_json = run_block_analysis(project_root, guest_stats_dir, fibercpu_library)
+        blocks_analysis_json = run_block_analysis_with_options(
+            project_root,
+            guest_stats_dir,
+            fibercpu_library,
+            n_gram=block_n_gram,
+            top_ngrams=block_top_ngrams,
+        )
 
     return SampleResult(
         engine=engine,
@@ -383,6 +403,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For --engine=jit, build with EnableHandlerProfile=true and export guest block dumps per sample",
     )
+    parser.add_argument(
+        "--block-n-gram",
+        type=int,
+        default=0,
+        help="When exporting block dumps, also analyze N-grams of handler sequences (default: 0, disabled)",
+    )
+    parser.add_argument(
+        "--block-top-ngrams",
+        type=int,
+        default=100,
+        help="Maximum number of top N-gram entries to emit per sample (default: 100)",
+    )
     return parser.parse_args()
 
 
@@ -434,6 +466,8 @@ def main() -> int:
     if args.jit_handler_profile_block_dump:
         print("[runner] jit_handler_profile_block_dump=enabled")
         print(f"[runner] fibercpu_library={fibercpu_library}")
+        if args.block_n_gram > 0:
+            print(f"[runner] block_n_gram={args.block_n_gram} top_ngrams={args.block_top_ngrams}")
     print(f"[runner] cases={','.join(selected_cases)} repeat={args.repeat} iterations={args.iterations}")
 
     if args.jit_handler_profile_block_dump:
@@ -461,6 +495,8 @@ def main() -> int:
                 export_block_dump=args.jit_handler_profile_block_dump,
                 auto_analyze_block_dump=args.jit_handler_profile_block_dump,
                 fibercpu_library=fibercpu_library,
+                block_n_gram=args.block_n_gram,
+                block_top_ngrams=args.block_top_ngrams,
             )
             all_results.append(sample)
             extra = ""

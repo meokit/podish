@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import argparse
 import json
 import os
@@ -87,49 +89,29 @@ def load_summary(summary_file):
         return json.load(f)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Analyze x86 emulator basic blocks")
-    parser.add_argument("input_path", help="Path to blocks.bin or exported stats directory")
-    parser.add_argument("lib_path", help="Path to the library for symbol resolution")
-    parser.add_argument("--min-exec-count", type=int, default=0,
-                        help="Minimum execution count to include a block (default: 0)")
-    parser.add_argument("--min-instr", type=int, default=0,
-                        help="Minimum number of instructions to include a block (default: 0)")
-    parser.add_argument("--n-gram", type=int, default=0,
-                        help="Analyze N-Grams of symbol sequences within blocks. N=0 disables analysis.")
-    parser.add_argument("--top-n", type=int, default=0,
-                        help="Output only top N blocks sorted by execution weight (default: 0, all blocks)")
-    parser.add_argument("--output", "-o", default=None,
-                        help="Output JSON file path")
-    args = parser.parse_args()
-
-    dump_file, summary_file, default_output = resolve_input_paths(args.input_path)
-    output_file = args.output or default_output
-    summary = load_summary(summary_file)
-
-    print(f"Loading symbols from {args.lib_path}...")
-    symbols = load_symbols(args.lib_path)
-    print(f"Loaded {len(symbols)} symbols.")
-
+def parse_blocks(dump_file, symbols):
     blocks_data = []
+    parse_warnings = []
+
     with open(dump_file, "rb") as f:
         base_addr_bytes = f.read(8)
         if len(base_addr_bytes) != 8:
-            print("Error reading base address")
-            sys.exit(1)
+            raise RuntimeError("Error reading base address")
         base_addr = struct.unpack("<Q", base_addr_bytes)[0]
         print(f"Runtime Base Address: 0x{base_addr:x}")
 
         count_bytes = f.read(4)
         if len(count_bytes) != 4:
-            print("Error reading block count")
-            sys.exit(1)
+            raise RuntimeError("Error reading block count")
         count = struct.unpack("<i", count_bytes)[0]
         print(f"Block Count: {count}")
 
-        for _ in range(count):
+        for block_index in range(count):
             hdr_bytes = f.read(20)
             if len(hdr_bytes) != 20:
+                parse_warnings.append(
+                    f"truncated block header at index {block_index}: expected 20 bytes, got {len(hdr_bytes)}"
+                )
                 break
 
             start_eip, end_eip, inst_count, exec_count = struct.unpack("<IIIQ", hdr_bytes)
@@ -140,22 +122,30 @@ def main():
                 "end_eip_hex": f"0x{end_eip:x}",
                 "inst_count": inst_count,
                 "exec_count": exec_count,
-                "ops": []
+                "ops": [],
             }
 
-            for _ in range(inst_count):
+            truncated_block = False
+            for op_index in range(inst_count):
                 op_bytes = f.read(32)
                 if len(op_bytes) != 32:
+                    parse_warnings.append(
+                        f"truncated op payload in block 0x{start_eip:x} at op {op_index}: "
+                        f"expected 32 bytes, got {len(op_bytes)}"
+                    )
+                    truncated_block = True
                     break
 
                 mem_packed, next_eip, length, modrm, prefixes, meta, imm, _padding, handler_ptr = struct.unpack(
-                    "<QIBBBBIIQ", op_bytes)
+                    "<QIBBBBIIQ", op_bytes
+                )
 
                 mem_disp = mem_packed & 0xFFFFFFFF
                 ea_desc = (mem_packed >> 32) & 0xFFFFFFFF
                 handler_offset = handler_ptr - base_addr if handler_ptr >= base_addr else 0
 
                 block_info["ops"].append({
+                    "index": op_index,
                     "next_eip": next_eip,
                     "next_eip_hex": f"0x{next_eip:x}",
                     "handler_ptr": handler_ptr,
@@ -176,11 +166,142 @@ def main():
                     "mem": {
                         "disp": mem_disp,
                         "disp_hex": f"0x{mem_disp:x}",
-                        **decode_ea_desc(ea_desc)
-                    }
+                        **decode_ea_desc(ea_desc),
+                    },
                 })
 
+            if truncated_block:
+                break
+
             blocks_data.append(block_info)
+
+    return base_addr, count, blocks_data, parse_warnings
+
+
+def analyze_ngrams(blocks_data, n, top_ngrams):
+    ngram_stats = {}
+
+    for block in blocks_data:
+        symbols_seq = [op["symbol"] for op in block["ops"]]
+        if len(symbols_seq) < n:
+            continue
+        for i in range(len(symbols_seq) - n + 1):
+            ngram = tuple(symbols_seq[i:i + n])
+            entry = ngram_stats.setdefault(ngram, {
+                "weighted_exec_count": 0,
+                "occurrences": 0,
+                "unique_block_starts": set(),
+                "example_blocks": [],
+            })
+            entry["weighted_exec_count"] += block["exec_count"]
+            entry["occurrences"] += 1
+            entry["unique_block_starts"].add(block["start_eip"])
+            if len(entry["example_blocks"]) < 5:
+                entry["example_blocks"].append({
+                    "start_eip": block["start_eip"],
+                    "start_eip_hex": block["start_eip_hex"],
+                    "exec_count": block["exec_count"],
+                    "start_op_index": i,
+                })
+
+    sorted_ngrams = sorted(
+        ngram_stats.items(),
+        key=lambda item: (item[1]["weighted_exec_count"], item[1]["occurrences"]),
+        reverse=True,
+    )
+
+    top_entries = []
+    for ngram, stats in sorted_ngrams[:top_ngrams]:
+        top_entries.append({
+            "ngram": list(ngram),
+            "ngram_display": " -> ".join(ngram),
+            "weighted_exec_count": stats["weighted_exec_count"],
+            "occurrences": stats["occurrences"],
+            "unique_block_count": len(stats["unique_block_starts"]),
+            "example_blocks": stats["example_blocks"],
+        })
+
+    return {
+        "n_gram_size": n,
+        "total_unique_ngrams": len(sorted_ngrams),
+        "top_ngrams": top_entries,
+    }
+
+
+def build_validation(summary, declared_block_count, parsed_blocks, parse_warnings):
+    validation = {
+        "warnings": list(parse_warnings),
+    }
+
+    if summary is not None:
+        exported_count = summary.get("block_stats", {}).get("block_count")
+        if exported_count is not None and exported_count != declared_block_count:
+            validation["warnings"].append(
+                f"summary block_count={exported_count} but dump declared block count={declared_block_count}"
+            )
+        if exported_count and parsed_blocks == 0:
+            validation["warnings"].append(
+                "summary reports non-zero block_count but parsed blocks are empty; dump/export format likely drifted"
+            )
+
+    return validation
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Analyze x86 emulator basic blocks")
+    parser.add_argument("input_path", help="Path to blocks.bin or exported stats directory")
+    parser.add_argument("lib_path", help="Path to the library for symbol resolution")
+    parser.add_argument(
+        "--min-exec-count",
+        type=int,
+        default=0,
+        help="Minimum execution count to include a block (default: 0)",
+    )
+    parser.add_argument(
+        "--min-instr",
+        type=int,
+        default=0,
+        help="Minimum number of instructions to include a block (default: 0)",
+    )
+    parser.add_argument(
+        "--n-gram",
+        type=int,
+        default=0,
+        help="Analyze N-Grams of symbol sequences within blocks. N=0 disables analysis.",
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=0,
+        help="Output only top N blocks sorted by execution weight (default: 0, all blocks)",
+    )
+    parser.add_argument(
+        "--top-ngrams",
+        type=int,
+        default=100,
+        help="Maximum number of n-gram entries to emit (default: 100)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output JSON file path",
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    dump_file, summary_file, default_output = resolve_input_paths(args.input_path)
+    output_file = args.output or default_output
+    summary = load_summary(summary_file)
+
+    print(f"Loading symbols from {args.lib_path}...")
+    symbols = load_symbols(args.lib_path)
+    print(f"Loaded {len(symbols)} symbols.")
+
+    base_addr, declared_block_count, blocks_data, parse_warnings = parse_blocks(dump_file, symbols)
 
     if args.min_exec_count > 0:
         before = len(blocks_data)
@@ -198,27 +319,6 @@ def main():
         blocks_data = blocks_data[:args.top_n]
         print(f"Limited to top {args.top_n} blocks")
 
-    ngrams_data = {}
-    if args.n_gram > 0:
-        print(f"Analyzing {args.n_gram}-grams...")
-        ngram_counts = defaultdict(int)
-        for block in blocks_data:
-            symbols_seq = [op["symbol"] for op in block["ops"]]
-            for i in range(len(symbols_seq) - args.n_gram + 1):
-                ngram = tuple(symbols_seq[i:i + args.n_gram])
-                ngram_counts[ngram] += block["exec_count"]
-
-        sorted_ngrams = sorted(ngram_counts.items(), key=lambda x: x[1], reverse=True)
-        ngrams_data = {
-            "n_gram_size": args.n_gram,
-            "total_unique_ngrams": len(sorted_ngrams),
-            "top_ngrams": [
-                {"ngram": " -> ".join(ngram), "weighted_exec_count": count}
-                for ngram, count in sorted_ngrams[:100]
-            ]
-        }
-        print(f"Found {len(sorted_ngrams)} unique {args.n_gram}-grams")
-
     result = {
         "blocks": blocks_data,
         "metadata": {
@@ -226,17 +326,23 @@ def main():
             "input_path": args.input_path,
             "dump_file": dump_file,
             "summary_file": summary_file,
+            "declared_block_count": declared_block_count,
             "total_blocks": len(blocks_data),
             "min_exec_count_filter": args.min_exec_count,
             "min_instr_filter": args.min_instr,
-            "n_gram_size": args.n_gram
-        }
+            "n_gram_size": args.n_gram,
+            "top_ngrams_limit": args.top_ngrams,
+        },
+        "validation": build_validation(summary, declared_block_count, len(blocks_data), parse_warnings),
     }
 
     if summary is not None:
         result["export_summary"] = summary
+
     if args.n_gram > 0:
-        result["ngrams"] = ngrams_data
+        print(f"Analyzing {args.n_gram}-grams...")
+        result["ngrams"] = analyze_ngrams(blocks_data, args.n_gram, args.top_ngrams)
+        print(f"Found {result['ngrams']['total_unique_ngrams']} unique {args.n_gram}-grams")
 
     print(f"Writing analysis to {output_file}...")
     with open(output_file, "w", encoding="utf-8") as f:
@@ -245,4 +351,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1)

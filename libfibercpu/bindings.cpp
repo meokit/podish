@@ -1157,25 +1157,25 @@ void X86_ResetTlbStats(EmuState* state) {
 }
 
 int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
-#ifdef ENABLE_TLB_STATS
     if (!state || !buffer || buffer_size == 0) return -1;
+#ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
     int n = snprintf(buffer, buffer_size,
                      "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
                      "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
                      "\"read_misses\":%llu,\"write_misses\":%llu,"
-                     "\"total_reads\":%llu,\"total_writes\":%llu}",
+                     "\"total_reads\":%llu,\"total_writes\":%llu,"
+                     "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
                      (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
                      (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
                      (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes);
+                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes, state->all_blocks.size(),
+                     state->block_cache.size(), state->page_to_blocks.size());
     return n;
 #else
-    if (buffer && buffer_size > 0) {
-        strncpy(buffer, "{}", buffer_size);
-        return 2;
-    }
-    return -1;
+    return snprintf(buffer, buffer_size,
+                    "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
+                    state->all_blocks.size(), state->block_cache.size(), state->page_to_blocks.size());
 #endif
 }
 
