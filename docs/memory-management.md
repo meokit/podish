@@ -56,7 +56,7 @@ Current clone behavior:
 - `share_mem=1`: share one MMU core
 - `share_mem=0`: clone owned pages and preserve external mappings
 - external pages are never internalized into owned MMU pages
-- child JIT block cache starts empty
+- child block cache starts empty
 
 Current reprotect behavior:
 
@@ -66,7 +66,7 @@ Current reprotect behavior:
 
 Current code-cache reset behavior:
 
-- `ResetCodeCacheByRange` only drops translated JIT blocks for a guest range
+- `ResetCodeCacheByRange` only drops translated blocks for a guest range
 - it does not change page tables or page ownership
 
 ## 3. Managed VM Layer
@@ -305,7 +305,7 @@ Current non-`CLONE_VM` fork behavior:
 
 Important current semantics:
 
-- fork does not range-reset JIT cache
+- fork does not range-reset the block cache
 - child block cache starts empty anyway
 - parent executable mappings keep their existing code cache
 - later private writes split through normal COW fault handling
@@ -317,7 +317,7 @@ Current `mprotect` behavior:
 - split/adjust `VmArea` metadata as needed
 - call `ReprotectMappedRange(...)`
 - publish protection change through `ProcessAddressSpaceSync`
-- only reset JIT cache if execute permission changed
+- only reset the block cache if execute permission changed
 
 It does not:
 
@@ -479,4 +479,4 @@ Current ownership boundaries:
 The important rule remains:
 
 - `VMAManager`, `VmArea`, `AddressSpace`, and `AnonVma` are authoritative.
-- Native MMU mappings and JIT blocks are caches derived from that managed state.
+- Native MMU mappings and translated blocks are caches derived from that managed state.

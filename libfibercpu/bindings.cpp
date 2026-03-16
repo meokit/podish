@@ -10,7 +10,6 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
-#include "jit_ops.h"
 #include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
@@ -212,8 +211,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     dst[out] = *b->Sentinel();
 
     ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
-    concat->entry = FindJitBlock(concat->FirstOp());
-    concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
+    concat->entry = concat->FirstOp()->handler;
     return concat;
 }
 
@@ -249,8 +247,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     dst[out] = *b->Sentinel();
 
     ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
-    concat->entry = FindJitBlock(concat->FirstOp());
-    concat->entry = concat->entry ? concat->entry : concat->FirstOp()->handler;
+    concat->entry = concat->FirstOp()->handler;
     return concat;
 }
 
@@ -608,7 +605,7 @@ int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     state->mmu.munmap(addr, size);
 
-    // Also invalidate JIT cache for this range (code may have been translated from these pages)
+    // Also invalidate the derived block cache for this range.
     uint32_t start_page = addr >> 12;
     uint32_t end_page = (addr + size + 0xFFF) >> 12;
     for (uint32_t p = start_page; p < end_page; ++p) {

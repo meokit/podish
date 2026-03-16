@@ -6,8 +6,7 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
-#include "jit_ops.h"
-#include "ops.h"  // For g_Handlers
+#include "ops.h"         // For g_Handlers
 #include "specialization.h"
 #include "state.h"
 #include "superopcodes.h"
@@ -763,9 +762,7 @@ finalize:
         }
     }
 
-    // JIT Entry or First Op Handler Fallback
-    block->entry = FindJitBlock(block->FirstOp());
-    block->entry = block->entry ? block->entry : block->FirstOp()->handler;
+    block->entry = block->FirstOp()->handler;
 
     return block;
 }
