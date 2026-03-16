@@ -57,11 +57,9 @@ enum class LogicFlow : uint8_t {
     ContinueSkipOne = 1,
     ExitOnCurrentEIP = 2,
     ExitOnNextEIP = 3,
-    ExitWithoutSyncEIP = 4,
-    RestartMemoryOp = 5,
-    RetryMemoryOp = 6,
-    ExitToBranch = 7,
-    ExitToNextOpBranch = 8,
+    RestartMemoryOp = 4,
+    RetryMemoryOp = 5,
+    ExitToBranch = 6,
 };
 
 #define LogicFuncParams                                                                                    \

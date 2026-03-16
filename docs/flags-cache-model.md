@@ -51,7 +51,6 @@ Architectural consumers are the only places allowed to force a commit or reload:
 
 - `ExitOnCurrentEIP`
 - `ExitOnNextEIP`
-- `ExitWithoutSyncEIP`
 - restart / retry exits
 - resolver miss / limit exits
 - external visibility points

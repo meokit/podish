@@ -77,10 +77,6 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             CommitFlagsCache(state, flags_cache);
             if (!state->eip_dirty) state->sync_eip_to_op_end(op);
             return instr_limit;
-        case LogicFlow::ExitWithoutSyncEIP:
-            RecordBlockHandlersThrough(state, op);
-            CommitFlagsCache(state, flags_cache);
-            return instr_limit;
         case LogicFlow::RestartMemoryOp:
             RecordBlockHandlersThrough(state, op);
             ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch, flags_cache);
@@ -90,9 +86,6 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
             ATTR_MUSTTAIL return ResolveBranchTarget(state, op, instr_limit, utlb, branch, flags_cache);
-        case LogicFlow::ExitToNextOpBranch:
-            RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTarget(state, NextOp(op), instr_limit, utlb, branch, flags_cache);
         default:
             CommitFlagsCache(state, flags_cache);
             return instr_limit;
