@@ -287,6 +287,26 @@ void RegisterDataMovOps() {
     g_Handlers[0x1BF] = DispatchWrapper<OpMovsx_Word>;
     g_Handlers[0xD7] = DispatchWrapper<OpXlat>;
 
+    {
+        SpecCriteria c32;
+        c32.prefix_mask = prefix::OPSIZE;
+        c32.prefix_val = 0;
+        c32.reg_mask = 7;
+
+        c32.reg_val = 0;
+        DispatchRegistrar<OpMovsx_Word_32_Eax>::RegisterSpecialized(0x1BF, c32);
+        c32.reg_val = 1;
+        DispatchRegistrar<OpMovsx_Word_32_Ecx>::RegisterSpecialized(0x1BF, c32);
+        c32.reg_val = 2;
+        DispatchRegistrar<OpMovsx_Word_32_Edx>::RegisterSpecialized(0x1BF, c32);
+        c32.reg_val = 3;
+        DispatchRegistrar<OpMovsx_Word_32_Ebx>::RegisterSpecialized(0x1BF, c32);
+        c32.reg_val = 5;
+        DispatchRegistrar<OpMovsx_Word_32_Ebp>::RegisterSpecialized(0x1BF, c32);
+        c32.reg_val = 7;
+        DispatchRegistrar<OpMovsx_Word_32_Edi>::RegisterSpecialized(0x1BF, c32);
+    }
+
     SpecCriteria c16;
     c16.prefix_mask = prefix::OPSIZE;
     c16.prefix_val = prefix::OPSIZE;

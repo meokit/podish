@@ -502,19 +502,55 @@ FORCE_INLINE LogicFlow OpMovsx_Byte(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) {
+template <Specialized RegSpec = Specialized::None, Specialized SizeSpec = Specialized::None>
+FORCE_INLINE LogicFlow OpMovsx_Word_Impl(LogicFuncParams) {
     // 0F BF: MOVSX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     int16_t val = (int16_t)*val_res;
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
+
+    if constexpr (SizeSpec == Specialized::Opsize32) {
+        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+            state->ctx.regs[FixedReg] = (uint32_t)(int32_t)val;
+        } else {
+            uint8_t reg = (op->modrm >> 3) & 7;
+            state->ctx.regs[reg] = (uint32_t)(int32_t)val;
+        }
+    } else if constexpr (SizeSpec == Specialized::Opsize16) {
+        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+            uint32_t current = state->ctx.regs[FixedReg];
+            state->ctx.regs[FixedReg] = (current & 0xFFFF0000) | (uint16_t)val;
+        } else {
+            uint8_t reg = (op->modrm >> 3) & 7;
+            SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
+        }
+    } else if (op->prefixes.flags.opsize) {
+        uint8_t reg = (op->modrm >> 3) & 7;
         SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
     } else {
+        uint8_t reg = (op->modrm >> 3) & 7;
         SetReg(state, reg, (uint32_t)(int32_t)val);
     }
     return LogicFlow::Continue;
 }
+
+FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) { return OpMovsx_Word_Impl<>(LogicPassParams); }
+
+#define MOVSX_WORD_32_REG_WRAPPER(RegName, Spec)                                \
+    FORCE_INLINE LogicFlow OpMovsx_Word_32_##RegName(LogicFuncParams) {         \
+        return OpMovsx_Word_Impl<Spec, Specialized::Opsize32>(LogicPassParams); \
+    }
+
+MOVSX_WORD_32_REG_WRAPPER(Eax, Specialized::RegEax)
+MOVSX_WORD_32_REG_WRAPPER(Ecx, Specialized::RegEcx)
+MOVSX_WORD_32_REG_WRAPPER(Edx, Specialized::RegEdx)
+MOVSX_WORD_32_REG_WRAPPER(Ebx, Specialized::RegEbx)
+MOVSX_WORD_32_REG_WRAPPER(Ebp, Specialized::RegEbp)
+MOVSX_WORD_32_REG_WRAPPER(Edi, Specialized::RegEdi)
+
+#undef MOVSX_WORD_32_REG_WRAPPER
 
 template <Specialized SizeSpec>
 FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
