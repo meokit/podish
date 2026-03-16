@@ -150,7 +150,7 @@ def analyze_sample_ngrams(blocks: list[dict[str, object]], n: int) -> dict[tuple
 
     for block in blocks:
         ops = block.get("ops") or []
-        symbols = [op.get("symbol", "<unknown>") for op in ops]
+        symbols = [op.get("logic_func") or op.get("symbol") for op in ops]
         if len(symbols) < n:
             continue
 
@@ -158,6 +158,8 @@ def analyze_sample_ngrams(blocks: list[dict[str, object]], n: int) -> dict[tuple
         block_exec_count = int(block.get("exec_count", 0))
         for index in range(len(symbols) - n + 1):
             ngram = tuple(symbols[index:index + n])
+            if any(not symbol or not str(symbol).startswith("op::Op") for symbol in ngram):
+                continue
             entry = stats.setdefault(ngram, {
                 "weighted_exec_count": 0,
                 "occurrences": 0,

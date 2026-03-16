@@ -10,10 +10,46 @@ import sys
 from collections import defaultdict
 
 
+def demangle_names(names):
+    unique_names = []
+    seen = set()
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique_names.append(name)
+
+    if not unique_names:
+        return {}
+
+    try:
+        filt_input = []
+        for name in unique_names:
+            if name.startswith("__Z"):
+                filt_input.append(name[1:])
+            else:
+                filt_input.append(name)
+        proc = subprocess.run(
+            ["c++filt", "-n"],
+            input="\n".join(filt_input) + "\n",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        lines = proc.stdout.splitlines()
+        if len(lines) != len(unique_names):
+            return {}
+        return dict(zip(unique_names, lines))
+    except Exception:
+        return {}
+
+
 def load_symbols(lib_path):
     symbols = {}
     commands = [
+        ["nm", "-nm", "-C", lib_path],
         ["nm", "-n", "-C", lib_path],
+        ["nm", "-nm", lib_path],
         ["nm", "-n", lib_path],
     ]
 
@@ -21,18 +57,22 @@ def load_symbols(lib_path):
         try:
             print(f"Running: {' '.join(cmd)}")
             output = subprocess.check_output(cmd).decode("utf-8", errors="replace")
+            raw_symbols = {}
             for line in output.splitlines():
-                parts = line.strip().split(" ", 2)
-                if len(parts) < 3:
+                parts = line.strip().split()
+                if len(parts) < 2:
                     continue
-                addr_str, type_code, name = parts
+                addr_str = parts[0]
+                name = parts[-1]
                 try:
                     addr = int(addr_str, 16)
                 except ValueError:
                     continue
-                if type_code.upper() in ("T", "W"):
-                    symbols[addr] = name
-            if symbols:
+                raw_symbols[addr] = name
+
+            if raw_symbols:
+                demangled = demangle_names(raw_symbols.values())
+                symbols = {addr: demangled.get(name, name) for addr, name in raw_symbols.items()}
                 return symbols
         except Exception as exc:
             print(f"Warning: failed to load symbols with {' '.join(cmd)}: {exc}")
@@ -44,19 +84,22 @@ def find_symbol(offset, symbols_map):
     name = symbols_map.get(offset)
     if not name:
         return f"func_{offset:x}"
+    return name
 
-    wrapper_match = re.search(r"DispatchWrapper<&(?:[a-zA-Z0-9_]+::)*([A-Za-z0-9_]+)\(", name)
+
+def normalize_logic_func_name(symbol_name):
+    if not symbol_name:
+        return None
+
+    wrapper_match = re.search(r"DispatchWrapper<&(?:[a-zA-Z0-9_]+::)*?(op::Op[A-Za-z0-9_]+)\(", symbol_name)
     if wrapper_match:
         return wrapper_match.group(1)
 
-    match = re.search(r"op::([a-zA-Z0-9_]+)", name)
-    if match:
-        return match.group(1)
+    direct_match = re.search(r"(?:^|::)(op::Op[A-Za-z0-9_]+)(?:\(|$)", symbol_name)
+    if direct_match:
+        return direct_match.group(1)
 
-    plain_match = re.search(r"(?:^|::)(Op[A-Za-z0-9_]+)$", name)
-    if plain_match:
-        return plain_match.group(1)
-    return name
+    return None
 
 
 def decode_ea_desc(ea_desc):
@@ -152,6 +195,9 @@ def parse_blocks(dump_file, symbols):
                 ea_desc = (mem_packed >> 32) & 0xFFFFFFFF
                 handler_offset = handler_ptr - base_addr if handler_ptr >= base_addr else 0
 
+                symbol_name = find_symbol(handler_offset, symbols)
+                logic_func = normalize_logic_func_name(symbol_name)
+
                 block_info["ops"].append({
                     "index": op_index,
                     "next_eip": next_eip,
@@ -160,7 +206,9 @@ def parse_blocks(dump_file, symbols):
                     "handler_ptr_hex": f"0x{handler_ptr:x}",
                     "handler_offset": handler_offset,
                     "handler_offset_hex": f"0x{handler_offset:x}",
-                    "symbol": find_symbol(handler_offset, symbols),
+                    "symbol_raw": symbol_name,
+                    "logic_func": logic_func,
+                    "symbol": logic_func or symbol_name,
                     "imm": imm,
                     "imm_hex": f"0x{imm:x}",
                     "len": length,
@@ -190,11 +238,13 @@ def analyze_ngrams(blocks_data, n, top_ngrams):
     ngram_stats = {}
 
     for block in blocks_data:
-        symbols_seq = [op["symbol"] for op in block["ops"]]
+        symbols_seq = [op.get("logic_func") for op in block["ops"]]
         if len(symbols_seq) < n:
             continue
         for i in range(len(symbols_seq) - n + 1):
             ngram = tuple(symbols_seq[i:i + n])
+            if any(not symbol for symbol in ngram):
+                continue
             entry = ngram_stats.setdefault(ngram, {
                 "weighted_exec_count": 0,
                 "occurrences": 0,

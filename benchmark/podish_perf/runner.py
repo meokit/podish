@@ -457,6 +457,11 @@ def parse_args() -> argparse.Namespace:
         help="Build the JIT binary with EnableSuperOpcodes=false before running samples",
     )
     parser.add_argument(
+        "--allow-superopcodes-in-block-analysis",
+        action="store_true",
+        help="Keep EnableSuperOpcodes=true even when exporting/analyzing JIT block dumps",
+    )
+    parser.add_argument(
         "--candidate-top",
         type=int,
         default=100,
@@ -510,11 +515,16 @@ def main() -> int:
     print(f"[runner] engine={args.engine}")
     if args.engine == "aot":
         print(f"[runner] aot_binary={aot_binary}")
+    disable_superopcodes_for_run = args.disable_superopcodes
+    if args.jit_handler_profile_block_dump and not args.allow_superopcodes_in_block_analysis:
+        disable_superopcodes_for_run = True
     if args.jit_handler_profile_block_dump:
         print("[runner] jit_handler_profile_block_dump=enabled")
         print(f"[runner] fibercpu_library={fibercpu_library}")
-        if args.disable_superopcodes:
+        if disable_superopcodes_for_run:
             print("[runner] disable_superopcodes=enabled")
+        if not args.disable_superopcodes and disable_superopcodes_for_run:
+            print("[runner] auto_disable_superopcodes_for_block_analysis=enabled")
         if args.block_n_gram > 0:
             print(f"[runner] block_n_gram={args.block_n_gram} top_ngrams={args.block_top_ngrams}")
         if args.aggregate_superopcode_candidates:
@@ -525,7 +535,7 @@ def main() -> int:
         if args.engine != "jit":
             print("--jit-handler-profile-block-dump requires --engine=jit", file=sys.stderr)
             return 1
-        ensure_jit_handler_profile_build(project_root, disable_superopcodes=args.disable_superopcodes)
+        ensure_jit_handler_profile_build(project_root, disable_superopcodes=disable_superopcodes_for_run)
 
     for case in selected_cases:
         for iteration in range(1, args.repeat + 1):

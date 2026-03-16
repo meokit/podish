@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import re
 from pathlib import Path
@@ -25,29 +24,14 @@ def parse_args() -> argparse.Namespace:
 def sanitize_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
-
-def build_symbol_namespace_map() -> dict[str, str]:
-    symbol_map: dict[str, str] = {}
-    pattern = re.compile(r"\b(Op[A-Za-z0-9_]+)\s*\(")
-
-    for file_path in sorted(glob.glob("libfibercpu/ops/*_impl.h")):
-        inside_op_namespace = False
-        for raw_line in Path(file_path).read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if line == "namespace op {":
-                inside_op_namespace = True
-                continue
-            if inside_op_namespace and line == "}  // namespace op":
-                inside_op_namespace = False
-                continue
-
-            match = pattern.search(line)
-            if not match:
-                continue
-
-            symbol_map.setdefault(match.group(1), "op" if inside_op_namespace else "root")
-
-    return symbol_map
+def canonical_logic_name(name: str) -> str | None:
+    if not name:
+        return None
+    if name.startswith("op::Op"):
+        return name
+    if name.startswith("Op"):
+        return f"op::{name}"
+    return None
 
 
 def load_candidates(path: Path, top: int) -> list[dict[str, object]]:
@@ -58,9 +42,9 @@ def load_candidates(path: Path, top: int) -> list[dict[str, object]]:
         ngram = candidate.get("ngram") or []
         if len(ngram) != 2:
             continue
-        op0 = str(ngram[0])
-        op1 = str(ngram[1])
-        if not op0.startswith("Op") or not op1.startswith("Op"):
+        op0 = canonical_logic_name(str(ngram[0]))
+        op1 = canonical_logic_name(str(ngram[1]))
+        if not op0 or not op1:
             continue
         key = (op0, op1)
         if key in seen:
@@ -77,16 +61,15 @@ def load_candidates(path: Path, top: int) -> list[dict[str, object]]:
     return out
 
 
-def qualify_symbol(name: str, symbol_map: dict[str, str]) -> str:
-    return name if symbol_map.get(name) == "root" else f"op::{name}"
-
-
-def emit_handler(index: int, candidate: dict[str, object], symbol_map: dict[str, str]) -> str:
+def emit_handler(index: int, candidate: dict[str, object]) -> str:
     op0_name = str(candidate["op0"])
     op1_name = str(candidate["op1"])
-    handler_name = f"SuperOpcode_{index:03d}_{sanitize_name(op0_name)}__{sanitize_name(op1_name)}"
-    op0_qualified = qualify_symbol(op0_name, symbol_map)
-    op1_qualified = qualify_symbol(op1_name, symbol_map)
+    handler_name = (
+        f"SuperOpcode_{index:03d}_{sanitize_name(op0_name.removeprefix('op::'))}"
+        f"__{sanitize_name(op1_name.removeprefix('op::'))}"
+    )
+    op0_qualified = op0_name
+    op1_qualified = op1_name
     return f"""// weighted_exec_count={candidate["weighted_exec_count"]} occurrences={candidate["occurrences"]}
 ATTR_PRESERVE_NONE int64_t {handler_name}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {{
@@ -110,9 +93,8 @@ ATTR_PRESERVE_NONE int64_t {handler_name}(EmuState* RESTRICT state, DecodedOp* R
 
 
 def build_cpp(candidates: list[dict[str, object]]) -> str:
-    symbol_map = build_symbol_namespace_map()
     impl_includes: list[str] = []
-    for file_path in sorted(glob.glob("libfibercpu/ops/*_impl.h")):
+    for file_path in sorted(Path("libfibercpu/ops").glob("*_impl.h")):
         impl_includes.append(f'#include "../ops/{Path(file_path).name}"')
 
     lines = [
@@ -125,16 +107,19 @@ def build_cpp(candidates: list[dict[str, object]]) -> str:
     ]
 
     for index, candidate in enumerate(candidates):
-        lines.append(emit_handler(index, candidate, symbol_map))
+        lines.append(emit_handler(index, candidate))
 
     lines.append("__attribute__((used)) HandlerFunc FindSuperOpcode(const DecodedOp* ops) {")
     lines.append("    if (!ops) return nullptr;")
     for index, candidate in enumerate(candidates):
         op0 = str(candidate["op0"])
         op1 = str(candidate["op1"])
-        op0_qualified = qualify_symbol(op0, symbol_map)
-        op1_qualified = qualify_symbol(op1, symbol_map)
-        handler_name = f"SuperOpcode_{index:03d}_{sanitize_name(op0)}__{sanitize_name(op1)}"
+        op0_qualified = op0
+        op1_qualified = op1
+        handler_name = (
+            f"SuperOpcode_{index:03d}_{sanitize_name(op0.removeprefix('op::'))}"
+            f"__{sanitize_name(op1.removeprefix('op::'))}"
+        )
         lines.append(
             f"    if (ops[0].handler == (HandlerFunc)DispatchWrapper<{op0_qualified}> && "
             f"ops[1].handler == (HandlerFunc)DispatchWrapper<{op1_qualified}>) return {handler_name};"
