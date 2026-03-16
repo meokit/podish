@@ -19,6 +19,14 @@ void RegisterCompareOps() {
 
     // 39: CMP r/m16/32, r16/32
     REGISTER_OPSIZE(0x39, OpCmp_EvGv);
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0x00;
+        DispatchRegistrar<OpCmp_EvGv_32_ModReg>::RegisterSpecialized(0x39, c);
+    }
 
     g_Handlers[0x3A] = DispatchWrapper<OpCmp_GbEb>;
 
@@ -27,6 +35,14 @@ void RegisterCompareOps() {
 
     // 85: TEST r/m16/32, r16/32
     REGISTER_OPSIZE(0x85, OpTest_EvGv);
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0x00;
+        DispatchRegistrar<OpTest_EvGv_32_ModReg>::RegisterSpecialized(0x85, c);
+    }
 
     g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg_Byte>;  // 0F B0
 

@@ -164,8 +164,7 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
 template <ExtKind Kind>
 static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                        int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
-    const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
+                                                                       uint32_t target_eip, uint64_t flags_cache) {
     state->mem_op.emplace<0>();
     if (instr_limit <= 0) {
         CommitFlagsCache(state, flags_cache);
@@ -185,7 +184,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
     if (next_block->MatchesChainTarget(target_eip)) [[likely]] {
         RecordConditionalBranchCacheResult(state, op, true);
         state->last_block = next_block;
-        ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
+        ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, target_eip, flags_cache);
     }
 
     ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<Kind>(state, op, instr_limit, utlb, target_eip, flags_cache);
@@ -193,7 +192,8 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
 
 ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+    const uint32_t target_eip = branch != std::numeric_limits<uint32_t>::max() ? branch : op->next_eip;
+    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, target_eip, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,

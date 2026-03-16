@@ -50,6 +50,16 @@ void RegisterGroupOps() {
     REG_G1_EB(0x80, 6, OpGroup1_EbIb_Xor);
     REG_G1_EB(0x80, 7, OpGroup1_EbIb_Cmp);
 
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Flags>::RegisterSpecialized(0x80, c);
+        DispatchRegistrar<OpGroup1_EbIb_Cmp_ModReg_Flags>::RegisterSpecialized(0x82, c);
+    }
+
 #define REG_EV_SPEC(opcode, subop, name)                                      \
     /* 32-bit Normal */                                                       \
     {                                                                         \
@@ -92,12 +102,22 @@ void RegisterGroupOps() {
 
     // Group 1: 0x83 (Mostly used)
     REG_EV_SPEC(0x83, 0, OpGroup1_EvIb_Add);
+    REG_EV_SPEC(0x83, 1, OpGroup1_EvIb_Or);
+    REG_EV_SPEC(0x83, 2, OpGroup1_EvIb_Adc);
+    REG_EV_SPEC(0x83, 3, OpGroup1_EvIb_Sbb);
+    REG_EV_SPEC(0x83, 4, OpGroup1_EvIb_And);
     REG_EV_SPEC(0x83, 5, OpGroup1_EvIb_Sub);
+    REG_EV_SPEC(0x83, 6, OpGroup1_EvIb_Xor);
     REG_EV_SPEC(0x83, 7, OpGroup1_EvIb_Cmp);
 
     // Group 1: 0x81 (Also used)
     REG_EV_SPEC(0x81, 0, OpGroup1_EvIz_Add);
+    REG_EV_SPEC(0x81, 1, OpGroup1_EvIz_Or);
+    REG_EV_SPEC(0x81, 2, OpGroup1_EvIz_Adc);
+    REG_EV_SPEC(0x81, 3, OpGroup1_EvIz_Sbb);
+    REG_EV_SPEC(0x81, 4, OpGroup1_EvIz_And);
     REG_EV_SPEC(0x81, 5, OpGroup1_EvIz_Sub);
+    REG_EV_SPEC(0x81, 6, OpGroup1_EvIz_Xor);
     REG_EV_SPEC(0x81, 7, OpGroup1_EvIz_Cmp);
 
 #define REG_G3_EB(opcode, subop, name)                                     \

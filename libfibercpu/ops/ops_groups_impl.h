@@ -17,12 +17,17 @@ namespace fiberish {
 // Group 1: 0x80 (Eb,Ib), 0x81 (Ev,Iz), 0x82 (Eb,Ib - alias), 0x83 (Ev,Ib)
 // =========================================================================================
 
-template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF>
+template <bool UpdateFlags, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpGroup1_EbIb_Internal(LogicFuncParams) {
     // 80: Arith r/m8, imm8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
+    uint8_t dest;
+    if constexpr (S == Specialized::ModReg) {
+        dest = GetReg8(state, op->modrm & 7);
+    } else {
+        auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        if (!dest_res) return LogicFlow::RestartMemoryOp;
+        dest = *dest_res;
+    }
 
     uint8_t src = (uint8_t)imm;
     return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp>(state, op, flags_cache, dest, src, utlb);
@@ -282,6 +287,10 @@ IMPL_G1_EB(5, OpGroup1_EbIb_Sub)
 IMPL_G1_EB(6, OpGroup1_EbIb_Xor)
 IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
 
+FORCE_INLINE LogicFlow OpGroup1_EbIb_Cmp_ModReg_Flags(LogicFuncParams) {
+    return OpGroup1_EbIb_Internal<true, 7, Specialized::ModReg>(LogicPassParams);
+}
+
 // Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags
 // Param `func` is OpGroup1_EvIz_T_Internal or OpGroup1_EvIb_T_Internal (templated)
 #define IMPL_EV_SPEC(subop, name, funcName, isImm8)                       \
@@ -300,12 +309,22 @@ IMPL_G1_EB(7, OpGroup1_EbIb_Cmp)
 
 // Group 1 Iz (0x81) - IsImm8=false
 IMPL_EV_SPEC(0, OpGroup1_EvIz_Add, OpGroup1_Ev_T_Internal, false)
+IMPL_EV_SPEC(1, OpGroup1_EvIz_Or, OpGroup1_Ev_T_Internal, false)
+IMPL_EV_SPEC(2, OpGroup1_EvIz_Adc, OpGroup1_Ev_T_Internal, false)
+IMPL_EV_SPEC(3, OpGroup1_EvIz_Sbb, OpGroup1_Ev_T_Internal, false)
+IMPL_EV_SPEC(4, OpGroup1_EvIz_And, OpGroup1_Ev_T_Internal, false)
 IMPL_EV_SPEC(5, OpGroup1_EvIz_Sub, OpGroup1_Ev_T_Internal, false)
+IMPL_EV_SPEC(6, OpGroup1_EvIz_Xor, OpGroup1_Ev_T_Internal, false)
 IMPL_EV_SPEC(7, OpGroup1_EvIz_Cmp, OpGroup1_Ev_T_Internal, false)
 
 // Group 1 Ib (0x83) - IsImm8=true
 IMPL_EV_SPEC(0, OpGroup1_EvIb_Add, OpGroup1_Ev_T_Internal, true)
+IMPL_EV_SPEC(1, OpGroup1_EvIb_Or, OpGroup1_Ev_T_Internal, true)
+IMPL_EV_SPEC(2, OpGroup1_EvIb_Adc, OpGroup1_Ev_T_Internal, true)
+IMPL_EV_SPEC(3, OpGroup1_EvIb_Sbb, OpGroup1_Ev_T_Internal, true)
+IMPL_EV_SPEC(4, OpGroup1_EvIb_And, OpGroup1_Ev_T_Internal, true)
 IMPL_EV_SPEC(5, OpGroup1_EvIb_Sub, OpGroup1_Ev_T_Internal, true)
+IMPL_EV_SPEC(6, OpGroup1_EvIb_Xor, OpGroup1_Ev_T_Internal, true)
 IMPL_EV_SPEC(7, OpGroup1_EvIb_Cmp, OpGroup1_Ev_T_Internal, true)
 
 #undef IMPL_EV_SPEC

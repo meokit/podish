@@ -30,15 +30,25 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+        uint16_t dest;
+        if constexpr (S == Specialized::ModReg) {
+            dest = (uint16_t)GetReg(state, op->modrm & 7);
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
         uint16_t src = (uint16_t)GetReg(state, reg);
         AluCmp<uint16_t>(state, flags_cache, dest, src);
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint32_t dest;
+        if constexpr (S == Specialized::ModReg) {
+            dest = GetReg(state, op->modrm & 7);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
         uint32_t src = GetReg(state, reg);
         AluCmp<uint32_t>(state, flags_cache, dest, src);
     }
@@ -96,15 +106,25 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+        uint16_t dest;
+        if constexpr (S == Specialized::ModReg) {
+            dest = (uint16_t)GetReg(state, op->modrm & 7);
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
         uint16_t src = (uint16_t)GetReg(state, reg);
         AluAnd<uint16_t>(state, flags_cache, dest, src);
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint32_t dest;
+        if constexpr (S == Specialized::ModReg) {
+            dest = GetReg(state, op->modrm & 7);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
         uint32_t src = GetReg(state, reg);
         AluAnd<uint32_t>(state, flags_cache, dest, src);
     }
@@ -180,6 +200,14 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
         return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg(LogicFuncParams) {
+    return OpCmp_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg(LogicFuncParams) {
+    return OpTest_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
 }
 
 namespace op {
