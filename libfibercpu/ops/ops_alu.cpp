@@ -154,11 +154,11 @@ void RegisterAluOps() {
         DispatchRegistrar<OpDec_Reg_NF>::RegisterNF(0x48 + i);
     }
 
-    g_Handlers[0x27] = DispatchWrapper<OpDaa>;
-    g_Handlers[0x2F] = DispatchWrapper<OpDas>;
-    g_Handlers[0x37] = DispatchWrapper<OpAaa>;
-    g_Handlers[0x3F] = DispatchWrapper<OpAas>;
-    g_Handlers[0xD4] = DispatchWrapper<OpAam>;
-    g_Handlers[0xD5] = DispatchWrapper<OpAad>;
+    g_Handlers[0x27] = DispatchWrapper<op::OpDaa>;
+    g_Handlers[0x2F] = DispatchWrapper<op::OpDas>;
+    g_Handlers[0x37] = DispatchWrapper<op::OpAaa>;
+    g_Handlers[0x3F] = DispatchWrapper<op::OpAas>;
+    g_Handlers[0xD4] = DispatchWrapper<op::OpAam>;
+    g_Handlers[0xD5] = DispatchWrapper<op::OpAad>;
 }
 }  // namespace fiberish

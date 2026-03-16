@@ -202,6 +202,8 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+namespace op {
+
 FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg(LogicFuncParams) {
     return OpCmp_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
 }
@@ -209,8 +211,6 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg(LogicFuncParams) {
     return OpTest_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
 }
-
-namespace op {
 
 FORCE_INLINE LogicFlow OpCmp_EvGv_16(LogicFuncParams) {
     return OpCmp_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);

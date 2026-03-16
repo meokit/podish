@@ -1076,6 +1076,8 @@ FORCE_INLINE void UpdateResultFlags(T res, uint32_t& flags) {
     if (CalcPflag(res & 0xFF)) flags |= PF_MASK;
 }
 
+namespace op {
+
 FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
     // 27: DAA
     // Decimal Adjust AL after Addition
@@ -1272,5 +1274,7 @@ FORCE_INLINE LogicFlow OpAad(LogicFuncParams) {
 
     return LogicFlow::Continue;
 }
+
+}  // namespace op
 
 }  // namespace fiberish

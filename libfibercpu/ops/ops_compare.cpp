@@ -25,7 +25,7 @@ void RegisterCompareOps() {
         c.mod_val = 3;
         c.prefix_mask = 0x40;
         c.prefix_val = 0x00;
-        DispatchRegistrar<OpCmp_EvGv_32_ModReg>::RegisterSpecialized(0x39, c);
+        DispatchRegistrar<op::OpCmp_EvGv_32_ModReg>::RegisterSpecialized(0x39, c);
     }
 
     g_Handlers[0x3A] = DispatchWrapper<OpCmp_GbEb>;
@@ -41,7 +41,7 @@ void RegisterCompareOps() {
         c.mod_val = 3;
         c.prefix_mask = 0x40;
         c.prefix_val = 0x00;
-        DispatchRegistrar<OpTest_EvGv_32_ModReg>::RegisterSpecialized(0x85, c);
+        DispatchRegistrar<op::OpTest_EvGv_32_ModReg>::RegisterSpecialized(0x85, c);
     }
 
     g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg_Byte>;  // 0F B0
