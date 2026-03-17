@@ -295,18 +295,21 @@ This avoids incorrectly selecting combinations that are actually unsuitable for 
 
 ## 9.1 Existing Runner / Block Dump Capability Assessment
 
-The current [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py) already provides a reusable foundation, but it cannot directly satisfy `SuperOpcode` candidate selection.
+The current `benchmark/podish_perf/runner.py` now provides a usable end-to-end foundation for `SuperOpcode` candidate collection.
 
 ### Existing Capabilities
 
 - Supports batch running samples for fixed workloads
 - Supports `--jit-handler-profile-block-dump`
-- Supports automatically calling [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py)
+- Supports automatically calling `scripts/analyze_blocks.py`
+- Supports `--block-n-gram`
+- Supports `--aggregate-superopcode-candidates`
+- Supports writing aggregate outputs to `superopcode_candidates.json` and `.md`
 - Each sample saves transcript, summary, and optional guest stats directory
 
 ### Parts Already Sufficient in Existing Data
 
-If `blocks.bin` export is complete and readable, then theoretically it is sufficient to recover:
+With the current block-dump pipeline, the exported data is already sufficient to recover:
 
 - Op order within blocks
 - Handler symbol corresponding to each op
@@ -319,38 +322,35 @@ This means:
 
 ### Current Deficiencies
 
-In the current runner form, there are several deficiencies:
+The old gaps around n-gram analysis and cross-sample aggregation are no longer the main blocker. The remaining deficiencies are narrower:
 
 1. `runner.py` treats block dump as a "byproduct"  
    The current main goal is still benchmark timing, not building a stable op-sequence corpus.
 
-2. `run_block_analysis()` does not enable `--n-gram`  
-   Current automatic analysis only outputs block/op lists, not directly producing 2-gram reports.
-
-3. Currently only runs a single workload at a time, narrow sample coverage  
+2. Workload coverage is still narrow by default  
    If based only on CoreMark, it is easy to overfit superopcodes to a single workload.
 
-4. `blocks_analysis.json` in the results directory may currently not have a valid `blocks` list  
-   This indicates that the current block dump export/consumption chain at least needs verification; cannot directly assume it can already stably provide complete block-op sequences.
+3. Candidate selection is still mostly frequency-driven  
+   The aggregation pipeline can rank and filter candidates, but it does not yet encode all semantic profitability constraints directly in the runtime.
 
-5. Lacks cross-sample aggregation  
-   Currently each sample is analyzed independently; there is no unified aggregation script to output "full-sample top 2-gram candidates".
+4. CLI shape is still somewhat historical  
+   `--jit-handler-profile-block-dump` remains the main switch, even though the pipeline has grown beyond simple handler profiling.
 
 ### Conclusion
 
 The conclusion is:
 
-- `runner.py` as a sampling entry point is basically sufficient
-- But the "current runner output data pipeline" is not yet sufficient to directly support `SuperOpcode` selection
-- The next step is more suitable for extending data post-processing rather than immediately adding complex runtime statistics inside the VM
+- `runner.py` is now sufficient as the main sampling entry point
+- `scripts/analyze_blocks.py` and `benchmark/podish_perf/analyze_superopcode_candidates.py` already provide the first usable post-processing path
+- The next step is to improve candidate quality and workload breadth, not to rebuild the data pipeline from scratch
 
 ## 9.2 Implementation Plan Based on Existing Runner
 
-It is recommended to proceed in the following order.
+It is recommended to proceed from the current implementation, rather than treating the whole pipeline as future work.
 
-### Step 1: First Establish Block Dump Readability
+### Step 1: Keep Block Dump Readability Verified
 
-First confirm that the chain `blocks.bin -> analyze_blocks.py -> blocks_analysis.json` stably outputs non-empty block/op lists.
+Keep validating that the chain `blocks.bin -> analyze_blocks.py -> blocks_analysis.json` stays readable as schemas evolve.
 
 Need to check:
 
@@ -358,16 +358,14 @@ Need to check:
 - Whether runtime base / handler pointer parsing is correct
 - Whether there is schema drift causing the script to read empty
 
-This is a prerequisite for `SuperOpcode`.  
-If this is not established, subsequent 2-gram work is all in vain.
+This remains a regression guard, not a missing first milestone.
 
-### Step 2: Extend `analyze_blocks.py`
+### Step 2: Continue Extending `analyze_blocks.py`
 
-It is recommended to turn [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py) into the first version of N-gram data source, rather than adding a completely parallel script.
+`scripts/analyze_blocks.py` is already the first working n-gram data source. Future work should build on it rather than replace it.
 
 Recommended new capabilities:
 
-- `--n-gram 2`
 - `--group-by handler`
 - `--group-by guest-opcode`
 - `--weighted-by exec-count`
@@ -377,23 +375,21 @@ Recommended new capabilities:
   - sample count
   - context examples
 
-### Step 3: Add Aggregation Script
+### Step 3: Keep Improving the Aggregation Script
 
-It is recommended to add a new aggregation script, for example:
+`benchmark/podish_perf/analyze_superopcode_candidates.py` already exists. The next step is to improve its scoring and filtering.
 
-- `benchmark/podish_perf/analyze_superopcode_candidates.py`
-
-Input:
+Current inputs:
 
 - A `results/` directory
 - Multiple `guest-stats/*/blocks_analysis.json`
 
-Output:
+Current outputs:
 
 - `superopcode_candidates.json`
 - `superopcode_candidates.md`
 
-Responsibilities:
+Next responsibilities to strengthen:
 
 - Cross-sample 2-gram aggregation
 - Deduplicate runtime address differences
@@ -402,15 +398,13 @@ Responsibilities:
 
 ### Step 4: Extend Runner Options
 
-It is recommended to add a clearer set of superopcode sampling parameters in [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py).
+The runner already exposes the essential superopcode sampling parameters, but the CLI can still be cleaned up.
 
-Recommended options:
+Current options already include:
 
-- `--export-block-dump`
-- `--analyze-blocks`
 - `--block-n-gram 2`
 - `--aggregate-superopcode-candidates`
-- `--candidate-output <path>`
+- `--jit-handler-profile-block-dump`
 
 Among these:
 
@@ -435,7 +429,7 @@ This makes the resulting candidates less likely to be hijacked by a single progr
 
 ## 9.3 Specific Extension Recommendations for Runner
 
-If extending directly on the existing [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py), the following is recommended.
+If extending directly on the existing `benchmark/podish_perf/runner.py`, the following is recommended.
 
 ### A. Keep Existing SampleResult, but Add Fields
 

@@ -1,27 +1,33 @@
 # x86emu
 
-`x86emu` is a mixed-language workspace for running Linux x86 userland on modern hosts, with a Podman-like container CLI on top.
+`x86emu` is a mixed-language workspace for running Linux x86 userland on modern hosts.
+
+At a high level:
+
+- `Fiberish` is the Linux runtime / kernel-simulation layer.
+- `Podish` is the container-oriented layer built on top of `Fiberish`.
 
 Today the repository is centered around these pieces:
 
 - `libfibercpu`: a C++ x86 IA-32 emulator built with CMake.
-- `Fiberish.Core`: the managed runtime and Linux compatibility layer.
+- `Fiberish.Core`: the managed Linux runtime and kernel compatibility layer.
 - `Fiberish.Netstack`: a Rust native networking component built with Cargo.
-- `Podish.Cli`: the main user-facing CLI, with `run`, `pull`, `ps`, `logs`, `events`, image import/export, and container lifecycle commands.
-- `Podish`: an optional SwiftUI frontend that embeds the native runtime as an XCFramework.
+- `Podish.Core`: the container/runtime orchestration layer on top of `Fiberish`.
+- `Podish.Cli`: the main container-facing CLI, with `run`, `pull`, `ps`, `logs`, `events`, image import/export, and container lifecycle commands.
+- `Podish`: an optional SwiftUI frontend for the `Podish` layer.
 
-The old `Fiberish.App`-style entrypoint no longer exists. For day-to-day use, the current entrypoint is `Podish.Cli`.
+The old `Fiberish.App`-style entrypoint no longer exists. For container-style day-to-day use, the current entrypoint is `Podish.Cli`.
 
 ## What Works Today
 
-Based on the current codebase and tests, the project already covers much more than the old README described:
+Based on the current codebase and tests, the repository already covers both the runtime core and the container layer:
 
-- Container-style execution from either OCI images or `--rootfs`.
-- OCI image pull/save/load/import/export flows.
-- Process lifecycle support including `fork`, `vfork`, `clone`, `execve`, and `wait*`.
-- Filesystem features including `tmpfs`, `procfs`, host mounts, and overlay-based container roots.
+- Linux-like process/runtime behavior including `fork`, `vfork`, `clone`, `execve`, and `wait*`.
+- Filesystem features including `tmpfs`, `procfs`, host mounts, and overlay-based roots.
 - PTY / TTY support.
 - Sockets and a native netstack integration.
+- Container-style execution from either OCI images or `--rootfs`.
+- OCI image pull/save/load/import/export flows.
 - Large managed test coverage for syscalls, VFS, memory, networking, and container runtime behavior.
 
 ## Requirements

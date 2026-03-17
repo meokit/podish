@@ -6,7 +6,7 @@
 - Scope: macOS + iOS app architecture and delivery plan
 
 ## Goals
-- Build a production-grade Swift app (`Podish`) that manages and runs containers via `Podish.Core`.
+- Build a production-grade Swift app (`Podish`) that manages and runs containers via `Podish.Core`, on top of the `Fiberish` runtime layer.
 - Keep runtime semantics aligned with Linux container expectations while preserving cross-platform behavior.
 - Expose a stable C ABI from .NET so Swift can drive the full container lifecycle.
 - Support concurrent multi-container operation safely in one app process.
@@ -19,6 +19,13 @@
 ## Current Baseline
 - `Podish` app uses SwiftTerm for terminal rendering.
 - `Podish.Core.Native` exists and is built as a static native artifact path.
+- A usable native C ABI is already exported from `Podish.Core.Native` and consumed by the Swift app.
+- Current native surface already covers:
+  - context create / destroy / last-error
+  - image pull / list / remove
+  - container create / open / start / stop / remove / inspect / list
+  - terminal attach / read / write / resize / close
+  - log polling and MsgPack event polling
 - AOT trim warning convergence was completed.
 - Runtime isolation work has started and includes:
   - per-context logging scope
@@ -28,7 +35,9 @@
 - VFS/page-cache behavior is actively being refined with regression coverage.
 
 ## Architecture Principles
-- Keep container/runtime logic in Core; keep Swift as orchestration + UI.
+- Keep `Fiberish` as the runtime and Linux-semantics layer.
+- Keep `Podish.Core` as the container/product layer above `Fiberish`.
+- Keep Swift as orchestration + UI.
 - C ABI must be explicit, versioned, and backwards-compatible within a major version.
 - No global mutable singleton state in runtime paths used by multiple containers.
 - Terminal device lifecycle belongs to container runtime, not UI view lifecycle.
@@ -54,26 +63,29 @@
 ## C ABI Strategy
 
 ### ABI Versioning
-- Export `podish_api_version()` and enforce min/max compatibility checks in Swift bootstrap.
+- Current exported ABI uses the `pod_*` symbol family in `podish.h`.
+- `podish_api_version()` style version negotiation is still a future hardening item and is not exported yet.
 - Keep opaque handles for all runtime objects.
 
 ### Core Handle Types
-- `podish_runtime_t`
-- `podish_container_t`
-- `podish_terminal_t`
-- `podish_subscription_t`
+- Current ABI uses opaque `void*` handles for context, container, and terminal objects.
+- A distinct subscription handle type is not exposed yet.
 
 ### Core API Groups
 - Runtime
   - create / destroy / configure logging / configure store paths
 - Image
-  - pull / load / save / import / export
+  - current ABI: pull / list / remove
+  - still missing as direct native entrypoints: load / save / import / export
 - Container
-  - create / start / stop / kill / wait / inspect / remove
+  - current ABI: create / open / start / stop / inspect / remove / list
+  - still missing as direct native entrypoints: kill / wait
 - Terminal
-  - open / attach / detach / write / resize / close
+  - current ABI: attach / read / write / resize / close
+  - detach is modeled by closing the terminal handle
 - Events
-  - subscribe to container and runtime events
+  - current ABI: MsgPack polling via `pod_ctx_call_msgpack`
+  - callback-style subscriptions are not exposed yet
 - Error/Diagnostics
   - thread-local last-error query
   - structured error code + message
@@ -86,22 +98,34 @@
 ## Milestone Plan
 
 ### M1: Runtime and ABI Foundation
-- Finalize minimal stable C ABI for runtime/container/terminal.
-- Remove remaining global mutable state in hot paths.
-- Add ABI contract tests (native layer).
-- Deliverable: Swift can create runtime and run non-interactive container commands.
+- Status: largely complete.
+- Delivered:
+  - Swift can create/destroy runtime context
+  - Swift can create/open/start/stop/remove containers
+  - Swift can inspect/list containers and read last-error state
+- Remaining work:
+  - explicit ABI versioning
+  - contract tests for ABI compatibility and lifecycle guarantees
 
 ### M2: Interactive Terminal MVP
-- Connect SwiftTerm input/output to guest terminal endpoint.
-- Implement resize and control key signal forwarding.
-- Ensure attach/detach without container interruption.
-- Deliverable: stable interactive shell session in app.
+- Status: largely complete.
+- Delivered:
+  - SwiftTerm input/output is connected through terminal attach/read/write
+  - resize is wired through the native terminal API
+  - terminal lifecycle is decoupled from container creation
+- Remaining work:
+  - stronger lifecycle tests
+  - signal/control-key behavior validation and polish
 
 ### M3: Image and Storage UX
-- Expose pull/load/save/import/export via C API and Swift UI.
-- Add progress + cancellation plumbing.
-- Build image/library views and operation history.
-- Deliverable: app-native image lifecycle management.
+- Status: partially complete.
+- Delivered:
+  - image pull/list/remove wiring exists in native API and Swift
+  - logs/event polling path exists
+- Remaining work:
+  - direct native load/save/import/export entrypoints
+  - progress + cancellation plumbing
+  - fuller library/history UX in Swift
 
 ### M4: Multi-Container and Observability
 - Run multiple containers concurrently from Swift.
@@ -146,6 +170,6 @@
   - one demo scenario runnable from clean checkout
 
 ## Immediate Next Actions
-- Finalize C ABI draft for M1 (runtime/container/terminal minimal set).
-- Implement SwiftTerm input path through terminal write API.
-- Add container-terminal lifecycle integration tests in `Fiberish.Tests` and native API tests.
+- Add ABI compatibility/versioning strategy on top of the existing `pod_*` exports.
+- Expand native API coverage for image archive flows (`load` / `save` / `import` / `export`).
+- Add stronger native API and container-terminal lifecycle tests.
