@@ -10,7 +10,9 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
+#if FIBERCPU_ENABLE_JIT
 #include "jit/block_builder.h"
+#endif
 #include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
@@ -255,6 +257,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
 }
 
 static void MaybeJitCompileBlock(EmuState* state, BasicBlock* block) {
+#if FIBERCPU_ENABLE_JIT
     if (!state || !block) return;
     state->block_stats.jit_compile_attempts++;
     auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
@@ -264,6 +267,10 @@ static void MaybeJitCompileBlock(EmuState* state, BasicBlock* block) {
     } else {
         state->block_stats.jit_compile_failure++;
     }
+#else
+    (void)state;
+    (void)block;
+#endif
 }
 
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,

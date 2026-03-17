@@ -44,6 +44,12 @@ benchmark/podish_perf/rootfs/coremark_i386_alpine
 
 Release JIT:
 
+Note: the current copy-and-patch JIT is an experimental baseline and is now
+disabled by default in CMake. If you intentionally want to benchmark that path,
+configure/build `libfibercpu` with `-DFIBERCPU_ENABLE_JIT=ON` first. On current
+M3 Max measurements, that baseline JIT is still slower than the interpreter
+(roughly `~1950` vs `~2250` CoreMark iterations/sec).
+
 ```bash
 python3 benchmark/podish_perf/runner.py --engine jit --repeat 3
 ```

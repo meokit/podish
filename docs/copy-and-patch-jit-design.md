@@ -1,5 +1,174 @@
 # Copy-and-Patch JIT Design Proposal
 
+## Current Status
+
+This document started as a forward-looking design proposal. We now also have a
+working baseline implementation of the copy-and-patch pipeline, and an
+important result is already clear:
+
+- the baseline copy-and-patch JIT is functionally usable
+- but it is currently **slower** than the existing threaded interpreter on
+  Apple Silicon
+- therefore `FIBERCPU_ENABLE_JIT` is **disabled by default** in CMake
+
+At the time of writing, representative CoreMark numbers on an M3 Max are:
+
+- baseline copy-and-patch JIT: about **1950** iterations/sec
+- current interpreter baseline: about **2250** iterations/sec
+
+The exact score moves somewhat with build flavor and surrounding experiments,
+but the qualitative result has been stable: the current JIT framework does not
+yet outperform the interpreter.
+
+This is not a surprising failure of "JIT in general". It is a specific outcome
+of this project's execution model:
+
+- the interpreter is already a **threaded interpreter**
+- blocks are already **predecoded**
+- dispatch overhead is already low
+- superopcode / concat-block work further reduces the remaining dispatch cost
+
+So a naive copy-and-patch JIT only removes a relatively small amount of
+remaining dispatch overhead. If the copied machine code still preserves most of
+the per-op handler scaffolding, the JIT has very little headroom to win.
+
+## Baseline JIT Strategy Implemented
+
+The implemented baseline JIT follows this structure:
+
+1. Build a two-pass stencil extraction pipeline from the existing opcode
+   implementation set.
+2. Discover opcode handlers dynamically from compiled core objects.
+3. Generate stencil kernels and extract copyable machine code plus relocation
+   metadata.
+4. At runtime, compile a `BasicBlock` by:
+   - selecting one stencil per decoded op
+   - copying each stencil into a JIT buffer
+   - patching predecoded `DecodedOp` qwords into placeholder immediates
+   - fixing branch/helper/rodata relocations
+   - stitching exits together with block-local branches and veneers
+5. Replace `BasicBlock::entry` with the JIT entry when compilation succeeds.
+
+In concrete terms, the baseline implementation has these properties:
+
+- **No SSA IR**
+- **No register allocator**
+- **No block-level instruction selection**
+- **No real cross-op optimization**
+- only limited post-pass peephole cleanup
+
+It is therefore best viewed as a **template copier with relocation repair**,
+not as a traditional optimizing JIT.
+
+## Why Baseline Performance Loses
+
+The hotspot profiles and annotated JIT block disassembly make the reason fairly
+clear.
+
+### 1. The interpreter baseline is already hard to beat
+
+The current interpreter is not a naive fetch/decode/dispatch loop. It already
+has:
+
+- predecoded blocks
+- direct threaded dispatch
+- cached block lookup
+- superopcode and block-concat support
+
+That means the remaining dispatch cost is already relatively small. A JIT that
+does not also improve **code quality inside each op** does not have much room
+to win.
+
+### 2. The copied stencils preserve too much handler scaffolding
+
+The current JIT removes the outer dispatch chain, but most copied stencils
+still look like standalone handler bodies:
+
+- each hot op still has its own prologue/epilogue shape
+- many hot stencils still materialize large stack frames
+- slow-path setup is still present inside each copied stencil
+- helper call / restart / fault glue is still preserved almost verbatim
+
+So although dispatch is reduced, much of the original handler framework remains
+intact in the emitted machine code.
+
+### 3. Patched qwords still get decoded at runtime
+
+The current patch model packs predecoded fields into qwords and patches those
+constants into the stencil. That avoids loading fields from `DecodedOp` memory,
+but many stencils still immediately do:
+
+- `movz/movk/movk/movk`
+- then `ubfx` / `lsr` / `and`
+- then use the unpacked field
+
+This means the runtime still pays a large amount of field-unpacking cost even
+though the values were already known at decode time.
+
+### 4. Memory and branch-heavy ops remain template-heavy
+
+CoreMark hotspots are dominated by things like:
+
+- `Mov_Load_*`
+- `Mov_Store_*`
+- `Jcc_*`
+- `Imul_*`
+- shift/group ops
+
+These are exactly the kinds of handlers where:
+
+- memory fast/slow path glue
+- page/TLB checks
+- branch exit glue
+- per-op field decoding
+
+still dominate the copied stencil. In practice, the JIT often ends up
+executing "compiled handler scaffolding" rather than a significantly more
+specialized fast path.
+
+## Practical Conclusion
+
+Under this project's current architecture, **pure copy-and-patch is not enough
+to guarantee a speedup**.
+
+This does **not** mean the work was wasted. The baseline implementation is
+still valuable because it established:
+
+- a JIT code cache
+- relocation handling for helper calls and rodata
+- block stitching infrastructure
+- JIT block dumping / profiling / hotspot attribution
+- a concrete proof of what this architecture can and cannot optimize
+
+But the evidence now strongly suggests that the next performance-oriented step
+should not be "more of the same copy-and-patch". The more promising direction
+is to move toward a compiler-assisted approach that gives the optimizer a view
+of larger traces or block bodies, such as:
+
+- LLVM-based block / trace compilation
+- generated block-level C++ trace functions
+- or another approach that enables real constant propagation and cross-op
+  optimization
+
+The current copy-and-patch pipeline should therefore be treated as:
+
+- a baseline JIT experiment
+- a correctness and infrastructure milestone
+- and a stepping stone toward a more optimizing design
+
+## Recommended Reading of the Rest of This Document
+
+The remaining sections still describe the design motivation and mechanics of
+the copy-and-patch approach. They remain useful as:
+
+- rationale for the baseline implementation
+- documentation of stencil extraction and patching strategy
+- background for future JIT infrastructure work
+
+However, performance expectations should now be interpreted in light of the
+results above: this design was successful as a baseline experiment, but not as
+the final performance solution.
+
 ## Goal
 
 The goal is to build a true copy-and-patch JIT by directly extracting copyable machine code stencils based on the existing `LogicFunc` system.
@@ -963,17 +1132,24 @@ This checklist tracks the implementation of the JIT generation pipeline and inte
 - [ ] Fix symbol parsing and extraction bugs in `extract_stencils_obj.py` (Currently WIP).
 
 ### Phase 2: Block Builder & Integration
-- [ ] Implement JIT Block Builder (`libfibercpu/jit/block_builder.h` / `.cpp`)
-  - Map `DecodedOp` fields to `StencilPatchData`.
-  - Stencil selection logic based on op `LogicFunc`.
-  - Code buffer allocation and code copying.
-  - Patch application logic (resolving magic values into code bytes).
-- [ ] Integrate into execution flow (`libfibercpu/dispatch.h` / block execution)
-  - `JitCodeBlock` structure.
-  - Fallback to interpreter when compiled stencil is unsupported or fails.
-  - Compilation attempts for entire `BasicBlock`s.
+- [x] Implement baseline JIT Block Builder (`libfibercpu/jit/block_builder.h` / `.cpp`)
+  - Maps decoded block entries to extracted stencils.
+  - Allocates code from a dedicated JIT code cache.
+  - Applies qword patch points, branch relocations, and rodata relocations.
+  - Builds block-local veneers and runtime metadata.
+- [x] Integrate into execution flow (`DecodeBlock`, concat-block path)
+  - `JitCodeBlock` ownership is wired through `BasicBlock::jit_code`.
+  - Fallback to interpreter when stencil selection or compilation fails.
+  - Concat blocks also go through the same JIT compile path when enabled.
+- [x] Add build-time kill switch
+  - `FIBERCPU_ENABLE_JIT` exists as a CMake option.
+  - Default is `OFF` because baseline performance is currently worse than the interpreter.
 
 ### Phase 3: Verification
-- [ ] Validate generated JIT machine code using existing testing framework.
-- [ ] Test JIT execution on simple instructions (using inline tests or `podish_perf`).
-- [ ] Measure performance and verify correctness against reference interpreter.
+- [x] Validate generated JIT machine code using existing testing and dump tooling.
+- [x] Test JIT execution on simple instructions and larger workloads.
+- [x] Measure performance and verify correctness against reference interpreter.
+- [x] Record baseline outcome
+  - Correctness is substantially in place.
+  - CoreMark on M3 Max is about `~1950`, below the interpreter's `~2250`.
+  - Therefore the baseline JIT is currently an experimental path, not the default runtime.

@@ -13,6 +13,7 @@
 #include "../generated/stencils.generated.inc"
 #include "../ops.h"
 #include "../state.h"
+#include "peephole.h"
 #include "stencil.h"
 
 namespace fiberish {
@@ -464,6 +465,8 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
         return nullptr;
     }
     std::vector<uint8_t*> stencil_starts(bb->inst_count);
+    std::vector<JitOpRange> op_ranges;
+    op_ranges.reserve(bb->inst_count);
     uint8_t* layout_ptr = start_ptr;
     for (uint32_t i = 0; i < bb->inst_count; ++i) {
         stencil_starts[i] = layout_ptr;
@@ -599,7 +602,16 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
         }
 
         current_ptr += copy_size;
+        op_ranges.push_back(JitOpRange{
+            .index = i,
+            .stencil_id = sid,
+            .name = generated::stencil_names[sid],
+            .start = stencil_starts[i],
+            .end = current_ptr,
+        });
     }
+
+    const PeepholeStats peephole_stats = OptimizeBlockInPlace(start_ptr, current_ptr, op_ranges);
 
     // Add termination (ret)
     // ret = 0xd65f03c0
@@ -631,6 +643,18 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
         JitDebugLog("[jit] compiled block start=%08x code=%p size=%zu branch_relocs=%zu veneers=%zu veneer_bytes=%zu\n",
                     bb->chain.start_eip, reinterpret_cast<void*>(start_ptr), jcb->code_size, branch_reloc_count,
                     veneer_count, veneer_bytes);
+        if (peephole_stats.branch_to_next_nops != 0) {
+            JitDebugLog("[jit] peephole block start=%08x branch_to_next_nops=%u\n", bb->chain.start_eip,
+                        peephole_stats.branch_to_next_nops);
+        }
+        if (peephole_stats.prfm_nops != 0) {
+            JitDebugLog("[jit] peephole block start=%08x prfm_nops=%u\n", bb->chain.start_eip,
+                        peephole_stats.prfm_nops);
+        }
+        if (peephole_stats.movwide_ubfm_constant_folds != 0) {
+            JitDebugLog("[jit] peephole block start=%08x movwide_ubfm_constant_folds=%u\n", bb->chain.start_eip,
+                        peephole_stats.movwide_ubfm_constant_folds);
+        }
     }
 
     return jcb;

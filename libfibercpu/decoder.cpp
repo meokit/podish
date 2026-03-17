@@ -7,7 +7,9 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
+#if FIBERCPU_ENABLE_JIT
 #include "jit/block_builder.h"
+#endif
 #include "ops.h"  // For g_Handlers
 #include "specialization.h"
 #include "state.h"
@@ -16,6 +18,7 @@
 namespace fiberish {
 
 namespace {
+#if FIBERCPU_ENABLE_JIT
 bool JitDebugEnabled() {
 #ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
     static bool enabled = [] {
@@ -42,6 +45,7 @@ void JitDebugLog(const char* fmt, ...) {
     (void)fmt;
 #endif
 }
+#endif
 }  // namespace
 
 alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
@@ -797,6 +801,7 @@ finalize:
     block->jit_code = nullptr;
 
     // Try JIT compilation
+#if FIBERCPU_ENABLE_JIT
     if constexpr (true) {
         state->block_stats.jit_compile_attempts++;
         auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
@@ -815,6 +820,7 @@ finalize:
             state->block_stats.jit_compile_failure++;
         }
     }
+#endif
 
     return block;
 }
