@@ -17,14 +17,19 @@ namespace fiberish {
 
 namespace {
 bool JitDebugEnabled() {
+#ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
     static bool enabled = [] {
         const char* value = std::getenv("FIBERCPU_JIT_DEBUG");
         return value != nullptr && value[0] != '\0' && value[0] != '0';
     }();
     return enabled;
+#else
+    return false;
+#endif
 }
 
 void JitDebugLog(const char* fmt, ...) {
+#ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
     if (!JitDebugEnabled()) return;
     FILE* fp = std::fopen("/tmp/fibercpu_jit.log", "a");
     if (!fp) return;
@@ -33,6 +38,9 @@ void JitDebugLog(const char* fmt, ...) {
     std::vfprintf(fp, fmt, args);
     va_end(args);
     std::fclose(fp);
+#else
+    (void)fmt;
+#endif
 }
 }  // namespace
 
@@ -792,7 +800,7 @@ finalize:
     if constexpr (true) {
         auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
         if (jcb) {
-            // block->entry = reinterpret_cast<HandlerFunc>(block->jit_code);
+            block->entry = reinterpret_cast<HandlerFunc>(block->jit_code);
             if (JitDebugEnabled()) {
                 JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->chain.start_eip,
                             reinterpret_cast<void*>(block->entry), block->jit_code, jcb->code_size);

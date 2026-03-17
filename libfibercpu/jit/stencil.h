@@ -42,6 +42,15 @@ ATTR_PRESERVE_NONE int64_t JitContinueTarget(EmuState* RESTRICT state, DecodedOp
 ATTR_PRESERVE_NONE int64_t JitContinueSkipOneTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                     int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                     uint64_t flags_cache);
+ATTR_PRESERVE_NONE int64_t JitExitOnCurrentEipTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                     int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                     uint64_t flags_cache);
+ATTR_PRESERVE_NONE int64_t JitExitOnNextEipTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
+ATTR_PRESERVE_NONE int64_t JitExitDefaultTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
+ATTR_PRESERVE_NONE int64_t JitFaultExitTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                              mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
 
 enum class PatchKind : uint8_t {
     OpQword64,
@@ -58,6 +67,19 @@ struct BranchRelocDesc {
     uint16_t target_id;
 };
 
+enum class AddrRelocKind : uint8_t {
+    PageOffset,
+    GotLoadToAddr,
+};
+
+struct AddrRelocDesc {
+    uint32_t page21_offset;
+    uint32_t pageoff12_offset;
+    uint16_t target_id;
+    AddrRelocKind kind;
+    uint8_t pageoff_shift;
+};
+
 struct StencilDesc {
     const uint8_t* code;
     uint32_t code_size;
@@ -65,6 +87,8 @@ struct StencilDesc {
     uint16_t patch_count;
     const BranchRelocDesc* branch_relocs;
     uint16_t branch_reloc_count;
+    const AddrRelocDesc* addr_relocs;
+    uint16_t addr_reloc_count;
     uint16_t id;
     uint32_t flags;
 };

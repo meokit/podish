@@ -4,6 +4,7 @@ import re
 import os
 import json
 import argparse
+from collections import defaultdict
 
 # Kind enum matching C++ PatchKind
 PATCH_KINDS = [
@@ -26,6 +27,17 @@ PAIR_ACCESS_RE = re.compile(
     r"\bldp\s+([wx]\d+),\s+([wx]\d+),\s+\[(x\d+)(?:,\s+#(0x[0-9a-fA-F]+|\d+))?\]"
 )
 RELOC_LINE_RE = re.compile(r"^\s*([0-9a-fA-F]+)\s+([A-Z0-9_]+)\s+(.+?)\s*$")
+NM_LINE_RE = re.compile(r"^([0-9a-fA-F]+)\s+([A-Za-z])\s+(.+)$")
+
+SECTION_NAMES_TO_LOAD = {
+    ("__TEXT", "__text"),
+    ("__TEXT", "__literal16"),
+    ("__TEXT", "__const"),
+    ("__TEXT", "__literal8"),
+    ("__TEXT", "__cstring"),
+    ("__DATA", "__const"),
+    ("__DATA", "__data"),
+}
 
 def decode_move_wide(inst):
     sf = (inst >> 31) & 0x1
@@ -60,6 +72,171 @@ def parse_disassembly(obj_path):
     except:
         res = subprocess.run(["objdump", "-d", "--demangle", obj_path], capture_output=True, text=True)
     return res.stdout
+
+def parse_sections(obj_path):
+    res = subprocess.run(["otool", "-l", obj_path], capture_output=True, text=True, check=True)
+    sections = []
+    current = {}
+    in_section = False
+    for raw_line in res.stdout.splitlines():
+        line = raw_line.strip()
+        if line == "Section":
+            if in_section and current:
+                sections.append(current)
+            current = {}
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            key = parts[0]
+            value = parts[1]
+            if key in {"sectname", "segname"}:
+                current[key] = value
+            elif key in {"addr", "size", "offset"}:
+                current[key] = int(value, 16 if value.startswith("0x") else 10)
+    if in_section and current:
+        sections.append(current)
+    return sections
+
+def parse_symbols(obj_path):
+    res = subprocess.run(["nm", "-a", "-n", obj_path], capture_output=True, text=True, check=True)
+    symbols = []
+    for line in res.stdout.splitlines():
+        m = NM_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        symbols.append({
+            "addr": int(m.group(1), 16),
+            "type": m.group(2),
+            "name": m.group(3),
+        })
+    return symbols
+
+def load_section_bytes(obj_path, sections):
+    section_bytes = {}
+    with open(obj_path, "rb") as f:
+        blob = f.read()
+    for sec in sections:
+        key = (sec.get("segname"), sec.get("sectname"))
+        if key not in SECTION_NAMES_TO_LOAD:
+            continue
+        file_off = sec["offset"]
+        size = sec["size"]
+        section_bytes[key] = blob[file_off:file_off + size]
+    return section_bytes
+
+def find_section_for_addr(sections, addr):
+    for sec in sections:
+        start = sec.get("addr")
+        size = sec.get("size")
+        if start is None or size is None:
+            continue
+        if start <= addr < start + size:
+            return sec
+    return None
+
+def infer_symbol_size(symbol, symbols, sections):
+    section = find_section_for_addr(sections, symbol["addr"])
+    if section is None:
+        return 0
+    next_addr = section["addr"] + section["size"]
+    for other in symbols:
+        if other["addr"] <= symbol["addr"]:
+            continue
+        if find_section_for_addr(sections, other["addr"]) == section:
+            next_addr = other["addr"]
+            break
+    return max(0, next_addr - symbol["addr"])
+
+def extract_local_symbol_data(symbol, symbols, sections, section_bytes):
+    section = find_section_for_addr(sections, symbol["addr"])
+    if section is None:
+        raise RuntimeError(f"Could not find section for local symbol {symbol['name']}")
+    sec_key = (section["segname"], section["sectname"])
+    blob = section_bytes.get(sec_key)
+    if blob is None:
+        raise RuntimeError(f"Section bytes unavailable for local symbol {symbol['name']} in {sec_key}")
+    section_offset = symbol["addr"] - section["addr"]
+    if section["sectname"] == "__cstring":
+        end = blob.find(b"\x00", section_offset)
+        if end < 0:
+            raise RuntimeError(f"Unterminated cstring for local symbol {symbol['name']}")
+        end += 1
+    else:
+        size = infer_symbol_size(symbol, symbols, sections)
+        if size <= 0:
+            raise RuntimeError(f"Could not infer size for local symbol {symbol['name']}")
+        end = section_offset + size
+    return bytes(blob[section_offset:end])
+
+def trailing_alignment(addr, max_align=16):
+    align = 1
+    while align < max_align and (addr & align) == 0:
+        align <<= 1
+    return min(align, max_align)
+
+def decode_add_immediate(inst):
+    if (inst & 0x7F000000) != 0x11000000:
+        return None
+    if ((inst >> 24) & 0x1) != 1:
+        return None
+    sf = (inst >> 31) & 0x1
+    op = (inst >> 30) & 0x1
+    if sf != 1 or op != 0:
+        return None
+    shift = (inst >> 22) & 0x3
+    if shift != 0:
+        return None
+    rn = (inst >> 5) & 0x1F
+    rd = inst & 0x1F
+    return {"rn": rn, "rd": rd}
+
+def decode_adrp(inst):
+    if (inst & 0x9F000000) != 0x90000000:
+        return None
+    return {"rd": inst & 0x1F}
+
+def decode_load_store_unsigned(inst):
+    if (inst & 0x3B000000) != 0x39000000:
+        return None
+    size_field = (inst >> 30) & 0x3
+    opc = (inst >> 22) & 0x3
+    v = (inst >> 26) & 0x1
+    rn = (inst >> 5) & 0x1F
+    rt = inst & 0x1F
+    if v == 0:
+        access_size = 1 << size_field
+        return {"rn": rn, "rt": rt, "shift": size_field, "access_size": access_size, "is_vector": False}
+    lane_bytes = 1 << size_field
+    if opc == 0:
+        access_size = lane_bytes
+    elif opc == 1:
+        access_size = lane_bytes * 2
+    elif opc == 2:
+        access_size = lane_bytes * 4
+    else:
+        access_size = lane_bytes * 8
+    shift = access_size.bit_length() - 1
+    return {"rn": rn, "rt": rt, "shift": shift, "access_size": access_size, "is_vector": True}
+
+def classify_addr_reloc_pair(page21_type, pageoff_type, adrp_inst, pageoff_inst):
+    adrp = decode_adrp(adrp_inst)
+    if adrp is None:
+        raise RuntimeError(f"Expected ADRP at page21 relocation, got 0x{adrp_inst:08x}")
+    if page21_type == "ARM64_RELOC_GOT_LOAD_PAGE21":
+        load = decode_load_store_unsigned(pageoff_inst)
+        if load is None or load["rn"] != adrp["rd"] or load["rt"] != adrp["rd"]:
+            raise RuntimeError(f"Expected GOT load pair after ADRP, got 0x{pageoff_inst:08x}")
+        return ("GotLoadToAddr", 0)
+    add = decode_add_immediate(pageoff_inst)
+    if add is not None and add["rn"] == adrp["rd"] and add["rd"] == adrp["rd"]:
+        return ("PageOffset", 0)
+    load = decode_load_store_unsigned(pageoff_inst)
+    if load is not None and load["rn"] == adrp["rd"]:
+        return ("PageOffset", load["shift"])
+    raise RuntimeError(f"Unsupported PAGEOFF12 relocation pair: page21={page21_type}, inst=0x{pageoff_inst:08x}")
 
 def split_functions(disasm_text):
     functions = []
@@ -190,6 +367,7 @@ def extract_stencils(obj_path, out_path, usage_path=None):
                         'bytes': bytearray(),
                         'patches': [],
                         'branch_relocs': [],
+                        'addr_relocs': [],
                         'start': int(m_header.group(1), 16),
                     }
                 current_start = stencils[current_symbol]['start']
@@ -205,33 +383,70 @@ def extract_stencils(obj_path, out_path, usage_path=None):
                 current_symbol = None
                 current_start = None
 
+    sections = parse_sections(obj_path)
+    symbols = parse_symbols(obj_path)
+    symbol_by_name = {symbol["name"]: symbol for symbol in symbols}
+    section_bytes = load_section_bytes(obj_path, sections)
+
     branch_target_ids = {}
     branch_targets = []
+    addr_target_ids = {}
+    addr_targets = []
     relocations = []
     for line in reloc_res.stdout.splitlines():
         m = RELOC_LINE_RE.match(line)
         if not m:
             continue
-        reloc_type = m.group(2)
-        if reloc_type != "ARM64_RELOC_BRANCH26":
-            continue
         relocations.append({
             "offset": int(m.group(1), 16),
+            "type": m.group(2),
             "symbol": m.group(3),
         })
 
     expected_branch_relocs = {name: 0 for name in stencils.keys()}
+    expected_addr_relocs = {name: 0 for name in stencils.keys()}
     skipped_relocs = 0
-    for reloc in relocations:
-        reloc_offset = reloc["offset"]
-        matched = False
-        for data in stencils.values():
+    stencil_items = sorted(stencils.items(), key=lambda item: item[1]["start"])
+
+    def find_stencil_for_offset(reloc_offset):
+        for stencil_name, data in stencil_items:
             start = data["start"]
             end = start + len(data["bytes"])
-            if reloc_offset < start or reloc_offset >= end:
-                continue
-            expected_branch_relocs[next(name for name, item in stencils.items() if item is data)] += 1
-            symbol = reloc["symbol"]
+            if start <= reloc_offset < end:
+                return stencil_name, data
+        return None, None
+
+    def intern_addr_target(symbol):
+        target_id = addr_target_ids.get(symbol)
+        if target_id is not None:
+            return target_id
+        entry = {
+            "name": symbol,
+            "storage": "external",
+        }
+        sym = symbol_by_name.get(symbol)
+        if sym and sym["type"].islower():
+            entry["storage"] = "embedded"
+            entry["bytes"] = extract_local_symbol_data(sym, symbols, sections, section_bytes)
+            entry["align"] = trailing_alignment(sym["addr"])
+        target_id = len(addr_targets)
+        addr_target_ids[symbol] = target_id
+        addr_targets.append(entry)
+        return target_id
+
+    branch_relocs = []
+    addr_reloc_candidates = defaultdict(dict)
+    for reloc in relocations:
+        reloc_offset = reloc["offset"]
+        stencil_name, data = find_stencil_for_offset(reloc_offset)
+        if data is None:
+            skipped_relocs += 1
+            continue
+        start = data["start"]
+        reloc_type = reloc["type"]
+        symbol = reloc["symbol"]
+        if reloc_type == "ARM64_RELOC_BRANCH26":
+            expected_branch_relocs[stencil_name] += 1
             target_id = branch_target_ids.get(symbol)
             if target_id is None:
                 target_id = len(branch_targets)
@@ -241,10 +456,46 @@ def extract_stencils(obj_path, out_path, usage_path=None):
                 "offset": reloc_offset - start,
                 "target_id": target_id,
             })
-            matched = True
-            break
-        if not matched:
-            skipped_relocs += 1
+            branch_relocs.append(reloc)
+            continue
+        if reloc_type in {
+            "ARM64_RELOC_PAGE21",
+            "ARM64_RELOC_PAGEOFF12",
+            "ARM64_RELOC_GOT_LOAD_PAGE21",
+            "ARM64_RELOC_GOT_LOAD_PAGEOFF12",
+        }:
+            candidate = addr_reloc_candidates[(stencil_name, symbol)]
+            candidate[reloc_type] = reloc_offset - start
+            continue
+
+    for (stencil_name, symbol), candidate in sorted(addr_reloc_candidates.items()):
+        data = stencils[stencil_name]
+        start = data["start"]
+        if "ARM64_RELOC_PAGE21" in candidate and "ARM64_RELOC_PAGEOFF12" in candidate:
+            page21_type = "ARM64_RELOC_PAGE21"
+            pageoff_type = "ARM64_RELOC_PAGEOFF12"
+        elif "ARM64_RELOC_GOT_LOAD_PAGE21" in candidate and "ARM64_RELOC_GOT_LOAD_PAGEOFF12" in candidate:
+            page21_type = "ARM64_RELOC_GOT_LOAD_PAGE21"
+            pageoff_type = "ARM64_RELOC_GOT_LOAD_PAGEOFF12"
+        else:
+            missing = sorted(set(candidate.keys()) ^ {
+                "ARM64_RELOC_PAGE21", "ARM64_RELOC_PAGEOFF12"
+            })
+            raise RuntimeError(f"Incomplete address relocation pair for {stencil_name}:{symbol}: {missing}")
+        page21_offset = candidate[page21_type]
+        pageoff_offset = candidate[pageoff_type]
+        adrp_inst = int.from_bytes(data["bytes"][page21_offset:page21_offset + 4], "little")
+        pageoff_inst = int.from_bytes(data["bytes"][pageoff_offset:pageoff_offset + 4], "little")
+        kind, shift = classify_addr_reloc_pair(page21_type, pageoff_type, adrp_inst, pageoff_inst)
+        target_id = intern_addr_target(symbol)
+        data["addr_relocs"].append({
+            "page21_offset": page21_offset,
+            "pageoff12_offset": pageoff_offset,
+            "target_id": target_id,
+            "kind": kind,
+            "shift": shift,
+        })
+        expected_addr_relocs[stencil_name] += 1
 
     if skipped_relocs:
         print(f"Skipped {skipped_relocs} branch relocations outside extracted stencil bodies.")
@@ -294,6 +545,12 @@ def extract_stencils(obj_path, out_path, usage_path=None):
             raise RuntimeError(
                 f"Stencil branch reloc mismatch for {name}: expected {expected_reloc_count}, found {actual_reloc_count}"
             )
+        expected_addr_reloc_count = expected_addr_relocs.get(name, 0)
+        actual_addr_reloc_count = len(data.get('addr_relocs', []))
+        if actual_addr_reloc_count != expected_addr_reloc_count:
+            raise RuntimeError(
+                f"Stencil address reloc mismatch for {name}: expected {expected_addr_reloc_count}, found {actual_addr_reloc_count}"
+            )
             
     with open(out_path, "w") as f:
         f.write("#pragma once\n#include \"jit/stencil.h\"\n#include \"decoder.h\"\n\n")
@@ -302,6 +559,9 @@ def extract_stencils(obj_path, out_path, usage_path=None):
             f.write(f"    extern ::fiberish::HandlerFunc JitStencilHandler_{name};\n")
         for i, symbol in enumerate(branch_targets):
             f.write(f"    extern void JitBranchRelocTarget_{i}() asm(\"{symbol}\");\n")
+        for i, target in enumerate(addr_targets):
+            if target["storage"] == "external":
+                f.write(f"    extern const unsigned char JitAddrRelocTarget_{i} asm(\"{target['name']}\");\n")
         f.write("}\n\nnamespace fiberish::jit::generated {\n\n")
         if branch_targets:
             f.write("const void* const branch_reloc_targets[] = {\n")
@@ -316,6 +576,28 @@ def extract_stencils(obj_path, out_path, usage_path=None):
         else:
             f.write("const void* const* branch_reloc_targets = nullptr;\n\n")
             f.write("const char* const* branch_reloc_target_names = nullptr;\n\n")
+        if addr_targets:
+            for i, target in enumerate(addr_targets):
+                if target["storage"] != "embedded":
+                    continue
+                align = max(1, int(target.get("align", 1)))
+                bytes_list = ", ".join(f"0x{b:02x}" for b in target["bytes"])
+                f.write(f"alignas({align}) const uint8_t addr_reloc_blob_{i}[] = {{ {bytes_list} }};\n")
+            f.write("const void* const addr_reloc_targets[] = {\n")
+            for i, target in enumerate(addr_targets):
+                if target["storage"] == "embedded":
+                    f.write(f"    addr_reloc_blob_{i},\n")
+                else:
+                    f.write(f"    reinterpret_cast<const void*>(&JitAddrRelocTarget_{i}),\n")
+            f.write("};\n\n")
+            f.write("const char* const addr_reloc_target_names[] = {\n")
+            for target in addr_targets:
+                escaped = target["name"].replace("\\", "\\\\").replace("\"", "\\\"")
+                f.write(f"    \"{escaped}\",\n")
+            f.write("};\n\n")
+        else:
+            f.write("const void* const* addr_reloc_targets = nullptr;\n\n")
+            f.write("const char* const* addr_reloc_target_names = nullptr;\n\n")
         for name in sorted(stencils.keys()):
             data = stencils[name]
             f.write(f"const uint8_t stencil_bytes_{name}[] = {{ " + ", ".join([f"0x{b:02x}" for b in data['bytes']]) + " };\n")
@@ -332,13 +614,27 @@ def extract_stencils(obj_path, out_path, usage_path=None):
                 f.write("};\n")
             else:
                 f.write(f"const BranchRelocDesc* stencil_branch_relocs_{name} = nullptr;\n")
+            if data.get('addr_relocs'):
+                f.write(f"const AddrRelocDesc stencil_addr_relocs_{name}[] = {{\n")
+                for r in data['addr_relocs']:
+                    f.write(
+                        f"    {{ {r['page21_offset']}, {r['pageoff12_offset']}, {r['target_id']}, "
+                        f"AddrRelocKind::{r['kind']}, {r['shift']} }},\n"
+                    )
+                f.write("};\n")
+            else:
+                f.write(f"const AddrRelocDesc* stencil_addr_relocs_{name} = nullptr;\n")
             
         f.write("\nconst StencilDesc stencils[] = {\n")
         for i, name in enumerate(sorted(stencils.keys())):
             data = stencils[name]
             p_ptr = f"stencil_patches_{name}" if data['patches'] else "nullptr"
             r_ptr = f"stencil_branch_relocs_{name}" if data['branch_relocs'] else "nullptr"
-            f.write(f"    {{ stencil_bytes_{name}, sizeof(stencil_bytes_{name}), {p_ptr}, {len(data['patches'])}, {r_ptr}, {len(data['branch_relocs'])}, {i}, 0 }}, // {name}\n")
+            a_ptr = f"stencil_addr_relocs_{name}" if data.get('addr_relocs') else "nullptr"
+            f.write(
+                f"    {{ stencil_bytes_{name}, sizeof(stencil_bytes_{name}), {p_ptr}, {len(data['patches'])}, "
+                f"{r_ptr}, {len(data['branch_relocs'])}, {a_ptr}, {len(data.get('addr_relocs', []))}, {i}, 0 }}, // {name}\n"
+            )
         f.write("};\n\nstruct HandlerStencilMapEntry { ::fiberish::HandlerFunc target; uint16_t stencil_id; };\n")
         f.write("const char* const stencil_names[] = {\n")
         for name in sorted(stencils.keys()):
