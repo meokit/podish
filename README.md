@@ -1,102 +1,179 @@
-# Fiberish
+# x86emu
 
-**Fiberish** is a .NET 8 runtime that provides a functional Linux kernel simulation layer, capable of running static x86 Linux binaries on macOS and Linux. It wraps **libfibercpu**, a high-performance, non-JIT, user-mode x86 IA-32 emulation library written in C++23.
+`x86emu` is a mixed-language workspace for running Linux x86 userland on modern hosts, with a Podman-like container CLI on top.
 
-## Architecture
+Today the repository is centered around these pieces:
 
-The project is divided into two layers:
+- `libfibercpu`: a C++ x86 IA-32 emulator built with CMake.
+- `Fiberish.Core`: the managed runtime and Linux compatibility layer.
+- `Fiberish.Netstack`: a Rust native networking component built with Cargo.
+- `Podish.Cli`: the main user-facing CLI, with `run`, `pull`, `ps`, `logs`, `events`, image import/export, and container lifecycle commands.
+- `Podish`: an optional SwiftUI frontend that embeds the native runtime as an XCFramework.
 
-1.  **Core (C++):** A standalone shared library (`libfibercpu`) implementing the raw CPU execution logic.
-    *   **Threaded Interpreter:** Uses `[[clang::musttail]]` for rapid instruction dispatch.
-    *   **SoftMMU:** Software Memory Management Unit with permission tracking.
-    *   **FPU/SSE:** Full 80-bit x87 FPU and SSE/SSE2 support.
-    
-2.  **Fiberish (C#):** A managed runtime that acts as the "kernel" and loader.
-    *   **ELF Loader:** Parses and loads static x86 binaries.
-    *   **Syscall Translation:** Implements Linux syscalls (Filesystem, Memory, threading) in managed code.
-    *   **Process Management:** Maps Guest threads to Host threads/Tasks.
+The old `Fiberish.App`-style entrypoint no longer exists. For day-to-day use, the current entrypoint is `Podish.Cli`.
 
-## Features
+## What Works Today
 
--   **High Performance:** Optimized interpreter loop approaching JIT speeds for interpretation.
--   **Cross-Platform:** Runs Linux x86 binaries on macOS (Apple Silicon/Intel) and Linux.
--   **Linux Emulation:**
-    -   Support for static binaries (musl-libc compatible).
-    -   File I/O with host path mapping.
-    -   **Process Management**: Support for `fork`, `vfork`, and the `wait` syscall family with parent-child relationship tracking.
-    -   **Asynchronous Syscalls**: Non-blocking syscall execution using C# async/await.
-    -   Multithreading support (`pthread_create`, `futex`).
-    -   Signal handling (Partial).
+Based on the current codebase and tests, the project already covers much more than the old README described:
 
-## Roadmap to POSIX 1995
-
-Fiberish aims to provide a highly compliant POSIX environment. Current priorities include:
-
-1.  **Process Execution**: Implementation of `execve` to support running new programs from within the guest.
-2.  **Directory & File Control**: Adding `chdir`, `mkdir`, `rmdir`, and `rename`.
-3.  **Pipe & Redirection**: Implementation of `pipe`, `dup2`, and `fcntl` for Shell-like inter-process communication.
-4.  **Signal Reliability**: Robust signal delivery and mask management (`rt_sigaction`, `kill`).
+- Container-style execution from either OCI images or `--rootfs`.
+- OCI image pull/save/load/import/export flows.
+- Process lifecycle support including `fork`, `vfork`, `clone`, `execve`, and `wait*`.
+- Filesystem features including `tmpfs`, `procfs`, host mounts, and overlay-based container roots.
+- PTY / TTY support.
+- Sockets and a native netstack integration.
+- Large managed test coverage for syscalls, VFS, memory, networking, and container runtime behavior.
 
 ## Requirements
 
--   **C++ Core:** Clang++ (supporting C++23), CMake 3.20+.
--   **Fiberish:** .NET 8 SDK.
--   **Testing:** Python 3.10+ (for core regression tests).
+Core development:
 
-## Build Instructions
+- .NET SDK 10+
+- CMake 3.20+
+- A C/C++ toolchain capable of building `libfibercpu`
+- Rust toolchain with Cargo
 
-You can use the provided helper script to build everything and run tests:
+Optional, depending on what you want to do:
 
-```bash
-./test.sh
-```
+- Python 3.10+ for the Python test and benchmark tooling
+- `pytest` and `pexpect` for integration/regression tests
+- `zig` for building some integration test assets
+- `podman` for image/rootfs preparation and some end-to-end scenarios
+- Xcode / Swift toolchain for the `Podish` app and XCFramework build
 
-Or build manually:
+On this repo snapshot, the workspace builds successfully with:
 
-### 1. Build the Core Library
+- `.NET SDK 10.0.103`
+- `cargo 1.85.0`
+- `Python 3.12.7`
+- `cmake 3.29.6`
 
-```bash
-cmake -B build
-cmake --build build -j
-# On macOS, you may need to codesign the library locally
-codesign -f -s - build/bin/libfibercpu.dylib
-```
+## Quick Start
 
-### 2. Build Fiberish
-
-```bash
-# Copy the native library to the output directory or ensure it's in LD_LIBRARY_PATH
-dotnet build Fiberish.App/Fiberish.App.csproj
-cp build/bin/libfibercpu.dylib Fiberish.App/bin/Debug/net10.0/  # macOS
-# cp build/bin/libfibercpu.so Fiberish.App/bin/Debug/net10.0/     # Linux
-```
-
-## Usage
-
-To run a static Linux x86 binary using Fiberish:
+Build the full solution:
 
 ```bash
-dotnet run --project Fiberish.App/Fiberish.App.csproj -- <binary_path> [arguments]
+dotnet build Fiberish.sln -c Debug
 ```
 
-### Example
+This build already triggers the native sub-builds:
+
+- `Fiberish.X86` builds `libfibercpu` with CMake
+- `Fiberish.Core` builds `Fiberish.Netstack` with Cargo
+
+Show CLI help:
 
 ```bash
-# Run a static hello world
-dotnet run --project Fiberish.App/Fiberish.App.csproj -- tests/linux/assets/hello_static
-
-# Run with RootFS mapping
-dotnet run --project Fiberish.App/Fiberish.App.csproj --rootfs ./my_rootfs -- /bin/ls
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- --help
 ```
 
-## Directory Structure
+Pull an image:
 
--   `libfibercpu/`: **Core C++ Library**. Instruction decoder, OPS, and execution engine.
--   `Fiberish.App/`: **Fiberish (C#)**. Syscall implementations, ELF loader, and CLI entry point.
--   `tests/`:
-    -   `regression/`: Python-based instruction verification against Unicorn/QEMU.
-    -   `linux/`: C source files for integration tests.
--   `spec/`: Design specifications.
+```bash
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- pull docker.io/i386/alpine:latest
+```
+
+Run a command from an image:
+
+```bash
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- run docker.io/i386/alpine:latest /bin/uname -a
+```
+
+Run against a local rootfs instead of pulling an image:
+
+```bash
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- run --rootfs /path/to/rootfs /bin/sh
+```
+
+Useful runtime options:
+
+- `-i`, `-t` for interactive TTY sessions
+- `-v /host:/guest` for bind mounts
+- `--network private` and `-p hostPort:containerPort` for private networking and port publishing
+- `-s` for syscall tracing
+- `--init` for an engine-managed PID 1 reaper
+
+## Main Commands
+
+The current CLI exposes these top-level commands:
+
+- `run`
+- `start`
+- `ps`
+- `rm`
+- `rename`
+- `images`
+- `image rm`
+- `pull`
+- `save`
+- `load`
+- `import`
+- `export`
+- `logs`
+- `events`
+
+See the live help for details:
+
+```bash
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- run --help
+```
+
+## Testing
+
+Managed tests:
+
+```bash
+dotnet test Fiberish.Tests/Fiberish.Tests.csproj --no-build
+dotnet test Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj --no-build
+```
+
+Python emulator/regression tests:
+
+```bash
+pytest
+```
+
+Integration tests:
+
+```bash
+cmake -S tests/integration -B build/integration-assets -DFIBERISH_PROJECT_ROOT=$PWD
+cmake --build build/integration-assets --target integration-tests-build
+pytest -m integration tests/integration
+```
+
+Helpful references:
+
+- `tests/README.md`
+- `tests/integration/README.md`
+- `benchmark/podish_perf/README.md`
+
+## SwiftUI Frontend
+
+The `Podish/` directory contains a SwiftUI app that consumes a native XCFramework built from `Podish.Core.Native`.
+
+Build the Apple XCFramework:
+
+```bash
+bash Podish.Core.Native/scripts/publish-static.sh
+```
+
+Then open or build the Swift package in `Podish/`.
+
+## Repository Layout
+
+- `Podish.Cli/`: main CLI entrypoint
+- `Podish.Core/`: container runtime orchestration and image handling
+- `Podish.Core.Native/`: NativeAOT/static packaging for Apple integration
+- `Podish/`: SwiftUI frontend
+- `Fiberish.Core/`: Linux emulation layer and runtime services
+- `Fiberish.X86/`: .NET wrapper that builds and ships `libfibercpu`
+- `Fiberish.Netstack/`: Rust networking component
+- `Fiberish.SilkFS/`: SQLite-backed filesystem storage pieces
+- `libfibercpu/`: C++ emulator core
+- `Fiberish.Tests/`: main managed test suite
+- `Fiberish.SilkFS.Tests/`: SilkFS tests
+- `tests/`: Python tests, regression generation, and integration harnesses
+- `benchmark/`: performance tools and benchmark runners
 
 ## License
 

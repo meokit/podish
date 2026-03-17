@@ -1,43 +1,63 @@
 # Podish
 
-A minimal SwiftUI macOS app that embeds a `SwiftTerm` terminal view.
-
-Current native artifacts are built for Apple Silicon (`osx-arm64`) on macOS.
+`Podish` is the SwiftUI frontend in this repository. It packages the native runtime as an Apple XCFramework and provides a terminal-style app shell on top of it.
 
 ## Open in Xcode
 
-Open `/Users/jiangyiheng/repos/x86emu/Podish/Package.swift` in Xcode.
+Open `Podish/Package.swift` in Xcode.
 
-## Build from CLI
+## Build from the repo root
+
+Restore managed dependencies first:
 
 ```bash
-cd /Users/jiangyiheng/repos/x86emu
 dotnet restore Fiberish.sln
-cd /Users/jiangyiheng/repos/x86emu/Podish
-bash ../Podish.Core.Native/scripts/publish-static.sh
+```
+
+Build the Apple XCFramework used by the app:
+
+```bash
+bash Podish.Core.Native/scripts/publish-static.sh
+```
+
+This produces:
+
+```text
+Podish/artifacts/podish-native/PodishCore.xcframework
+```
+
+Then build the Swift package:
+
+```bash
+cd Podish
 swift build
 ```
 
-The publish script builds all Apple slices (`osx-arm64`, `ios-arm64`, `iossimulator-arm64`) and produces:
-`/Users/jiangyiheng/repos/x86emu/Podish/artifacts/podish-native/PodishCore.xcframework`
+## Build Apple native artifacts only
 
-## Build iOS native artifacts
+If you only want the native runtime slices:
 
 ```bash
-cd /Users/jiangyiheng/repos/x86emu/Podish
-dotnet workload restore ../Podish.Core.Native/Podish.Core.Native.csproj
-bash ../Podish.Core.Native/scripts/publish-static.sh
+dotnet workload restore Podish.Core.Native/Podish.Core.Native.csproj
+bash Podish.Core.Native/scripts/publish-static.sh
 ```
 
-Then build for iPhone:
+The publish script builds:
+
+- `osx-arm64`
+- `ios-arm64`
+- `iossimulator-arm64`
+
+## Build for iPhone
 
 ```bash
+cd Podish
 xcodebuild -scheme Podish -destination 'generic/platform=iOS' build
 ```
 
 ## Run from CLI
 
 ```bash
-cd /Users/jiangyiheng/repos/x86emu/Podish
+cd Podish
 swift run Podish
 ```

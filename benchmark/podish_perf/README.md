@@ -1,54 +1,52 @@
 # Podish CoreMark Performance Runner
 
-This directory contains a standalone performance harness for `Podish.Cli`. It
-is deliberately separate from `pytest`, so normal test runs do not execute any
-performance workload.
+This directory contains a standalone performance harness for `Podish.Cli`.
+
+It is intentionally separate from the normal test suites, so routine `dotnet test` and `pytest` runs do not execute benchmark workloads.
 
 ## What it does
 
-- Builds a preconfigured i386 Alpine environment with `git`, `gcc`, `musl-dev`,
-  `make`, and `gzip`
-- Clones CoreMark into `/coremark` inside that environment
-- Prebuilds `/coremark/coremark.exe` with `make ... compile`
-- Exports the environment as a local rootfs directory for `Podish.Cli --rootfs`
-- Runs three benchmark cases with `pexpect`
-  - `compress`: archive and extract `/coremark`
-  - `compile`: rebuild CoreMark without running it
-  - `run`: execute the prebuilt `coremark.exe`
+- builds a prepared i386 Alpine environment with `git`, `gcc`, `musl-dev`, `make`, and `gzip`
+- clones CoreMark into `/coremark`
+- prebuilds `/coremark/coremark.exe`
+- exports that environment as a local rootfs for `Podish.Cli --rootfs`
+- runs benchmark cases through the actual runtime
 
-## Prepare the rootfs
+Current benchmark cases:
 
-Build the release JIT binary first because the runner uses `dotnet run -c Release --no-build`:
+- `compress`: archive and extract `/coremark`
+- `compile`: rebuild CoreMark without running it
+- `run`: execute the prebuilt `coremark.exe`
+
+## Prerequisites
+
+- a Release build of `Podish.Cli`
+- Python 3
+- `podman`
+- on macOS, a running `podman machine`
+
+Build the Release runtime and prepare the rootfs:
 
 ```bash
 dotnet build Podish.Cli/Podish.Cli.csproj -c Release
 benchmark/podish_perf/prepare_coremark_env.sh
 ```
 
-If you want to benchmark NativeAOT, also publish the AOT binary:
-
-```bash
-dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -o build/nativeaot/podish-cli-static
-```
-
-On macOS, make sure `podman machine start` is already running before preparing
-the rootfs.
-
-The exported rootfs will be written to:
+The prepared rootfs is written to:
 
 ```text
 benchmark/podish_perf/rootfs/coremark_i386_alpine
 ```
 
-## Run the benchmarks
+If you also want a NativeAOT binary:
 
-Release JIT:
+```bash
+dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -o build/nativeaot/podish-cli-static
+```
 
-Note: the current copy-and-patch JIT is an experimental baseline and is now
-disabled by default in CMake. If you intentionally want to benchmark that path,
-configure/build `libfibercpu` with `-DFIBERCPU_ENABLE_JIT=ON` first. On current
-M3 Max measurements, that baseline JIT is still slower than the interpreter
-(roughly `~1950` vs `~2250` CoreMark iterations/sec).
+## Run benchmarks
+
+Interpreter / normal managed runtime path:
 
 ```bash
 python3 benchmark/podish_perf/runner.py --engine jit --repeat 3
@@ -69,15 +67,29 @@ python3 benchmark/podish_perf/runner.py --engine jit --reuse-rootfs
 python3 benchmark/podish_perf/runner.py --engine aot --aot-binary /path/to/Podish.Cli
 ```
 
-By default the runner copies the prepared rootfs into a disposable work
-directory for each sample, so `--rootfs` does not get dirtied by benchmark
-writes. Logs and `summary.json` are written under
-`benchmark/podish_perf/results/`.
+The runner copies the prepared rootfs into a disposable work directory for each sample, so the source rootfs is not dirtied by benchmark writes.
 
-## Export block dumps and aggregate SuperOpcode candidates
+Outputs are written under:
 
-If you want to mine handler 2-grams for `SuperOpcode` work, use the JIT
-handler-profile build and enable block analysis:
+```text
+benchmark/podish_perf/results/
+```
+
+## Optional JIT baseline
+
+The copy-and-patch JIT is currently an experimental baseline and is disabled by default in CMake.
+
+If you intentionally want to benchmark that path, rebuild `libfibercpu` with:
+
+```bash
+-DFIBERCPU_ENABLE_JIT=ON
+```
+
+On current local measurements noted in this repo, that baseline JIT is still slower than the interpreter on the CoreMark run workload.
+
+## Export block dumps and mine SuperOpcode candidates
+
+To collect handler n-grams and aggregate `SuperOpcode` candidates:
 
 ```bash
 python3 benchmark/podish_perf/runner.py \
@@ -89,20 +101,20 @@ python3 benchmark/podish_perf/runner.py \
   --aggregate-superopcode-candidates
 ```
 
-This writes per-sample files under:
+This writes per-sample analysis under:
 
 ```text
 benchmark/podish_perf/results/<timestamp>/guest-stats/.../blocks_analysis.json
 ```
 
-and also emits aggregate outputs:
+and aggregate outputs under:
 
 ```text
 benchmark/podish_perf/results/<timestamp>/superopcode_candidates.json
 benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
 ```
 
-You can also aggregate existing samples later:
+You can aggregate existing samples later:
 
 ```bash
 python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
@@ -113,7 +125,7 @@ python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
   --output-md benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
 ```
 
-To run the whole SuperOpcode mining flow in one command, use:
+To run the whole SuperOpcode mining flow in one command:
 
 ```bash
 python3 benchmark/podish_perf/superopcode_pipeline.py \
@@ -123,21 +135,18 @@ python3 benchmark/podish_perf/superopcode_pipeline.py \
   --iterations 3000
 ```
 
-This pipeline intentionally builds the analysis binary with `EnableSuperOpcodes=false`,
-runs the benchmark and candidate mining on raw opcode streams, then generates
-`libfibercpu/generated/superopcodes.generated.cpp`, and finally does an optional
-verification rebuild with superopcodes enabled.
+That pipeline builds an analysis binary with `EnableSuperOpcodes=false`, mines raw opcode streams, generates `libfibercpu/generated/superopcodes.generated.cpp`, and can optionally rebuild with superopcodes enabled for verification.
 
-## Record and analyze `xctrace`
+## Record and analyze xctrace
 
-Use [profile_xctrace.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/profile_xctrace.py) to:
+Use `benchmark/podish_perf/profile_xctrace.py` to:
 
-- copy the NativeAOT binary to a unique name to avoid clashing with a local Swift app
-- record a `Time Profiler` trace
-- export the raw `time-profile` XML
-- aggregate steady-state hotspots after a warmup cutoff
-- dump disassembly for the top symbols
-- compare multiple runs with a markdown table
+- copy the NativeAOT binary to a unique name to avoid colliding with the Swift app
+- record a Time Profiler trace
+- export raw `time-profile` XML
+- aggregate steady-state hotspots after warmup cutoff
+- dump disassembly for hot symbols
+- compare multiple runs
 
 Record and analyze in one step:
 
@@ -173,7 +182,7 @@ python3 benchmark/podish_perf/profile_xctrace.py compare \
   --report benchmark/podish_perf/results/run-b/run-b.report.json
 ```
 
-Outputs:
+Typical outputs:
 
 - `<name>.trace`
 - `<name>.xml`

@@ -1,138 +1,138 @@
-# SuperOpcode 设计文档
+# SuperOpcode Design Document
 
-## 文档状态
+## Document Status
 
 - Owner: Fiberish Core Maintainers
 - Last Updated: 2026-03-16
 - Status: Draft v1
-- Scope: `libfibercpu` decode/dispatch 路径 + profile/生成脚本
+- Scope: `libfibercpu` decode/dispatch path + profile/generation scripts
 
-## 1. 背景
+## 1. Background
 
-当前解释执行热路径已经有两类明显成本：
+The current hot path of interpretation execution has two obvious costs:
 
-- 单个 op 的 `DispatchWrapper` 框架成本
-- 相邻 op 之间的 handler 跳转、`NextOp()` 前进、分支预测与 I-cache 干扰
+- The framework cost of `DispatchWrapper` for a single op
+- Handler jumps between adjacent ops, `NextOp()` advancement, branch prediction, and I-cache interference
 
-已有 profile 表明，CoreMark 这类 workload 中会反复出现稳定的局部 op 序列。  
-如果两个相邻 op 经常一起出现，并且中间没有必须暴露给通用 dispatch 的边界，那么把它们合并成一个更宽的 handler，通常可以减少：
+Existing profiles show that workloads like CoreMark repeatedly exhibit stable local op sequences.  
+If two adjacent ops frequently appear together and there is no boundary that must be exposed to the generic dispatch between them, merging them into a wider handler typically reduces:
 
-- 一次 handler 跳转
-- 一次 `DispatchWrapper` 框架
-- 一部分重复的 decode 元信息读取
-- 一部分不必要的 branch predictor / BTB 噪声
+- One handler jump
+- One `DispatchWrapper` framework
+- Some repeated decode metadata reads
+- Some unnecessary branch predictor / BTB noise
 
-这里把这种“由多个连续 op 合并出的单个执行单元”称为 `SuperOpcode`。
+Here we call this "a single execution unit formed by merging multiple consecutive ops" a `SuperOpcode`.
 
-## 2. 目标
+## 2. Goals
 
-`SuperOpcode` 的第一阶段目标很克制：
+The first-phase goals for `SuperOpcode` are modest:
 
-- 只做 block 内连续 2 个 op 的合并
-- 只合并 profile 中高频的 2-gram
-- 只在 decode 完成后重写第一个 op 的 handler
-- 不改变 `DecodedOp` 大小
-- 不引入新的动态编译器
+- Only merge 2 consecutive ops within a block
+- Only merge high-frequency 2-grams from the profile
+- Only rewrite the first op's handler after decode is complete
+- Do not change `DecodedOp` size
+- Do not introduce a new dynamic compiler
 
-非目标：
+Non-goals:
 
-- 不在第一阶段支持 3 个及以上 op 合并
-- 不在第一阶段支持跨 block 合并
-- 不在第一阶段改变 guest 可观察语义
-- 不在第一阶段做基于 SSA/IR 的 peephole 优化
+- Do not support merging 3 or more ops in the first phase
+- Do not support cross-block merging in the first phase
+- Do not change guest-observable semantics in the first phase
+- Do not perform SSA/IR-based peephole optimization in the first phase
 
-## 3. 核心思路
+## 3. Core Approach
 
-### 3.1 数据来源
+### 3.1 Data Sources
 
-通过脚本统计 block 内 `handler[i] -> handler[i + 1]` 的出现频次，得到常见 2-gram。
+Scripts count the frequency of `handler[i] -> handler[i + 1]` within blocks to obtain common 2-grams.
 
-输入可来自：
+Input can come from:
 
-- handler profile block dump
-- block trace dump
-- 直接遍历 `blocks.bin` 导出的 op 序列
+- Handler profile block dump
+- Block trace dump
+- Directly traversing the op sequence exported from `blocks.bin`
 
-输出应至少包含：
+Output should at least include:
 
 - `first_handler`
 - `second_handler`
-- 频次
-- 覆盖率
-- 可选的 guest opcode / ModRM / 前缀分布
+- Frequency
+- Coverage
+- Optional guest opcode / ModRM / prefix distribution
 
-### 3.2 生成物
+### 3.2 Generated Artifacts
 
-对选中的 2-gram，脚本生成一个新的 handler：
+For selected 2-grams, scripts generate a new handler:
 
-- 名字形如 `SuperOpcode_<A>__<B>`
-- 内部顺序执行两个原始 `LogicFunc`
-- 在成功路径上直接跳到第三个 op
+- Named like `SuperOpcode_<A>__<B>`
+- Internally executes two original `LogicFunc` sequentially
+- Jumps directly to the third op on the success path
 
-解码后，如果发现：
+After decoding, if:
 
-- 当前 op 的 handler 是 `A`
-- 下一 op 的 handler 是 `B`
-- 且满足该 superopcode 的附加约束
+- The current op's handler is `A`
+- The next op's handler is `B`
+- And the additional constraints for this superopcode are satisfied
 
-则把第一个 op 的 handler 改写成 `SuperOpcode_<A>__<B>`。
+Then rewrite the first op's handler to `SuperOpcode_<A>__<B>`.
 
-第二个 op 仍然保留在 block 中，但正常执行时会被第一个 op 跨过去。
+The second op remains in the block but is skipped by the first op during normal execution.
 
-## 4. 执行模型
+## 4. Execution Model
 
-假设原始执行链是：
+Assume the original execution chain is:
 
 `op0(A) -> op1(B) -> op2(C)`
 
-重写后变成：
+After rewriting it becomes:
 
 - `op0.handler = SuperOpcode_A_B`
-- `op1.handler = B`，但正常路径不会直接落到这里
+- `op1.handler = B`, but the normal path will not directly land here
 - `op2.handler = C`
 
-`SuperOpcode_A_B` 的成功路径相当于：
+The success path of `SuperOpcode_A_B` is equivalent to:
 
-1. 调用 `A` 对应的 `LogicFunc`
-2. 若 `A` 返回非 `Continue`，按原语义退出
-3. 调用 `B` 对应的 `LogicFunc`
-4. 若 `B` 返回非 `Continue`，按原语义退出
-5. 直接跳到 `op2->handler`
+1. Call the `LogicFunc` corresponding to `A`
+2. If `A` returns non-`Continue`, exit according to original semantics
+3. Call the `LogicFunc` corresponding to `B`
+4. If `B` returns non-`Continue`, exit according to original semantics
+5. Jump directly to `op2->handler`
 
-关键点是：
+The key points are:
 
-- `A` 和 `B` 仍然使用原来的逻辑实现
-- 不改变单 op 语义
-- 只改变“两个 op 之间的调度框架”
+- `A` and `B` still use their original logic implementations
+- Single-op semantics are not changed
+- Only the "scheduling framework between two ops" is changed
 
-## 5. 推荐实现形态
+## 5. Recommended Implementation Form
 
-### 5.1 生成脚本
+### 5.1 Generation Scripts
 
-建议新增一个脚本，输入 2-gram 统计结果，输出：
+It is recommended to add a new script that takes 2-gram statistics as input and outputs:
 
-- 一个 `.inc` 或 `.generated.h`
-- 可选一个 `.generated.cpp`
-- 一份 manifest，记录生成了哪些 superopcode
+- A `.inc` or `.generated.h`
+- Optionally a `.generated.cpp`
+- A manifest recording which superopcodes were generated
 
-推荐输出内容：
+Recommended output content:
 
-- superopcode 的枚举表
-- `HandlerFunc` 声明
-- `DispatchWrapper` 风格的包装函数
-- `(handler_a, handler_b) -> super_handler` 的查找表初始化代码
+- Superopcode enumeration table
+- `HandlerFunc` declarations
+- `DispatchWrapper`-style wrapper functions
+- Lookup table initialization code for `(handler_a, handler_b) -> super_handler`
 
-### 5.2 组合方式
+### 5.2 Composition Approach
 
-建议复用现有 `LogicFunc` 模型，而不是直接拼两个 `HandlerFunc`。
+It is recommended to reuse the existing `LogicFunc` model rather than directly concatenating two `HandlerFunc`s.
 
-原因：
+Reasons:
 
-- `HandlerFunc` 已经带了一层 dispatch 外壳，直接嵌套会重复框架
-- `LogicFunc` 的输入输出更接近“可组合的解释器 primitive”
-- 现有 `LogicFlow` 已经表达了 continue/exit/restart/branch 等结果
+- `HandlerFunc` already has a dispatch wrapper layer; direct nesting would duplicate the framework
+- `LogicFunc` input/output is closer to "composable interpreter primitives"
+- Existing `LogicFlow` already expresses continue/exit/restart/branch results
 
-理想生成形态类似：
+The ideal generated form looks like:
 
 ```cpp
 template <LogicFunc A, LogicFunc B>
@@ -140,84 +140,84 @@ ATTR_PRESERVE_NONE int64_t SuperOpcodeDispatch(EmuState* state, DecodedOp* op, i
                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
     auto* op1 = NextOp(op);
     auto flow0 = A(state, op, &utlb, GetImm(op), &branch, flags_cache);
-    // 处理 A 的 flow
+    // Handle A's flow
     auto flow1 = B(state, op1, &utlb, GetImm(op1), &branch, flags_cache);
-    // 处理 B 的 flow
+    // Handle B's flow
     auto* op2 = NextOp(op1);
     ATTR_MUSTTAIL return op2->handler(state, op2, instr_limit, utlb, branch, flags_cache);
 }
 ```
 
-实际生成代码不一定长这样，但语义应尽量接近。
+The actual generated code may not look exactly like this, but the semantics should be as close as possible.
 
-### 5.3 查找表
+### 5.3 Lookup Table
 
-运行时不应做昂贵查找。  
-推荐在进程初始化期构建一个静态表：
+Expensive lookups should not be done at runtime.  
+It is recommended to build a static table during process initialization:
 
 - key: `(handler_a, handler_b)`
 - value: `super_handler`
 
-decode 阶段只做一次查询，然后写回 `op->handler`。
+The decode phase only performs one lookup and then writes back to `op->handler`.
 
-查找结构可选：
+Lookup structure options:
 
-- 小规模静态数组 + 线性扫
-- 排序数组 + 二分
-- `unordered_dense` 静态 map
+- Small static array + linear scan
+- Sorted array + binary search
+- `unordered_dense` static map
 
-第一阶段条目不会很多，优先简单实现。
+The first phase will not have many entries; prefer a simple implementation.
 
-## 6. Decode 接线
+## 6. Decode Integration
 
-### 6.1 时机
+### 6.1 Timing
 
-推荐在 block decode 完成、sentinel 追加之前或之后统一跑一遍 block-local pass。
+It is recommended to run a block-local pass uniformly either before or after block decode is complete and sentinel is appended.
 
-输入：
+Input:
 
 - `temp_ops`
-- op 数量
-- 每个 op 当前已经解析好的 handler
+- Number of ops
+- Each op's already-parsed handler
 
-遍历方式：
+Traversal method:
 
-- 对每个 `i` 看 `temp_ops[i]` 和 `temp_ops[i+1]`
-- 如果命中 superopcode 表，则尝试应用
+- For each `i`, look at `temp_ops[i]` and `temp_ops[i+1]`
+- If a superopcode table match is found, attempt to apply it
 
-### 6.2 应用规则
+### 6.2 Application Rules
 
-应用 superopcode 时，第一个 op 至少需要满足：
+When applying a superopcode, the first op must at least satisfy:
 
-- `op[i]` 不是 block 最后一个真实 op
-- `op[i+1]` 不是 sentinel
-- `(handler_i, handler_{i+1})` 命中表
-- 两个 op 都满足对应的 legality check
+- `op[i]` is not the last real op in the block
+- `op[i+1]` is not a sentinel
+- `(handler_i, handler_{i+1})` matches the table
+- Both ops satisfy their corresponding legality checks
 
-应用后：
+After application:
 
 - `op[i].handler = super_handler`
-- `op[i]` 可选标记一个 debug bit，表示已被 superopcode 覆盖
+- `op[i]` can optionally mark a debug bit indicating it has been covered by a superopcode
 
-不建议第一阶段直接删除 `op[i+1]`，因为这会改变 block 布局、`NextOp` 偏移和大量现有假设。  
-“保留第二个 op 但跳过它”更稳。
+It is not recommended to directly delete `op[i+1]` in the first phase, as this would change block layout, `NextOp` offsets, and many existing assumptions.  
+"Keep the second op but skip it" is safer.
 
-## 7. 正确性约束
+## 7. Correctness Constraints
 
-不是所有相邻的两个 op 都适合合并。第一阶段必须保守。
+Not all adjacent pairs of ops are suitable for merging. The first phase must be conservative.
 
-### 7.1 必须拒绝的组合
+### 7.1 Combinations That Must Be Rejected
 
-- 第一个 op 可能 `ContinueSkipOne`
-- 第一个 op 或第二个 op 可能依赖“当前 op 必须等于 dispatch 入口 op”的特殊协议
-- 第一个 op 成功后可能改写 `op` 指针语义
-- 第二个 op 对 block profiler / debug hook 有特殊边界要求
-- 任一 op 是 sentinel / exit handler
-- 任一 op 是需要精确单步可见边界的特殊控制流 op
+- The first op may `ContinueSkipOne`
+- The first op or second op may depend on a special protocol where "current op must equal dispatch entry op"
+- The first op may change `op` pointer semantics after success
+- The second op has special boundary requirements for block profiler / debug hooks
+- Either op is a sentinel / exit handler
+- Either op is a special control-flow op that requires precise single-step visible boundaries
 
-### 7.2 内存重启语义
+### 7.2 Memory Restart Semantics
 
-如果第一个 op 返回：
+If the first op returns:
 
 - `RestartMemoryOp`
 - `RetryMemoryOp`
@@ -225,60 +225,60 @@ decode 阶段只做一次查询，然后写回 `op->handler`。
 - `ExitOnNextEIP`
 - `ExitToBranch`
 
-则 superopcode 必须立刻按原语义退出，不能继续执行第二个 op。
+Then the superopcode must immediately exit according to original semantics and cannot continue executing the second op.
 
-第二个 op 同理。
+The same applies to the second op.
 
-### 7.3 分支语义
+### 7.3 Branch Semantics
 
-第一个 op 如果写了 `branch` 并返回分支型 flow：
+If the first op writes `branch` and returns a branch-type flow:
 
-- superopcode 必须把该 `branch` 原样传给原来的 resolver 路径
+- The superopcode must pass this `branch` unchanged to the original resolver path
 
-只有在第一个 op 返回普通 `Continue` 时，才能进入第二个 op。
+Only when the first op returns a normal `Continue` can it proceed to the second op.
 
-### 7.4 EIP 可见性
+### 7.4 EIP Visibility
 
-如果中途退出：
+If exiting midway:
 
-- 必须保证与“单独执行第一个或第二个 op”完全一致的 `eip` 同步行为
+- Must guarantee exactly the same `eip` synchronization behavior as "executing the first or second op alone"
 
-这里最容易出错的是：
+The easiest places to make mistakes here are:
 
-- 第一个 op 成功，第二个 op fault/restart
-- 第一个 op 已经修改状态，第二个 op 需要把可见 `eip` 设为自己的起始/结束位置
+- First op succeeds, second op faults/restarts
+- First op has already modified state, second op needs to set visible `eip` to its own start/end position
 
-所以 superopcode 里的 flow 处理不能偷懒，必须按“当前正在处理哪个 op”分别走原规则。
+Therefore, flow handling in superopcodes cannot cut corners; it must follow the original rules separately for "which op is currently being processed".
 
-## 8. 推荐的第一批候选
+## 8. Recommended First Batch of Candidates
 
-候选应优先满足：
+Candidates should prioritize satisfying:
 
-- 高频
-- 都是普通 `Continue` 型 ALU/compare/data-move op
-- 没有复杂控制流边界
+- High frequency
+- Both are ordinary `Continue`-type ALU/compare/data-move ops
+- No complex control-flow boundaries
 
-典型可能包括：
+Typical possibilities include:
 
-- `cmp/test + jcc` 之前的纯 flags producer
+- Pure flags producers before `cmp/test + jcc`
 - `mov/load + cmp/test`
 - `add/sub/and no-flags + cmp/test`
-- 常见 register-only ALU 串
+- Common register-only ALU sequences
 
-但要注意：
+But note:
 
-- `cmp + jcc` 虽然直觉上很香，第二个 op 是 control-flow，合法性检查要更严
-- 比起一上来碰 `jcc`，第一阶段也许先做纯非控制流二元组更稳
+- `cmp + jcc` may seem attractive intuitively, but the second op is control-flow, so legality checks must be stricter
+- Compared to tackling `jcc` right away, it may be safer to first do pure non-control-flow pairs in the first phase
 
-## 9. 统计脚本输出建议
+## 9. Statistics Script Output Recommendations
 
-N-gram 统计脚本建议输出三层视图：
+N-gram statistics scripts should output a three-level view:
 
-1. handler 级频次
-2. guest opcode 级频次
-3. “可合并候选”频次
+1. Handler-level frequency
+2. Guest opcode-level frequency
+3. "Mergeable candidate" frequency
 
-示例字段：
+Example fields:
 
 - `handler_a`
 - `handler_b`
@@ -291,120 +291,120 @@ N-gram 统计脚本建议输出三层视图：
 - `is_candidate`
 - `reject_reason`
 
-这样可以避免只看 handler 热度就错误选择一些实际上不适合合并的组合。
+This avoids incorrectly selecting combinations that are actually unsuitable for merging by only looking at handler popularity.
 
-## 9.1 现有 Runner / Block Dump 能力评估
+## 9.1 Existing Runner / Block Dump Capability Assessment
 
-当前 [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py) 已经提供了一个可复用的基础，但还不能直接满足 `SuperOpcode` 候选筛选。
+The current [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py) already provides a reusable foundation, but it cannot directly satisfy `SuperOpcode` candidate selection.
 
-### 现有能力
+### Existing Capabilities
 
-- 支持固定 workload 批量跑样本
-- 支持 `--jit-handler-profile-block-dump`
-- 支持自动调用 [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py)
-- 每个 sample 都会保存 transcript、summary 和可选 guest stats 目录
+- Supports batch running samples for fixed workloads
+- Supports `--jit-handler-profile-block-dump`
+- Supports automatically calling [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py)
+- Each sample saves transcript, summary, and optional guest stats directory
 
-### 现有数据里已经够用的部分
+### Parts Already Sufficient in Existing Data
 
-如果 `blocks.bin` 导出完整可读，那么理论上已经足够恢复：
+If `blocks.bin` export is complete and readable, then theoretically it is sufficient to recover:
 
-- block 内 op 顺序
-- 每个 op 对应的 handler symbol
-- block 级执行次数
+- Op order within blocks
+- Handler symbol corresponding to each op
+- Block-level execution count
 
-这意味着：
+This means:
 
-- handler 2-gram 统计不一定需要新增 VM 内埋点
-- 可以先离线遍历 block dump，按 `block.exec_count` 对 block 内相邻 handler 做加权
+- Handler 2-gram statistics do not necessarily require new VM internal instrumentation
+- Can first offline traverse block dump, weighting adjacent handlers within blocks by `block.exec_count`
 
-### 当前不足
+### Current Deficiencies
 
-以现在的 runner 形态，还存在几处不足：
+In the current runner form, there are several deficiencies:
 
-1. `runner.py` 只把 block dump 当“附带产物”  
-   当前主目标还是 benchmark 计时，不是构建稳定的 op-sequence 语料。
+1. `runner.py` treats block dump as a "byproduct"  
+   The current main goal is still benchmark timing, not building a stable op-sequence corpus.
 
-2. `run_block_analysis()` 没有启用 `--n-gram`  
-   当前自动分析只输出 block/op 列表，不会直接产出 2-gram 报告。
+2. `run_block_analysis()` does not enable `--n-gram`  
+   Current automatic analysis only outputs block/op lists, not directly producing 2-gram reports.
 
-3. 目前一次只跑单个 workload，样本覆盖窄  
-   如果只基于 CoreMark，很容易把 superopcode 过拟合到单一 workload。
+3. Currently only runs a single workload at a time, narrow sample coverage  
+   If based only on CoreMark, it is easy to overfit superopcodes to a single workload.
 
-4. 结果目录中的 `blocks_analysis.json` 目前可能没有有效 `blocks` 列表  
-   这说明当前 block dump 导出/消费链路至少还需要验证，不能直接假设它已经能稳定提供完整 block-op 序列。
+4. `blocks_analysis.json` in the results directory may currently not have a valid `blocks` list  
+   This indicates that the current block dump export/consumption chain at least needs verification; cannot directly assume it can already stably provide complete block-op sequences.
 
-5. 缺少跨 sample 聚合  
-   当前每次 sample 独立分析，没有统一聚合脚本来输出“全样本 top 2-gram 候选”。
+5. Lacks cross-sample aggregation  
+   Currently each sample is analyzed independently; there is no unified aggregation script to output "full-sample top 2-gram candidates".
 
-### 结论
+### Conclusion
 
-结论是：
+The conclusion is:
 
-- `runner.py` 作为采样入口已经基本够了
-- 但“当前 runner 输出的数据管线”还不够直接支持 `SuperOpcode` 选型
-- 下一步更合适的是扩展数据后处理，而不是立刻改 VM 内部新增复杂 runtime 统计
+- `runner.py` as a sampling entry point is basically sufficient
+- But the "current runner output data pipeline" is not yet sufficient to directly support `SuperOpcode` selection
+- The next step is more suitable for extending data post-processing rather than immediately adding complex runtime statistics inside the VM
 
-## 9.2 基于现有 Runner 的实施方案
+## 9.2 Implementation Plan Based on Existing Runner
 
-推荐按下面顺序推进。
+It is recommended to proceed in the following order.
 
-### Step 1: 先打通 block dump 可读性
+### Step 1: First Establish Block Dump Readability
 
-先确认 `blocks.bin -> analyze_blocks.py -> blocks_analysis.json` 这条链路稳定输出非空 block/op 列表。
+First confirm that the chain `blocks.bin -> analyze_blocks.py -> blocks_analysis.json` stably outputs non-empty block/op lists.
 
-需要检查：
+Need to check:
 
-- `blocks.bin` 导出格式是否与脚本读取格式一致
-- runtime base / handler 指针解析是否正确
-- 是否有 schema 漂移导致脚本读空
+- Whether `blocks.bin` export format is consistent with script reading format
+- Whether runtime base / handler pointer parsing is correct
+- Whether there is schema drift causing the script to read empty
 
-这是 `SuperOpcode` 的前置条件。  
-如果这里没打通，后续 2-gram 全是空谈。
+This is a prerequisite for `SuperOpcode`.  
+If this is not established, subsequent 2-gram work is all in vain.
 
-### Step 2: 扩展 `analyze_blocks.py`
+### Step 2: Extend `analyze_blocks.py`
 
-建议把 [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py) 变成第一版 N-gram 数据源，而不是新增一套完全平行的脚本。
+It is recommended to turn [analyze_blocks.py](/Users/jiangyiheng/repos/x86emu/scripts/analyze_blocks.py) into the first version of N-gram data source, rather than adding a completely parallel script.
 
-建议新增能力：
+Recommended new capabilities:
 
 - `--n-gram 2`
 - `--group-by handler`
 - `--group-by guest-opcode`
 - `--weighted-by exec-count`
-- 输出每个 n-gram 的：
+- Output for each n-gram:
   - weighted count
   - unique block count
   - sample count
-  - 前后文示例
+  - context examples
 
-### Step 3: 新增聚合脚本
+### Step 3: Add Aggregation Script
 
-建议新增一个聚合脚本，例如：
+It is recommended to add a new aggregation script, for example:
 
 - `benchmark/podish_perf/analyze_superopcode_candidates.py`
 
-输入：
+Input:
 
-- 一个 `results/` 目录
-- 多个 `guest-stats/*/blocks_analysis.json`
+- A `results/` directory
+- Multiple `guest-stats/*/blocks_analysis.json`
 
-输出：
+Output:
 
 - `superopcode_candidates.json`
 - `superopcode_candidates.md`
 
-职责：
+Responsibilities:
 
-- 跨 sample 聚合 2-gram
-- 去重 runtime address 差异
-- 按 weighted count / coverage 排序
-- 标记候选与 reject reason
+- Cross-sample 2-gram aggregation
+- Deduplicate runtime address differences
+- Sort by weighted count / coverage
+- Mark candidates with reject reasons
 
-### Step 4: 扩展 runner 选项
+### Step 4: Extend Runner Options
 
-在 [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py) 中建议新增一组更明确的 superopcode 采样参数。
+It is recommended to add a clearer set of superopcode sampling parameters in [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py).
 
-推荐选项：
+Recommended options:
 
 - `--export-block-dump`
 - `--analyze-blocks`
@@ -412,66 +412,66 @@ N-gram 统计脚本建议输出三层视图：
 - `--aggregate-superopcode-candidates`
 - `--candidate-output <path>`
 
-其中：
+Among these:
 
-- `--jit-handler-profile-block-dump` 可以保留兼容
-- 但长期建议收敛为更通用的 block stats / n-gram 语义，而不是把功能绑死在“handler profile build”
+- `--jit-handler-profile-block-dump` can be kept for compatibility
+- But long-term it is recommended to converge to more general block stats / n-gram semantics, rather than binding functionality to "handler profile build"
 
-### Step 5: 扩大 workload 覆盖
+### Step 5: Expand Workload Coverage
 
-第一批候选不应只来自 CoreMark。
+The first batch of candidates should not come only from CoreMark.
 
-建议至少覆盖：
+It is recommended to cover at least:
 
 - `coremark run`
 - `compress`
 - `compile`
-- 未来可加：
-  - 小型 shell workload
-  - libc-heavy workload
-  - branch-heavy workload
+- Future additions:
+  - Small shell workloads
+  - libc-heavy workloads
+  - branch-heavy workloads
 
-这样得到的候选更不容易被单一程序绑架。
+This makes the resulting candidates less likely to be hijacked by a single program.
 
-## 9.3 对 Runner 的具体扩展建议
+## 9.3 Specific Extension Recommendations for Runner
 
-如果直接在现有 [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py) 上扩展，建议如下。
+If extending directly on the existing [runner.py](/Users/jiangyiheng/repos/x86emu/benchmark/podish_perf/runner.py), the following is recommended.
 
-### A. 保留现有 SampleResult，但新增字段
+### A. Keep Existing SampleResult, but Add Fields
 
-建议新增：
+It is recommended to add:
 
 - `block_dump_dir`
 - `ngram_analysis_json`
 - `candidate_manifest_json`
 
-这样 summary.json 可以直接串起整条数据链。
+This way summary.json can directly link the entire data chain.
 
-### B. 将 block dump 与 benchmark 计时解耦
+### B. Decouple Block Dump from Benchmark Timing
 
-当前 `run_sample()` 中，导出 block dump 与 benchmark 样本是绑在一起的。  
-对 `SuperOpcode` 来说，更好的模式是：
+In the current `run_sample()`, exporting block dump is tied together with benchmark samples.  
+For `SuperOpcode`, a better pattern is:
 
-- benchmark 模式：追求时间稳定
-- block-dump 模式：追求语料覆盖
+- Benchmark mode: pursue timing stability
+- Block-dump mode: pursue corpus coverage
 
-建议后续允许：
+It is recommended to subsequently allow:
 
-- 单独跑“语料采集模式”
-- 调低 `repeat`
-- 提高 workload 多样性
+- Running "corpus collection mode" separately
+- Lowering `repeat`
+- Increasing workload diversity
 
-### C. 支持后处理聚合
+### C. Support Post-Processing Aggregation
 
-建议 runner 在全部 sample 完成后，可选自动调用聚合脚本，产出：
+It is recommended that after all samples are complete, the runner can optionally automatically call the aggregation script to produce:
 
-- 全局 top 2-gram
-- 每个 workload 的 top 2-gram
-- 候选 superopcode 清单
+- Global top 2-gram
+- Top 2-gram for each workload
+- Candidate superopcode list
 
-这会比手工翻多个 `blocks_analysis.json` 高效很多。
+This is much more efficient than manually flipping through multiple `blocks_analysis.json`.
 
-现在这一步已经可以直接跑，建议流程是：
+Now this step can already be run directly; the recommended flow is:
 
 ```bash
 python3 benchmark/podish_perf/runner.py \
@@ -483,7 +483,7 @@ python3 benchmark/podish_perf/runner.py \
   --aggregate-superopcode-candidates
 ```
 
-或者对已有结果目录单独聚合：
+Or aggregate separately on existing results directories:
 
 ```bash
 python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
@@ -494,179 +494,179 @@ python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
   --output-md benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
 ```
 
-当前聚合脚本的职责是：
+The current aggregation script's responsibilities are:
 
-- 递归发现 `blocks_analysis.json`
-- 跳过 `blocks` 为空或存在明显 schema/dump 漂移告警的样本
-- 直接从 `blocks` 重建 N-gram，而不是依赖 `top_ngrams`
-  这样不会被单样本截断影响总榜
-- 输出：
+- Recursively discover `blocks_analysis.json`
+- Skip samples where `blocks` is empty or there are obvious schema/dump drift warnings
+- Rebuild N-gram directly from `blocks`, rather than relying on `top_ngrams`
+  This way it is not affected by single-sample truncation affecting the overall ranking
+- Output:
   - `superopcode_candidates.json`
   - `superopcode_candidates.md`
 
-### D. 记录 build identity
+### D. Record Build Identity
 
-因为 superopcode 候选依赖 handler symbol 名和布局，建议 summary 里额外记录：
+Because superopcode candidates depend on handler symbol names and layout, it is recommended to additionally record in summary:
 
 - git commit
 - build flavor
 - `EnableHandlerProfile`
 - `FIBERCPU_EXIT_HANDLER_REPLICA_COUNT`
-- 是否启用 superopcode
+- Whether superopcode is enabled
 
-这样后续比较不同数据集时不会混淆来源。
+This way subsequent comparisons of different datasets will not be confused about their origins.
 
-## 9.4 推荐的数据成熟度标准
+## 9.4 Recommended Data Maturity Standards
 
-在开始生成第一批 superopcode 之前，建议至少满足：
+Before starting to generate the first batch of superopcodes, it is recommended to at least satisfy:
 
-- `blocks_analysis.json` 中能稳定看到非空 `blocks`
-- 至少 3 个 workload
-- 至少 3 次 sample 聚合
-- top 2-gram 排名在样本间基本稳定
-- 候选 pair 的 coverage 足够高
+- `blocks_analysis.json` can stably show non-empty `blocks`
+- At least 3 workloads
+- At least 3 sample aggregations
+- Top 2-gram rankings are basically stable between samples
+- Candidate pair coverage is sufficiently high
 
-如果这些条件达不到，就更适合先修数据管线，而不是急着生成 superopcode。
+If these conditions cannot be met, it is more suitable to fix the data pipeline first rather than rushing to generate superopcodes.
 
-## 10. 代码生成建议
+## 10. Code Generation Recommendations
 
-推荐生成代码而不是手写大表，原因是：
+It is recommended to generate code rather than hand-write large tables; the reasons are:
 
-- 候选组合会不断调整
-- 命名规则可以统一
-- 容易同步生成 legality metadata
-- 可以自动产出注册表和测试清单
+- Candidate combinations will be continuously adjusted
+- Naming rules can be unified
+- Easy to synchronously generate legality metadata
+- Can automatically produce registration tables and test lists
 
-生成器输入建议：
+Generator input recommendations:
 
 - `superopcode_candidates.json`
 
-生成器输出建议：
+Generator output recommendations:
 
 - `libfibercpu/generated/superopcodes.generated.h`
 - `libfibercpu/generated/superopcodes.generated.cpp`
 
-每条 superopcode 元数据建议包含：
+Each superopcode metadata should include:
 
-- 名称
+- Name
 - `LogicFunc A`
 - `LogicFunc B`
-- 需要的 legality predicate
-- 是否启用
+- Required legality predicate
+- Whether enabled
 
-## 11. 调试与可观测性
+## 11. Debugging and Observability
 
-建议保留以下调试能力：
+It is recommended to retain the following debugging capabilities:
 
-- 环境变量总开关：`FIBERCPU_ENABLE_SUPEROPCODE`
-- 日志/计数器：命中多少次 superopcode
-- block dump 中可见“哪个 op 被 superopcode 覆盖”
-- 可打印 `(A,B) -> SuperOpcode_A_B` 映射
+- Environment variable master switch: `FIBERCPU_ENABLE_SUPEROPCODE`
+- Log/counter: how many times superopcodes are hit
+- Block dump shows "which op was covered by superopcode"
+- Can print `(A,B) -> SuperOpcode_A_B` mapping
 
-这样当出现错误时，可以很快：
+This way, when errors occur, one can quickly:
 
-- 全局关闭 superopcode 验证问题是否消失
-- 定位到具体哪一对组合有问题
+- Globally disable superopcode to verify if the problem disappears
+- Locate which specific pair has issues
 
-## 12. 测试策略
+## 12. Testing Strategy
 
-### 12.1 单元测试
+### 12.1 Unit Tests
 
-对每个生成的 superopcode，至少覆盖：
+For each generated superopcode, cover at least:
 
-- 正常 `Continue -> Continue`
-- 第一个 op 提前退出
-- 第二个 op 提前退出
-- branch 写回
-- memory restart / retry
-- fault 时的 `eip` 同步
+- Normal `Continue -> Continue`
+- First op early exit
+- Second op early exit
+- Branch writeback
+- Memory restart / retry
+- `eip` synchronization on fault
 
-### 12.2 差分测试
+### 12.2 Differential Testing
 
-同一 guest 输入，比较：
+For the same guest input, compare:
 
-- superopcode 关闭
-- superopcode 开启
+- Superopcode disabled
+- Superopcode enabled
 
-对比：
+Compare:
 
 - GPR
 - flags
 - memory
 - `eip`
-- 异常/信号行为
+- Exception/signal behavior
 
-### 12.3 Profile 回归
+### 12.3 Profile Regression
 
-每次扩充 superopcode 集合，都至少看：
+Each time the superopcode set is expanded, at least look at:
 
-- 总体 wall time
+- Overall wall time
 - top-25 self time
-- 命中 superopcode 的次数
-- 热门原始 handler 是否真的下降
+- Number of superopcode hits
+- Whether popular original handlers really decreased
 
-避免只因为热点重排就误判优化有效。
+Avoid misjudging optimization effectiveness just because of hotspot rearrangement.
 
-## 13. 风险
+## 13. Risks
 
-主要风险有四类：
+There are four main risk categories:
 
-1. 语义风险  
-   flow 处理不完整，导致 restart/exit/eip 同步错误。
+1. Semantic risks  
+   Incomplete flow handling leading to restart/exit/eip synchronization errors.
 
-2. 代码体积风险  
-   生成过多 superopcode，造成 I-cache 和指令布局恶化。
+2. Code size risks  
+   Generating too many superopcodes, causing I-cache and instruction layout deterioration.
 
-3. 维护风险  
-   hand-written 组合过多后难以管理，所以第一阶段必须脚本化生成。
+3. Maintenance risks  
+   After too many hand-written combinations become difficult to manage, so the first phase must use scripted generation.
 
-4. profile 过拟合  
-   只对单一 workload 有效，换程序后收益消失甚至回退。
+4. Profile overfitting  
+   Only effective for a single workload; benefits disappear or even regress when switching programs.
 
-## 14. 分阶段落地建议
+## 14. Phased Rollout Recommendations
 
-### Phase 1: 基础设施
+### Phase 1: Infrastructure
 
-- 增加 N-gram 统计脚本
-- 打通 `blocks.bin -> analyze_blocks.py` 可读链路
-- 让 runner 能稳定导出 block-op 序列
-- 定义 superopcode manifest 格式
-- 增加代码生成脚本
-- 引入全局开关和 debug 计数
+- Add N-gram statistics scripts
+- Establish `blocks.bin -> analyze_blocks.py` readable chain
+- Enable runner to stably export block-op sequences
+- Define superopcode manifest format
+- Add code generation scripts
+- Introduce global switches and debug counters
 
-### Phase 2: 最小可用版本
+### Phase 2: Minimum Viable Version
 
-- 基于聚合数据选出少量稳定 2-gram
-- 只启用少量纯 `Continue` 二元组
-- decode 后按 handler pair 重写第一个 op
-- 保留第二个 op，不改 block 布局
+- Select a small number of stable 2-grams based on aggregated data
+- Only enable a small number of pure `Continue` pairs
+- Rewrite the first op by handler pair after decode
+- Keep the second op, do not change block layout
 
-### Phase 3: 扩展集合
+### Phase 3: Expand the Set
 
-- 按 profile 扩大候选
-- 加入更复杂但收益更高的组合
-- 引入 legality predicate 细分
+- Expand candidates based on profile
+- Add more complex but higher-benefit combinations
+- Introduce legality predicate refinement
 
-### Phase 4: 更激进优化
+### Phase 4: More Aggressive Optimizations
 
-- 研究 3-op superopcode
-- 研究 block 内 op 物理压缩
-- 研究与 specialized handler / modreg fast path 的协同生成
+- Research 3-op superopcodes
+- Research physical op compression within blocks
+- Research coordinated generation with specialized handler / modreg fast path
 
-## 15. 当前建议
+## 15. Current Recommendations
 
-当前最合理的实现路径是：
+The current most reasonable implementation path is:
 
-- 先把 N-gram 统计做出来
-- 先只支持 2-op
-- 先只做“decode 后 handler 重写”
-- 先只合并最稳的普通 `Continue` 组合
+- First produce N-gram statistics
+- Only support 2-ops initially
+- Only do "handler rewriting after decode" initially
+- Only merge the most stable ordinary `Continue` combinations initially
 
-等这一版跑通并验证收益后，再决定要不要把 `cmp/test + jcc` 这类控制流组合纳入第一批。
+After this version is run through and benefits are verified, then decide whether to incorporate control-flow combinations like `cmp/test + jcc` into the first batch.
 
-这条路线的优点是：
+The advantages of this route are:
 
-- 对现有解释器结构侵入小
-- 回滚简单
-- 容易逐步扩容
-- 更容易把错误限制在单个 superopcode 上
+- Small intrusion into existing interpreter structure
+- Easy rollback
+- Easy gradual expansion
+- Easier to confine errors to individual superopcodes
