@@ -66,4 +66,7 @@ void RegisterSseFpOps();
 void RegisterSseIntOps();
 void RegisterSseMovOps();
 
+// Diagnostics / tooling helper: map a wrapper handler pointer back to its logical opcode id.
+int FindOpcodeIndexForHandler(HandlerFunc handler);
+
 }  // namespace fiberish

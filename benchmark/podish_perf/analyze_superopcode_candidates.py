@@ -4,13 +4,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import sys
 from collections import Counter
 from pathlib import Path
+
+GPR_NAMES = ("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from op_def_use_lut import analyze_def_use
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate handler N-gram data across block analysis samples."
+        description=(
+            "Aggregate SuperOpcode candidates across block analysis samples using "
+            "hot single-op anchors plus adjacent def-use relations."
+        )
     )
     parser.add_argument(
         "inputs",
@@ -21,7 +34,7 @@ def parse_args() -> argparse.Namespace:
         "--n-gram",
         type=int,
         default=2,
-        help="N-gram size to aggregate (default: 2)",
+        help="Compatibility flag. Only 2-op SuperOpcodes are currently supported (default: 2).",
     )
     parser.add_argument(
         "--top",
@@ -30,16 +43,34 @@ def parse_args() -> argparse.Namespace:
         help="Maximum number of aggregate candidates to emit (default: 100)",
     )
     parser.add_argument(
+        "--min-gpr-ratio",
+        type=float,
+        default=0.5,
+        help="Require at least this fraction of emitted candidates to depend on GPR flow when enough such candidates exist (default: 0.5)",
+    )
+    parser.add_argument(
+        "--anchor-top",
+        type=int,
+        default=64,
+        help="Only keep candidates whose anchor op is in the top-N hottest single ops (default: 64)",
+    )
+    parser.add_argument(
         "--min-samples",
         type=int,
         default=1,
-        help="Minimum number of distinct samples an N-gram must appear in (default: 1)",
+        help="Minimum number of distinct samples a candidate must appear in (default: 1)",
     )
     parser.add_argument(
         "--min-weighted-exec-count",
         type=int,
         default=0,
         help="Minimum total weighted_exec_count required to keep a candidate (default: 0)",
+    )
+    parser.add_argument(
+        "--min-stable-resource-ratio",
+        type=float,
+        default=0.75,
+        help="Minimum ratio for the dominant shared-resource pattern within a handler pair (default: 0.75)",
     )
     parser.add_argument(
         "--output-json",
@@ -145,58 +176,356 @@ def should_skip_analysis(data: dict[str, object]) -> tuple[bool, list[str]]:
     return bool(reasons), reasons
 
 
-def analyze_sample_ngrams(blocks: list[dict[str, object]], n: int) -> dict[tuple[str, ...], dict[str, object]]:
-    stats: dict[tuple[str, ...], dict[str, object]] = {}
+def normalize_logic_name(symbol: object) -> str | None:
+    if not symbol:
+        return None
+    text = str(symbol)
+    if "SuperOpcode_" in text:
+        return None
+    if text.startswith("op::Op"):
+        return text
+    if text.startswith("Op"):
+        return f"op::{text}"
+    direct_match = re.search(r"(?:^|::)(Op[A-Za-z0-9_]+)(?:\(|$)", text)
+    if direct_match:
+        return f"op::{direct_match.group(1)}"
+    mangled_match = re.search(r"(Op[A-Za-z0-9_]+?)EPNS_", text)
+    if mangled_match:
+        return f"op::{mangled_match.group(1)}"
+    return None
+
+
+def op_short_name(name: str) -> str:
+    short = name.split("::")[-1]
+    if short.startswith("Op"):
+        return short[2:]
+    return short
+
+
+def infer_semantics(name: str) -> dict[str, object]:
+    short = op_short_name(name)
+    lower = short.lower()
+    reads: set[str] = set()
+    writes: set[str] = set()
+    notes: list[str] = []
+    control_flow = False
+    memory_side_effect = False
+
+    if lower.startswith(("jcc", "jmp", "call", "ret", "loop", "iret", "sys")):
+        control_flow = True
+
+    if lower.startswith("jcc"):
+        reads.add("flags")
+        notes.append("conditional branch consumes flags")
+    elif lower.startswith("cmov"):
+        reads.update({"flags", "gpr"})
+        writes.add("gpr")
+        notes.append("cmov consumes flags and forwards a register value")
+    elif lower.startswith("setcc"):
+        reads.add("flags")
+        writes.add("gpr")
+        notes.append("setcc consumes flags and defines a byte register")
+
+    if lower.startswith(("cmp", "test", "bt", "btc", "btr", "bts", "comis", "ucomis")):
+        reads.add("gpr")
+        writes.add("flags")
+        notes.append("compare/test family defines flags")
+    elif lower.startswith(("adc", "sbb")):
+        reads.update({"gpr", "flags"})
+        writes.update({"gpr", "flags"})
+        notes.append("adc/sbb both consume and define flags")
+    elif lower.startswith(
+        ("add", "sub", "and", "or", "xor", "inc", "dec", "neg", "shl", "shr", "sar", "sal", "rol", "ror", "shld", "shrd")
+    ):
+        reads.add("gpr")
+        writes.update({"gpr", "flags"})
+        notes.append("ALU op updates register and flags")
+
+    is_load = "load" in lower
+    is_store = "store" in lower
+
+    if is_load:
+        reads.add("mem")
+        writes.add("gpr")
+        notes.append("load defines a register from memory")
+    if is_store:
+        reads.add("gpr")
+        writes.add("mem")
+        memory_side_effect = True
+        notes.append("store consumes a register and writes memory")
+
+    if not is_store and lower.startswith(("mov", "lea", "movzx", "movsx", "pop")):
+        writes.add("gpr")
+    if not is_load and lower.startswith(("mov", "push", "xchg", "cmp", "test")):
+        reads.add("gpr")
+    if lower.startswith("push"):
+        writes.add("mem")
+        memory_side_effect = True
+    if lower.startswith("xchg"):
+        writes.add("gpr")
+    if lower.startswith("movs"):
+        reads.update({"gpr", "mem"})
+        writes.add("mem")
+        memory_side_effect = True
+    if lower.startswith(("cmps", "scas")):
+        reads.update({"gpr", "mem"})
+        writes.add("flags")
+        notes.append("string compare defines flags")
+
+    return {
+        "reads": sorted(reads),
+        "writes": sorted(writes),
+        "notes": notes,
+        "control_flow": control_flow,
+        "memory_side_effect": memory_side_effect,
+    }
+
+
+def get_op_semantics(op: dict[str, object], normalized_name: str) -> dict[str, object]:
+    def_use = analyze_def_use(
+        op_id=op.get("op_id"),
+        modrm=int(op.get("modrm", 0) or 0),
+        meta=int(op.get("meta", 0) or 0),
+        prefixes=int(op.get("prefixes", 0) or 0),
+        ea_desc=int(((op.get("mem") or {}).get("ea_desc", 0)) or 0),
+    )
+    if not isinstance(def_use, dict):
+        def_use = op.get("def_use")
+    if not isinstance(def_use, dict):
+        return infer_semantics(normalized_name)
+
+    reads_data = [str(name) for name in def_use.get("reads_data_gpr") or def_use.get("reads_gpr") or []]
+    writes_data = [str(name) for name in def_use.get("writes_gpr") or []]
+    reads: set[str] = set(reads_data)
+    writes: set[str] = set(writes_data)
+    addr_reads = [str(name) for name in def_use.get("reads_addr_gpr") or []]
+
+    reads_flags = [str(name) for name in def_use.get("reads_flags") or []]
+    writes_flags = [str(name) for name in def_use.get("writes_flags") or []]
+    reads.update(f"flag:{name}" for name in reads_flags)
+    writes.update(f"flag:{name}" for name in writes_flags)
+
+    if bool(def_use.get("reads_memory")):
+        reads.add("mem")
+    if bool(def_use.get("writes_memory")):
+        writes.add("mem")
+
+    fallback = infer_semantics(normalized_name)
+    control_flow = bool(fallback["control_flow"])
+    memory_side_effect = bool(def_use.get("writes_memory")) or bool(fallback["memory_side_effect"])
+    notes = [str(note) for note in def_use.get("notes") or []]
+    notes.extend(str(note) for note in fallback["notes"] if str(note) not in notes)
+    if addr_reads:
+        notes.append(f"address regs: {', '.join(addr_reads)}")
+
+    return {
+        "reads": sorted(reads),
+        "writes": sorted(writes),
+        "notes": notes,
+        "control_flow": control_flow,
+        "memory_side_effect": memory_side_effect,
+    }
+
+
+def classify_pair(
+    first_name: str,
+    second_name: str,
+    first_op: dict[str, object],
+    second_op: dict[str, object],
+) -> dict[str, object] | None:
+    first_info = get_op_semantics(first_op, first_name)
+    second_info = get_op_semantics(second_op, second_name)
+    shared_resources = sorted(set(first_info["writes"]) & set(second_info["reads"]))
+    if not shared_resources:
+        return None
+
+    shared_gprs = [resource for resource in shared_resources if resource in GPR_NAMES]
+    shared_flags = [resource for resource in shared_resources if resource.startswith("flag:")]
+
+    if shared_flags and bool(second_info["control_flow"]):
+        relation_kind = "flags-into-control"
+        priority = 4
+    elif shared_flags:
+        relation_kind = "flags-flow"
+        priority = 3
+    elif shared_gprs:
+        relation_kind = "gpr-flow"
+        priority = 2
+    else:
+        relation_kind = "data-flow"
+        priority = 1
+
+    legality_notes: list[str] = []
+    if bool(second_info["control_flow"]):
+        legality_notes.append("second op is control-flow and needs strict mid-exit handling")
+    if bool(first_info["memory_side_effect"]) or bool(second_info["memory_side_effect"]):
+        legality_notes.append("pair touches memory side effects and should keep restart semantics conservative")
+
+    return {
+        "relation_kind": relation_kind,
+        "relation_priority": priority,
+        "shared_resources": shared_resources,
+        "first_semantics": first_info,
+        "second_semantics": second_info,
+        "legality_notes": legality_notes,
+    }
+
+
+def update_anchor_entry(
+    stats: dict[str, dict[str, object]],
+    anchor: str,
+    block_start: str,
+    block_exec_count: int,
+    op_index: int,
+) -> None:
+    entry = stats.setdefault(
+        anchor,
+        {
+            "anchor": anchor,
+            "anchor_display": op_short_name(anchor),
+            "weighted_exec_count": 0,
+            "occurrences": 0,
+            "unique_block_starts": set(),
+            "example_blocks": [],
+            "semantics": infer_semantics(anchor),
+        },
+    )
+    entry["weighted_exec_count"] += block_exec_count
+    entry["occurrences"] += 1
+    entry["unique_block_starts"].add(block_start)
+    if len(entry["example_blocks"]) < 5:
+        entry["example_blocks"].append(
+            {
+                "start_eip_hex": block_start,
+                "exec_count": block_exec_count,
+                "anchor_op_index": op_index,
+            }
+        )
+
+
+def update_pair_entry(
+    stats: dict[tuple[str, str], dict[str, object]],
+    pair: tuple[str, str],
+    anchor: str,
+    direction: str,
+    relation: dict[str, object],
+    block_start: str,
+    block_exec_count: int,
+    start_op_index: int,
+) -> None:
+    entry = stats.setdefault(
+        pair,
+        {
+            "pair": list(pair),
+            "pair_display": " -> ".join(pair),
+            "ngram": list(pair),
+            "ngram_display": " -> ".join(pair),
+            "first_handler": pair[0],
+            "second_handler": pair[1],
+            "anchor_handler": anchor,
+            "anchor_display": op_short_name(anchor),
+            "direction": direction,
+            "relation_kind": relation["relation_kind"],
+            "relation_priority": relation["relation_priority"],
+            "shared_resources": relation["shared_resources"],
+            "shared_resource_variants": Counter(),
+            "relation_kind_variants": Counter(),
+            "legality_notes": list(relation["legality_notes"]),
+            "weighted_exec_count": 0,
+            "occurrences": 0,
+            "unique_block_starts": set(),
+            "example_blocks": [],
+        },
+    )
+    entry["weighted_exec_count"] += block_exec_count
+    entry["occurrences"] += 1
+    entry["unique_block_starts"].add(block_start)
+    entry["shared_resource_variants"][tuple(relation["shared_resources"])] += 1
+    entry["relation_kind_variants"][str(relation["relation_kind"])] += 1
+    if len(entry["example_blocks"]) < 3:
+        entry["example_blocks"].append(
+            {
+                "start_eip_hex": block_start,
+                "exec_count": block_exec_count,
+                "start_op_index": start_op_index,
+                "anchor_handler": anchor,
+                "direction": direction,
+            }
+        )
+
+
+def analyze_sample_candidates(
+    blocks: list[dict[str, object]],
+) -> tuple[dict[str, dict[str, object]], dict[tuple[str, str], dict[str, object]]]:
+    anchor_stats: dict[str, dict[str, object]] = {}
+    pair_stats: dict[tuple[str, str], dict[str, object]] = {}
 
     for block in blocks:
         ops = block.get("ops") or []
-        symbols = [op.get("logic_func") or op.get("symbol") for op in ops]
-        if len(symbols) < n:
-            continue
-
-        block_start = block.get("start_eip_hex") or hex(block.get("start_eip", 0))
+        symbols = [normalize_logic_name(op.get("logic_func") or op.get("symbol")) for op in ops]
+        block_start = str(block.get("start_eip_hex") or hex(int(block.get("start_eip", 0))))
         block_exec_count = int(block.get("exec_count", 0))
-        for index in range(len(symbols) - n + 1):
-            ngram = tuple(symbols[index:index + n])
-            if any(not symbol or not str(symbol).startswith("op::Op") for symbol in ngram):
+
+        for index, anchor in enumerate(symbols):
+            if not anchor or not anchor.startswith("op::Op"):
                 continue
-            entry = stats.setdefault(ngram, {
-                "weighted_exec_count": 0,
-                "occurrences": 0,
-                "unique_block_starts": set(),
-                "example_blocks": [],
-            })
-            entry["weighted_exec_count"] += block_exec_count
-            entry["occurrences"] += 1
-            entry["unique_block_starts"].add(block_start)
-            if len(entry["example_blocks"]) < 3:
-                entry["example_blocks"].append({
-                    "start_eip_hex": block_start,
-                    "exec_count": block_exec_count,
-                    "start_op_index": index,
-                })
 
-    return stats
+            update_anchor_entry(anchor_stats, anchor, block_start, block_exec_count, index)
+
+            if index > 0 and symbols[index - 1]:
+                first = str(symbols[index - 1])
+                relation = classify_pair(first, anchor, ops[index - 1], ops[index])
+                if relation is not None:
+                    update_pair_entry(
+                        pair_stats,
+                        (first, anchor),
+                        anchor=anchor,
+                        direction="predecessor",
+                        relation=relation,
+                        block_start=block_start,
+                        block_exec_count=block_exec_count,
+                        start_op_index=index - 1,
+                    )
+
+            if index + 1 < len(symbols) and symbols[index + 1]:
+                second = str(symbols[index + 1])
+                relation = classify_pair(anchor, second, ops[index], ops[index + 1])
+                if relation is not None:
+                    update_pair_entry(
+                        pair_stats,
+                        (anchor, second),
+                        anchor=anchor,
+                        direction="successor",
+                        relation=relation,
+                        block_start=block_start,
+                        block_exec_count=block_exec_count,
+                        start_op_index=index,
+                    )
+
+    return anchor_stats, pair_stats
 
 
-def merge_candidate(
-    aggregate: dict[tuple[str, ...], dict[str, object]],
-    ngram: tuple[str, ...],
+def merge_anchor_stats(
+    aggregate: dict[str, dict[str, object]],
+    anchor: str,
     sample_meta: dict[str, object],
     sample_stats: dict[str, object],
 ) -> None:
-    entry = aggregate.setdefault(ngram, {
-        "ngram": list(ngram),
-        "ngram_display": " -> ".join(ngram),
-        "weighted_exec_count": 0,
-        "occurrences": 0,
-        "unique_block_count": 0,
-        "sample_count": 0,
-        "engine_counts": Counter(),
-        "case_counts": Counter(),
-        "example_sources": [],
-    })
-
+    entry = aggregate.setdefault(
+        anchor,
+        {
+            "anchor": anchor,
+            "anchor_display": op_short_name(anchor),
+            "weighted_exec_count": 0,
+            "occurrences": 0,
+            "unique_block_count": 0,
+            "sample_count": 0,
+            "engine_counts": Counter(),
+            "case_counts": Counter(),
+            "example_sources": [],
+            "semantics": sample_stats["semantics"],
+        },
+    )
     entry["weighted_exec_count"] += int(sample_stats["weighted_exec_count"])
     entry["occurrences"] += int(sample_stats["occurrences"])
     entry["unique_block_count"] += len(sample_stats["unique_block_starts"])
@@ -210,25 +539,191 @@ def merge_candidate(
         entry["case_counts"][str(case)] += 1
 
     if len(entry["example_sources"]) < 5:
-        entry["example_sources"].append({
-            "analysis_file": sample_meta["analysis_file"],
-            "result_name": sample_meta["result_name"],
-            "sample_name": sample_meta["sample_name"],
-            "engine": sample_meta["engine"],
-            "case": sample_meta["case"],
-            "iteration": sample_meta["iteration"],
-            "weighted_exec_count": int(sample_stats["weighted_exec_count"]),
-            "occurrences": int(sample_stats["occurrences"]),
-            "unique_block_count": len(sample_stats["unique_block_starts"]),
-            "example_blocks": sample_stats["example_blocks"],
-        })
+        entry["example_sources"].append(
+            {
+                "analysis_file": sample_meta["analysis_file"],
+                "result_name": sample_meta["result_name"],
+                "sample_name": sample_meta["sample_name"],
+                "engine": sample_meta["engine"],
+                "case": sample_meta["case"],
+                "iteration": sample_meta["iteration"],
+                "weighted_exec_count": int(sample_stats["weighted_exec_count"]),
+                "occurrences": int(sample_stats["occurrences"]),
+                "unique_block_count": len(sample_stats["unique_block_starts"]),
+                "example_blocks": sample_stats["example_blocks"],
+            }
+        )
 
 
-def normalize_aggregate_entry(entry: dict[str, object]) -> dict[str, object]:
+def merge_pair_stats(
+    aggregate: dict[tuple[str, str], dict[str, object]],
+    pair: tuple[str, str],
+    sample_meta: dict[str, object],
+    sample_stats: dict[str, object],
+) -> None:
+    entry = aggregate.setdefault(
+        pair,
+        {
+            "pair": list(pair),
+            "pair_display": " -> ".join(pair),
+            "ngram": list(pair),
+            "ngram_display": " -> ".join(pair),
+            "first_handler": pair[0],
+            "second_handler": pair[1],
+            "anchor_handler": sample_stats["anchor_handler"],
+            "anchor_display": sample_stats["anchor_display"],
+            "direction": sample_stats["direction"],
+            "relation_kind": sample_stats["relation_kind"],
+            "relation_priority": sample_stats["relation_priority"],
+            "shared_resources": list(sample_stats["shared_resources"]),
+            "shared_resource_variants": Counter(),
+            "relation_kind_variants": Counter(),
+            "legality_notes": list(sample_stats["legality_notes"]),
+            "weighted_exec_count": 0,
+            "occurrences": 0,
+            "unique_block_count": 0,
+            "sample_count": 0,
+            "engine_counts": Counter(),
+            "case_counts": Counter(),
+            "example_sources": [],
+        },
+    )
+
+    entry["weighted_exec_count"] += int(sample_stats["weighted_exec_count"])
+    entry["occurrences"] += int(sample_stats["occurrences"])
+    entry["unique_block_count"] += len(sample_stats["unique_block_starts"])
+    entry["sample_count"] += 1
+    entry["shared_resource_variants"].update(sample_stats["shared_resource_variants"])
+    entry["relation_kind_variants"].update(sample_stats["relation_kind_variants"])
+
+    engine = sample_meta.get("engine")
+    case = sample_meta.get("case")
+    if engine:
+        entry["engine_counts"][str(engine)] += 1
+    if case:
+        entry["case_counts"][str(case)] += 1
+
+    if len(entry["example_sources"]) < 5:
+        entry["example_sources"].append(
+            {
+                "analysis_file": sample_meta["analysis_file"],
+                "result_name": sample_meta["result_name"],
+                "sample_name": sample_meta["sample_name"],
+                "engine": sample_meta["engine"],
+                "case": sample_meta["case"],
+                "iteration": sample_meta["iteration"],
+                "weighted_exec_count": int(sample_stats["weighted_exec_count"]),
+                "occurrences": int(sample_stats["occurrences"]),
+                "unique_block_count": len(sample_stats["unique_block_starts"]),
+                "example_blocks": sample_stats["example_blocks"],
+            }
+        )
+
+
+def normalize_counter_map(counter: Counter[str]) -> dict[str, int]:
+    return dict(sorted(counter.items()))
+
+
+def normalize_anchor_entry(entry: dict[str, object]) -> dict[str, object]:
     normalized = dict(entry)
-    normalized["engine_counts"] = dict(sorted(entry["engine_counts"].items()))
-    normalized["case_counts"] = dict(sorted(entry["case_counts"].items()))
+    normalized["engine_counts"] = normalize_counter_map(entry["engine_counts"])
+    normalized["case_counts"] = normalize_counter_map(entry["case_counts"])
     return normalized
+
+
+def normalize_candidate_entry(entry: dict[str, object], anchor_entry: dict[str, object]) -> dict[str, object]:
+    normalized = dict(entry)
+    normalized["engine_counts"] = normalize_counter_map(entry["engine_counts"])
+    normalized["case_counts"] = normalize_counter_map(entry["case_counts"])
+    shared_variant_counts = Counter({
+        ",".join(variant): count for variant, count in entry["shared_resource_variants"].items()
+    })
+    dominant_shared_variant: tuple[str, ...] = ()
+    dominant_shared_count = 0
+    if entry["shared_resource_variants"]:
+        dominant_shared_variant, dominant_shared_count = entry["shared_resource_variants"].most_common(1)[0]
+
+    dominant_relation_kind = str(entry["relation_kind"])
+    dominant_relation_count = 0
+    if entry["relation_kind_variants"]:
+        dominant_relation_kind, dominant_relation_count = entry["relation_kind_variants"].most_common(1)[0]
+
+    dominant_relation_priority = 1
+    if dominant_relation_kind == "flags-into-control":
+        dominant_relation_priority = 4
+    elif dominant_relation_kind == "flags-flow":
+        dominant_relation_priority = 3
+    elif dominant_relation_kind == "gpr-flow":
+        dominant_relation_priority = 2
+
+    normalized["shared_resources"] = list(dominant_shared_variant)
+    normalized["shared_resource_variants"] = normalize_counter_map(shared_variant_counts)
+    normalized["dominant_shared_resource_count"] = int(dominant_shared_count)
+    normalized["dominant_shared_resource_ratio"] = (
+        dominant_shared_count / int(entry["occurrences"]) if int(entry["occurrences"]) else 0.0
+    )
+    normalized["relation_kind"] = dominant_relation_kind
+    normalized["relation_priority"] = dominant_relation_priority
+    normalized["relation_kind_variants"] = normalize_counter_map(entry["relation_kind_variants"])
+    normalized["dominant_relation_kind_count"] = int(dominant_relation_count)
+    normalized["anchor_weighted_exec_count"] = int(anchor_entry["weighted_exec_count"])
+    normalized["anchor_sample_count"] = int(anchor_entry["sample_count"])
+    normalized["anchor_unique_block_count"] = int(anchor_entry["unique_block_count"])
+    normalized["anchor_semantics"] = anchor_entry["semantics"]
+    return normalized
+
+
+def candidate_sort_key(entry: dict[str, object]) -> tuple[object, ...]:
+    return (
+        entry["relation_priority"],
+        entry["weighted_exec_count"],
+        entry["anchor_weighted_exec_count"],
+        entry["sample_count"],
+        entry["occurrences"],
+        entry["unique_block_count"],
+    )
+
+
+def is_gpr_dependent_candidate(entry: dict[str, object]) -> bool:
+    shared_resources = entry.get("shared_resources") or []
+    return any(str(resource) in GPR_NAMES for resource in shared_resources)
+
+
+def apply_gpr_mix_quota(candidates: list[dict[str, object]], top: int, min_gpr_ratio: float) -> list[dict[str, object]]:
+    if top <= 0 or not candidates:
+        return []
+
+    clamped_ratio = max(0.0, min(1.0, min_gpr_ratio))
+    required_gpr = min(len(candidates), int(top * clamped_ratio + 0.999999))
+
+    gpr_candidates = [entry for entry in candidates if is_gpr_dependent_candidate(entry)]
+    other_candidates = [entry for entry in candidates if not is_gpr_dependent_candidate(entry)]
+
+    gpr_candidates.sort(key=candidate_sort_key, reverse=True)
+    other_candidates.sort(key=candidate_sort_key, reverse=True)
+
+    selected: list[dict[str, object]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    def try_append(entry: dict[str, object]) -> None:
+        pair = tuple(str(item) for item in entry.get("pair", []))
+        if len(pair) != 2 or pair in seen_pairs:
+            return
+        seen_pairs.add(pair)
+        selected.append(entry)
+
+    for entry in gpr_candidates[:required_gpr]:
+        if len(selected) >= top:
+            break
+        try_append(entry)
+
+    merged_by_rank = sorted(candidates, key=candidate_sort_key, reverse=True)
+    for entry in merged_by_rank:
+        if len(selected) >= top:
+            break
+        try_append(entry)
+
+    return selected[:top]
 
 
 def build_markdown(
@@ -236,42 +731,63 @@ def build_markdown(
     analysis_files: list[Path],
     included_samples: list[dict[str, object]],
     skipped_samples: list[dict[str, object]],
+    anchors: list[dict[str, object]],
     candidates: list[dict[str, object]],
-    ngram_size: int,
+    anchor_top: int,
 ) -> str:
     lines = [
         "# SuperOpcode Candidates",
         "",
         f"- Inputs: {', '.join(inputs)}",
-        f"- N-gram size: {ngram_size}",
+        "- Strategy: hot single-op anchors + adjacent def-use relations",
         f"- Analysis files discovered: {len(analysis_files)}",
         f"- Included samples: {len(included_samples)}",
         f"- Skipped samples: {len(skipped_samples)}",
+        f"- Anchor pool limit: {anchor_top}",
         f"- Candidate count: {len(candidates)}",
         "",
-        "## Top Candidates",
+        "## Top Anchors",
         "",
-        "| Rank | N-Gram | Weighted Exec | Samples | Occurrences | Unique Blocks | Cases |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "| Rank | Anchor | Weighted Exec | Samples | Occurrences | Unique Blocks |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
     ]
 
-    for rank, candidate in enumerate(candidates, start=1):
-        case_counts = candidate.get("case_counts") or {}
-        cases = ", ".join(f"{name}:{count}" for name, count in case_counts.items()) or "-"
+    for rank, anchor in enumerate(anchors, start=1):
         lines.append(
-            f"| {rank} | `{candidate['ngram_display']}` | "
+            f"| {rank} | `{anchor['anchor_display']}` | "
+            f"{anchor['weighted_exec_count']} | {anchor['sample_count']} | "
+            f"{anchor['occurrences']} | {anchor['unique_block_count']} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Top Candidates",
+            "",
+            "| Rank | Pair | Relation | Anchor | Dir | Weighted Exec | Samples | Occurrences | Shared |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |",
+        ]
+    )
+
+    for rank, candidate in enumerate(candidates, start=1):
+        shared = ", ".join(candidate.get("shared_resources") or []) or "-"
+        lines.append(
+            f"| {rank} | `{candidate['pair_display']}` | {candidate['relation_kind']} | "
+            f"`{candidate['anchor_display']}` | {candidate['direction']} | "
             f"{candidate['weighted_exec_count']} | {candidate['sample_count']} | "
-            f"{candidate['occurrences']} | {candidate['unique_block_count']} | {cases} |"
+            f"{candidate['occurrences']} | {shared} |"
         )
 
     if skipped_samples:
-        lines.extend([
-            "",
-            "## Skipped Samples",
-            "",
-            "| Sample | Reason |",
-            "| --- | --- |",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Skipped Samples",
+                "",
+                "| Sample | Reason |",
+                "| --- | --- |",
+            ]
+        )
         for sample in skipped_samples:
             reason = "; ".join(sample["reasons"])
             lines.append(f"| `{sample['analysis_file']}` | {reason} |")
@@ -281,11 +797,15 @@ def build_markdown(
 
 def main() -> int:
     args = parse_args()
+    if args.n_gram != 2:
+        raise RuntimeError("--n-gram must remain 2 because current SuperOpcode generation only supports 2-op pairs")
+
     analysis_files = discover_analysis_files(args.inputs)
     if not analysis_files:
         raise RuntimeError("No blocks_analysis.json files found under the provided inputs")
 
-    aggregate: dict[tuple[str, ...], dict[str, object]] = {}
+    aggregate_anchors: dict[str, dict[str, object]] = {}
+    aggregate_pairs: dict[tuple[str, str], dict[str, object]] = {}
     included_samples: list[dict[str, object]] = []
     skipped_samples: list[dict[str, object]] = []
 
@@ -294,32 +814,33 @@ def main() -> int:
         sample_meta = infer_sample_metadata(analysis_file)
         skip, reasons = should_skip_analysis(data)
         if skip:
-            skipped_samples.append({
-                "analysis_file": str(analysis_file),
-                "reasons": reasons,
-            })
+            skipped_samples.append(
+                {
+                    "analysis_file": str(analysis_file),
+                    "reasons": reasons,
+                }
+            )
             continue
 
         blocks = data.get("blocks") or []
-        sample_ngrams = analyze_sample_ngrams(blocks, args.n_gram)
-        if not sample_ngrams:
-            skipped_samples.append({
-                "analysis_file": str(analysis_file),
-                "reasons": [f"no {args.n_gram}-grams found in blocks"],
-            })
+        sample_anchors, sample_pairs = analyze_sample_candidates(blocks)
+        if not sample_pairs:
+            skipped_samples.append(
+                {
+                    "analysis_file": str(analysis_file),
+                    "reasons": ["no def-use-adjacent 2-op candidates found in blocks"],
+                }
+            )
             continue
 
         included_samples.append(sample_meta)
-        for ngram, sample_stats in sample_ngrams.items():
-            merge_candidate(aggregate, ngram, sample_meta, sample_stats)
+        for anchor, sample_stats in sample_anchors.items():
+            merge_anchor_stats(aggregate_anchors, anchor, sample_meta, sample_stats)
+        for pair, sample_stats in sample_pairs.items():
+            merge_pair_stats(aggregate_pairs, pair, sample_meta, sample_stats)
 
-    candidates = [
-        normalize_aggregate_entry(entry)
-        for entry in aggregate.values()
-        if entry["sample_count"] >= args.min_samples
-        and entry["weighted_exec_count"] >= args.min_weighted_exec_count
-    ]
-    candidates.sort(
+    anchors = [normalize_anchor_entry(entry) for entry in aggregate_anchors.values()]
+    anchors.sort(
         key=lambda entry: (
             entry["weighted_exec_count"],
             entry["sample_count"],
@@ -328,22 +849,52 @@ def main() -> int:
         ),
         reverse=True,
     )
-    candidates = candidates[:args.top]
+
+    top_anchors = anchors[: args.anchor_top]
+    allowed_anchor_names = {str(anchor["anchor"]) for anchor in top_anchors}
+    anchor_index = {str(anchor["anchor"]): anchor for anchor in anchors}
+
+    candidates = []
+    for entry in aggregate_pairs.values():
+        anchor_name = str(entry["anchor_handler"])
+        if anchor_name not in allowed_anchor_names:
+            continue
+        if entry["sample_count"] < args.min_samples:
+            continue
+        if entry["weighted_exec_count"] < args.min_weighted_exec_count:
+            continue
+        normalized_entry = normalize_candidate_entry(entry, anchor_index[anchor_name])
+        if normalized_entry["dominant_shared_resource_ratio"] < args.min_stable_resource_ratio:
+            continue
+        candidates.append(normalized_entry)
+
+    candidates.sort(key=candidate_sort_key, reverse=True)
+    candidates = apply_gpr_mix_quota(candidates, args.top, args.min_gpr_ratio)
+
+    gpr_candidate_count = sum(1 for entry in candidates if is_gpr_dependent_candidate(entry))
 
     output = {
         "metadata": {
             "inputs": [str(Path(item).resolve()) for item in args.inputs],
-            "n_gram_size": args.n_gram,
+            "strategy": "anchor-def-use-adjacent",
             "analysis_file_count": len(analysis_files),
             "included_sample_count": len(included_samples),
             "skipped_sample_count": len(skipped_samples),
             "candidate_count": len(candidates),
+            "anchor_count": len(anchors),
+            "anchor_top_limit": args.anchor_top,
             "min_samples": args.min_samples,
             "min_weighted_exec_count": args.min_weighted_exec_count,
+            "min_gpr_ratio": args.min_gpr_ratio,
+            "min_stable_resource_ratio": args.min_stable_resource_ratio,
             "top_limit": args.top,
+            "superopcode_width": 2,
+            "selected_gpr_candidate_count": gpr_candidate_count,
+            "selected_gpr_candidate_ratio": (gpr_candidate_count / len(candidates)) if candidates else 0.0,
         },
         "included_samples": included_samples,
         "skipped_samples": skipped_samples,
+        "anchors": top_anchors,
         "candidates": candidates,
     }
 
@@ -360,8 +911,9 @@ def main() -> int:
                 analysis_files=analysis_files,
                 included_samples=included_samples,
                 skipped_samples=skipped_samples,
+                anchors=top_anchors[: min(len(top_anchors), 20)],
                 candidates=candidates,
-                ngram_size=args.n_gram,
+                anchor_top=args.anchor_top,
             ),
             encoding="utf-8",
         )

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -8,6 +9,8 @@ import struct
 import subprocess
 import sys
 from collections import defaultdict
+
+from op_def_use_lut import analyze_def_use
 
 
 def demangle_names(names):
@@ -80,6 +83,42 @@ def load_symbols(lib_path):
     return symbols
 
 
+class HandlerOpIdResolver:
+    def __init__(self, lib_path):
+        self._cache = {}
+        self._func = None
+        self._lib_base = None
+        try:
+            lib = ctypes.CDLL(lib_path)
+            func = lib.X86_GetOpIdForHandler
+            func.argtypes = [ctypes.c_void_p]
+            func.restype = ctypes.c_int32
+            self._func = func
+            get_lib_base = lib.X86_GetLibAddress
+            get_lib_base.argtypes = []
+            get_lib_base.restype = ctypes.c_void_p
+            self._lib_base = int(ctypes.cast(get_lib_base(), ctypes.c_void_p).value or 0)
+        except Exception as exc:
+            print(f"Warning: failed to load X86_GetOpIdForHandler from {lib_path}: {exc}")
+
+    def resolve(self, handler_ptr, handler_offset=0):
+        if not self._func:
+            return None
+        lookup_ptr = None
+        if self._lib_base and handler_offset:
+            lookup_ptr = self._lib_base + int(handler_offset)
+        elif handler_ptr:
+            lookup_ptr = int(handler_ptr)
+        if not lookup_ptr:
+            return None
+        if lookup_ptr in self._cache:
+            return self._cache[lookup_ptr]
+        value = int(self._func(ctypes.c_void_p(lookup_ptr)))
+        result = None if value < 0 else value
+        self._cache[lookup_ptr] = result
+        return result
+
+
 def find_symbol(offset, symbols_map):
     name = symbols_map.get(offset)
     if not name:
@@ -140,7 +179,7 @@ def load_summary(summary_file):
         return json.load(f)
 
 
-def parse_blocks(dump_file, symbols):
+def parse_blocks(dump_file, symbols, handler_resolver):
     blocks_data = []
     parse_warnings = []
 
@@ -197,6 +236,14 @@ def parse_blocks(dump_file, symbols):
 
                 symbol_name = find_symbol(handler_offset, symbols)
                 logic_func = normalize_logic_func_name(symbol_name)
+                op_id = handler_resolver.resolve(handler_ptr, handler_offset) if handler_resolver else None
+                def_use = analyze_def_use(
+                    op_id=op_id,
+                    modrm=modrm,
+                    meta=meta,
+                    prefixes=prefixes,
+                    ea_desc=ea_desc,
+                )
 
                 block_info["ops"].append({
                     "index": op_index,
@@ -209,6 +256,8 @@ def parse_blocks(dump_file, symbols):
                     "symbol_raw": symbol_name,
                     "logic_func": logic_func,
                     "symbol": logic_func or symbol_name,
+                    "op_id": op_id,
+                    "op_id_hex": f"0x{op_id:x}" if op_id is not None else None,
                     "imm": imm,
                     "imm_hex": f"0x{imm:x}",
                     "len": length,
@@ -224,6 +273,7 @@ def parse_blocks(dump_file, symbols):
                         "disp_hex": f"0x{mem_disp:x}",
                         **decode_ea_desc(ea_desc),
                     },
+                    "def_use": def_use,
                 })
 
             if truncated_block:
@@ -375,8 +425,9 @@ def main():
     print(f"Loading symbols from {args.lib_path}...")
     symbols = load_symbols(args.lib_path)
     print(f"Loaded {len(symbols)} symbols.")
+    handler_resolver = HandlerOpIdResolver(args.lib_path)
 
-    base_addr, declared_block_count, blocks_data, parse_warnings = parse_blocks(dump_file, symbols)
+    base_addr, declared_block_count, blocks_data, parse_warnings = parse_blocks(dump_file, symbols, handler_resolver)
 
     if args.min_exec_count > 0:
         before = len(blocks_data)

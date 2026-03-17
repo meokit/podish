@@ -351,4 +351,25 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     return found;
 }
 
+int FindOpcodeIndexForHandler(HandlerFunc handler) {
+    if (!handler) return -1;
+
+    for (int opcode = 0; opcode < 1024; ++opcode) {
+        if (g_Handlers[opcode] == handler) {
+            return opcode;
+        }
+    }
+
+    for (int opcode = 0; opcode < 1024; ++opcode) {
+        const auto& list = g_OpSpecializations[opcode];
+        for (const auto& entry : list) {
+            if (entry.handler == handler) {
+                return opcode;
+            }
+        }
+    }
+
+    return -1;
+}
+
 }  // namespace fiberish

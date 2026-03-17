@@ -1223,6 +1223,10 @@ size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) 
     return count;
 }
 
+int32_t X86_GetOpIdForHandler(void* handler) {
+    return static_cast<int32_t>(FindOpcodeIndexForHandler(reinterpret_cast<HandlerFunc>(handler)));
+}
+
 void* X86_GetLibAddress() {
 #if defined(_WIN32)
     HMODULE hModule = NULL;

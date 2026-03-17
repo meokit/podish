@@ -545,7 +545,7 @@ FORCE_INLINE bool EvaluatePF(uint64_t flags_cache) {
 FORCE_INLINE void CommitFlagsCache(EmuState* state, uint64_t& flags_cache) { SetStateFlagsCache(state, flags_cache); }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest + src;
 
     if constexpr (UpdateFlags) {
@@ -563,7 +563,7 @@ inline T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest - src;
 
     if constexpr (UpdateFlags) {
@@ -594,7 +594,7 @@ inline T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     uint32_t cf_in = ReadCF(flags_cache) ? 1u : 0u;
 
     using UT = std::make_unsigned_t<T>;
@@ -619,7 +619,7 @@ inline T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     uint32_t cf_in = ReadCF(flags_cache) ? 1u : 0u;
 
     using UT = std::make_unsigned_t<T>;
@@ -644,7 +644,7 @@ inline T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest & src;
 
     if constexpr (UpdateFlags) {
@@ -670,7 +670,7 @@ inline T AluOr(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest ^ src;
 
     if constexpr (UpdateFlags) {
@@ -687,7 +687,7 @@ inline T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 // ------------------------------------------------------------------------------------------------
 
 template <typename T, bool UpdateFlags = true>
-inline T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -713,7 +713,7 @@ inline T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -735,7 +735,7 @@ inline T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
@@ -760,7 +760,7 @@ inline T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
     count &= 0x1F;
@@ -789,7 +789,7 @@ inline T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
     count &= 0x1F;
@@ -818,7 +818,7 @@ inline T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
     count %= (width + 1);
     if (count == 0) return dest;
@@ -844,7 +844,7 @@ inline T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T, bool UpdateFlags = true>
-inline T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
+FORCE_INLINE T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
     count %= (width + 1);
     if (count == 0) return dest;
@@ -871,12 +871,12 @@ inline T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
 }
 
 template <typename T>
-inline void AluCmp(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE void AluCmp(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     AluSub<T, true>(state, flags_cache, dest, src);
 }
 
 template <typename T>
-inline void AluTest(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+FORCE_INLINE void AluTest(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     AluAnd<T, true>(state, flags_cache, dest, src);
 }
 

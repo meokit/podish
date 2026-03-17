@@ -29,7 +29,7 @@ Here we call this "a single execution unit formed by merging multiple consecutiv
 The first-phase goals for `SuperOpcode` are modest:
 
 - Only merge 2 consecutive ops within a block
-- Only merge high-frequency 2-grams from the profile
+- Only select candidates from high-frequency single-op anchors plus adjacent def-use relations
 - Only rewrite the first op's handler after decode is complete
 - Do not change `DecodedOp` size
 - Do not introduce a new dynamic compiler
@@ -45,7 +45,13 @@ Non-goals:
 
 ### 3.1 Data Sources
 
-Scripts count the frequency of `handler[i] -> handler[i + 1]` within blocks to obtain common 2-grams.
+The candidate miner should start from hot single-op anchors rather than directly ranking raw 2-grams.
+
+For each hot handler `handler[i]`, analyze:
+
+- Its predecessor `handler[i - 1]`
+- Its successor `handler[i + 1]`
+- Whether either adjacent op forms a plausible def-use chain with the anchor
 
 Input can come from:
 
@@ -55,11 +61,20 @@ Input can come from:
 
 Output should at least include:
 
+- `anchor_handler`
 - `first_handler`
 - `second_handler`
-- Frequency
-- Coverage
+- `direction` (`predecessor` or `successor`)
+- `relation_kind` such as `flags-flow`, `flags-into-control`, or `gpr-flow`
+- Anchor hotness, pair frequency, and coverage
 - Optional guest opcode / ModRM / prefix distribution
+
+Typical coarse def-use patterns worth modeling first:
+
+- `cmp/test/...` define `eflags`
+- `jcc/cmov/setcc` use `eflags`
+- `load/movzx/movsx/mov reg, ...` define a register
+- `store/cmp/test/alu/...` use a register
 
 ### 3.2 Generated Artifacts
 
@@ -254,44 +269,47 @@ Therefore, flow handling in superopcodes cannot cut corners; it must follow the 
 
 Candidates should prioritize satisfying:
 
-- High frequency
-- Both are ordinary `Continue`-type ALU/compare/data-move ops
-- No complex control-flow boundaries
+- The anchor op itself is very hot
+- The adjacent op is connected by an obvious def-use relation
+- The pair is still only 2 ops wide
+- Legality can be expressed conservatively at decode time
 
-Typical possibilities include:
+Typical first-batch shapes include:
 
-- Pure flags producers before `cmp/test + jcc`
-- `mov/load + cmp/test`
-- `add/sub/and no-flags + cmp/test`
-- Common register-only ALU sequences
+- `cmp/test/... -> jcc`
+- `cmp/test/... -> cmov`
+- `load/movzx/movsx -> cmp/test`
+- `load/mov -> alu`
+- `mov/reg-producer -> store`
 
 But note:
 
-- `cmp + jcc` may seem attractive intuitively, but the second op is control-flow, so legality checks must be stricter
-- Compared to tackling `jcc` right away, it may be safer to first do pure non-control-flow pairs in the first phase
+- `cmp/test + jcc` is attractive precisely because the data dependency is clear (`eflags`), but it still needs strict control-flow legality checks
+- Pairs containing stores or other memory side effects should preserve restart / retry semantics exactly
 
 ## 9. Statistics Script Output Recommendations
 
-N-gram statistics scripts should output a three-level view:
+Candidate mining should expose a three-level view:
 
-1. Handler-level frequency
-2. Guest opcode-level frequency
-3. "Mergeable candidate" frequency
+1. Anchor hotness: which single handlers dominate execution
+2. Anchor neighborhood: which predecessor/successor ops sit next to those anchors
+3. Mergeable candidates: which adjacent pairs also satisfy a coarse def-use relation
 
 Example fields:
 
-- `handler_a`
-- `handler_b`
-- `count`
+- `anchor_handler`
+- `first_handler`
+- `second_handler`
+- `direction`
+- `relation_kind`
+- `shared_resources`
+- `anchor_weighted_exec_count`
+- `weighted_exec_count`
 - `count_pct`
-- `opcode_a`
-- `opcode_b`
-- `modrm_shape_a`
-- `modrm_shape_b`
 - `is_candidate`
 - `reject_reason`
 
-This avoids incorrectly selecting combinations that are actually unsuitable for merging by only looking at handler popularity.
+This avoids incorrectly selecting combinations that are merely adjacent in the profile but not semantically coupled.
 
 ## 9.1 Existing Runner / Block Dump Capability Assessment
 
@@ -302,7 +320,7 @@ The current `benchmark/podish_perf/runner.py` now provides a usable end-to-end f
 - Supports batch running samples for fixed workloads
 - Supports `--jit-handler-profile-block-dump`
 - Supports automatically calling `scripts/analyze_blocks.py`
-- Supports `--block-n-gram`
+- Supports block-local adjacency mining over decoded op streams
 - Supports `--aggregate-superopcode-candidates`
 - Supports writing aggregate outputs to `superopcode_candidates.json` and `.md`
 - Each sample saves transcript, summary, and optional guest stats directory
@@ -317,8 +335,8 @@ With the current block-dump pipeline, the exported data is already sufficient to
 
 This means:
 
-- Handler 2-gram statistics do not necessarily require new VM internal instrumentation
-- Can first offline traverse block dump, weighting adjacent handlers within blocks by `block.exec_count`
+- Hot-anchor statistics do not necessarily require new VM internal instrumentation
+- We can first traverse block dump offline, weighting anchor and adjacent-pair observations by `block.exec_count`
 
 ### Current Deficiencies
 
@@ -330,8 +348,8 @@ The old gaps around n-gram analysis and cross-sample aggregation are no longer t
 2. Workload coverage is still narrow by default  
    If based only on CoreMark, it is easy to overfit superopcodes to a single workload.
 
-3. Candidate selection is still mostly frequency-driven  
-   The aggregation pipeline can rank and filter candidates, but it does not yet encode all semantic profitability constraints directly in the runtime.
+3. Candidate selection is still too frequency-driven  
+   The aggregation pipeline should explicitly encode anchor-neighbor def-use affinity, rather than treating every adjacent pair equally.
 
 4. CLI shape is still somewhat historical  
    `--jit-handler-profile-block-dump` remains the main switch, even though the pipeline has grown beyond simple handler profiling.
@@ -362,22 +380,23 @@ This remains a regression guard, not a missing first milestone.
 
 ### Step 2: Continue Extending `analyze_blocks.py`
 
-`scripts/analyze_blocks.py` is already the first working n-gram data source. Future work should build on it rather than replace it.
+`scripts/analyze_blocks.py` is already the first working block-order data source. Future work should build on it rather than replace it.
 
 Recommended new capabilities:
 
 - `--group-by handler`
 - `--group-by guest-opcode`
 - `--weighted-by exec-count`
-- Output for each n-gram:
+- Output for each anchor / adjacent pair:
   - weighted count
   - unique block count
   - sample count
   - context examples
+  - inferred def-use hints
 
 ### Step 3: Keep Improving the Aggregation Script
 
-`benchmark/podish_perf/analyze_superopcode_candidates.py` already exists. The next step is to improve its scoring and filtering.
+`benchmark/podish_perf/analyze_superopcode_candidates.py` already exists. The next step is to score hot-anchor neighborhoods rather than raw N-grams.
 
 Current inputs:
 
@@ -391,9 +410,10 @@ Current outputs:
 
 Next responsibilities to strengthen:
 
-- Cross-sample 2-gram aggregation
+- Cross-sample anchor aggregation
+- Cross-sample adjacent-pair aggregation around anchors
 - Deduplicate runtime address differences
-- Sort by weighted count / coverage
+- Sort by semantic relation first, then weighted count / coverage
 - Mark candidates with reject reasons
 
 ### Step 4: Extend Runner Options
@@ -409,7 +429,8 @@ Current options already include:
 Among these:
 
 - `--jit-handler-profile-block-dump` can be kept for compatibility
-- But long-term it is recommended to converge to more general block stats / n-gram semantics, rather than binding functionality to "handler profile build"
+- `--block-n-gram 2` can remain as the block-window width, but selection should be anchor-driven rather than pure n-gram ranking
+- Long-term it is recommended to converge to more general block stats / adjacency semantics, rather than binding functionality to "handler profile build"
 
 ### Step 5: Expand Workload Coverage
 

@@ -208,6 +208,9 @@ size_t X86_GetJccProfileStats(EmuState* state, X86_JccProfileEntry* buffer, size
 size_t X86_GetBlockCount(EmuState* state);
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
 
+// Returns the base logical opcode id for a dispatch/specialized handler, or -1 if unknown.
+int32_t X86_GetOpIdForHandler(void* handler);
+
 // Returns the base address of the fibercpu library (for symbol resolution)
 void* X86_GetLibAddress();
 

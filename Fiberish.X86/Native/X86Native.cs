@@ -263,6 +263,10 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockList")]
     public static partial int GetBlockList(IntPtr state, IntPtr* buffer, int maxCount);
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetOpIdForHandler")]
+    [SuppressGCTransition]
+    public static partial int GetOpIdForHandler(IntPtr handler);
+
     [LibraryImport(LibName, EntryPoint = "X86_GetLibAddress")]
     public static partial IntPtr GetLibAddress();
 
@@ -288,6 +292,7 @@ public unsafe partial class X86Native
         public uint start_eip;
         public uint is_valid;
         public IntPtr entry;
+        public IntPtr jit_code;
         public uint inst_count;
         public uint end_eip;
         public uint slot_count;

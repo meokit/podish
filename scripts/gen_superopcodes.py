@@ -39,11 +39,11 @@ def load_candidates(path: Path, top: int) -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
     for candidate in data.get("candidates", []):
-        ngram = candidate.get("ngram") or []
-        if len(ngram) != 2:
+        pair = candidate.get("pair") or candidate.get("ngram") or []
+        if len(pair) != 2:
             continue
-        op0 = canonical_logic_name(str(ngram[0]))
-        op1 = canonical_logic_name(str(ngram[1]))
+        op0 = canonical_logic_name(str(pair[0]))
+        op1 = canonical_logic_name(str(pair[1]))
         if not op0 or not op1:
             continue
         key = (op0, op1)
@@ -55,6 +55,9 @@ def load_candidates(path: Path, top: int) -> list[dict[str, object]]:
             "op1": op1,
             "weighted_exec_count": int(candidate.get("weighted_exec_count", 0)),
             "occurrences": int(candidate.get("occurrences", 0)),
+            "relation_kind": str(candidate.get("relation_kind", "")),
+            "anchor_display": str(candidate.get("anchor_display", "")),
+            "direction": str(candidate.get("direction", "")),
         })
         if len(out) >= top:
             break
@@ -70,7 +73,10 @@ def emit_handler(index: int, candidate: dict[str, object]) -> str:
     )
     op0_qualified = op0_name
     op1_qualified = op1_name
-    return f"""// weighted_exec_count={candidate["weighted_exec_count"]} occurrences={candidate["occurrences"]}
+    relation_kind = str(candidate.get("relation_kind", ""))
+    anchor_display = str(candidate.get("anchor_display", ""))
+    direction = str(candidate.get("direction", ""))
+    return f"""// weighted_exec_count={candidate["weighted_exec_count"]} occurrences={candidate["occurrences"]} relation={relation_kind} anchor={anchor_display} direction={direction}
 ATTR_PRESERVE_NONE int64_t {handler_name}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {{
     auto flow0 = {op0_qualified}(state, op, &utlb, GetImm(op), &branch, flags_cache);
