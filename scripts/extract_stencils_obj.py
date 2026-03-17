@@ -162,7 +162,7 @@ def extract_stencils(obj_path, out_path, usage_path=None):
     except:
         reloc_res = subprocess.run(["objdump", "-r", obj_path], capture_output=True, text=True)
 
-    symbol_regex = re.compile(r'fiberish::jit::ExtractKernel<(.*)>')
+    symbol_regex = re.compile(r'fiberish::jit::(?:ExtractKernel|JitDispatchKernel)<(.*)>')
     op_regex = re.compile(r'fiberish::op::(Op[a-zA-Z0-9_]+)')
     inst_regex = re.compile(r'^\s*([0-9a-fA-F]+):\s+([0-9a-fA-F]{8})')
 
@@ -308,8 +308,14 @@ def extract_stencils(obj_path, out_path, usage_path=None):
             for i in range(len(branch_targets)):
                 f.write(f"    reinterpret_cast<const void*>(&JitBranchRelocTarget_{i}),\n")
             f.write("};\n\n")
+            f.write("const char* const branch_reloc_target_names[] = {\n")
+            for symbol in branch_targets:
+                escaped = symbol.replace("\\", "\\\\").replace("\"", "\\\"")
+                f.write(f"    \"{escaped}\",\n")
+            f.write("};\n\n")
         else:
             f.write("const void* const* branch_reloc_targets = nullptr;\n\n")
+            f.write("const char* const* branch_reloc_target_names = nullptr;\n\n")
         for name in sorted(stencils.keys()):
             data = stencils[name]
             f.write(f"const uint8_t stencil_bytes_{name}[] = {{ " + ", ".join([f"0x{b:02x}" for b in data['bytes']]) + " };\n")
@@ -334,6 +340,10 @@ def extract_stencils(obj_path, out_path, usage_path=None):
             r_ptr = f"stencil_branch_relocs_{name}" if data['branch_relocs'] else "nullptr"
             f.write(f"    {{ stencil_bytes_{name}, sizeof(stencil_bytes_{name}), {p_ptr}, {len(data['patches'])}, {r_ptr}, {len(data['branch_relocs'])}, {i}, 0 }}, // {name}\n")
         f.write("};\n\nstruct HandlerStencilMapEntry { ::fiberish::HandlerFunc target; uint16_t stencil_id; };\n")
+        f.write("const char* const stencil_names[] = {\n")
+        for name in sorted(stencils.keys()):
+            f.write(f"    \"{name}\",\n")
+        f.write("};\n")
         f.write("const HandlerStencilMapEntry handler_to_stencil[] = {\n")
         for i, name in enumerate(sorted(stencils.keys())):
             f.write(f"    {{ JitStencilHandler_{name}, {i} }},\n")

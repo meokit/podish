@@ -37,6 +37,12 @@ using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, Decod
 
 namespace jit {
 
+ATTR_PRESERVE_NONE int64_t JitContinueTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                             mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
+ATTR_PRESERVE_NONE int64_t JitContinueSkipOneTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                    int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                    uint64_t flags_cache);
+
 enum class PatchKind : uint8_t {
     OpQword64,
 };

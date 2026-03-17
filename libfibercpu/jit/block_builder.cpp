@@ -22,6 +22,7 @@ constexpr uint32_t kBranchOpcodeMask = 0xFC000000;
 constexpr uint32_t kBranchLinkOpcode = 0x94000000;
 constexpr uint32_t kCallVeneerSize = 8 * sizeof(uint32_t);
 constexpr uint32_t kJumpVeneerSize = 6 * sizeof(uint32_t);
+constexpr uint32_t kHandlerTailVeneerSize = 10 * sizeof(uint32_t);
 
 bool JitDebugEnabled() {
     static bool enabled = [] {
@@ -40,6 +41,77 @@ void JitDebugLog(const char* fmt, ...) {
     std::vfprintf(fp, fmt, args);
     va_end(args);
     std::fclose(fp);
+}
+
+const char* JitDumpDir() {
+    static const char* dir = std::getenv("FIBERCPU_JIT_DUMP_DIR");
+    return (dir && dir[0] != '\0') ? dir : nullptr;
+}
+
+bool ParseHexOrDec(const char* text, uint32_t* out) {
+    if (!text || !text[0]) return false;
+    char* end = nullptr;
+    unsigned long value = std::strtoul(text, &end, 0);
+    if (end == text || *end != '\0') return false;
+    *out = static_cast<uint32_t>(value);
+    return true;
+}
+
+bool ShouldDumpBlock(uint32_t start_eip) {
+    const char* filter = std::getenv("FIBERCPU_JIT_DUMP_EIP");
+    if (!filter || filter[0] == '\0') return true;
+    uint32_t expected = 0;
+    return ParseHexOrDec(filter, &expected) && expected == start_eip;
+}
+
+bool IsContinueTargetName(const char* target_name) {
+    return target_name && std::strstr(target_name, "JitContinueTarget") != nullptr &&
+           std::strstr(target_name, "JitContinueSkipOneTarget") == nullptr;
+}
+
+bool CanTrimTrailingContinue(const StencilDesc& desc, uint32_t inst_index, uint32_t inst_count) {
+    if (inst_index + 1 >= inst_count) return false;
+    if (desc.branch_reloc_count != 1) return false;
+    const BranchRelocDesc& reloc = desc.branch_relocs[0];
+    if (reloc.offset + sizeof(uint32_t) != desc.code_size) return false;
+    return IsContinueTargetName(generated::branch_reloc_target_names[reloc.target_id]);
+}
+
+struct VeneerKey {
+    uint64_t target_addr;
+    uint64_t aux_addr;
+    uint8_t kind;
+
+    bool operator==(const VeneerKey& other) const = default;
+};
+
+struct VeneerKeyHash {
+    size_t operator()(const VeneerKey& key) const {
+        uint64_t hash = key.target_addr;
+        hash ^= key.aux_addr + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+        hash ^= static_cast<uint64_t>(key.kind) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+        return static_cast<size_t>(hash);
+    }
+};
+
+void DumpJitBlock(uint32_t start_eip, const uint8_t* code, size_t size) {
+    const char* dump_dir = JitDumpDir();
+    if (!dump_dir || !ShouldDumpBlock(start_eip)) return;
+
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/jit_%08x.bin", dump_dir, start_eip);
+    FILE* fp = std::fopen(path, "wb");
+    if (!fp) {
+        if (JitDebugEnabled()) {
+            JitDebugLog("[jit] dump failed start=%08x path=%s\n", start_eip, path);
+        }
+        return;
+    }
+    std::fwrite(code, 1, size, fp);
+    std::fclose(fp);
+    if (JitDebugEnabled()) {
+        JitDebugLog("[jit] dumped block start=%08x path=%s size=%zu\n", start_eip, path, size);
+    }
 }
 
 uint64_t GetDecodedOpQword(const DecodedOp* op, uint16_t qword_index) {
@@ -91,7 +163,30 @@ void EmitJumpVeneer(uint32_t* veneer_ptr, uint64_t target_addr) {
     PatchMovImm64(veneer_ptr, target_addr);
 }
 
+void EmitHandlerTailVeneer(uint32_t* veneer_ptr, uint64_t op_addr, uint64_t handler_addr) {
+    veneer_ptr[0] = 0xD2800001;  // movz x1, #0
+    veneer_ptr[1] = 0xF2A00001;  // movk x1, #0, lsl #16
+    veneer_ptr[2] = 0xF2C00001;  // movk x1, #0, lsl #32
+    veneer_ptr[3] = 0xF2E00001;  // movk x1, #0, lsl #48
+    veneer_ptr[4] = 0xD2800010;  // movz x16, #0
+    veneer_ptr[5] = 0xF2A00010;  // movk x16, #0, lsl #16
+    veneer_ptr[6] = 0xF2C00010;  // movk x16, #0, lsl #32
+    veneer_ptr[7] = 0xF2E00010;  // movk x16, #0, lsl #48
+    veneer_ptr[8] = 0xD61F0200;  // br x16
+    veneer_ptr[9] = 0xD503201F;  // nop
+    PatchMovImm64(veneer_ptr, op_addr);
+    PatchMovImm64(veneer_ptr + 4, handler_addr);
+}
+
 }  // namespace
+
+ATTR_PRESERVE_NONE int64_t JitContinueTarget(EmuState*, DecodedOp*, int64_t, mem::MicroTLB, uint32_t, uint64_t) {
+    std::abort();
+}
+
+ATTR_PRESERVE_NONE int64_t JitContinueSkipOneTarget(EmuState*, DecodedOp*, int64_t, mem::MicroTLB, uint32_t, uint64_t) {
+    std::abort();
+}
 
 BlockBuilder& BlockBuilder::Get() {
     static BlockBuilder instance;
@@ -140,7 +235,9 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     size_t estimated_size = 0;
     size_t branch_reloc_count = 0;
     std::vector<uint16_t> stencil_ids;
+    std::vector<uint32_t> emitted_sizes;
     stencil_ids.reserve(bb->inst_count);
+    emitted_sizes.reserve(bb->inst_count);
 
     for (uint32_t i = 0; i < bb->inst_count; ++i) {
         DecodedOp* op = bb->FirstOp() + i;
@@ -154,19 +251,28 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
         }
 
         if (JitDebugEnabled()) {
-            JitDebugLog("[jit]   op[%u] handler=%p sid=%u code=%u patches=%u branch_relocs=%u\n", i,
-                        reinterpret_cast<void*>(op->handler), sid, generated::stencils[sid].code_size,
-                        generated::stencils[sid].patch_count, generated::stencils[sid].branch_reloc_count);
+            JitDebugLog("[jit]   op[%u] handler=%p sid=%u name=%s code=%u patches=%u branch_relocs=%u\n", i,
+                        reinterpret_cast<void*>(op->handler), sid, generated::stencil_names[sid],
+                        generated::stencils[sid].code_size, generated::stencils[sid].patch_count,
+                        generated::stencils[sid].branch_reloc_count);
         }
 
         stencil_ids.push_back(sid);
-        estimated_size += generated::stencils[sid].code_size;
-        branch_reloc_count += generated::stencils[sid].branch_reloc_count;
+        const StencilDesc& desc = generated::stencils[sid];
+        uint32_t emitted_size = desc.code_size;
+        uint16_t effective_reloc_count = desc.branch_reloc_count;
+        if (CanTrimTrailingContinue(desc, i, bb->inst_count)) {
+            emitted_size -= sizeof(uint32_t);
+            effective_reloc_count -= 1;
+        }
+        emitted_sizes.push_back(emitted_size);
+        estimated_size += emitted_size;
+        branch_reloc_count += effective_reloc_count;
     }
 
     // Add extra for trampoline (ret)
     estimated_size += 32;
-    estimated_size += branch_reloc_count * kCallVeneerSize;
+    estimated_size += branch_reloc_count * kHandlerTailVeneerSize;
 
     if (m_buffer_offset + estimated_size > m_buffer_size) {
         if (JitDebugEnabled()) {
@@ -180,20 +286,26 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     pthread_jit_write_protect_np(0);
 
     uint8_t* start_ptr = (uint8_t*)m_code_buffer + m_buffer_offset;
-    uint8_t* current_ptr = start_ptr;
-    uint8_t* veneer_ptr = start_ptr;
+    std::vector<uint8_t*> stencil_starts(bb->inst_count);
+    uint8_t* layout_ptr = start_ptr;
     for (uint32_t i = 0; i < bb->inst_count; ++i) {
-        veneer_ptr += generated::stencils[stencil_ids[i]].code_size;
+        stencil_starts[i] = layout_ptr;
+        layout_ptr += emitted_sizes[i];
     }
+    uint8_t* current_ptr = start_ptr;
+    uint8_t* veneer_ptr = layout_ptr;
     veneer_ptr += sizeof(uint32_t);
+    ankerl::unordered_dense::map<VeneerKey, uint8_t*, VeneerKeyHash> veneer_cache;
 
     for (uint32_t i = 0; i < bb->inst_count; ++i) {
         uint16_t sid = stencil_ids[i];
         const StencilDesc& desc = generated::stencils[sid];
         DecodedOp* op = bb->FirstOp() + i;
+        const bool trim_trailing_continue = CanTrimTrailingContinue(desc, i, bb->inst_count);
+        const uint32_t copy_size = emitted_sizes[i];
 
         // Copy code
-        std::memcpy(current_ptr, desc.code, desc.code_size);
+        std::memcpy(current_ptr, desc.code, copy_size);
 
         // Apply Patches
         for (uint16_t p = 0; p < desc.patch_count; ++p) {
@@ -208,21 +320,60 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
 
         for (uint16_t r = 0; r < desc.branch_reloc_count; ++r) {
             const BranchRelocDesc& reloc = desc.branch_relocs[r];
-            uint32_t* branch_ptr = reinterpret_cast<uint32_t*>(current_ptr + reloc.offset);
-            uint8_t* stub_start = veneer_ptr;
-            uint32_t* stub_ptr = reinterpret_cast<uint32_t*>(veneer_ptr);
-            uint64_t target_addr = reinterpret_cast<uint64_t>(generated::branch_reloc_targets[reloc.target_id]);
-            if ((*branch_ptr & kBranchOpcodeMask) == kBranchLinkOpcode) {
-                EmitCallVeneer(stub_ptr, target_addr);
-                veneer_ptr += kCallVeneerSize;
-            } else {
-                EmitJumpVeneer(stub_ptr, target_addr);
-                veneer_ptr += kJumpVeneerSize;
+            if (trim_trailing_continue && reloc.offset + sizeof(uint32_t) == desc.code_size) {
+                continue;
             }
-            PatchBranch26(branch_ptr, stub_start);
+            uint32_t* branch_ptr = reinterpret_cast<uint32_t*>(current_ptr + reloc.offset);
+            uint64_t target_addr = reinterpret_cast<uint64_t>(generated::branch_reloc_targets[reloc.target_id]);
+            const char* target_name = generated::branch_reloc_target_names[reloc.target_id];
+
+            if (target_name && (std::strstr(target_name, "JitContinueTarget") ||
+                                std::strstr(target_name, "JitContinueSkipOneTarget"))) {
+                const uint32_t skip = (std::strstr(target_name, "JitContinueSkipOneTarget") != nullptr) ? 2u : 1u;
+                const uint32_t target_index = i + skip;
+                if (target_index < bb->inst_count) {
+                    PatchBranch26(branch_ptr, stencil_starts[target_index]);
+                } else {
+                    DecodedOp* target_op = bb->FirstOp() + target_index;
+                    VeneerKey key{
+                        .target_addr = reinterpret_cast<uint64_t>(target_op->handler),
+                        .aux_addr = reinterpret_cast<uint64_t>(target_op),
+                        .kind = 2,
+                    };
+                    uint8_t*& stub_start = veneer_cache[key];
+                    if (stub_start == nullptr) {
+                        stub_start = veneer_ptr;
+                        uint32_t* stub_ptr = reinterpret_cast<uint32_t*>(veneer_ptr);
+                        EmitHandlerTailVeneer(stub_ptr, reinterpret_cast<uint64_t>(target_op),
+                                              reinterpret_cast<uint64_t>(target_op->handler));
+                        veneer_ptr += kHandlerTailVeneerSize;
+                    }
+                    PatchBranch26(branch_ptr, stub_start);
+                }
+            } else {
+                const bool is_call = ((*branch_ptr & kBranchOpcodeMask) == kBranchLinkOpcode);
+                VeneerKey key{
+                    .target_addr = target_addr,
+                    .aux_addr = 0,
+                    .kind = static_cast<uint8_t>(is_call ? 0 : 1),
+                };
+                uint8_t*& stub_start = veneer_cache[key];
+                if (stub_start == nullptr) {
+                    stub_start = veneer_ptr;
+                    uint32_t* stub_ptr = reinterpret_cast<uint32_t*>(veneer_ptr);
+                    if (is_call) {
+                        EmitCallVeneer(stub_ptr, target_addr);
+                        veneer_ptr += kCallVeneerSize;
+                    } else {
+                        EmitJumpVeneer(stub_ptr, target_addr);
+                        veneer_ptr += kJumpVeneerSize;
+                    }
+                }
+                PatchBranch26(branch_ptr, stub_start);
+            }
         }
 
-        current_ptr += desc.code_size;
+        current_ptr += copy_size;
     }
 
     // Add termination (ret)
@@ -243,6 +394,7 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     jcb->code_size = current_ptr - start_ptr;
     jcb->owner = bb;
     bb->jit_code = start_ptr;
+    DumpJitBlock(bb->chain.start_eip, start_ptr, jcb->code_size);
 
     if (JitDebugEnabled()) {
         JitDebugLog("[jit] compiled block start=%08x code=%p size=%zu branch_relocs=%zu\n", bb->chain.start_eip,
