@@ -798,16 +798,21 @@ finalize:
 
     // Try JIT compilation
     if constexpr (true) {
+        state->block_stats.jit_compile_attempts++;
         auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
         if (jcb) {
-            block->entry = reinterpret_cast<HandlerFunc>(block->jit_code);
+            state->block_stats.jit_compile_success++;
+            block->entry = reinterpret_cast<HandlerFunc>(jcb->entry);
             if (JitDebugEnabled()) {
                 JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->chain.start_eip,
-                            reinterpret_cast<void*>(block->entry), block->jit_code, jcb->code_size);
+                            reinterpret_cast<void*>(block->entry), jcb->entry, jcb->code_size);
             }
         } else if (JitDebugEnabled()) {
+            state->block_stats.jit_compile_failure++;
             JitDebugLog("[jit] fallback block start=%08x entry=%p\n", block->chain.start_eip,
                         reinterpret_cast<void*>(block->entry));
+        } else {
+            state->block_stats.jit_compile_failure++;
         }
     }
 

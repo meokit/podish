@@ -343,5 +343,8 @@ public unsafe partial class X86Native
         public ulong BlockConcatRejectSizeLimit;
         public ulong BlockConcatRejectLoop;
         public ulong BlockConcatRejectTargetMissing;
+        public ulong JitCompileAttempts;
+        public ulong JitCompileSuccess;
+        public ulong JitCompileFailure;
     }
 }

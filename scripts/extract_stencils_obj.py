@@ -209,16 +209,15 @@ def decode_load_store_unsigned(inst):
     if v == 0:
         access_size = 1 << size_field
         return {"rn": rn, "rt": rt, "shift": size_field, "access_size": access_size, "is_vector": False}
-    lane_bytes = 1 << size_field
-    if opc == 0:
-        access_size = lane_bytes
-    elif opc == 1:
-        access_size = lane_bytes * 2
-    elif opc == 2:
-        access_size = lane_bytes * 4
-    else:
-        access_size = lane_bytes * 8
-    shift = access_size.bit_length() - 1
+    # For SIMD&FP unsigned-offset loads/stores, the immediate is scaled by
+    # the datum size encoded by opc:size. Examples:
+    #   ldr b  -> scale 0
+    #   ldr h  -> scale 1
+    #   ldr s  -> scale 2
+    #   ldr d  -> scale 3
+    #   ldr q  -> scale 4
+    shift = (((opc >> 1) & 0x1) << 2) | size_field
+    access_size = 1 << shift
     return {"rn": rn, "rt": rt, "shift": shift, "access_size": access_size, "is_vector": True}
 
 def classify_addr_reloc_pair(page21_type, pageoff_type, adrp_inst, pageoff_inst):
@@ -435,7 +434,7 @@ def extract_stencils(obj_path, out_path, usage_path=None):
         return target_id
 
     branch_relocs = []
-    addr_reloc_candidates = defaultdict(dict)
+    addr_reloc_candidates = defaultdict(lambda: defaultdict(list))
     for reloc in relocations:
         reloc_offset = reloc["offset"]
         stencil_name, data = find_stencil_for_offset(reloc_offset)
@@ -465,37 +464,45 @@ def extract_stencils(obj_path, out_path, usage_path=None):
             "ARM64_RELOC_GOT_LOAD_PAGEOFF12",
         }:
             candidate = addr_reloc_candidates[(stencil_name, symbol)]
-            candidate[reloc_type] = reloc_offset - start
+            candidate[reloc_type].append(reloc_offset - start)
             continue
 
     for (stencil_name, symbol), candidate in sorted(addr_reloc_candidates.items()):
         data = stencils[stencil_name]
         start = data["start"]
-        if "ARM64_RELOC_PAGE21" in candidate and "ARM64_RELOC_PAGEOFF12" in candidate:
-            page21_type = "ARM64_RELOC_PAGE21"
-            pageoff_type = "ARM64_RELOC_PAGEOFF12"
-        elif "ARM64_RELOC_GOT_LOAD_PAGE21" in candidate and "ARM64_RELOC_GOT_LOAD_PAGEOFF12" in candidate:
-            page21_type = "ARM64_RELOC_GOT_LOAD_PAGE21"
-            pageoff_type = "ARM64_RELOC_GOT_LOAD_PAGEOFF12"
-        else:
-            missing = sorted(set(candidate.keys()) ^ {
-                "ARM64_RELOC_PAGE21", "ARM64_RELOC_PAGEOFF12"
-            })
-            raise RuntimeError(f"Incomplete address relocation pair for {stencil_name}:{symbol}: {missing}")
-        page21_offset = candidate[page21_type]
-        pageoff_offset = candidate[pageoff_type]
-        adrp_inst = int.from_bytes(data["bytes"][page21_offset:page21_offset + 4], "little")
-        pageoff_inst = int.from_bytes(data["bytes"][pageoff_offset:pageoff_offset + 4], "little")
-        kind, shift = classify_addr_reloc_pair(page21_type, pageoff_type, adrp_inst, pageoff_inst)
-        target_id = intern_addr_target(symbol)
-        data["addr_relocs"].append({
-            "page21_offset": page21_offset,
-            "pageoff12_offset": pageoff_offset,
-            "target_id": target_id,
-            "kind": kind,
-            "shift": shift,
-        })
-        expected_addr_relocs[stencil_name] += 1
+        pair_kinds = [
+            ("ARM64_RELOC_PAGE21", "ARM64_RELOC_PAGEOFF12"),
+            ("ARM64_RELOC_GOT_LOAD_PAGE21", "ARM64_RELOC_GOT_LOAD_PAGEOFF12"),
+        ]
+        matched_any = False
+        for page21_type, pageoff_type in pair_kinds:
+            page21_offsets = sorted(candidate.get(page21_type, []))
+            pageoff_offsets = sorted(candidate.get(pageoff_type, []))
+            if not page21_offsets and not pageoff_offsets:
+                continue
+            matched_any = True
+            if len(page21_offsets) != len(pageoff_offsets):
+                raise RuntimeError(
+                    f"Mismatched address relocation pair counts for {stencil_name}:{symbol}: "
+                    f"{page21_type}={len(page21_offsets)} {pageoff_type}={len(pageoff_offsets)}"
+                )
+            for page21_offset, pageoff_offset in zip(page21_offsets, pageoff_offsets):
+                adrp_inst = int.from_bytes(data["bytes"][page21_offset:page21_offset + 4], "little")
+                pageoff_inst = int.from_bytes(data["bytes"][pageoff_offset:pageoff_offset + 4], "little")
+                kind, shift = classify_addr_reloc_pair(page21_type, pageoff_type, adrp_inst, pageoff_inst)
+                target_id = intern_addr_target(symbol)
+                data["addr_relocs"].append({
+                    "page21_offset": page21_offset,
+                    "pageoff12_offset": pageoff_offset,
+                    "target_id": target_id,
+                    "kind": kind,
+                    "shift": shift,
+                })
+                expected_addr_relocs[stencil_name] += 1
+        if not matched_any:
+            raise RuntimeError(
+                f"Incomplete address relocation pair for {stencil_name}:{symbol}: {sorted(candidate.keys())}"
+            )
 
     if skipped_relocs:
         print(f"Skipped {skipped_relocs} branch relocations outside extracted stencil bodies.")

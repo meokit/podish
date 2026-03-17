@@ -47,6 +47,9 @@
 namespace fiberish {
 struct EmuState;
 struct DecodedOp;
+namespace jit {
+struct JitCodeBlock;
+}
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -286,7 +289,7 @@ struct BasicBlockChainMatch {
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain;
     HandlerFunc entry = nullptr;
-    void* jit_code = nullptr;
+    jit::JitCodeBlock* jit_code = nullptr;
     uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     uint32_t end_eip;
     uint32_t slot_count;           // Total decoded ops including sentinel

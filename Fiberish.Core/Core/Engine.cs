@@ -753,7 +753,10 @@ public class Engine : IDisposable
             native.BlockConcatRejectCrossPage,
             native.BlockConcatRejectSizeLimit,
             native.BlockConcatRejectLoop,
-            native.BlockConcatRejectTargetMissing);
+            native.BlockConcatRejectTargetMissing,
+            native.JitCompileAttempts,
+            native.JitCompileSuccess,
+            native.JitCompileFailure);
     }
 
     public unsafe int GetBlockCount()
@@ -899,4 +902,7 @@ public readonly record struct BlockStatsSnapshot(
     ulong BlockConcatRejectCrossPage,
     ulong BlockConcatRejectSizeLimit,
     ulong BlockConcatRejectLoop,
-    ulong BlockConcatRejectTargetMissing);
+    ulong BlockConcatRejectTargetMissing,
+    ulong JitCompileAttempts,
+    ulong JitCompileSuccess,
+    ulong JitCompileFailure);

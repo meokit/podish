@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ankerl/unordered_dense.h>
+#include <memory_resource>
 #include <vector>
 #include "stencil.h"
 
@@ -33,7 +34,7 @@ private:
 
     void* m_code_buffer;
     size_t m_buffer_size;
-    size_t m_buffer_offset;
+    std::pmr::memory_resource* m_code_pool;
 
     ankerl::unordered_dense::map<uintptr_t, uint16_t> m_handler_map;
     bool m_initialized = false;

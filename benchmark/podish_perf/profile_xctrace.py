@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +53,22 @@ class SymbolEntry:
     mangled: str
     demangled: str
     next_address: str | None = None
+
+
+@dataclass
+class JitOpEntry:
+    index: int
+    name: str
+    runtime_start: int
+    offset: int
+
+
+@dataclass
+class JitBlockEntry:
+    guest_block_start_eip: int
+    runtime_start: int
+    code_size: int
+    ops: list[JitOpEntry]
 
 
 def repo_root() -> Path:
@@ -141,14 +158,30 @@ def shell_join(parts: Iterable[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
-def run_checked(cmd: list[str], cwd: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def run_checked(
+    cmd: list[str],
+    cwd: Path | None = None,
+    capture: bool = False,
+    ok_exit_codes: tuple[int, ...] = (0,),
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
-        check=True,
         text=True,
         capture_output=capture,
     )
+    if result.returncode not in ok_exit_codes:
+        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
+    return result
+
+
+def run_xctrace_record(cmd: list[str], trace_path: Path, env: dict[str, str] | None = None) -> None:
+    result = subprocess.run(cmd, text=True, capture_output=False, env=env)
+    if result.returncode == 0:
+        return
+    if trace_path.exists():
+        return
+    raise subprocess.CalledProcessError(result.returncode, cmd)
 
 
 def make_output_dir(base: Path, name: str) -> Path:
@@ -158,6 +191,13 @@ def make_output_dir(base: Path, name: str) -> Path:
 
 
 def make_unique_binary(src_binary: Path, out_dir: Path, renamed_binary: str) -> Path:
+    for sibling in src_binary.parent.iterdir():
+        if not sibling.is_file():
+            continue
+        if sibling.name == src_binary.name:
+            continue
+        shutil.copy2(sibling, out_dir / sibling.name)
+
     dst = out_dir / renamed_binary
     shutil.copy2(src_binary, dst)
     dst.chmod(dst.stat().st_mode | 0o111)
@@ -165,7 +205,12 @@ def make_unique_binary(src_binary: Path, out_dir: Path, renamed_binary: str) -> 
 
 
 def build_record_command(
-    binary: Path, rootfs: Path, time_limit: int, output_trace: Path, iterations: int, bench_case: str
+    binary: Path,
+    rootfs: Path,
+    time_limit: int,
+    output_trace: Path,
+    iterations: int,
+    bench_case: str,
 ) -> list[str]:
     guest_cmd = default_guest_command(bench_case, iterations)
     return [
@@ -230,7 +275,70 @@ def element_text(element: ET.Element | None, id_index: dict[str, ET.Element]) ->
     return resolved.text
 
 
-def parse_time_profile(xml_path: Path, warmup_seconds: float) -> tuple[list[Hotspot], ReportMetadata]:
+def parse_hex_symbol(symbol: str) -> int | None:
+    if not symbol.startswith("0x"):
+        return None
+    try:
+        return int(symbol, 16)
+    except ValueError:
+        return None
+
+
+def load_jit_profile_maps(map_dir: Path | None) -> list[JitBlockEntry]:
+    if map_dir is None or not map_dir.exists():
+        return []
+    entries: list[JitBlockEntry] = []
+    for path in sorted(map_dir.glob("jit_*.map.json")):
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        ops = [
+            JitOpEntry(
+                index=int(op["index"]),
+                name=str(op["name"]),
+                runtime_start=int(op["runtime_start"]),
+                offset=int(op["offset"]),
+            )
+            for op in obj.get("ops", [])
+        ]
+        entries.append(
+            JitBlockEntry(
+                guest_block_start_eip=int(obj["guest_block_start_eip"]),
+                runtime_start=int(obj["runtime_start"]),
+                code_size=int(obj["code_size"]),
+                ops=ops,
+            )
+        )
+    entries.sort(key=lambda item: item.runtime_start)
+    return entries
+
+
+def annotate_jit_symbol(symbol: str, jit_maps: list[JitBlockEntry]) -> tuple[str, str | None]:
+    addr = parse_hex_symbol(symbol)
+    if addr is None:
+        return symbol, None
+    for block in jit_maps:
+        if not (block.runtime_start <= addr < block.runtime_start + block.code_size):
+            continue
+        block_off = addr - block.runtime_start
+        current_op: JitOpEntry | None = None
+        for op in block.ops:
+            if op.runtime_start <= addr:
+                current_op = op
+            else:
+                break
+        if current_op is None:
+            return f"jit:block@{block.guest_block_start_eip:08x}+0x{block_off:x}", "jit"
+        op_off = addr - current_op.runtime_start
+        return (
+            f"jit:block@{block.guest_block_start_eip:08x}+0x{block_off:x} "
+            f"op[{current_op.index}] {current_op.name}+0x{op_off:x}",
+            "jit",
+        )
+    return symbol, None
+
+
+def parse_time_profile(
+    xml_path: Path, warmup_seconds: float, jit_maps: list[JitBlockEntry] | None = None
+) -> tuple[list[Hotspot], ReportMetadata]:
     root = ET.fromstring(xml_path.read_text(encoding="utf-8"))
     id_index = build_id_index(root)
     rows = root.findall(".//row")
@@ -239,13 +347,30 @@ def parse_time_profile(xml_path: Path, warmup_seconds: float) -> tuple[list[Hots
     total_rows = 0
     kept_rows = 0
     warmup_ns = int(warmup_seconds * 1_000_000_000)
+    jit_maps = jit_maps or []
+
+    def first_interesting_frame(backtrace: ET.Element | None) -> ET.Element | None:
+        if backtrace is None:
+            return None
+        frames = backtrace.findall("frame")
+        if not frames:
+            return None
+        resolved_frames = [resolve_ref(frame, id_index) for frame in frames]
+        resolved_frames = [frame for frame in resolved_frames if frame is not None]
+        if not resolved_frames:
+            return None
+        for frame in resolved_frames:
+            name = frame.attrib.get("name", "")
+            if name and name != "<deduplicated_symbol>":
+                return frame
+        return resolved_frames[0]
 
     for row in rows:
         total_rows += 1
         sample_time = element_text(row.find("sample-time"), id_index)
         weight = element_text(row.find("weight"), id_index)
         backtrace = resolve_ref(row.find("backtrace"), id_index)
-        frame = resolve_ref(backtrace.find("frame") if backtrace is not None else None, id_index)
+        frame = first_interesting_frame(backtrace)
         if sample_time is None or weight is None or frame is None:
             continue
         if int(sample_time) < warmup_ns:
@@ -253,6 +378,10 @@ def parse_time_profile(xml_path: Path, warmup_seconds: float) -> tuple[list[Hots
         symbol = frame.attrib.get("name", "<unknown>")
         binary = resolve_ref(frame.find("binary"), id_index)
         binary_name = binary.attrib.get("name") if binary is not None else None
+        if binary_name is None:
+            symbol, annotated_binary = annotate_jit_symbol(symbol, jit_maps)
+            if annotated_binary is not None:
+                binary_name = annotated_binary
         key = (symbol, binary_name)
         aggregated[key] += int(weight) / 1_000_000.0
         counts[key] += 1
@@ -448,9 +577,14 @@ def cmd_record(args: argparse.Namespace) -> int:
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
     trace_path = out_dir / f"{args.name}.trace"
+    if args.jit_map_dir:
+        args.jit_map_dir.mkdir(parents=True, exist_ok=True)
     cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations, args.bench_case)
     (out_dir / "record-command.txt").write_text(shell_join(cmd) + "\n", encoding="utf-8")
-    run_checked(cmd)
+    env = os.environ.copy()
+    if args.jit_map_dir:
+        env["FIBERCPU_JIT_PROFILE_MAP_DIR"] = str(args.jit_map_dir.resolve())
+    run_xctrace_record(cmd, trace_path, env=env)
     print(trace_path)
     return 0
 
@@ -461,7 +595,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     xml_path = out_dir / f"{args.name}.xml"
     export_time_profile(trace_path, xml_path)
-    hotspots, metadata = parse_time_profile(xml_path, args.warmup_seconds)
+    jit_maps = load_jit_profile_maps(args.jit_map_dir.resolve()) if args.jit_map_dir else []
+    hotspots, metadata = parse_time_profile(xml_path, args.warmup_seconds, jit_maps)
     hotspots = hotspots[: args.top]
     top_symbols = [hotspot.symbol for hotspot in hotspots[: args.disasm_top]]
     disassembly = disassemble_symbols(binary_path, top_symbols, out_dir) if args.disasm_top > 0 else {}
@@ -489,13 +624,19 @@ def cmd_record_and_analyze(args: argparse.Namespace) -> int:
     out_dir = make_output_dir(args.output_dir.resolve(), args.name)
     run_binary = make_unique_binary(src_binary, out_dir, args.renamed_binary)
     trace_path = out_dir / f"{args.name}.trace"
+    if args.jit_map_dir:
+        args.jit_map_dir.mkdir(parents=True, exist_ok=True)
     cmd = build_record_command(run_binary, rootfs, args.time_limit, trace_path, args.iterations, args.bench_case)
     (out_dir / "record-command.txt").write_text(shell_join(cmd) + "\n", encoding="utf-8")
-    run_checked(cmd)
+    env = os.environ.copy()
+    if args.jit_map_dir:
+        env["FIBERCPU_JIT_PROFILE_MAP_DIR"] = str(args.jit_map_dir.resolve())
+    run_xctrace_record(cmd, trace_path, env=env)
 
     xml_path = out_dir / f"{args.name}.xml"
     export_time_profile(trace_path, xml_path)
-    hotspots, metadata = parse_time_profile(xml_path, args.warmup_seconds)
+    jit_maps = load_jit_profile_maps(args.jit_map_dir.resolve()) if args.jit_map_dir else []
+    hotspots, metadata = parse_time_profile(xml_path, args.warmup_seconds, jit_maps)
     hotspots = hotspots[: args.top]
     top_symbols = [hotspot.symbol for hotspot in hotspots[: args.disasm_top]]
     disassembly = disassemble_symbols(run_binary, top_symbols, out_dir) if args.disasm_top > 0 else {}
@@ -533,6 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--name", default=DEFAULT_RECORD_NAME)
         subparser.add_argument("--time-limit", type=int, default=DEFAULT_TIME_LIMIT)
         subparser.add_argument("--iterations", type=int, default=30000)
+        subparser.add_argument("--jit-map-dir", type=Path, help="Directory where runtime JIT block maps will be written")
         subparser.add_argument(
             "--bench-case",
             choices=("run", "compile", "compress", "gcc_compile"),
@@ -549,6 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--warmup-seconds", type=float, default=DEFAULT_WARMUP_SECONDS)
         subparser.add_argument("--top", type=int, default=DEFAULT_TOP)
         subparser.add_argument("--disasm-top", type=int, default=DEFAULT_DISASM_SYMBOLS)
+        subparser.add_argument("--jit-map-dir", type=Path, help="Directory containing jit_*.map.json files")
 
     record_parser = subparsers.add_parser("record", help="Record a new xctrace trace.")
     add_common_record(record_parser)

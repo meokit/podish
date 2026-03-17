@@ -1,4 +1,5 @@
 #include "block_builder.h"
+#include <inttypes.h>
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory_resource>
 #include "../decoder.h"
 #include "../generated/stencils.generated.inc"
 #include "../ops.h"
@@ -27,6 +29,38 @@ constexpr uint32_t kAdrpOpcode = 0x90000000;
 constexpr uint32_t kCallVeneerSize = 6 * sizeof(uint32_t);
 constexpr uint32_t kJumpVeneerSize = 6 * sizeof(uint32_t);
 constexpr uint32_t kHandlerTailVeneerSize = 10 * sizeof(uint32_t);
+
+class JitCodeResource final : public std::pmr::memory_resource {
+public:
+    JitCodeResource(void* buffer, size_t size) : m_begin(static_cast<std::byte*>(buffer)), m_end(m_begin + size) {}
+
+    void* try_allocate(size_t bytes, size_t alignment) {
+        uintptr_t current = reinterpret_cast<uintptr_t>(m_current);
+        uintptr_t aligned = (current + alignment - 1) & ~(static_cast<uintptr_t>(alignment) - 1);
+        std::byte* next = reinterpret_cast<std::byte*>(aligned + bytes);
+        if (next < reinterpret_cast<std::byte*>(aligned) || next > m_end) {
+            return nullptr;
+        }
+        m_current = next;
+        return reinterpret_cast<void*>(aligned);
+    }
+
+protected:
+    void* do_allocate(size_t bytes, size_t alignment) override {
+        void* ptr = try_allocate(bytes, alignment);
+        if (!ptr) std::abort();
+        return ptr;
+    }
+
+    void do_deallocate(void*, size_t, size_t) override {}
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
+
+private:
+    std::byte* m_begin;
+    std::byte* m_current = m_begin;
+    std::byte* m_end;
+};
 
 bool JitDebugEnabled() {
 #ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
@@ -57,6 +91,15 @@ void JitDebugLog(const char* fmt, ...) {
 
 const char* JitDumpDir() {
     static const char* dir = std::getenv("FIBERCPU_JIT_DUMP_DIR");
+    return (dir && dir[0] != '\0') ? dir : nullptr;
+}
+
+const char* JitProfileMapDir() {
+    static const char* dir = [] {
+        const char* explicit_dir = std::getenv("FIBERCPU_JIT_PROFILE_MAP_DIR");
+        if (explicit_dir && explicit_dir[0] != '\0') return explicit_dir;
+        return JitDumpDir();
+    }();
     return (dir && dir[0] != '\0') ? dir : nullptr;
 }
 
@@ -122,6 +165,34 @@ void DumpJitBlock(uint32_t start_eip, const uint8_t* code, size_t size) {
     if (JitDebugEnabled()) {
         JitDebugLog("[jit] dumped block start=%08x path=%s size=%zu\n", start_eip, path, size);
     }
+}
+
+void WriteJitProfileMap(uint32_t start_eip, const uint8_t* code, size_t size,
+                        const std::vector<uint8_t*>& stencil_starts, const std::vector<uint16_t>& stencil_ids) {
+    const char* map_dir = JitProfileMapDir();
+    if (!map_dir) return;
+
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/jit_%08x.map.json", map_dir, start_eip);
+    FILE* fp = std::fopen(path, "w");
+    if (!fp) return;
+
+    std::fprintf(fp, "{\n");
+    std::fprintf(fp, "  \"guest_block_start_eip\": %u,\n", start_eip);
+    std::fprintf(fp, "  \"runtime_start\": %" PRIu64 ",\n", static_cast<uint64_t>(reinterpret_cast<uintptr_t>(code)));
+    std::fprintf(fp, "  \"code_size\": %zu,\n", size);
+    std::fprintf(fp, "  \"ops\": [\n");
+    for (size_t i = 0; i < stencil_ids.size(); ++i) {
+        const uint64_t runtime_addr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(stencil_starts[i]));
+        const uint64_t offset = static_cast<uint64_t>(stencil_starts[i] - code);
+        std::fprintf(
+            fp, "    {\"index\": %zu, \"name\": \"%s\", \"runtime_start\": %" PRIu64 ", \"offset\": %" PRIu64 "}%s\n",
+            i, generated::stencil_names[stencil_ids[i]], runtime_addr, offset,
+            (i + 1 == stencil_ids.size()) ? "" : ",");
+    }
+    std::fprintf(fp, "  ]\n");
+    std::fprintf(fp, "}\n");
+    std::fclose(fp);
 }
 
 uint64_t GetDecodedOpQword(const DecodedOp* op, uint16_t qword_index) {
@@ -298,11 +369,15 @@ BlockBuilder::BlockBuilder() {
     m_buffer_size = 64 * 1024 * 1024;  // 64MB code cache
     m_code_buffer =
         mmap(nullptr, m_buffer_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
-    m_buffer_offset = 0;
+    m_code_pool = nullptr;
+    if (m_code_buffer != MAP_FAILED) {
+        m_code_pool = new JitCodeResource(m_code_buffer, m_buffer_size);
+    }
     InitializeMapping();
 }
 
 BlockBuilder::~BlockBuilder() {
+    delete m_code_pool;
     if (m_code_buffer != MAP_FAILED) {
         munmap(m_code_buffer, m_buffer_size);
     }
@@ -325,7 +400,7 @@ uint16_t BlockBuilder::LookupStencil(HandlerFunc target) {
 }
 
 JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
-    if (m_code_buffer == MAP_FAILED) return nullptr;
+    if (m_code_buffer == MAP_FAILED || m_code_pool == nullptr) return nullptr;
 
     if (JitDebugEnabled()) {
         JitDebugLog("[jit] compile block start=%08x insts=%u entry=%p\n", bb->chain.start_eip, bb->inst_count,
@@ -376,18 +451,18 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     estimated_size += 32;
     estimated_size += branch_reloc_count * kHandlerTailVeneerSize;
 
-    if (m_buffer_offset + estimated_size > m_buffer_size) {
-        if (JitDebugEnabled()) {
-            JitDebugLog("[jit] code cache full block=%08x need=%zu have=%zu/%zu\n", bb->chain.start_eip, estimated_size,
-                        m_buffer_offset, m_buffer_size);
-        }
-        return nullptr;  // Buffer full
-    }
-
     // Switch to RW for Apple Silicon
     pthread_jit_write_protect_np(0);
-
-    uint8_t* start_ptr = (uint8_t*)m_code_buffer + m_buffer_offset;
+    auto* code_pool = static_cast<JitCodeResource*>(m_code_pool);
+    uint8_t* start_ptr = static_cast<uint8_t*>(code_pool->try_allocate(estimated_size, 16));
+    if (!start_ptr) {
+        pthread_jit_write_protect_np(1);
+        if (JitDebugEnabled()) {
+            JitDebugLog("[jit] code cache full block=%08x need=%zu pool=%p size=%zu\n", bb->chain.start_eip,
+                        estimated_size, m_code_buffer, m_buffer_size);
+        }
+        return nullptr;
+    }
     std::vector<uint8_t*> stencil_starts(bb->inst_count);
     uint8_t* layout_ptr = start_ptr;
     for (uint32_t i = 0; i < bb->inst_count; ++i) {
@@ -532,19 +607,25 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     current_ptr += 4;
 
     current_ptr = veneer_ptr;
-
-    m_buffer_offset = (current_ptr - (uint8_t*)m_code_buffer + 15) & ~15;  // Align 16
+    void* jcb_mem = code_pool->try_allocate(sizeof(JitCodeBlock), alignof(JitCodeBlock));
+    if (!jcb_mem) {
+        if (JitDebugEnabled()) {
+            JitDebugLog("[jit] metadata alloc failed block=%08x size=%zu\n", bb->chain.start_eip, sizeof(JitCodeBlock));
+        }
+        return nullptr;
+    }
+    JitCodeBlock* jcb = new (jcb_mem) JitCodeBlock();
+    jcb->entry = start_ptr;
+    jcb->code_size = current_ptr - start_ptr;
+    jcb->owner = bb;
+    bb->jit_code = jcb;
 
     // Switch back to RX
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(start_ptr, current_ptr - start_ptr);
 
-    JitCodeBlock* jcb = new JitCodeBlock();
-    jcb->entry = start_ptr;
-    jcb->code_size = current_ptr - start_ptr;
-    jcb->owner = bb;
-    bb->jit_code = start_ptr;
     DumpJitBlock(bb->chain.start_eip, start_ptr, jcb->code_size);
+    WriteJitProfileMap(bb->chain.start_eip, start_ptr, jcb->code_size, stencil_starts, stencil_ids);
 
     if (JitDebugEnabled()) {
         JitDebugLog("[jit] compiled block start=%08x code=%p size=%zu branch_relocs=%zu veneers=%zu veneer_bytes=%zu\n",

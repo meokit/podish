@@ -51,7 +51,13 @@ public sealed record GuestStatsBlockStats(
     [property: JsonPropertyName("block_concat_reject_loop")]
     ulong BlockConcatRejectLoop,
     [property: JsonPropertyName("block_concat_reject_target_missing")]
-    ulong BlockConcatRejectTargetMissing)
+    ulong BlockConcatRejectTargetMissing,
+    [property: JsonPropertyName("jit_compile_attempts")]
+    ulong JitCompileAttempts,
+    [property: JsonPropertyName("jit_compile_success")]
+    ulong JitCompileSuccess,
+    [property: JsonPropertyName("jit_compile_failure")]
+    ulong JitCompileFailure)
 {
     public static GuestStatsBlockStats FromSnapshot(BlockStatsSnapshot snapshot)
     {
@@ -68,7 +74,10 @@ public sealed record GuestStatsBlockStats(
             snapshot.BlockConcatRejectCrossPage,
             snapshot.BlockConcatRejectSizeLimit,
             snapshot.BlockConcatRejectLoop,
-            snapshot.BlockConcatRejectTargetMissing);
+            snapshot.BlockConcatRejectTargetMissing,
+            snapshot.JitCompileAttempts,
+            snapshot.JitCompileSuccess,
+            snapshot.JitCompileFailure);
     }
 }
 

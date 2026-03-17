@@ -1172,8 +1172,13 @@ public sealed class ContainerRuntimeService
             Directory.CreateDirectory(exportDir);
 
             var blocksPath = Path.Combine(exportDir, "blocks.bin");
-            using (var fs = File.Create(blocksPath))
+            var skipBlocksDump = Environment.GetEnvironmentVariable("PODISH_SKIP_BLOCKS_EXPORT") is { Length: > 0 } value &&
+                                 value != "0";
+            if (!skipBlocksDump)
+            {
+                using var fs = File.Create(blocksPath);
                 engine.DumpBlocks(fs);
+            }
 
             var nativeStats = engine.DumpStats();
             var blockStats = engine.GetBlockStats();

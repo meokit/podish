@@ -160,6 +160,9 @@ typedef struct {
     uint64_t block_concat_reject_size_limit;
     uint64_t block_concat_reject_loop;
     uint64_t block_concat_reject_target_missing;
+    uint64_t jit_compile_attempts;
+    uint64_t jit_compile_success;
+    uint64_t jit_compile_failure;
 } X86_BlockStats;
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats);

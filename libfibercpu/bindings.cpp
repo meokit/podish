@@ -10,6 +10,7 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
+#include "jit/block_builder.h"
 #include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
@@ -253,6 +254,18 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     return concat;
 }
 
+static void MaybeJitCompileBlock(EmuState* state, BasicBlock* block) {
+    if (!state || !block) return;
+    state->block_stats.jit_compile_attempts++;
+    auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
+    if (jcb) {
+        state->block_stats.jit_compile_success++;
+        block->entry = reinterpret_cast<HandlerFunc>(jcb->entry);
+    } else {
+        state->block_stats.jit_compile_failure++;
+    }
+}
+
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
                                                                           uint32_t end_eip) {
     BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
@@ -293,6 +306,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
     BasicBlock* concat_block = is_direct_jmp ? BuildDirectJmpBlockConcat(state, new_block, successor_block)
                                              : BuildJccFallthroughBlockConcat(state, new_block, successor_block);
+    MaybeJitCompileBlock(state, concat_block);
     state->block_stats.block_concat_success++;
     if (is_direct_jmp) {
         state->block_stats.block_concat_success_direct_jmp++;
@@ -848,6 +862,9 @@ void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     stats->block_concat_reject_size_limit = src.block_concat_reject_size_limit;
     stats->block_concat_reject_loop = src.block_concat_reject_loop;
     stats->block_concat_reject_target_missing = src.block_concat_reject_target_missing;
+    stats->jit_compile_attempts = src.jit_compile_attempts;
+    stats->jit_compile_success = src.jit_compile_success;
+    stats->jit_compile_failure = src.jit_compile_failure;
 }
 
 void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
