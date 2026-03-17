@@ -49,6 +49,9 @@ FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
             dest = static_cast<T>(GetReg(state, op->modrm & 7));
         else
             dest = static_cast<T>(GetReg(state, op->modrm & 7));
+    } else if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
+        constexpr uint8_t FixedReg = static_cast<uint8_t>(S) - static_cast<uint8_t>(Specialized::Reg0);
+        dest = static_cast<T>(GetReg(state, FixedReg));
     } else if constexpr (sizeof(T) == 2) {
         auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
@@ -328,6 +331,44 @@ FORCE_INLINE LogicFlow OpGroup1_EvIb_Add_32_Flags_ModReg(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpGroup1_EvIb_And_32_NoFlags_ModReg(LogicFuncParams) {
     return OpGroup1_Ev_T_Internal<uint32_t, false, 4, true, Specialized::ModReg>(LogicPassParams);
 }
+
+#define IMPL_G1_EV_FIXED_REG_IMM_WRAPPER(RegName, Spec)                                  \
+    FORCE_INLINE LogicFlow OpGroup1_EvIb_Add_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 0, true, Spec>(LogicPassParams);   \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIb_Add_32_NoFlags_##RegName(LogicFuncParams) {     \
+        return OpGroup1_Ev_T_Internal<uint32_t, false, 0, true, Spec>(LogicPassParams);  \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIb_Sub_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 5, true, Spec>(LogicPassParams);   \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIb_Sub_32_NoFlags_##RegName(LogicFuncParams) {     \
+        return OpGroup1_Ev_T_Internal<uint32_t, false, 5, true, Spec>(LogicPassParams);  \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIb_Cmp_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 7, true, Spec>(LogicPassParams);   \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIz_Add_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 0, false, Spec>(LogicPassParams);  \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIz_Add_32_NoFlags_##RegName(LogicFuncParams) {     \
+        return OpGroup1_Ev_T_Internal<uint32_t, false, 0, false, Spec>(LogicPassParams); \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIz_Sub_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 5, false, Spec>(LogicPassParams);  \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIz_Sub_32_NoFlags_##RegName(LogicFuncParams) {     \
+        return OpGroup1_Ev_T_Internal<uint32_t, false, 5, false, Spec>(LogicPassParams); \
+    }                                                                                    \
+    FORCE_INLINE LogicFlow OpGroup1_EvIz_Cmp_32_Flags_##RegName(LogicFuncParams) {       \
+        return OpGroup1_Ev_T_Internal<uint32_t, true, 7, false, Spec>(LogicPassParams);  \
+    }
+
+IMPL_G1_EV_FIXED_REG_IMM_WRAPPER(Eax, Specialized::RegEax)
+IMPL_G1_EV_FIXED_REG_IMM_WRAPPER(Ecx, Specialized::RegEcx)
+IMPL_G1_EV_FIXED_REG_IMM_WRAPPER(Edx, Specialized::RegEdx)
+
+#undef IMPL_G1_EV_FIXED_REG_IMM_WRAPPER
 
 // Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags
 // Param `func` is OpGroup1_EvIz_T_Internal or OpGroup1_EvIb_T_Internal (templated)

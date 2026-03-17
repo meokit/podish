@@ -149,6 +149,39 @@ void RegisterDataMovOps() {
         c.mod_val = 3;
         DispatchRegistrar<OpMov_Edx_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
     }
+    // 4. MOV EAX, EAX
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        c.rm_mask = 7;
+        c.rm_val = 0;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_Eax_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+    }
+    // 5. MOV ESI, EAX
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 6;
+        c.rm_mask = 7;
+        c.rm_val = 0;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_Esi_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+    }
+    // 6. MOV EDI, EAX
+    {
+        SpecCriteria c;
+        c.reg_mask = 7;
+        c.reg_val = 7;
+        c.rm_mask = 7;
+        c.rm_val = 0;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        DispatchRegistrar<OpMov_Edi_Eax>::RegisterSpecialized(OP_MOV_RR_LOAD, c);
+    }
 
     // EvGv_Reg Specializations (Dst=Reg, Src=Reg) - Store Reg to Reg?
     // OpMov_EvGv_Reg is for 0x89 (MOV r/m, r) -> if mod=3, it's Reg -> Reg.
@@ -259,6 +292,13 @@ void RegisterDataMovOps() {
         c32.prefix_mask = prefix::OPSIZE;
         c32.prefix_val = 0;
         DispatchRegistrar<OpLea_32>::RegisterSpecialized(0x8D, c32);
+        c32.reg_mask = 7;
+        c32.reg_val = 0;
+        DispatchRegistrar<OpLea_32_Eax>::RegisterSpecialized(0x8D, c32);
+        c32.reg_val = 1;
+        DispatchRegistrar<OpLea_32_Ecx>::RegisterSpecialized(0x8D, c32);
+        c32.reg_val = 2;
+        DispatchRegistrar<OpLea_32_Edx>::RegisterSpecialized(0x8D, c32);
     }
     g_Handlers[0x50] = DispatchWrapper<OpPush_Reg32_Eax>;
     g_Handlers[0x51] = DispatchWrapper<OpPush_Reg32_Ecx>;
@@ -292,6 +332,16 @@ void RegisterDataMovOps() {
         c32.prefix_mask = prefix::OPSIZE;
         c32.prefix_val = 0;
         c32.reg_mask = 7;
+
+        c32.reg_val = 0;
+        DispatchRegistrar<OpMovzx_Byte_32_Eax>::RegisterSpecialized(0x1B6, c32);
+        DispatchRegistrar<OpMovsx_Byte_32_Eax>::RegisterSpecialized(0x1BE, c32);
+        c32.reg_val = 1;
+        DispatchRegistrar<OpMovzx_Byte_32_Ecx>::RegisterSpecialized(0x1B6, c32);
+        DispatchRegistrar<OpMovsx_Byte_32_Ecx>::RegisterSpecialized(0x1BE, c32);
+        c32.reg_val = 2;
+        DispatchRegistrar<OpMovzx_Byte_32_Edx>::RegisterSpecialized(0x1B6, c32);
+        DispatchRegistrar<OpMovsx_Byte_32_Edx>::RegisterSpecialized(0x1BE, c32);
 
         c32.reg_val = 0;
         DispatchRegistrar<OpMovsx_Word_32_Eax>::RegisterSpecialized(0x1BF, c32);

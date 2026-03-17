@@ -204,12 +204,45 @@ FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
 
 namespace op {
 
+template <uint8_t FixedReg>
+FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_SameReg_Internal(LogicFuncParams) {
+    uint32_t value = state->ctx.regs[FixedReg];
+    AluCmp<uint32_t>(state, flags_cache, value, value);
+    return LogicFlow::Continue;
+}
+
+template <uint8_t FixedReg>
+FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_SameReg_Internal(LogicFuncParams) {
+    uint32_t value = state->ctx.regs[FixedReg];
+    AluAnd<uint32_t>(state, flags_cache, value, value);
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg(LogicFuncParams) {
     return OpCmp_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
 }
 
+FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Eax(LogicFuncParams) {
+    return OpCmp_EvGv_32_ModReg_SameReg_Internal<EAX>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Ecx(LogicFuncParams) {
+    return OpCmp_EvGv_32_ModReg_SameReg_Internal<ECX>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Edx(LogicFuncParams) {
+    return OpCmp_EvGv_32_ModReg_SameReg_Internal<EDX>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg(LogicFuncParams) {
     return OpTest_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Eax(LogicFuncParams) {
+    return OpTest_EvGv_32_ModReg_SameReg_Internal<EAX>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Ecx(LogicFuncParams) {
+    return OpTest_EvGv_32_ModReg_SameReg_Internal<ECX>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Edx(LogicFuncParams) {
+    return OpTest_EvGv_32_ModReg_SameReg_Internal<EDX>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpCmp_EvGv_16(LogicFuncParams) {

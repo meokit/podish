@@ -157,6 +157,58 @@ void RegisterGroupOps() {
         SpecCriteria c;
         c.mod_mask = 3;
         c.mod_val = 3;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0;
+
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        c.rm_mask = 7;
+        c.rm_val = 0;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_Flags_Eax>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_NoFlags_Eax>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_Flags_Eax>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_NoFlags_Eax>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIb_Cmp_32_Flags_Eax>::RegisterSpecialized(0x83, c);
+
+        c.reg_val = 0;
+        c.rm_val = 1;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_Flags_Ecx>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_NoFlags_Ecx>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_Flags_Ecx>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_NoFlags_Ecx>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIb_Cmp_32_Flags_Ecx>::RegisterSpecialized(0x83, c);
+
+        c.reg_val = 0;
+        c.rm_val = 2;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_Flags_Edx>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Add_32_NoFlags_Edx>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_Flags_Edx>::RegisterSpecialized(0x83, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIb_Sub_32_NoFlags_Edx>::RegisterSpecialized(0x83, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIb_Cmp_32_Flags_Edx>::RegisterSpecialized(0x83, c);
+    }
+
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
         c.reg_mask = 7;
         c.reg_val = 4;
         c.prefix_mask = 0x40;
@@ -174,6 +226,58 @@ void RegisterGroupOps() {
     REG_EV_SPEC(0x81, 5, OpGroup1_EvIz_Sub);
     REG_EV_SPEC(0x81, 6, OpGroup1_EvIz_Xor);
     REG_EV_SPEC(0x81, 7, OpGroup1_EvIz_Cmp);
+
+    {
+        SpecCriteria c;
+        c.mod_mask = 3;
+        c.mod_val = 3;
+        c.prefix_mask = 0x40;
+        c.prefix_val = 0;
+        c.rm_mask = 7;
+
+        c.rm_val = 0;
+        c.reg_mask = 7;
+        c.reg_val = 0;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_Flags_Eax>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_NoFlags_Eax>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_Flags_Eax>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_NoFlags_Eax>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIz_Cmp_32_Flags_Eax>::RegisterSpecialized(0x81, c);
+
+        c.rm_val = 1;
+        c.reg_val = 0;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_Flags_Ecx>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_NoFlags_Ecx>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_Flags_Ecx>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_NoFlags_Ecx>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIz_Cmp_32_Flags_Ecx>::RegisterSpecialized(0x81, c);
+
+        c.rm_val = 2;
+        c.reg_val = 0;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_Flags_Edx>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Add_32_NoFlags_Edx>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 5;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_Flags_Edx>::RegisterSpecialized(0x81, c);
+        c.no_flags = true;
+        DispatchRegistrar<OpGroup1_EvIz_Sub_32_NoFlags_Edx>::RegisterSpecialized(0x81, c);
+        c.no_flags = false;
+        c.reg_val = 7;
+        DispatchRegistrar<OpGroup1_EvIz_Cmp_32_Flags_Edx>::RegisterSpecialized(0x81, c);
+    }
 
 #define REG_G3_EB(opcode, subop, name)                                     \
     {                                                                      \

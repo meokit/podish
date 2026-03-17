@@ -26,6 +26,17 @@ void RegisterCompareOps() {
         c.prefix_mask = 0x40;
         c.prefix_val = 0x00;
         DispatchRegistrar<op::OpCmp_EvGv_32_ModReg>::RegisterSpecialized(0x39, c);
+        c.reg_mask = 7;
+        c.rm_mask = 7;
+        c.reg_val = 0;
+        c.rm_val = 0;
+        DispatchRegistrar<op::OpCmp_EvGv_32_ModReg_Eax>::RegisterSpecialized(0x39, c);
+        c.reg_val = 1;
+        c.rm_val = 1;
+        DispatchRegistrar<op::OpCmp_EvGv_32_ModReg_Ecx>::RegisterSpecialized(0x39, c);
+        c.reg_val = 2;
+        c.rm_val = 2;
+        DispatchRegistrar<op::OpCmp_EvGv_32_ModReg_Edx>::RegisterSpecialized(0x39, c);
     }
 
     g_Handlers[0x3A] = DispatchWrapper<OpCmp_GbEb>;
@@ -42,6 +53,17 @@ void RegisterCompareOps() {
         c.prefix_mask = 0x40;
         c.prefix_val = 0x00;
         DispatchRegistrar<op::OpTest_EvGv_32_ModReg>::RegisterSpecialized(0x85, c);
+        c.reg_mask = 7;
+        c.rm_mask = 7;
+        c.reg_val = 0;
+        c.rm_val = 0;
+        DispatchRegistrar<op::OpTest_EvGv_32_ModReg_Eax>::RegisterSpecialized(0x85, c);
+        c.reg_val = 1;
+        c.rm_val = 1;
+        DispatchRegistrar<op::OpTest_EvGv_32_ModReg_Ecx>::RegisterSpecialized(0x85, c);
+        c.reg_val = 2;
+        c.rm_val = 2;
+        DispatchRegistrar<op::OpTest_EvGv_32_ModReg_Edx>::RegisterSpecialized(0x85, c);
     }
 
     g_Handlers[0x1B0] = DispatchWrapper<OpCmpxchg_Byte>;  // 0F B0
