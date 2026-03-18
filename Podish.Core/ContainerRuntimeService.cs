@@ -99,9 +99,9 @@ public sealed class ContainerRuntimeService
             var tty = ttyDiag!;
             stdinStream = new FileStream(new SafeFileHandle((IntPtr)0, ownsHandle: false), FileAccess.Read);
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                var res = MacOSTermios.EnableRawMode(0);
+                var res = HostTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
                 rawModeEnabled = res == 0;
 
@@ -112,7 +112,7 @@ public sealed class ContainerRuntimeService
 
                     try
                     {
-                        MacOSTermios.DisableRawMode(0);
+                        HostTermios.DisableRawMode(0);
                     }
                     catch
                     {
@@ -496,11 +496,11 @@ public sealed class ContainerRuntimeService
             if (cancelKeyPressHandler != null)
                 Console.CancelKeyPress -= cancelKeyPressHandler;
 
-            if (rawModeEnabled && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            if (rawModeEnabled && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
             {
                 _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
                     request.ContainerId);
-                MacOSTermios.DisableRawMode(0);
+                HostTermios.DisableRawMode(0);
                 rawModeEnabled = false;
             }
 
