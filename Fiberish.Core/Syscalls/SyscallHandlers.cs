@@ -171,7 +171,6 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.setfsgid32, SysSetFsGid32);
         Register(X86SyscallNumbers.clock_gettime, SysClockGetTime);
         Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
-        Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
         Register(X86SyscallNumbers.gettimeofday, SysGetTimeOfDay);
         Register(X86SyscallNumbers.nanosleep, SysNanosleep);
 

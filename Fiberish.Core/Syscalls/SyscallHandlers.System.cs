@@ -435,6 +435,18 @@ public partial class SyscallManager
         var buf = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), nsecs);
+
+        if (sm.Strace)
+        {
+            Logger.LogTrace(
+                "[SysClockGetTime64] clockId={ClockId} tsPtr=0x{TsPtr:X} secs={Secs} nsecs={Nsecs} bytes={Bytes}",
+                clockId,
+                tsPtr,
+                secs,
+                nsecs,
+                Convert.ToHexString(buf));
+        }
+
         if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;

@@ -115,6 +115,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     )
 endif()
 
+if(NOT MSVC)
+    target_compile_options(fibercpu_core PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
 # SoftFloat library
 if(USE_SOFTFLOAT)
     add_definitions(-DX86EMU_USE_SOFTFLOAT)
@@ -230,6 +237,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
+if(NOT MSVC)
+    target_compile_options(fibercpu PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()

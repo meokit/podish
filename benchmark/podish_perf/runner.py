@@ -22,6 +22,7 @@ MARKER_END = "__PODISH_BENCH_END__"
 DEFAULT_CASES = ("compress", "compile", "run")
 DEFAULT_ENGINE = "jit"
 AOT_BINARY_RELATIVE = Path("build/nativeaot/podish-cli-static/Podish.Cli")
+JIT_BINARY_RELATIVE = Path("Podish.Cli/bin")
 
 
 @dataclass
@@ -47,6 +48,16 @@ def default_rootfs() -> Path:
 
 def default_aot_binary(project_root: Path) -> Path:
     return project_root / AOT_BINARY_RELATIVE
+
+
+def default_jit_configuration(project_root: Path) -> str:
+    release_binary = project_root / JIT_BINARY_RELATIVE / "Release" / "net10.0" / "Podish.Cli"
+    debug_binary = project_root / JIT_BINARY_RELATIVE / "Debug" / "net10.0" / "Podish.Cli"
+    if release_binary.exists():
+        return "Release"
+    if debug_binary.exists():
+        return "Debug"
+    return "Release"
 
 
 def default_fibercpu_library(project_root: Path) -> Path:
@@ -108,6 +119,7 @@ def build_engine_command(
     aot_binary: Path,
     rootfs: Path,
     script: str,
+    jit_configuration: str = "Release",
     guest_stats_dir: Path | None = None,
 ) -> tuple[str, list[str]]:
     podish_args = [
@@ -131,7 +143,7 @@ def build_engine_command(
                 "--project",
                 str(project_root / "Podish.Cli" / "Podish.Cli.csproj"),
                 "-c",
-                "Release",
+                jit_configuration,
                 "--no-build",
                 "--",
                 *podish_args,
@@ -274,6 +286,7 @@ def run_sample(
     fibercpu_library: Path | None,
     block_n_gram: int,
     block_top_ngrams: int,
+    jit_configuration: str,
 ) -> SampleResult:
     work_rootfs = create_work_rootfs(base_rootfs, case, iteration, work_dir, reuse_rootfs)
     transcript = results_dir / f"{engine}-{case}-{iteration:02d}.log"
@@ -288,6 +301,7 @@ def run_sample(
         aot_binary,
         work_rootfs,
         script,
+        jit_configuration=jit_configuration,
         guest_stats_dir=guest_stats_dir,
     )
     start = 0.0
@@ -476,6 +490,7 @@ def main() -> int:
     base_rootfs = Path(args.rootfs).resolve()
     work_dir = Path(args.work_dir).resolve()
     fibercpu_library = default_fibercpu_library(project_root)
+    jit_configuration = default_jit_configuration(project_root)
     aot_binary = (
         Path(args.aot_binary).resolve()
         if args.aot_binary
@@ -513,6 +528,8 @@ def main() -> int:
     print(f"[runner] rootfs={base_rootfs}")
     print(f"[runner] results_dir={results_dir}")
     print(f"[runner] engine={args.engine}")
+    if args.engine == "jit":
+        print(f"[runner] jit_configuration={jit_configuration}")
     if args.engine == "aot":
         print(f"[runner] aot_binary={aot_binary}")
     disable_superopcodes_for_run = args.disable_superopcodes
@@ -558,6 +575,7 @@ def main() -> int:
                 fibercpu_library=fibercpu_library,
                 block_n_gram=args.block_n_gram,
                 block_top_ngrams=args.block_top_ngrams,
+                jit_configuration=jit_configuration,
             )
             all_results.append(sample)
             extra = ""
