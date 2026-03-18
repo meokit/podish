@@ -179,10 +179,23 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
     }
 
     // Decode pre-fills control-flow caches with dummy_invalid_block, so cached pointers are never null here.
-    if (next_block->MatchesChainTarget(target_eip)) [[likely]] {
+    auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
+    auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
+    auto entry = header_ptr->entry;
+    if (header_ptr->MatchesChainTarget(target_eip)) [[likely]] {
         RecordConditionalBranchCacheResult(state, op, true);
         state->last_block = next_block;
-        ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, target_eip, flags_cache);
+        // Copy from ChainToKnownBlock
+        BasicBlock* next_block = state->last_block;
+        instr_limit -= next_block->inst_count;
+        DecodedOp* next_head = next_block->FirstOp();
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+        next_block->exec_count++;
+        state->current_block_head = next_head;
+#endif
+        __builtin_assume(entry != nullptr);
+        ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max(),
+                                   flags_cache);
     }
 
     ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<Kind>(state, op, instr_limit, utlb, target_eip, flags_cache);
