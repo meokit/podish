@@ -136,7 +136,7 @@ public partial class SyscallManager
             HostSocketInode inode;
             if ((sockType == SocketType.Dgram || sockType == SocketType.Raw) &&
                 (protocol == LinuxConstants.IPPROTO_ICMP || protocol == LinuxConstants.IPPROTO_ICMPV6))
-                inode = CreateHostSocketForLinuxPingSemantics(sm, af, proto, sockType);
+                inode = CreateHostSocketForPingSemantics(sm, af, proto, sockType);
             else
                 inode = new HostSocketInode(0, sm.MemfdSuperBlock, af, sockType, proto);
 
@@ -158,34 +158,25 @@ public partial class SyscallManager
 
     /// <summary>
     ///     Maps Linux ping/raw socket semantics onto a host socket shape we can actually support.
-    ///     Darwin is intentionally special-cased here: guest raw ICMP/ICMPv6 sockets are downgraded
-    ///     to host datagram sockets, while HostSocketInode keeps Linux-visible SO_TYPE semantics via
+    ///     We prefer host datagram sockets for ICMP/ICMPv6 so Linux guest ping follows the same
+    ///     shape as the macOS path, while HostSocketInode preserves guest-visible SO_TYPE via
     ///     LinuxSocketType. Keep this policy here, not in HostSocketInode, so the data path stays uniform.
     /// </summary>
-    private static HostSocketInode CreateHostSocketForLinuxPingSemantics(SyscallManager sm, AddressFamily af,
-        ProtocolType proto,
-        SocketType linuxSocketType)
+    private static HostSocketInode CreateHostSocketForPingSemantics(SyscallManager sm, AddressFamily af,
+        ProtocolType proto, SocketType linuxSocketType)
     {
-        if (OperatingSystem.IsMacOS())
-            return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
-                linuxSocketType);
-
-        if (linuxSocketType == SocketType.Dgram)
-            try
-            {
-                return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto,
-                    SocketType.Dgram);
-            }
-            catch (SocketException ex) when (
-                ex.SocketErrorCode is SocketError.ProtocolNotSupported or SocketError.OperationNotSupported)
-            {
-                // Some hosts do not expose Linux-style ping sockets but still allow raw ICMP.
-                // Keep guest-visible SO_TYPE as SOCK_DGRAM to preserve Linux ABI.
-                return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto,
-                    SocketType.Dgram);
-            }
-
-        return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto, linuxSocketType);
+        try
+        {
+            return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Dgram, proto, linuxSocketType);
+        }
+        catch (SocketException ex) when (
+            ex.SocketErrorCode is SocketError.ProtocolNotSupported or SocketError.OperationNotSupported or
+            SocketError.AccessDenied)
+        {
+            // Some hosts only support raw ICMP, or they gate ping sockets by capability/group policy.
+            // Fall back to raw so privileged environments still work, but keep Linux-visible SO_TYPE.
+            return new HostSocketInode(0, sm.MemfdSuperBlock, af, SocketType.Raw, proto, linuxSocketType);
+        }
     }
 
     private static async ValueTask<int> SysConnect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
