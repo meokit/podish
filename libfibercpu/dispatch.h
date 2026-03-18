@@ -111,10 +111,6 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    // Prefetch further ops
-    PREFETCH(reinterpret_cast<const std::byte*>(op) + 128);
-    PREFETCH(reinterpret_cast<const std::byte*>(op) + 256);
-
     // Execute Logic
     auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache);
 
