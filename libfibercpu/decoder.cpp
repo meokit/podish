@@ -114,7 +114,7 @@ static bool IsConditionalBranchHandlerIndex(uint16_t handler_index) {
 // Decoder Logic
 // Returns true on success, false on failure/invalid instruction
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
-    std::memset(inst, 0, sizeof(*inst));
+    *inst = {};
 
     DecodedOp* op = &inst->head;
 
@@ -515,7 +515,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                     "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
                     "%02X %02X\n",
                     current_eip, buf[0], buf[1], buf[2], buf[3]);
-            std::memset(&inst, 0, sizeof(inst));
+            inst = {};
             inst.head.SetLength(0);  // Fault: EIP points to instruction
 
             HandlerFunc ud2 = g_Handlers[0x10B];  // UD2
@@ -525,8 +525,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             temp_ops.push_back(inst);
 
             // Append Sentinel for dispatch safety
-            DecodedInstTmp sentinel;
-            std::memset(&sentinel, 0, sizeof(sentinel));
+            DecodedInstTmp sentinel{};
 
             HandlerFunc exit_h = g_ExitHandlersFallthrough[0];
             sentinel.head.handler = exit_h;
@@ -651,8 +650,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     // Append Sentinel Op
     {
-        DecodedInstTmp sentinel;
-        std::memset(&sentinel, 0, sizeof(sentinel));
+        DecodedInstTmp sentinel{};
 
         uint32_t k = (uint32_t)current_eip;
         k ^= k >> 12;

@@ -362,7 +362,7 @@ EmuState* X86_Create() {
 
     EmuState* state = new EmuState();
     // Zero entire context first
-    std::memset(&state->ctx, 0, sizeof(state->ctx));
+    state->ctx = {};
 
     // Set default EFLAGS and Mask
     SetStateFlagsCache(state, InitFlagsCache(0x202));  // IF=1, Reserved=1
@@ -994,11 +994,10 @@ int X86_Step(EmuState* state) {
         }
     }
 
-    DecodedInstTmp inst;
+    DecodedInstTmp inst{};
     uint16_t handler_index = 0;
 
     if (!DecodeInstruction(buf, &inst, &handler_index)) {
-        std::memset(&inst, 0, sizeof(inst));
         inst.head.SetLength(1);
         // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
@@ -1008,7 +1007,8 @@ int X86_Step(EmuState* state) {
     inst.head.next_eip = state->ctx.eip + inst.head.GetLength();
 
     alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2];
-    std::memset(op_storage, 0, sizeof(op_storage));
+    std::byte* op_storage_bytes = op_storage;
+    std::fill_n(op_storage_bytes, sizeof(op_storage), std::byte{0});
     auto* head = reinterpret_cast<DecodedOp*>(op_storage);
     std::memcpy(head, &inst.head, sizeof(inst.head));
 

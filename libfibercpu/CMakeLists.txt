@@ -71,16 +71,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
 endif()
 
-# Compiler warnings and options
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(
-        -Wall -Wextra -Wpedantic
-        -Wno-unused-parameter
-        -Wno-nested-anon-types
-        -fno-rtti -fno-exceptions
-    )
-endif()
-
 # Source files
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cpp" "*.c" "*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
@@ -108,8 +98,22 @@ endif()
 # Object library for core parts (contains the opcodes to scan)
 add_library(fibercpu_core OBJECT ${SOURCES_CORE})
 set_target_properties(fibercpu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(fibercpu_core PRIVATE . ${simde_SOURCE_DIR})
+target_include_directories(fibercpu_core PRIVATE .)
+target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu_core PRIVATE unordered_dense::unordered_dense)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(fibercpu_core PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
 
 # SoftFloat library
 if(USE_SOFTFLOAT)
@@ -134,9 +138,10 @@ if(FIBERCPU_ENABLE_JIT)
         -fno-stack-protector
         -fomit-frame-pointer
         -fPIC
+        -fno-strict-aliasing
         -I${CMAKE_CURRENT_SOURCE_DIR}
         -I${CMAKE_CURRENT_SOURCE_DIR}/..
-        -I${simde_SOURCE_DIR}
+        -isystem ${simde_SOURCE_DIR}
         -I${unordered_dense_SOURCE_DIR}/include
     )
     if(APPLE)
@@ -212,8 +217,22 @@ if(FIBERCPU_ENABLE_JIT)
     add_dependencies(fibercpu fibercpu_jit_stencils)
 endif()
 
-target_include_directories(fibercpu PRIVATE . ${simde_SOURCE_DIR})
+target_include_directories(fibercpu PRIVATE .)
+target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(fibercpu PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
 
 # Link libraries
 if(USE_SOFTFLOAT)

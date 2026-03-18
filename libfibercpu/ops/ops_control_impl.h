@@ -395,7 +395,7 @@ FORCE_INLINE LogicFlow OpRdtsc(LogicFuncParams) {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - state->tsc_start_time).count();
         // tsc = offset + (elapsed_ns * frequency) / 1,000,000,000
-        unsigned __int128 val = (unsigned __int128)elapsed * state->tsc_frequency;
+        __extension__ unsigned __int128 val = (unsigned __int128)elapsed * state->tsc_frequency;
         tsc = state->tsc_offset + (uint64_t)(val / 1000000000ULL);
     } else {
         // Fixed increment mode
