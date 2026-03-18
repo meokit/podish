@@ -1713,7 +1713,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         for (var index = 0; index < candidates.Count; index++)
         {
             var c = candidates[index];
-            var handlerName = $"SuperOpcode_{index:03d}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
+            var handlerName = $"SuperOpcode_{index:000}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
             sb.AppendLine($"// weighted_exec_count={c.Wec} occurrences={c.Occ} relation={c.Relation} anchor={c.Anchor} direction={c.Direction}");
             sb.AppendLine("ATTR_PRESERVE_NONE int64_t " + handlerName + "(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,");
             sb.AppendLine("                                          mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {");
@@ -1735,7 +1735,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         for (var index = 0; index < candidates.Count; index++)
         {
             var c = candidates[index];
-            var handlerName = $"SuperOpcode_{index:03d}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
+            var handlerName = $"SuperOpcode_{index:000}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
             sb.AppendLine($"    if (ops[0].handler == (HandlerFunc)DispatchWrapper<{c.Op0}> && ops[1].handler == (HandlerFunc)DispatchWrapper<{c.Op1}>) return {handlerName};");
         }
         sb.AppendLine("    return nullptr;");
