@@ -72,7 +72,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
             // Reg->Mem: Store 64 bits
             uint32_t addr = ComputeLinearAddress(state, op);
             double val;
-            simde_mm_store_sd(&val, simde_mm_castpd_ps(src_val));
+            simde_mm_store_sd(&val, simde_mm_castps_pd(src_val));
             if (!WriteMem<double, OpOnTLBMiss::Retry>(state, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
         }
     } else if (op->prefixes.flags.rep) {  // F3: MOVSS

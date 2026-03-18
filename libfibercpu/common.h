@@ -19,6 +19,12 @@
 #define CPU_RELAX() std::this_thread::yield()
 #endif
 
+#ifndef __builtin_assume
+#define __builtin_assume(expr) do { \
+    if (!(expr)) __builtin_unreachable(); \
+} while (0)
+#endif
+
 namespace fiberish {
 
 enum class EmuStatus { Running, Stopped, Fault, Yield };

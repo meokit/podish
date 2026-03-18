@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <memory_resource>
+#include <variant>
 #include <vector>
 #include "common.h"
 #include "decoder.h"  // For BasicBlock definition
