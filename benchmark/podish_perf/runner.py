@@ -23,6 +23,7 @@ DEFAULT_CASES = ("compress", "compile", "run")
 DEFAULT_ENGINE = "jit"
 AOT_BINARY_RELATIVE = Path("build/nativeaot/podish-cli-static/Podish.Cli")
 JIT_BINARY_RELATIVE = Path("Podish.Cli/bin")
+PERF_TOOLS_PROJECT_RELATIVE = Path("Podish.PerfTools/Podish.PerfTools.csproj")
 
 
 @dataclass
@@ -67,6 +68,47 @@ def default_fibercpu_library(project_root: Path) -> Path:
         if candidate.exists():
             return candidate
     return host_dir / "libfibercpu.dylib"
+
+
+def perf_tools_project(project_root: Path) -> Path:
+    return project_root / PERF_TOOLS_PROJECT_RELATIVE
+
+
+def ensure_perf_tools_build(project_root: Path) -> None:
+    cmd = [
+        "dotnet",
+        "build",
+        str(perf_tools_project(project_root)),
+        "-c",
+        "Release",
+        "--no-restore",
+    ]
+    print(f"[runner] building perf tools: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"perf tools build failed with exit code {result.returncode}")
+
+
+def perf_tools_run(
+    project_root: Path,
+    command: str,
+    extra_args: list[str],
+) -> subprocess.CompletedProcess[str]:
+    cmd = [
+        "dotnet",
+        "run",
+        "--project",
+        str(perf_tools_project(project_root)),
+        "-c",
+        "Release",
+        "--no-build",
+        "--no-restore",
+        "--",
+        command,
+        *extra_args,
+    ]
+    print(f"[runner] perf tools: {' '.join(cmd)}")
+    return subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
 
 
 def build_guest_script(case: str, iterations: int) -> str:
@@ -220,20 +262,19 @@ def run_block_analysis_with_options(
     n_gram: int,
     top_ngrams: int,
 ) -> Path:
-    analysis_script = project_root / "scripts" / "analyze_blocks.py"
     output_path = guest_stats_dir / "blocks_analysis.json"
     cmd = [
-        sys.executable,
-        str(analysis_script),
+        "analyze-blocks",
+        "--input",
         str(guest_stats_dir),
+        "--lib",
         str(fibercpu_library),
         "--output",
         str(output_path),
     ]
     if n_gram > 0:
         cmd.extend(["--n-gram", str(n_gram), "--top-ngrams", str(top_ngrams)])
-    print(f"[runner] analyzing block dump: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    result = perf_tools_run(project_root, cmd[0], cmd[1:])
     if result.returncode != 0:
         raise RuntimeError(f"block analysis failed with exit code {result.returncode}")
     return output_path
@@ -247,10 +288,8 @@ def run_superopcode_aggregation(
     n_gram: int,
     top_candidates: int,
 ) -> tuple[Path, Path]:
-    script = project_root / "benchmark" / "podish_perf" / "analyze_superopcode_candidates.py"
     cmd = [
-        sys.executable,
-        str(script),
+        "analyze-superopcode-candidates",
         str(input_dir),
         "--n-gram",
         str(n_gram),
@@ -261,8 +300,7 @@ def run_superopcode_aggregation(
         "--output-md",
         str(output_md),
     ]
-    print(f"[runner] aggregating superopcode candidates: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=str(project_root), env=clean_env(), check=False)
+    result = perf_tools_run(project_root, cmd[0], cmd[1:])
     if result.returncode != 0:
         raise RuntimeError(f"superopcode aggregation failed with exit code {result.returncode}")
     return output_json, output_md
@@ -476,6 +514,11 @@ def parse_args() -> argparse.Namespace:
         help="Keep EnableSuperOpcodes=true even when exporting/analyzing JIT block dumps",
     )
     parser.add_argument(
+        "--skip-auto-analyze-block-dump",
+        action="store_true",
+        help="Export guest block dumps but skip the built-in Python analysis step",
+    )
+    parser.add_argument(
         "--candidate-top",
         type=int,
         default=100,
@@ -511,6 +554,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    if args.jit_handler_profile_block_dump or args.aggregate_superopcode_candidates:
+        ensure_perf_tools_build(project_root)
 
     timestamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
     results_dir = (
@@ -571,7 +617,7 @@ def main() -> int:
                 reuse_rootfs=args.reuse_rootfs,
                 keep_workdirs=args.keep_workdirs,
                 export_block_dump=args.jit_handler_profile_block_dump,
-                auto_analyze_block_dump=args.jit_handler_profile_block_dump,
+                auto_analyze_block_dump=args.jit_handler_profile_block_dump and not args.skip_auto_analyze_block_dump,
                 fibercpu_library=fibercpu_library,
                 block_n_gram=args.block_n_gram,
                 block_top_ngrams=args.block_top_ngrams,

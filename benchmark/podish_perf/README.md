@@ -125,7 +125,7 @@ benchmark/podish_perf/results/<timestamp>/superopcode_candidates.md
 You can aggregate existing samples later:
 
 ```bash
-python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- analyze-superopcode-candidates \
   benchmark/podish_perf/results/<timestamp>/guest-stats \
   --n-gram 2 \
   --top 100 \
@@ -136,7 +136,7 @@ python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
 To run the whole SuperOpcode mining flow in one command:
 
 ```bash
-python3 benchmark/podish_perf/superopcode_pipeline.py \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- pipeline \
   --results-dir benchmark/podish_perf/results/superopcode-run \
   --case run \
   --repeat 1 \
@@ -144,6 +144,8 @@ python3 benchmark/podish_perf/superopcode_pipeline.py \
 ```
 
 That pipeline builds an analysis binary with `EnableSuperOpcodes=false`, mines raw opcode streams, ranks global 2-gram candidates by anchor frequency and dependency weight, generates `libfibercpu/generated/superopcodes.generated.cpp`, and can optionally rebuild with superopcodes enabled for verification.
+
+The old Python entrypoints remain as compatibility wrappers, but the C# tool is the recommended path for superopcode analysis and generation.
 
 ## Record and analyze xctrace
 
