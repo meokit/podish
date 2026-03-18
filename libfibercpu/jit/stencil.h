@@ -27,6 +27,8 @@ enum class LogicFlow : uint8_t;
 
 #ifdef __clang__
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
+#elif defined(__GNUC__)
+#define ATTR_PRESERVE_NONE
 #else
 #define ATTR_PRESERVE_NONE
 #endif
