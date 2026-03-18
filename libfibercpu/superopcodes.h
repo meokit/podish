@@ -42,7 +42,8 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count);
                 ATTR_MUSTTAIL return MemoryOpRetry(state, flow_op, instr_limit, utlb, branch, flags_cache);        \
             case LogicFlow::ExitToBranch:                                                                          \
                 RecordBlockHandlersThrough(state, flow_op);                                                        \
-                ATTR_MUSTTAIL return ResolveBranchTarget(state, flow_op, instr_limit, utlb, branch, flags_cache);  \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, flow_op, instr_limit,  \
+                                                                                     utlb, branch, flags_cache);   \
             default:                                                                                               \
                 CommitFlagsCache(state, flags_cache);                                                              \
                 return instr_limit;                                                                                \

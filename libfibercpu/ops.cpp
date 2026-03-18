@@ -5,20 +5,6 @@
 
 namespace fiberish {
 
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-static FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState* state, const DecodedOp* op, bool cache_hit) {
-    if (!op->meta.flags.is_conditional_branch) return;
-    auto& counters = state->jcc_profile_counts[reinterpret_cast<uintptr_t>(op->handler)];
-    if (cache_hit) {
-        counters.cache_hit++;
-    } else {
-        counters.cache_miss++;
-    }
-}
-#else
-static FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState*, const DecodedOp*, bool) {}
-#endif
-
 template <bool restart>
 ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
@@ -159,67 +145,38 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
     ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
-template <ExtKind Kind>
-static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t target_eip, uint64_t flags_cache) {
-    state->mem_op.emplace<0>();
-    if (instr_limit <= 0) {
-        CommitFlagsCache(state, flags_cache);
-        state->ctx.eip = target_eip;
-        return instr_limit;
-    }
+ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                       int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                       uint64_t flags_cache) {
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+}
 
-    BasicBlock* next_block;
-    if constexpr (Kind == ExtKind::Link) {
-        next_block = GetNextBlock(op);
-    } else {
-        static_assert(Kind == ExtKind::ControlFlow);
-        next_block = GetCachedTarget(op);
-    }
-
-    // Decode pre-fills control-flow caches with dummy_invalid_block, so cached pointers are never null here.
-    auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
-    auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
-    auto entry = header_ptr->entry;
-    if (header_ptr->MatchesChainTarget(target_eip)) [[likely]] {
-        RecordConditionalBranchCacheResult(state, op, true);
-        state->last_block = next_block;
-        // Copy from ChainToKnownBlock
-        BasicBlock* next_block = state->last_block;
-        instr_limit -= header_ptr->inst_count();
-        DecodedOp* next_head = next_block->FirstOp();
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-        next_block->exec_count++;
-        state->current_block_head = next_head;
-#endif
-        __builtin_assume(entry != nullptr);
-        ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max(),
-                                   flags_cache);
-    }
-
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<Kind>(state, op, instr_limit, utlb, target_eip, flags_cache);
+ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                              uint64_t flags_cache) {
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
+                                                                           flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
     (void)op;
     if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveSentinelFallthrough(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                       int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                       uint64_t flags_cache) {
     (void)branch;
-    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
-                                                                flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
+                                                                  flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
-                                                                       flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
+                                                                         flags_cache);
 }
 
 // Sentinel Handlers
