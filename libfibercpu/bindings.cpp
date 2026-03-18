@@ -379,10 +379,6 @@ EmuState* X86_Create() {
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
 
-    // Link pointers
-    state->ctx.mmu = &state->mmu;
-    state->ctx.hooks = &state->hooks;
-
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
 
@@ -409,11 +405,7 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
         state->mmu.attach_core(mem::Mmu::CloneCorePreserveExternal(parent->mmu.core_handle()), false);
     }
 
-    // 3. Link Internal Pointers
-    state->ctx.mmu = &state->mmu;
-    state->ctx.hooks = &state->hooks;
-
-    // 4. Set Callbacks (Bridge to same handlers, but new 'state' passed)
+    // 3. Set Callbacks (Bridge to same handlers, but new 'state' passed)
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     // state->mmu.set_mem_hook(InternalMemHookBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);

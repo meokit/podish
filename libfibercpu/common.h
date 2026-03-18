@@ -54,17 +54,6 @@ struct alignas(64) Context {
     uint64_t flags_state;  // Canonical flags state; architectural EFLAGS live in lower32
     uint32_t eflags_mask;  // Mask for user-modifiable flags (1=modifiable)
 
-    // SSE/SSE2 Registers
-    alignas(16) simde__m128 xmm[8];
-    uint32_t mxcsr;
-
-    // FPU Registers (80-bit Extended Precision)
-    alignas(16) float80 fpu_regs[8];
-    uint16_t fpu_sw = 0;
-    uint16_t fpu_cw = 0;       // Default to 0 to match Unicorn (was 0x037F)
-    uint16_t fpu_tw = 0xFFFF;  // Empty
-    int fpu_top = 0;
-
     // Segment Base Addresses
     // For user-mode simulation:
     // CS, DS, SS, ES, are typically base 0 (Flat Model).
@@ -76,9 +65,17 @@ struct alignas(64) Context {
     // Profiling
     uint16_t last_opcode;
 
-    // System Environment (Pointers to Managers)
-    void* mmu;    // Type-erased or forward-declared SoftMMU*
-    void* hooks;  // Type-erased or forward-declared HookManager*
+    uint32_t mxcsr;
+
+    // SSE/SSE2 Registers
+    alignas(16) simde__m128 xmm[8];
+
+    // FPU Registers (80-bit Extended Precision)
+    alignas(16) float80 fpu_regs[8];
+    int fpu_top = 0;
+    uint16_t fpu_sw = 0;
+    uint16_t fpu_cw = 0;       // Default to 0 to match Unicorn (was 0x037F)
+    uint16_t fpu_tw = 0xFFFF;  // Empty
 };
 
 struct EmuState;
