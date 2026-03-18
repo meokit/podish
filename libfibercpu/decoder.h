@@ -6,15 +6,20 @@
 #include "common.h"
 #include "mem/tlb.h"
 
-#ifdef __clang__
-#define ATTR_PRESERVE_NONE __attribute__((preserve_none))
+#if __has_cpp_attribute(clang::musttail)
 #define ATTR_MUSTTAIL [[clang::musttail]]
-#elif defined(__GNUC__)
-#define ATTR_PRESERVE_NONE
+#elif __has_cpp_attribute(gnu::musttail)
 #define ATTR_MUSTTAIL [[gnu::musttail]]
+#elif __has_cpp_attribute(msvc::musttail)
+#define ATTR_MUSTTAIL [[msvc::musttail]]
+#else
+#define ATTR_MUSTTAIL
+#endif
+
+#if __has_cpp_attribute(preserve_none)
+#define ATTR_PRESERVE_NONE __attribute__((preserve_none))
 #else
 #define ATTR_PRESERVE_NONE
-#define ATTR_MUSTTAIL
 #endif
 
 #if defined(_MSC_VER)
@@ -31,26 +36,6 @@
 #define RESTRICT __restrict__
 #else
 #define RESTRICT
-#endif
-
-#if defined(__GNUC__) || defined(__clang__)
-#define PREFETCH(addr) __builtin_prefetch(addr, 0, 3)
-#define PREFETCH_WRITE(addr) __builtin_prefetch(addr, 1, 3)
-#elif defined(_MSC_VER)
-#include <intrin.h>
-#if defined(_M_X64) || defined(_M_IX86)
-#define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
-#define PREFETCH_WRITE(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
-#elif defined(_M_ARM64) || defined(_M_ARM)
-#define PREFETCH(addr) __prefetch((const void*)(addr))
-#define PREFETCH_WRITE(addr) __prefetchw((const void*)(addr))
-#else
-#define PREFETCH(addr)
-#define PREFETCH_WRITE(addr)
-#endif
-#else
-#define PREFETCH(addr)
-#define PREFETCH_WRITE(addr)
 #endif
 
 namespace fiberish {

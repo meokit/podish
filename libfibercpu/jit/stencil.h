@@ -25,10 +25,8 @@ enum class LogicFlow : uint8_t;
     EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch, \
         uint64_t &flags_cache
 
-#ifdef __clang__
+#if __has_cpp_attribute(preserve_none)
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
-#elif defined(__GNUC__)
-#define ATTR_PRESERVE_NONE
 #else
 #define ATTR_PRESERVE_NONE
 #endif
