@@ -122,7 +122,7 @@ static ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, De
     (void)op;
     (void)branch;
     BasicBlock* next_block = state->last_block;
-    instr_limit -= next_block->inst_count;
+    instr_limit -= next_block->inst_count();
     DecodedOp* next_head = next_block->FirstOp();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     next_block->exec_count++;
@@ -187,7 +187,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetImpl(EmuState*
         state->last_block = next_block;
         // Copy from ChainToKnownBlock
         BasicBlock* next_block = state->last_block;
-        instr_limit -= next_block->inst_count;
+        instr_limit -= header_ptr->inst_count();
         DecodedOp* next_head = next_block->FirstOp();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
         next_block->exec_count++;

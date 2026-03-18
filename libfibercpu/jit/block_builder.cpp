@@ -404,7 +404,7 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     if (m_code_buffer == MAP_FAILED || m_code_pool == nullptr) return nullptr;
 
     if (JitDebugEnabled()) {
-        JitDebugLog("[jit] compile block start=%08x insts=%u entry=%p\n", bb->chain.start_eip, bb->inst_count,
+        JitDebugLog("[jit] compile block start=%08x insts=%u entry=%p\n", bb->chain.start_eip, bb->inst_count(),
                     reinterpret_cast<void*>(bb->entry));
     }
     const bool log_reloc_detail = JitDebugEnabled() && ShouldDumpBlock(bb->chain.start_eip);
@@ -422,9 +422,9 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     size_t estimated_size = 0;
     size_t branch_reloc_count = 0;
     std::vector<uint16_t> stencil_ids;
-    stencil_ids.reserve(bb->inst_count);
+    stencil_ids.reserve(bb->inst_count());
 
-    for (uint32_t i = 0; i < bb->inst_count; ++i) {
+    for (uint32_t i = 0; i < bb->inst_count(); ++i) {
         DecodedOp* op = bb->FirstOp() + i;
         uint16_t sid = LookupStencil(op->handler);
         if (sid == 0xFFFF) {
@@ -464,11 +464,11 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
         }
         return nullptr;
     }
-    std::vector<uint8_t*> stencil_starts(bb->inst_count);
+    std::vector<uint8_t*> stencil_starts(bb->inst_count());
     std::vector<JitOpRange> op_ranges;
-    op_ranges.reserve(bb->inst_count);
+    op_ranges.reserve(bb->inst_count());
     uint8_t* layout_ptr = start_ptr;
-    for (uint32_t i = 0; i < bb->inst_count; ++i) {
+    for (uint32_t i = 0; i < bb->inst_count(); ++i) {
         stencil_starts[i] = layout_ptr;
         layout_ptr += generated::stencils[stencil_ids[i]].code_size;
     }
@@ -478,7 +478,7 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
     ankerl::unordered_dense::map<VeneerKey, uint8_t*, VeneerKeyHash> veneer_cache;
     size_t veneer_count = 0;
     size_t veneer_bytes = 0;
-    for (uint32_t i = 0; i < bb->inst_count; ++i) {
+    for (uint32_t i = 0; i < bb->inst_count(); ++i) {
         uint16_t sid = stencil_ids[i];
         const StencilDesc& desc = generated::stencils[sid];
         DecodedOp* op = bb->FirstOp() + i;
@@ -535,7 +535,7 @@ JitCodeBlock* BlockBuilder::CompileBlock(BasicBlock* bb) {
                                 std::strstr(target_name, "JitContinueSkipOneTarget"))) {
                 const uint32_t skip = (std::strstr(target_name, "JitContinueSkipOneTarget") != nullptr) ? 2u : 1u;
                 const uint32_t target_index = i + skip;
-                if (target_index < bb->inst_count) {
+                if (target_index < bb->inst_count()) {
                     PatchBranch26(branch_ptr, stencil_starts[target_index]);
                     if (log_reloc_detail) {
                         JitDebugLog(

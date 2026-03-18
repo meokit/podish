@@ -105,8 +105,8 @@ static void X86_ResetCodeCache(EmuState* state) {
 }
 
 static bool BlockCrossesPage(const BasicBlock* block) {
-    if (!block || block->inst_count == 0 || block->end_eip <= block->chain.start_eip) return false;
-    return ((block->chain.start_eip ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
+    if (!block || block->inst_count() == 0 || block->end_eip <= block->start_eip()) return false;
+    return ((block->start_eip() ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
 }
 
 static bool BlockIsConcatCandidateTerminal(const BasicBlock* block) {
@@ -117,14 +117,14 @@ static bool BlockIsConcatCandidateTerminal(const BasicBlock* block) {
 
 static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
     if (!source || !target) return false;
-    if (source->chain.start_eip == target->chain.start_eip) return true;
-    return target->branch_target_eip == source->chain.start_eip;
+    if (source->start_eip() == target->start_eip()) return true;
+    return target->branch_target_eip == source->start_eip();
 }
 
 static void RegisterBlockPages(EmuState* state, uint32_t cache_eip, const BasicBlock* block) {
     uint32_t page_idx = cache_eip >> 12;
     state->page_to_blocks[page_idx].push_back(cache_eip);
-    if (block && block->end_eip > block->chain.start_eip && ((block->end_eip - 1) >> 12) != page_idx) {
+    if (block && block->end_eip > block->start_eip() && ((block->end_eip - 1) >> 12) != page_idx) {
         uint32_t page2 = (block->end_eip - 1) >> 12;
         state->page_to_blocks[page2].push_back(cache_eip);
     }
@@ -156,12 +156,12 @@ static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t 
 
 static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
                                         BlockStats* stats) {
-    if (!a || !b || !a->chain.is_valid || !b->chain.is_valid || a->inst_count == 0 || b->inst_count == 0) {
+    if (!a || !b || !a->is_valid() || !b->is_valid() || a->inst_count() == 0 || b->inst_count() == 0) {
         stats->block_concat_reject_target_missing++;
         return false;
     }
 
-    if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->chain.start_eip ^ b->chain.start_eip) & 0xFFFFF000u) != 0) {
+    if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->start_eip() ^ b->start_eip()) & 0xFFFFF000u) != 0) {
         stats->block_concat_reject_cross_page++;
         return false;
     }
@@ -172,7 +172,7 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
     }
 
     const uint32_t removed_inst_count = remove_source_terminal_inst ? 1u : 0u;
-    const uint32_t concat_inst_count = a->inst_count - removed_inst_count + b->inst_count;
+    const uint32_t concat_inst_count = a->inst_count() - removed_inst_count + b->inst_count();
 
     if (concat_inst_count > 64) {
         stats->block_concat_reject_size_limit++;
@@ -183,22 +183,21 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
 }
 
 static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    const uint32_t concat_inst_count = a->inst_count - 1 + b->inst_count;
+    const uint32_t concat_inst_count = a->inst_count() - 1 + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
     state->RememberAllocatedBlock(concat);
 
-    concat->chain.start_eip = a->chain.start_eip;
+    concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
     concat->jit_code = nullptr;
-    concat->inst_count = concat_inst_count;
+    concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
     concat->branch_target_eip = b->branch_target_eip;
     concat->fallthrough_eip = b->fallthrough_eip;
     concat->set_terminal_kind(b->terminal_kind());
-    concat->chain.is_valid = true;
     concat->exec_count = 0;
 
     DecodedOp* dst = concat->FirstOp();
@@ -206,10 +205,10 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     const DecodedOp* b_ops = b->FirstOp();
 
     uint32_t out = 0;
-    for (uint32_t i = 0; i + 1 < a->inst_count; ++i) {
+    for (uint32_t i = 0; i + 1 < a->inst_count(); ++i) {
         dst[out++] = a_ops[i];
     }
-    for (uint32_t i = 0; i < b->inst_count; ++i) {
+    for (uint32_t i = 0; i < b->inst_count(); ++i) {
         dst[out++] = b_ops[i];
     }
     dst[out] = *b->Sentinel();
@@ -220,22 +219,21 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
 }
 
 static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    const uint32_t concat_inst_count = a->inst_count + b->inst_count;
+    const uint32_t concat_inst_count = a->inst_count() + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
     void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
     state->RememberAllocatedBlock(concat);
 
-    concat->chain.start_eip = a->chain.start_eip;
+    concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
     concat->jit_code = nullptr;
-    concat->inst_count = concat_inst_count;
+    concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
     concat->branch_target_eip = b->branch_target_eip;
     concat->fallthrough_eip = b->fallthrough_eip;
     concat->set_terminal_kind(b->terminal_kind());
-    concat->chain.is_valid = true;
     concat->exec_count = 0;
 
     DecodedOp* dst = concat->FirstOp();
@@ -243,10 +241,10 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     const DecodedOp* b_ops = b->FirstOp();
 
     uint32_t out = 0;
-    for (uint32_t i = 0; i < a->inst_count; ++i) {
+    for (uint32_t i = 0; i < a->inst_count(); ++i) {
         dst[out++] = a_ops[i];
     }
-    for (uint32_t i = 0; i < b->inst_count; ++i) {
+    for (uint32_t i = 0; i < b->inst_count(); ++i) {
         dst[out++] = b_ops[i];
     }
     dst[out] = *b->Sentinel();
@@ -338,9 +336,9 @@ static bool g_SignalRegistered = false;
 static void InitializeDummyInvalidBlock(EmuState* state) {
     BasicBlock& block = state->dummy_invalid_block;
     block.chain = {};
-    block.chain.is_valid = false;
+    block.set_start_eip(BasicBlock::kInvalidStartEipBit);
     block.end_eip = 0;
-    block.inst_count = 0;
+    block.set_inst_count(0);
     block.slot_count = 0;
     block.sentinel_slot_index = 0;
     block.branch_target_eip = 0;
@@ -746,11 +744,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         auto execute_block = [&](BasicBlock* block_ptr) {
             block_ptr->exec_count++;
 
-            if (state->last_block->inst_count > 0) {
+            if (state->last_block->inst_count() > 0) {
                 SetNextBlock(state->last_block->Sentinel(), block_ptr);
             }
             state->last_block = block_ptr;
-            if (block_ptr->inst_count == 0) return;
+            if (block_ptr->inst_count() == 0) return;
 
             DecodedOp* head = block_ptr->FirstOp();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
@@ -768,7 +766,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                     }
                 }
                 int64_t initial_batch_limit = batch_limit;
-                batch_limit -= block_ptr->inst_count;
+                batch_limit -= block_ptr->inst_count();
                 if (state->eip_dirty) state->eip_dirty = false;
 
                 MicroTLB utlb;
@@ -821,7 +819,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         // Skip invalid blocks (shouldn't happen if we erase them on invalidation,
         // but safe to check if we change logic)
-        if (!block_ptr->chain.is_valid) {
+        if (!block_ptr->is_valid()) {
             // Re-decode? Or Fault?
             // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
             // Let's treat it as a miss and re-decode.
@@ -885,11 +883,11 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
 
     for (const auto& [eip, block] : state->block_cache) {
         (void)eip;
-        if (!block || block == &state->dummy_invalid_block || block->inst_count == 0) continue;
+        if (!block || block == &state->dummy_invalid_block || block->inst_count() == 0) continue;
         stats->executed_block_entries += block->exec_count;
-        stats->executed_inst_total += block->exec_count * block->inst_count;
-        stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count, 64)] += block->exec_count;
-        try_insert_top(block->chain.start_eip, block->inst_count, block->exec_count);
+        stats->executed_inst_total += block->exec_count * block->inst_count();
+        stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count(), 64)] += block->exec_count;
+        try_insert_top(block->start_eip(), block->inst_count(), block->exec_count);
     }
 
     stats->exec_weighted_avg_block_insts =

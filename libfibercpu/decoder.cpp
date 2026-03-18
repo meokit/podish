@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include <cassert>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -761,12 +762,12 @@ finalize:
     BasicBlock* block = new (mem) BasicBlock;
     state->RememberAllocatedBlock(block);
 
-    block->chain.start_eip = start_eip;
+    assert((start_eip & BasicBlock::kInvalidStartEipBit) == 0 && "BasicBlock start_eip must stay in low 2G");
+    block->set_start_eip(start_eip);
     block->end_eip = end_eip;
-    block->inst_count = inst_count;
+    block->set_inst_count(inst_count);
     block->slot_count = (uint32_t)slot_count;
     block->exec_count = 0;
-    block->chain.is_valid = 1;
     block->sentinel_slot_index = 0;
     block->branch_target_eip = 0;
     block->fallthrough_eip = end_eip;
@@ -809,12 +810,12 @@ finalize:
             state->block_stats.jit_compile_success++;
             block->entry = reinterpret_cast<HandlerFunc>(jcb->entry);
             if (JitDebugEnabled()) {
-                JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->chain.start_eip,
+                JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->start_eip(),
                             reinterpret_cast<void*>(block->entry), jcb->entry, jcb->code_size);
             }
         } else if (JitDebugEnabled()) {
             state->block_stats.jit_compile_failure++;
-            JitDebugLog("[jit] fallback block start=%08x entry=%p\n", block->chain.start_eip,
+            JitDebugLog("[jit] fallback block start=%08x entry=%p\n", block->start_eip(),
                         reinterpret_cast<void*>(block->entry));
         } else {
             state->block_stats.jit_compile_failure++;
@@ -830,9 +831,9 @@ finalize:
 // ----------------------------------------------------------------------------
 
 void BasicBlock::Invalidate() {
-    if (!chain.is_valid) return;
-    chain.is_valid = false;
-    // No unlinking needed because OpExitBlock checks chain.is_valid
+    if (!is_valid()) return;
+    chain.start_eip = start_eip() | kInvalidStartEipBit;
+    // No unlinking needed because OpExitBlock checks start_eip's invalid bit.
 }
 
 }  // namespace fiberish

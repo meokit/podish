@@ -277,20 +277,15 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
 }
 
 struct BasicBlockChainPrefix {
-    uint32_t start_eip;
-    uint32_t is_valid;
-};
-
-struct BasicBlockChainMatch {
-    uint32_t start_eip;
-    uint32_t is_valid;
+    uint64_t start_eip : 32;
+    uint64_t inst_count : 8;
+    uint64_t reserved : 24;
 };
 
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain;
     HandlerFunc entry = nullptr;
     jit::JitCodeBlock* jit_code = nullptr;
-    uint32_t inst_count;  // Number of instructions in block (excluding sentinel)
     uint32_t end_eip;
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
@@ -320,13 +315,16 @@ struct alignas(16) BasicBlock {
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
 
-    bool MatchesChainTarget(uint32_t target_eip) const {
-        // The chaining fast path only cares about start_eip + valid word.
-        const auto actual =
-            std::bit_cast<uint64_t>(BasicBlockChainMatch{.start_eip = chain.start_eip, .is_valid = chain.is_valid});
-        const auto expected = std::bit_cast<uint64_t>(BasicBlockChainMatch{.start_eip = target_eip, .is_valid = 1});
-        return actual == expected;
-    }
+    static constexpr uint32_t kInvalidStartEipBit = 0x80000000u;
+
+    uint32_t start_eip() const { return static_cast<uint32_t>(chain.start_eip); }
+    void set_start_eip(uint32_t start_eip) { chain.start_eip = start_eip; }
+    bool is_valid() const { return (start_eip() & kInvalidStartEipBit) == 0; }
+
+    uint32_t inst_count() const { return chain.inst_count; }
+    void set_inst_count(uint32_t count) { chain.inst_count = static_cast<uint8_t>(count); }
+
+    bool MatchesChainTarget(uint32_t target_eip) const { return start_eip() == target_eip; }
 
     // Mark block as invalid
     void Invalidate();
@@ -335,7 +333,7 @@ struct alignas(16) BasicBlock {
 static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at offset 0");
 static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at offset 8");
 static_assert(offsetof(BasicBlock, jit_code) == 16, "BasicBlock: jit_code must start at offset 16");
-static_assert(offsetof(BasicBlock, inst_count) == 24, "BasicBlock: inst_count must start at offset 24");
+static_assert(sizeof(BasicBlockChainPrefix) == 8, "BasicBlockChainPrefix must be exactly 8 bytes");
 static_assert(offsetof(BasicBlock, slots) == 64, "BasicBlock: slots must start at offset 64");
 
 // Decoder Logic
