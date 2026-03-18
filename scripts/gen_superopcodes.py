@@ -79,16 +79,10 @@ def emit_handler(index: int, candidate: dict[str, object]) -> str:
     return f"""// weighted_exec_count={candidate["weighted_exec_count"]} occurrences={candidate["occurrences"]} relation={relation_kind} anchor={anchor_display} direction={direction}
 ATTR_PRESERVE_NONE int64_t {handler_name}(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {{
-    auto flow0 = {op0_qualified}(state, op, &utlb, GetImm(op), &branch, flags_cache);
-    if (flow0 != LogicFlow::Continue) [[unlikely]] {{
-        HANDLE_SUPEROPCODE_FLOW(flow0, state, op, instr_limit, utlb, branch, flags_cache);
-    }}
+    RUN_SUPEROPCODE_OP({op0_qualified}, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
-    auto flow1 = {op1_qualified}(state, second_op, &utlb, GetImm(second_op), &branch, flags_cache);
-    if (flow1 != LogicFlow::Continue) [[unlikely]] {{
-        HANDLE_SUPEROPCODE_FLOW(flow1, state, second_op, instr_limit, utlb, branch, flags_cache);
-    }}
+    RUN_SUPEROPCODE_OP({op1_qualified}, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {{
         ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);

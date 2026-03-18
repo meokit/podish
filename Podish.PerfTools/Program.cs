@@ -95,7 +95,7 @@ Examples:
         var inputs = GetMultiValue(args, "--input");
         if (inputs.Count == 0)
         {
-            inputs = args.Where(x => !x.StartsWith("--", StringComparison.Ordinal)).ToList();
+            inputs = GetPositionalArgs(args);
         }
 
         var nGram = GetIntValue(args, "--n-gram", 2);
@@ -103,6 +103,16 @@ Examples:
             throw new InvalidOperationException("--n-gram must remain 2");
 
         var top = GetIntValue(args, "--top", 100);
+        var scoreBasis = GetValue(args, "--score-basis") ?? "pair";
+        if (scoreBasis is not ("anchor" or "pair"))
+            throw new InvalidOperationException("--score-basis must be one of: anchor, pair");
+        var rawWeight = GetIntValue(args, "--raw-weight", 2);
+        var rarWeight = GetIntValue(args, "--rar-weight", 0);
+        var wawWeight = GetIntValue(args, "--waw-weight", 0);
+        var jccMultiplier = GetIntValue(args, "--jcc-multiplier", 1);
+        var jccMode = GetValue(args, "--jcc-mode") ?? "none";
+        if (jccMode is not ("none" or "pair" or "raw-only"))
+            throw new InvalidOperationException("--jcc-mode must be one of: none, pair, raw-only");
         var anchorTop = GetIntValue(args, "--anchor-top", 64);
         var minSamples = GetIntValue(args, "--min-samples", 1);
         var minWeightedExec = GetIntValue(args, "--min-weighted-exec-count", 0);
@@ -151,7 +161,7 @@ Examples:
                 skippedSamples.Add(new Dictionary<string, object?>
                 {
                     ["analysis_file"] = analysisFile.ToString(),
-                    ["reasons"] = new[] { "no adjacent 2-op candidates found in blocks" }
+                    ["reasons"] = new[] { "no def-use-adjacent 2-op candidates found in blocks" }
                 });
                 continue;
             }
@@ -182,7 +192,15 @@ Examples:
             if (entry.SampleCount < minSamples || entry.WeightedExecCount < minWeightedExec)
                 continue;
 
-            candidates.Add(NormalizeCandidateEntry(entry, anchorEntry));
+            candidates.Add(NormalizeCandidateEntry(
+                entry,
+                anchorEntry,
+                scoreBasis,
+                rawWeight,
+                rarWeight,
+                wawWeight,
+                jccMultiplier,
+                jccMode));
         }
 
         candidates = candidates
@@ -197,17 +215,27 @@ Examples:
             ["metadata"] = new Dictionary<string, object?>
             {
                 ["inputs"] = inputs.Select(Path.GetFullPath).ToArray(),
-                ["strategy"] = "sequential-2-gram-count",
+                ["strategy"] = "global-score-anchor-freq-times-dep-weight",
                 ["analysis_file_count"] = analysisFiles.Count,
                 ["included_sample_count"] = includedSamples.Count,
                 ["skipped_sample_count"] = skippedSamples.Count,
                 ["candidate_count"] = candidates.Count,
                 ["anchor_count"] = anchors.Count,
                 ["anchor_top_limit"] = anchorTop,
+                ["score_basis"] = scoreBasis,
+                ["raw_weight"] = rawWeight,
+                ["rar_weight"] = rarWeight,
+                ["waw_weight"] = wawWeight,
+                ["jcc_multiplier"] = jccMultiplier,
+                ["jcc_mode"] = jccMode,
                 ["min_samples"] = minSamples,
                 ["min_weighted_exec_count"] = minWeightedExec,
                 ["top_limit"] = top,
-                ["superopcode_width"] = 2
+                ["superopcode_width"] = 2,
+                ["selected_relation_kind_counts"] = candidates
+                    .GroupBy(c => Convert.ToString(c["relation_kind"], CultureInfo.InvariantCulture) ?? "", StringComparer.Ordinal)
+                    .OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal)
             },
             ["included_samples"] = includedSamples,
             ["skipped_samples"] = skippedSamples,
@@ -833,18 +861,38 @@ Examples:
                 anchorStats.WeightedExecCount += blockExecCount;
                 anchorStats.Occurrences += 1;
                 anchorStats.UniqueBlockStarts.Add(blockStart);
+                anchorStats.Semantics ??= InferSemantics(anchor!);
+
+                if (i > 0 && !string.IsNullOrWhiteSpace(seq[i - 1]))
+                {
+                    var first = seq[i - 1]!;
+                    var relation = ClassifyPair(first, anchor!, opsNode[i - 1], opsNode[i]);
+                    if (relation is not null)
+                    {
+                        var pair = (first, anchor!);
+                        if (!pairs.TryGetValue(pair, out var pairStats))
+                        {
+                            pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "predecessor", relation);
+                            pairs[pair] = pairStats;
+                        }
+                        pairStats.Add(blockExecCount, blockStart, i - 1, relation);
+                    }
+                }
 
                 if (i + 1 < seq.Count && !string.IsNullOrWhiteSpace(seq[i + 1]))
                 {
-                    var pair = (anchor!, seq[i + 1]!);
+                    var second = seq[i + 1]!;
+                    var relation = ClassifyPair(anchor!, second, opsNode[i], opsNode[i + 1]);
+                    if (relation is null)
+                        continue;
+
+                    var pair = (anchor!, second);
                     if (!pairs.TryGetValue(pair, out var pairStats))
                     {
-                        pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!);
+                        pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "successor", relation);
                         pairs[pair] = pairStats;
                     }
-                    pairStats.WeightedExecCount += blockExecCount;
-                    pairStats.Occurrences += 1;
-                    pairStats.UniqueBlockStarts.Add(blockStart);
+                    pairStats.Add(blockExecCount, blockStart, i, relation);
                 }
             }
         }
@@ -868,6 +916,7 @@ Examples:
         entry.SampleCount += 1;
         entry.EngineCounts.Add((string?)sampleMeta["engine"]);
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
+        entry.Semantics ??= sampleStats.Semantics;
     }
 
     private static void MergePairStats(
@@ -878,7 +927,7 @@ Examples:
     {
         if (!aggregate.TryGetValue(pair, out var entry))
         {
-            entry = new PairAggregate(pair.Item1, pair.Item2, sampleStats.AnchorHandler);
+            entry = new PairAggregate(pair.Item1, pair.Item2, sampleStats.AnchorHandler, sampleStats.Direction, sampleStats.RelationKind, sampleStats.RelationPriority, sampleStats.SharedResources, sampleStats.LegalityNotes);
             aggregate[pair] = entry;
         }
 
@@ -888,6 +937,8 @@ Examples:
         entry.SampleCount += 1;
         entry.EngineCounts.Add((string?)sampleMeta["engine"]);
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
+        entry.SharedResourceVariants.Add(string.Join(",", sampleStats.SharedResources));
+        entry.RelationKindVariants.Add(sampleStats.RelationKind);
     }
 
     private static Dictionary<string, object?> NormalizeAnchorEntry(AnchorAggregate entry)
@@ -902,11 +953,38 @@ Examples:
             ["sample_count"] = entry.SampleCount,
             ["engine_counts"] = entry.EngineCounts.ToSortedDictionary(),
             ["case_counts"] = entry.CaseCounts.ToSortedDictionary(),
+            ["semantics"] = entry.Semantics?.ToDictionary(),
         };
     }
 
-    private static Dictionary<string, object?> NormalizeCandidateEntry(PairAggregate entry, Dictionary<string, object?> anchorEntry)
+    private static Dictionary<string, object?> NormalizeCandidateEntry(
+        PairAggregate entry,
+        Dictionary<string, object?> anchorEntry,
+        string scoreBasis,
+        int rawWeight,
+        int rarWeight,
+        int wawWeight,
+        int jccMultiplier,
+        string jccMode)
     {
+        var dominantSharedVariant = entry.SharedResourceVariants
+            .OrderByDescending(kvp => kvp.Value)
+            .ThenBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .FirstOrDefault();
+        var dominantRelation = entry.RelationKindVariants.TryGetValue("RAW", out var rawVariantCount) ? new KeyValuePair<string, int>("RAW", rawVariantCount) :
+            entry.RelationKindVariants.TryGetValue("RAR/WAW", out var rarWawVariantCount) ? new KeyValuePair<string, int>("RAR/WAW", rarWawVariantCount) :
+            entry.RelationKindVariants.OrderByDescending(kvp => kvp.Value).ThenBy(kvp => kvp.Key, StringComparer.Ordinal).FirstOrDefault();
+        var dominantRelationKind = string.IsNullOrWhiteSpace(dominantRelation.Key) ? entry.RelationKind : dominantRelation.Key;
+        var dominantRelationCount = dominantRelation.Value;
+        var dominantShared = string.IsNullOrWhiteSpace(dominantSharedVariant.Key)
+            ? entry.SharedResources.ToArray()
+            : dominantSharedVariant.Key.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var dominantDepWeight = RelationDepWeight(dominantRelationKind, rawWeight, rarWeight, wawWeight);
+        var baseFrequency = scoreBasis == "anchor"
+            ? Convert.ToInt64(anchorEntry["weighted_exec_count"], CultureInfo.InvariantCulture)
+            : entry.WeightedExecCount;
+        var jccWeight = RelationJccWeight(new[] { entry.FirstHandler, entry.SecondHandler }, dominantRelationKind, jccMultiplier, jccMode);
+
         return new Dictionary<string, object?>
         {
             ["pair"] = new[] { entry.FirstHandler, entry.SecondHandler },
@@ -917,23 +995,30 @@ Examples:
             ["second_handler"] = entry.SecondHandler,
             ["anchor_handler"] = entry.AnchorHandler,
             ["anchor_display"] = OpShortName(entry.AnchorHandler),
-            ["direction"] = "sequential",
-            ["relation_kind"] = "SEQUENTIAL",
-            ["relation_priority"] = 1,
-            ["shared_resources"] = Array.Empty<string>(),
+            ["direction"] = entry.Direction,
+            ["relation_kind"] = dominantRelationKind,
+            ["relation_priority"] = dominantDepWeight,
+            ["shared_resources"] = dominantShared,
             ["weighted_exec_count"] = entry.WeightedExecCount,
             ["occurrences"] = entry.Occurrences,
             ["unique_block_count"] = entry.UniqueBlockCount,
             ["sample_count"] = entry.SampleCount,
             ["engine_counts"] = entry.EngineCounts.ToSortedDictionary(),
             ["case_counts"] = entry.CaseCounts.ToSortedDictionary(),
-            ["score"] = entry.WeightedExecCount,
+            ["shared_resource_variants"] = entry.SharedResourceVariants.ToSortedDictionary(),
+            ["dominant_shared_resource_count"] = dominantSharedVariant.Value,
+            ["dominant_shared_resource_ratio"] = entry.Occurrences > 0 ? (double)dominantSharedVariant.Value / entry.Occurrences : 0.0,
+            ["relation_kind_variants"] = entry.RelationKindVariants.ToSortedDictionary(),
+            ["dominant_relation_kind_count"] = dominantRelationCount,
+            ["legality_notes"] = entry.LegalityNotes,
+            ["score"] = baseFrequency * dominantDepWeight * jccWeight,
             ["anchor_weighted_exec_count"] = anchorEntry["weighted_exec_count"],
             ["anchor_sample_count"] = anchorEntry["sample_count"],
             ["anchor_unique_block_count"] = anchorEntry["unique_block_count"],
-            ["score_basis"] = "pair",
-            ["base_frequency"] = entry.WeightedExecCount,
-            ["jcc_weight"] = 1,
+            ["anchor_semantics"] = anchorEntry["semantics"],
+            ["score_basis"] = scoreBasis,
+            ["base_frequency"] = baseFrequency,
+            ["jcc_weight"] = jccWeight,
         };
     }
 
@@ -960,7 +1045,7 @@ Examples:
         sb.AppendLine("# SuperOpcode Candidates");
         sb.AppendLine();
         sb.AppendLine($"- Inputs: {string.Join(", ", inputs)}");
-        sb.AppendLine("- Strategy: sequential 2-gram scoring");
+        sb.AppendLine("- Strategy: global 2-gram scoring with hot anchors and dependency weights");
         sb.AppendLine($"- Analysis files discovered: {analysisFiles.Count}");
         sb.AppendLine($"- Included samples: {includedSamples.Count}");
         sb.AppendLine($"- Skipped samples: {skippedSamples.Count}");
@@ -983,7 +1068,10 @@ Examples:
         sb.AppendLine("| --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- |");
         foreach (var (candidate, index) in candidates.Select((c, i) => (c, i + 1)))
         {
-            sb.AppendLine($"| {index} | `{candidate["pair_display"]}` | {candidate["relation_kind"]} | {candidate["score"]} | `{candidate["anchor_display"]}` | {candidate["direction"]} | {candidate["weighted_exec_count"]} | {candidate["sample_count"]} | {candidate["occurrences"]} | - |");
+            var shared = candidate["shared_resources"] is IEnumerable<string> sharedSet ? string.Join(", ", sharedSet) : "-";
+            if (string.IsNullOrWhiteSpace(shared))
+                shared = "-";
+            sb.AppendLine($"| {index} | `{candidate["pair_display"]}` | {candidate["relation_kind"]} | {candidate["score"]} | `{candidate["anchor_display"]}` | {candidate["direction"]} | {candidate["weighted_exec_count"]} | {candidate["sample_count"]} | {candidate["occurrences"]} | {shared} |");
         }
 
         if (skippedSamples.Count > 0)
@@ -1061,16 +1149,10 @@ Examples:
             sb.AppendLine($"// weighted_exec_count={c.Wec} occurrences={c.Occ} relation={c.Relation} anchor={c.Anchor} direction={c.Direction}");
             sb.AppendLine("ATTR_PRESERVE_NONE int64_t " + handlerName + "(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,");
             sb.AppendLine("                                          mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {");
-            sb.AppendLine($"    auto flow0 = {c.Op0}(state, op, &utlb, GetImm(op), &branch, flags_cache);");
-            sb.AppendLine("    if (flow0 != LogicFlow::Continue) [[unlikely]] {");
-            sb.AppendLine("        HANDLE_SUPEROPCODE_FLOW(flow0, state, op, instr_limit, utlb, branch, flags_cache);");
-            sb.AppendLine("    }");
+            sb.AppendLine($"    RUN_SUPEROPCODE_OP({c.Op0}, state, op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
             sb.AppendLine("    DecodedOp* second_op = NextOp(op);");
-            sb.AppendLine($"    auto flow1 = {c.Op1}(state, second_op, &utlb, GetImm(second_op), &branch, flags_cache);");
-            sb.AppendLine("    if (flow1 != LogicFlow::Continue) [[unlikely]] {");
-            sb.AppendLine("        HANDLE_SUPEROPCODE_FLOW(flow1, state, second_op, instr_limit, utlb, branch, flags_cache);");
-            sb.AppendLine("    }");
+            sb.AppendLine($"    RUN_SUPEROPCODE_OP({c.Op1}, state, second_op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
             sb.AppendLine("    if (auto* next_op = NextOp(second_op)) {");
             sb.AppendLine("        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);");
@@ -1116,6 +1198,242 @@ Examples:
         var shortName = name.Split("::").Last();
         return shortName.StartsWith("Op", StringComparison.Ordinal) ? shortName[2..] : shortName;
     }
+
+    private static OpSemantics InferSemantics(string name)
+    {
+        var shortName = OpShortName(name);
+        var lower = shortName.ToLowerInvariant();
+        var reads = new HashSet<string>(StringComparer.Ordinal);
+        var writes = new HashSet<string>(StringComparer.Ordinal);
+        var notes = new List<string>();
+        var controlFlow = false;
+        var memorySideEffect = false;
+
+        if (lower.StartsWith("jcc", StringComparison.Ordinal) ||
+            lower.StartsWith("jmp", StringComparison.Ordinal) ||
+            lower.StartsWith("call", StringComparison.Ordinal) ||
+            lower.StartsWith("ret", StringComparison.Ordinal) ||
+            lower.StartsWith("loop", StringComparison.Ordinal) ||
+            lower.StartsWith("iret", StringComparison.Ordinal) ||
+            lower.StartsWith("sys", StringComparison.Ordinal))
+        {
+            controlFlow = true;
+        }
+
+        if (lower.StartsWith("jcc", StringComparison.Ordinal))
+        {
+            reads.Add("flags");
+            notes.Add("conditional branch consumes flags");
+        }
+        else if (lower.StartsWith("cmov", StringComparison.Ordinal))
+        {
+            reads.Add("flags");
+            reads.Add("gpr");
+            writes.Add("gpr");
+            notes.Add("cmov consumes flags and forwards a register value");
+        }
+        else if (lower.StartsWith("setcc", StringComparison.Ordinal))
+        {
+            reads.Add("flags");
+            writes.Add("gpr");
+            notes.Add("setcc consumes flags and defines a byte register");
+        }
+
+        if (StartsWithAny(lower, "cmp", "test", "bt", "btc", "btr", "bts", "comis", "ucomis"))
+        {
+            reads.Add("gpr");
+            writes.Add("flags");
+            notes.Add("compare/test family defines flags");
+        }
+        else if (StartsWithAny(lower, "adc", "sbb"))
+        {
+            reads.Add("gpr");
+            reads.Add("flags");
+            writes.Add("gpr");
+            writes.Add("flags");
+            notes.Add("adc/sbb both consume and define flags");
+        }
+        else if (StartsWithAny(lower, "add", "sub", "and", "or", "xor", "inc", "dec", "neg", "shl", "shr", "sar", "sal", "rol", "ror", "shld", "shrd"))
+        {
+            reads.Add("gpr");
+            writes.Add("gpr");
+            writes.Add("flags");
+            notes.Add("ALU op updates register and flags");
+        }
+
+        var isLoad = lower.Contains("load", StringComparison.Ordinal);
+        var isStore = lower.Contains("store", StringComparison.Ordinal);
+
+        if (isLoad)
+        {
+            reads.Add("mem");
+            writes.Add("gpr");
+            notes.Add("load defines a register from memory");
+        }
+        if (isStore)
+        {
+            reads.Add("gpr");
+            writes.Add("mem");
+            memorySideEffect = true;
+            notes.Add("store consumes a register and writes memory");
+        }
+
+        if (!isStore && StartsWithAny(lower, "mov", "lea", "movzx", "movsx", "pop"))
+            writes.Add("gpr");
+        if (!isLoad && StartsWithAny(lower, "mov", "push", "xchg", "cmp", "test"))
+            reads.Add("gpr");
+        if (lower.StartsWith("push", StringComparison.Ordinal))
+        {
+            writes.Add("mem");
+            memorySideEffect = true;
+        }
+        if (lower.StartsWith("xchg", StringComparison.Ordinal))
+            writes.Add("gpr");
+        if (lower.StartsWith("movs", StringComparison.Ordinal))
+        {
+            reads.Add("gpr");
+            reads.Add("mem");
+            writes.Add("mem");
+            memorySideEffect = true;
+        }
+        if (StartsWithAny(lower, "cmps", "scas"))
+        {
+            reads.Add("gpr");
+            reads.Add("mem");
+            writes.Add("flags");
+            notes.Add("string compare defines flags");
+        }
+
+        return new OpSemantics(reads, writes, notes, controlFlow, memorySideEffect);
+    }
+
+    private static OpSemantics GetOpSemantics(JsonElement opNode, string normalizedName)
+    {
+        if (!opNode.TryGetProperty("def_use", out var defUse) || defUse.ValueKind != JsonValueKind.Object)
+            return InferSemantics(normalizedName);
+
+        var reads = new HashSet<string>(ReadStringArray(defUse, "reads_data_gpr"), StringComparer.Ordinal);
+        if (reads.Count == 0)
+            reads.UnionWith(ReadStringArray(defUse, "reads_gpr"));
+        var writes = new HashSet<string>(ReadStringArray(defUse, "writes_gpr"), StringComparer.Ordinal);
+        var addrReads = ReadStringArray(defUse, "reads_addr_gpr");
+
+        foreach (var flag in ReadStringArray(defUse, "reads_flags"))
+            reads.Add($"flag:{flag}");
+        foreach (var flag in ReadStringArray(defUse, "writes_flags"))
+            writes.Add($"flag:{flag}");
+
+        if (GetBool(defUse, "reads_memory"))
+            reads.Add("mem");
+        if (GetBool(defUse, "writes_memory"))
+            writes.Add("mem");
+
+        var fallback = InferSemantics(normalizedName);
+        var controlFlow = fallback.ControlFlow;
+        var memorySideEffect = GetBool(defUse, "writes_memory") || fallback.MemorySideEffect;
+        var notes = ReadStringArray(defUse, "notes");
+        foreach (var note in fallback.Notes)
+        {
+            if (!notes.Contains(note, StringComparer.Ordinal))
+                notes.Add(note);
+        }
+        if (addrReads.Count > 0)
+            notes.Add($"address regs: {string.Join(", ", addrReads)}");
+
+        if (reads.Count == 0 && writes.Count == 0 && notes.Count == 0 && !memorySideEffect)
+            return fallback;
+
+        return new OpSemantics(reads, writes, notes, controlFlow, memorySideEffect);
+    }
+
+    private static PairRelation? ClassifyPair(string firstName, string secondName, JsonElement firstOp, JsonElement secondOp)
+    {
+        var firstInfo = GetOpSemantics(firstOp, firstName);
+        var secondInfo = GetOpSemantics(secondOp, secondName);
+        var sharedRaw = firstInfo.Writes.Intersect(secondInfo.Reads, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var sharedRar = firstInfo.Reads.Intersect(secondInfo.Reads, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var sharedWaw = firstInfo.Writes.Intersect(secondInfo.Writes, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        if (sharedRaw.Length == 0 && sharedRar.Length == 0 && sharedWaw.Length == 0)
+            return null;
+
+        string relationKind;
+        string[] sharedResources;
+        var depWeight = 1;
+        if (sharedRaw.Length > 0)
+        {
+            relationKind = "RAW";
+            sharedResources = sharedRaw;
+            depWeight = 2;
+        }
+        else if (sharedRar.Length > 0 && sharedWaw.Length > 0)
+        {
+            relationKind = "RAR/WAW";
+            sharedResources = sharedRar.Concat(sharedWaw).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        }
+        else if (sharedRar.Length > 0)
+        {
+            relationKind = "RAR";
+            sharedResources = sharedRar;
+        }
+        else
+        {
+            relationKind = "WAW";
+            sharedResources = sharedWaw;
+        }
+
+        var legalityNotes = new List<string>();
+        if (secondInfo.ControlFlow)
+            legalityNotes.Add("second op is control-flow and needs strict mid-exit handling");
+        if (firstInfo.MemorySideEffect || secondInfo.MemorySideEffect)
+            legalityNotes.Add("pair touches memory side effects and should keep restart semantics conservative");
+        if (!string.Equals(relationKind, "RAW", StringComparison.Ordinal))
+            legalityNotes.Add("pair is non-RAW and may only be profitable when repeated reads or write coalescing can be shared");
+
+        return new PairRelation(relationKind, depWeight, sharedResources, firstInfo, secondInfo, legalityNotes.ToArray());
+    }
+
+    private static bool IsJccPair(IEnumerable<string> pair)
+        => pair.Any(name => OpShortName(name).StartsWith("Jcc", StringComparison.Ordinal));
+
+    private static int RelationDepWeight(string relationKind, int rawWeight, int rarWeight, int wawWeight)
+        => relationKind switch
+        {
+            "RAW" => rawWeight,
+            "RAR" => rarWeight,
+            "WAW" => wawWeight,
+            _ => Math.Max(rarWeight, wawWeight)
+        };
+
+    private static int RelationJccWeight(IEnumerable<string> pair, string relationKind, int jccMultiplier, string jccMode)
+    {
+        if (jccMultiplier <= 1 || !IsJccPair(pair))
+            return 1;
+        if (string.Equals(jccMode, "none", StringComparison.Ordinal))
+            return 1;
+        if (string.Equals(jccMode, "raw-only", StringComparison.Ordinal) && !string.Equals(relationKind, "RAW", StringComparison.Ordinal))
+            return 1;
+        return jccMultiplier;
+    }
+
+    private static bool StartsWithAny(string text, params string[] prefixes)
+        => prefixes.Any(prefix => text.StartsWith(prefix, StringComparison.Ordinal));
+
+    private static List<string> ReadStringArray(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var node) || node.ValueKind != JsonValueKind.Array)
+            return new List<string>();
+        var values = new List<string>();
+        foreach (var item in node.EnumerateArray())
+        {
+            var value = item.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                values.Add(value);
+        }
+        return values;
+    }
+
+    private static bool GetBool(JsonElement obj, string propertyName)
+        => obj.TryGetProperty(propertyName, out var node) && node.ValueKind is JsonValueKind.True or JsonValueKind.False && node.GetBoolean();
 
     private static string NormalizeCandidateName(string? name)
     {
@@ -1164,13 +1482,31 @@ Examples:
         return values;
     }
 
+    private static List<string> GetPositionalArgs(string[] args)
+    {
+        var positionals = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    i++;
+                continue;
+            }
+
+            positionals.Add(args[i]);
+        }
+
+        return positionals;
+    }
+
     private static string RequireValue(string[] args, string option, int positionalIndex = -1)
     {
         var value = GetValue(args, option);
         if (!string.IsNullOrWhiteSpace(value))
             return value;
 
-        var positional = args.Where(x => !x.StartsWith("--", StringComparison.Ordinal)).ToArray();
+        var positional = GetPositionalArgs(args).ToArray();
         if (positionalIndex >= 0 && positionalIndex < positional.Length)
             return positional[positionalIndex];
 
@@ -1298,23 +1634,45 @@ Examples:
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
         public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
+        public OpSemantics? Semantics { get; set; }
     }
 
     private sealed class SamplePairStats
     {
-        public SamplePairStats(string first, string second, string anchor)
+        public SamplePairStats(string first, string second, string anchor, string direction, PairRelation relation)
         {
             FirstHandler = first;
             SecondHandler = second;
             AnchorHandler = anchor;
+            Direction = direction;
+            RelationKind = relation.RelationKind;
+            RelationPriority = relation.RelationPriority;
+            SharedResources = relation.SharedResources.ToArray();
+            LegalityNotes = relation.LegalityNotes.ToArray();
         }
 
         public string FirstHandler { get; }
         public string SecondHandler { get; }
         public string AnchorHandler { get; }
+        public string Direction { get; }
+        public string RelationKind { get; }
+        public int RelationPriority { get; }
+        public string[] SharedResources { get; }
+        public string[] LegalityNotes { get; }
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
         public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
+        public CountingMap SharedResourceVariants { get; } = new();
+        public CountingMap RelationKindVariants { get; } = new();
+
+        public void Add(long blockExecCount, string blockStart, int startOpIndex, PairRelation relation)
+        {
+            WeightedExecCount += blockExecCount;
+            Occurrences += 1;
+            UniqueBlockStarts.Add(blockStart);
+            SharedResourceVariants.Add(string.Join(",", relation.SharedResources));
+            RelationKindVariants.Add(relation.RelationKind);
+        }
     }
 
     private sealed class AnchorAggregate
@@ -1327,26 +1685,39 @@ Examples:
         public long SampleCount { get; set; }
         public CountingMap EngineCounts { get; } = new();
         public CountingMap CaseCounts { get; } = new();
+        public OpSemantics? Semantics { get; set; }
     }
 
     private sealed class PairAggregate
     {
-        public PairAggregate(string first, string second, string anchor)
+        public PairAggregate(string first, string second, string anchor, string direction, string relationKind, int relationPriority, IEnumerable<string> sharedResources, IEnumerable<string> legalityNotes)
         {
             FirstHandler = first;
             SecondHandler = second;
             AnchorHandler = anchor;
+            Direction = direction;
+            RelationKind = relationKind;
+            RelationPriority = relationPriority;
+            SharedResources = sharedResources.ToArray();
+            LegalityNotes = legalityNotes.ToArray();
         }
 
         public string FirstHandler { get; }
         public string SecondHandler { get; }
         public string AnchorHandler { get; }
+        public string Direction { get; }
+        public string RelationKind { get; }
+        public int RelationPriority { get; }
+        public string[] SharedResources { get; }
+        public string[] LegalityNotes { get; }
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
         public long UniqueBlockCount { get; set; }
         public long SampleCount { get; set; }
         public CountingMap EngineCounts { get; } = new();
         public CountingMap CaseCounts { get; } = new();
+        public CountingMap SharedResourceVariants { get; } = new();
+        public CountingMap RelationKindVariants { get; } = new();
     }
 
     private sealed class CountingMap : Dictionary<string, int>
@@ -1373,6 +1744,31 @@ Examples:
         public HashSet<uint> UniqueBlockStarts { get; } = new();
         public List<Dictionary<string, object?>> ExampleBlocks { get; } = new();
     }
+
+    private sealed record OpSemantics(
+        IReadOnlyCollection<string> Reads,
+        IReadOnlyCollection<string> Writes,
+        IReadOnlyList<string> Notes,
+        bool ControlFlow,
+        bool MemorySideEffect)
+    {
+        public Dictionary<string, object?> ToDictionary() => new()
+        {
+            ["reads"] = Reads.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+            ["writes"] = Writes.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+            ["notes"] = Notes.ToArray(),
+            ["control_flow"] = ControlFlow,
+            ["memory_side_effect"] = MemorySideEffect
+        };
+    }
+
+    private sealed record PairRelation(
+        string RelationKind,
+        int RelationPriority,
+        string[] SharedResources,
+        OpSemantics FirstSemantics,
+        OpSemantics SecondSemantics,
+        string[] LegalityNotes);
 
     private sealed record OpSnapshot(uint EaDesc, byte Modrm, byte Meta, byte Prefixes);
 }
