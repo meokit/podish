@@ -796,13 +796,15 @@ public class Engine : IDisposable
             if (blockPtr == IntPtr.Zero) continue;
 
             var nativeBlock = (X86Native.BasicBlock*)blockPtr;
-            writer.Write(nativeBlock->start_eip);
+            var startEip = nativeBlock->start_eip;
+            var instCount = (uint)nativeBlock->inst_count;
+            writer.Write(startEip);
             writer.Write(nativeBlock->end_eip);
-            writer.Write(nativeBlock->inst_count);
+            writer.Write(instCount);
             writer.Write(nativeBlock->exec_count);
 
             var ops = (X86Native.DecodedOp*)((byte*)nativeBlock + sizeof(X86Native.BasicBlock));
-            for (var i = 0; i < nativeBlock->inst_count; i++)
+            for (var i = 0; i < instCount; i++)
             {
                 var op = ops[i];
                 var memPacked = PackDumpMem(op);

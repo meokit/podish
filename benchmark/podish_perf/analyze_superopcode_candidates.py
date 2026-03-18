@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Aggregate SuperOpcode candidates across block analysis samples using "
-            "hot single-op anchors plus adjacent def-use relations."
+            "global 2-gram scoring from hot anchors and dependency weights."
         )
     )
     parser.add_argument(
@@ -43,16 +43,46 @@ def parse_args() -> argparse.Namespace:
         help="Maximum number of aggregate candidates to emit (default: 100)",
     )
     parser.add_argument(
-        "--min-gpr-ratio",
-        type=float,
-        default=0.5,
-        help="Require at least this fraction of emitted candidates to depend on GPR flow when enough such candidates exist (default: 0.5)",
+        "--score-basis",
+        choices=("anchor", "pair"),
+        default="pair",
+        help="Base frequency used in score computation (default: pair)",
+    )
+    parser.add_argument(
+        "--raw-weight",
+        type=int,
+        default=2,
+        help="Dependency weight for RAW pairs (default: 2)",
+    )
+    parser.add_argument(
+        "--rar-weight",
+        type=int,
+        default=0,
+        help="Dependency weight for RAR pairs (default: 0)",
+    )
+    parser.add_argument(
+        "--waw-weight",
+        type=int,
+        default=0,
+        help="Dependency weight for WAW pairs (default: 0)",
+    )
+    parser.add_argument(
+        "--jcc-multiplier",
+        type=int,
+        default=1,
+        help="Extra multiplier for Jcc-related pairs (default: 1)",
+    )
+    parser.add_argument(
+        "--jcc-mode",
+        choices=("none", "pair", "raw-only"),
+        default="none",
+        help="How to apply the Jcc multiplier (default: none)",
     )
     parser.add_argument(
         "--anchor-top",
         type=int,
         default=64,
-        help="Only keep candidates whose anchor op is in the top-N hottest single ops (default: 64)",
+        help="Show this many hottest single ops in the markdown summary (default: 64)",
     )
     parser.add_argument(
         "--min-samples",
@@ -65,12 +95,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Minimum total weighted_exec_count required to keep a candidate (default: 0)",
-    )
-    parser.add_argument(
-        "--min-stable-resource-ratio",
-        type=float,
-        default=0.75,
-        help="Minimum ratio for the dominant shared-resource pattern within a handler pair (default: 0.75)",
     )
     parser.add_argument(
         "--output-json",
@@ -335,35 +359,41 @@ def classify_pair(
 ) -> dict[str, object] | None:
     first_info = get_op_semantics(first_op, first_name)
     second_info = get_op_semantics(second_op, second_name)
-    shared_resources = sorted(set(first_info["writes"]) & set(second_info["reads"]))
-    if not shared_resources:
+    shared_raw = sorted(set(first_info["writes"]) & set(second_info["reads"]))
+    shared_rar = sorted(set(first_info["reads"]) & set(second_info["reads"]))
+    shared_waw = sorted(set(first_info["writes"]) & set(second_info["writes"]))
+    if not shared_raw and not shared_rar and not shared_waw:
         return None
 
-    shared_gprs = [resource for resource in shared_resources if resource in GPR_NAMES]
-    shared_flags = [resource for resource in shared_resources if resource.startswith("flag:")]
+    shared_resources: list[str]
+    relation_kind: str
+    dep_weight = 1
 
-    if shared_flags and bool(second_info["control_flow"]):
-        relation_kind = "flags-into-control"
-        priority = 4
-    elif shared_flags:
-        relation_kind = "flags-flow"
-        priority = 3
-    elif shared_gprs:
-        relation_kind = "gpr-flow"
-        priority = 2
+    if shared_raw:
+        relation_kind = "RAW"
+        shared_resources = shared_raw
+        dep_weight = 2
+    elif shared_rar and shared_waw:
+        relation_kind = "RAR/WAW"
+        shared_resources = sorted(set(shared_rar) | set(shared_waw))
+    elif shared_rar:
+        relation_kind = "RAR"
+        shared_resources = shared_rar
     else:
-        relation_kind = "data-flow"
-        priority = 1
+        relation_kind = "WAW"
+        shared_resources = shared_waw
 
     legality_notes: list[str] = []
     if bool(second_info["control_flow"]):
         legality_notes.append("second op is control-flow and needs strict mid-exit handling")
     if bool(first_info["memory_side_effect"]) or bool(second_info["memory_side_effect"]):
         legality_notes.append("pair touches memory side effects and should keep restart semantics conservative")
+    if relation_kind != "RAW":
+        legality_notes.append("pair is non-RAW and may only be profitable when repeated reads or write coalescing can be shared")
 
     return {
         "relation_kind": relation_kind,
-        "relation_priority": priority,
+        "relation_priority": dep_weight,
         "shared_resources": shared_resources,
         "first_semantics": first_info,
         "second_semantics": second_info,
@@ -624,6 +654,30 @@ def normalize_counter_map(counter: Counter[str]) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
+def is_jcc_pair(pair: list[str]) -> bool:
+    return any(op_short_name(name).startswith("Jcc") for name in pair)
+
+
+def relation_dep_weight(relation_kind: str, raw_weight: int, rar_weight: int, waw_weight: int) -> int:
+    if relation_kind == "RAW":
+        return raw_weight
+    if relation_kind == "RAR":
+        return rar_weight
+    if relation_kind == "WAW":
+        return waw_weight
+    return max(rar_weight, waw_weight)
+
+
+def relation_jcc_weight(pair: list[str], relation_kind: str, jcc_multiplier: int, jcc_mode: str) -> int:
+    if jcc_multiplier <= 1 or not is_jcc_pair(pair):
+        return 1
+    if jcc_mode == "none":
+        return 1
+    if jcc_mode == "raw-only" and relation_kind != "RAW":
+        return 1
+    return jcc_multiplier
+
+
 def normalize_anchor_entry(entry: dict[str, object]) -> dict[str, object]:
     normalized = dict(entry)
     normalized["engine_counts"] = normalize_counter_map(entry["engine_counts"])
@@ -631,7 +685,17 @@ def normalize_anchor_entry(entry: dict[str, object]) -> dict[str, object]:
     return normalized
 
 
-def normalize_candidate_entry(entry: dict[str, object], anchor_entry: dict[str, object]) -> dict[str, object]:
+def normalize_candidate_entry(
+    entry: dict[str, object],
+    anchor_entry: dict[str, object],
+    *,
+    score_basis: str,
+    raw_weight: int,
+    rar_weight: int,
+    waw_weight: int,
+    jcc_multiplier: int,
+    jcc_mode: str,
+) -> dict[str, object]:
     normalized = dict(entry)
     normalized["engine_counts"] = normalize_counter_map(entry["engine_counts"])
     normalized["case_counts"] = normalize_counter_map(entry["case_counts"])
@@ -647,14 +711,19 @@ def normalize_candidate_entry(entry: dict[str, object], anchor_entry: dict[str, 
     dominant_relation_count = 0
     if entry["relation_kind_variants"]:
         dominant_relation_kind, dominant_relation_count = entry["relation_kind_variants"].most_common(1)[0]
+        if "RAW" in entry["relation_kind_variants"]:
+            dominant_relation_kind = "RAW"
+            dominant_relation_count = int(entry["relation_kind_variants"]["RAW"])
+        elif "RAR/WAW" in entry["relation_kind_variants"]:
+            dominant_relation_kind = "RAR/WAW"
+            dominant_relation_count = int(entry["relation_kind_variants"]["RAR/WAW"])
 
-    dominant_relation_priority = 1
-    if dominant_relation_kind == "flags-into-control":
-        dominant_relation_priority = 4
-    elif dominant_relation_kind == "flags-flow":
-        dominant_relation_priority = 3
-    elif dominant_relation_kind == "gpr-flow":
-        dominant_relation_priority = 2
+    dominant_dep_weight = relation_dep_weight(
+        dominant_relation_kind,
+        raw_weight=raw_weight,
+        rar_weight=rar_weight,
+        waw_weight=waw_weight,
+    )
 
     normalized["shared_resources"] = list(dominant_shared_variant)
     normalized["shared_resource_variants"] = normalize_counter_map(shared_variant_counts)
@@ -663,67 +732,39 @@ def normalize_candidate_entry(entry: dict[str, object], anchor_entry: dict[str, 
         dominant_shared_count / int(entry["occurrences"]) if int(entry["occurrences"]) else 0.0
     )
     normalized["relation_kind"] = dominant_relation_kind
-    normalized["relation_priority"] = dominant_relation_priority
+    normalized["relation_priority"] = dominant_dep_weight
     normalized["relation_kind_variants"] = normalize_counter_map(entry["relation_kind_variants"])
     normalized["dominant_relation_kind_count"] = int(dominant_relation_count)
     normalized["anchor_weighted_exec_count"] = int(anchor_entry["weighted_exec_count"])
     normalized["anchor_sample_count"] = int(anchor_entry["sample_count"])
     normalized["anchor_unique_block_count"] = int(anchor_entry["unique_block_count"])
     normalized["anchor_semantics"] = anchor_entry["semantics"]
+    base_freq = (
+        int(anchor_entry["weighted_exec_count"])
+        if score_basis == "anchor"
+        else int(entry["weighted_exec_count"])
+    )
+    jcc_weight = relation_jcc_weight(
+        entry["pair"],
+        dominant_relation_kind,
+        jcc_multiplier=jcc_multiplier,
+        jcc_mode=jcc_mode,
+    )
+    normalized["score"] = base_freq * dominant_dep_weight * jcc_weight
+    normalized["score_basis"] = score_basis
+    normalized["base_frequency"] = base_freq
+    normalized["jcc_weight"] = jcc_weight
     return normalized
 
 
 def candidate_sort_key(entry: dict[str, object]) -> tuple[object, ...]:
     return (
-        entry["relation_priority"],
+        entry["score"],
         entry["weighted_exec_count"],
-        entry["anchor_weighted_exec_count"],
         entry["sample_count"],
         entry["occurrences"],
         entry["unique_block_count"],
     )
-
-
-def is_gpr_dependent_candidate(entry: dict[str, object]) -> bool:
-    shared_resources = entry.get("shared_resources") or []
-    return any(str(resource) in GPR_NAMES for resource in shared_resources)
-
-
-def apply_gpr_mix_quota(candidates: list[dict[str, object]], top: int, min_gpr_ratio: float) -> list[dict[str, object]]:
-    if top <= 0 or not candidates:
-        return []
-
-    clamped_ratio = max(0.0, min(1.0, min_gpr_ratio))
-    required_gpr = min(len(candidates), int(top * clamped_ratio + 0.999999))
-
-    gpr_candidates = [entry for entry in candidates if is_gpr_dependent_candidate(entry)]
-    other_candidates = [entry for entry in candidates if not is_gpr_dependent_candidate(entry)]
-
-    gpr_candidates.sort(key=candidate_sort_key, reverse=True)
-    other_candidates.sort(key=candidate_sort_key, reverse=True)
-
-    selected: list[dict[str, object]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-
-    def try_append(entry: dict[str, object]) -> None:
-        pair = tuple(str(item) for item in entry.get("pair", []))
-        if len(pair) != 2 or pair in seen_pairs:
-            return
-        seen_pairs.add(pair)
-        selected.append(entry)
-
-    for entry in gpr_candidates[:required_gpr]:
-        if len(selected) >= top:
-            break
-        try_append(entry)
-
-    merged_by_rank = sorted(candidates, key=candidate_sort_key, reverse=True)
-    for entry in merged_by_rank:
-        if len(selected) >= top:
-            break
-        try_append(entry)
-
-    return selected[:top]
 
 
 def build_markdown(
@@ -739,11 +780,11 @@ def build_markdown(
         "# SuperOpcode Candidates",
         "",
         f"- Inputs: {', '.join(inputs)}",
-        "- Strategy: hot single-op anchors + adjacent def-use relations",
+        "- Strategy: global 2-gram scoring with hot anchors and dependency weights",
         f"- Analysis files discovered: {len(analysis_files)}",
         f"- Included samples: {len(included_samples)}",
         f"- Skipped samples: {len(skipped_samples)}",
-        f"- Anchor pool limit: {anchor_top}",
+        f"- Anchor display limit: {anchor_top}",
         f"- Candidate count: {len(candidates)}",
         "",
         "## Top Anchors",
@@ -764,8 +805,8 @@ def build_markdown(
             "",
             "## Top Candidates",
             "",
-            "| Rank | Pair | Relation | Anchor | Dir | Weighted Exec | Samples | Occurrences | Shared |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |",
+            "| Rank | Pair | Relation | Score | Anchor | Dir | Weighted Exec | Samples | Occurrences | Shared |",
+            "| --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | --- |",
         ]
     )
 
@@ -773,7 +814,7 @@ def build_markdown(
         shared = ", ".join(candidate.get("shared_resources") or []) or "-"
         lines.append(
             f"| {rank} | `{candidate['pair_display']}` | {candidate['relation_kind']} | "
-            f"`{candidate['anchor_display']}` | {candidate['direction']} | "
+            f"{candidate['score']} | `{candidate['anchor_display']}` | {candidate['direction']} | "
             f"{candidate['weighted_exec_count']} | {candidate['sample_count']} | "
             f"{candidate['occurrences']} | {shared} |"
         )
@@ -850,51 +891,58 @@ def main() -> int:
         reverse=True,
     )
 
-    top_anchors = anchors[: args.anchor_top]
-    allowed_anchor_names = {str(anchor["anchor"]) for anchor in top_anchors}
     anchor_index = {str(anchor["anchor"]): anchor for anchor in anchors}
 
     candidates = []
     for entry in aggregate_pairs.values():
         anchor_name = str(entry["anchor_handler"])
-        if anchor_name not in allowed_anchor_names:
+        if anchor_name not in anchor_index:
             continue
         if entry["sample_count"] < args.min_samples:
             continue
         if entry["weighted_exec_count"] < args.min_weighted_exec_count:
             continue
-        normalized_entry = normalize_candidate_entry(entry, anchor_index[anchor_name])
-        if normalized_entry["dominant_shared_resource_ratio"] < args.min_stable_resource_ratio:
-            continue
+        normalized_entry = normalize_candidate_entry(
+            entry,
+            anchor_index[anchor_name],
+            score_basis=args.score_basis,
+            raw_weight=args.raw_weight,
+            rar_weight=args.rar_weight,
+            waw_weight=args.waw_weight,
+            jcc_multiplier=args.jcc_multiplier,
+            jcc_mode=args.jcc_mode,
+        )
         candidates.append(normalized_entry)
 
     candidates.sort(key=candidate_sort_key, reverse=True)
-    candidates = apply_gpr_mix_quota(candidates, args.top, args.min_gpr_ratio)
-
-    gpr_candidate_count = sum(1 for entry in candidates if is_gpr_dependent_candidate(entry))
+    candidates = candidates[: args.top]
+    relation_kind_counts = Counter(str(entry["relation_kind"]) for entry in candidates)
 
     output = {
         "metadata": {
             "inputs": [str(Path(item).resolve()) for item in args.inputs],
-            "strategy": "anchor-def-use-adjacent",
+            "strategy": "global-score-anchor-freq-times-dep-weight",
             "analysis_file_count": len(analysis_files),
             "included_sample_count": len(included_samples),
             "skipped_sample_count": len(skipped_samples),
             "candidate_count": len(candidates),
             "anchor_count": len(anchors),
             "anchor_top_limit": args.anchor_top,
+            "score_basis": args.score_basis,
+            "raw_weight": args.raw_weight,
+            "rar_weight": args.rar_weight,
+            "waw_weight": args.waw_weight,
+            "jcc_multiplier": args.jcc_multiplier,
+            "jcc_mode": args.jcc_mode,
             "min_samples": args.min_samples,
             "min_weighted_exec_count": args.min_weighted_exec_count,
-            "min_gpr_ratio": args.min_gpr_ratio,
-            "min_stable_resource_ratio": args.min_stable_resource_ratio,
             "top_limit": args.top,
             "superopcode_width": 2,
-            "selected_gpr_candidate_count": gpr_candidate_count,
-            "selected_gpr_candidate_ratio": (gpr_candidate_count / len(candidates)) if candidates else 0.0,
+            "selected_relation_kind_counts": normalize_counter_map(relation_kind_counts),
         },
         "included_samples": included_samples,
         "skipped_samples": skipped_samples,
-        "anchors": top_anchors,
+        "anchors": anchors[: args.anchor_top],
         "candidates": candidates,
     }
 
@@ -911,7 +959,7 @@ def main() -> int:
                 analysis_files=analysis_files,
                 included_samples=included_samples,
                 skipped_samples=skipped_samples,
-                anchors=top_anchors[: min(len(top_anchors), 20)],
+                anchors=anchors[: min(len(anchors), max(20, args.anchor_top))],
                 candidates=candidates,
                 anchor_top=args.anchor_top,
             ),

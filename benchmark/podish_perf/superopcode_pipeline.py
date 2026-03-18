@@ -26,7 +26,11 @@ def run(cmd: list[str], cwd: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="One-shot SuperOpcode pipeline: build without superopcodes, profile workloads, generate candidates, emit generated source, then optionally rebuild with superopcodes enabled."
+        description=(
+            "One-shot SuperOpcode pipeline: build without superopcodes, profile workloads, "
+            "score global 2-gram candidates from hot anchors and dependency weights, emit "
+            "generated source, then optionally rebuild with superopcodes enabled."
+        )
     )
     parser.add_argument("--project-root", default=str(repo_root()), help="Repository root")
     parser.add_argument("--rootfs", default=str(default_rootfs()), help="Prepared rootfs directory")

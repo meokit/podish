@@ -89,7 +89,15 @@ On current local measurements noted in this repo, that baseline JIT is still slo
 
 ## Export block dumps and mine SuperOpcode candidates
 
-To collect handler n-grams and aggregate `SuperOpcode` candidates:
+To collect handler n-grams and aggregate `SuperOpcode` candidates, the analyzer now scores each 2-gram globally as:
+
+```text
+score = frequency * dep_weight
+```
+
+The current default uses pair frequency. `RAW` pairs are weighted as `2`, and `RAR` / `WAW` pairs are weighted as `0`, which effectively keeps the default search focused on RAW-only candidates.
+
+Run the profiling pass like this:
 
 ```bash
 python3 benchmark/podish_perf/runner.py \
@@ -135,7 +143,7 @@ python3 benchmark/podish_perf/superopcode_pipeline.py \
   --iterations 3000
 ```
 
-That pipeline builds an analysis binary with `EnableSuperOpcodes=false`, mines raw opcode streams, generates `libfibercpu/generated/superopcodes.generated.cpp`, and can optionally rebuild with superopcodes enabled for verification.
+That pipeline builds an analysis binary with `EnableSuperOpcodes=false`, mines raw opcode streams, ranks global 2-gram candidates by anchor frequency and dependency weight, generates `libfibercpu/generated/superopcodes.generated.cpp`, and can optionally rebuild with superopcodes enabled for verification.
 
 ## Record and analyze xctrace
 

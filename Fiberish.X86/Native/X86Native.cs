@@ -286,14 +286,34 @@ public unsafe partial class X86Native
         [FieldOffset(24)] public IntPtr ext_ptr;
     }
 
+    [StructLayout(LayoutKind.Sequential, Size = 8)]
+    public struct BasicBlockChainPrefix
+    {
+        public ulong packed;
+        // Bit layout:
+        // [0-31]: start_eip (32 bits)
+        // [32-39]: inst_count (8 bits)
+        // [40-63]: reserved (24 bits)
+
+        public uint start_eip
+        {
+            get => (uint)(packed & 0xFFFFFFFF);
+            set => packed = (packed & 0xFFFFFFFF00000000) | (value & 0xFFFFFFFF);
+        }
+
+        public byte inst_count
+        {
+            get => (byte)((packed >> 32) & 0xFF);
+            set => packed = (packed & 0xFFFFFFFF00FFFFFF) | (((ulong)value & 0xFF) << 32);
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential, Size = 64)]
     public struct BasicBlock
     {
-        public uint start_eip;
-        public uint is_valid;
+        public BasicBlockChainPrefix chain;
         public IntPtr entry;
         public IntPtr jit_code;
-        public uint inst_count;
         public uint end_eip;
         public uint slot_count;
         public uint sentinel_slot_index;
@@ -304,6 +324,21 @@ public unsafe partial class X86Native
         private ushort block_padding1;
         public ulong exec_count;
         // Native BasicBlock::slots is alignas(16), so decoded ops start at offset 64.
+
+        // Convenience properties for start_eip and inst_count
+        public uint start_eip
+        {
+            get => chain.start_eip;
+            set => chain.start_eip = value;
+        }
+
+        public byte inst_count
+        {
+            get => chain.inst_count;
+            set => chain.inst_count = value;
+        }
+
+        public bool is_valid => (start_eip & 0x80000000u) == 0;
     }
 
     [StructLayout(LayoutKind.Sequential)]
