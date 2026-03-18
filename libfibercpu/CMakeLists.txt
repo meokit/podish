@@ -306,11 +306,12 @@ if(FIBERCPU_ENABLE_LTO)
     endif()
 endif()
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(NOT MSVC)
     add_compile_options(
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>" 
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>"
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-march=native>"
     )
 endif()
 

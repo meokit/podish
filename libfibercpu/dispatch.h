@@ -38,9 +38,6 @@ extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, Deco
                                                   mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                 mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
-extern ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                        int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-                                                        uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                               int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                               uint64_t flags_cache);

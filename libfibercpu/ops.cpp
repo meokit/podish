@@ -158,21 +158,6 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT
                                                                            flags_cache);
 }
 
-ATTR_PRESERVE_NONE int64_t ResolveSentinelTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                 mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    (void)op;
-    if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
-}
-
-ATTR_PRESERVE_NONE int64_t ResolveSentinelFallthrough(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-                                                      uint64_t flags_cache) {
-    (void)branch;
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
-                                                                  flags_cache);
-}
-
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
     ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
@@ -185,9 +170,11 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
                                        mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
     RecordBlockHandlersUntil(state, op);
     if constexpr (UseBranch) {
-        ATTR_MUSTTAIL return ResolveSentinelTarget(state, op, instr_limit, utlb, branch, flags_cache);
+        if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
     } else {
-        ATTR_MUSTTAIL return ResolveSentinelFallthrough(state, op, instr_limit, utlb, branch, flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
+                                                                    flags_cache);
     }
 }
 

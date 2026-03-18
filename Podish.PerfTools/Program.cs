@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -47,6 +48,7 @@ internal static class Program
                 "analyze-superopcode-candidates" => RunAnalyzeSuperopcodeCandidates(rest),
                 "gen-superopcodes" => RunGenerateSuperopcodes(rest),
                 "pipeline" => RunPipeline(rest),
+                "profile" => RunProfile(rest),
                 "help" or "--help" or "-h" => PrintUsage(),
                 _ => throw new ArgumentException($"Unknown command: {command}")
             };
@@ -68,9 +70,11 @@ Commands:
   analyze-superopcode-candidates Aggregate candidate pairs from analysis files
   gen-superopcodes               Generate libfibercpu/generated/superopcodes.generated.cpp
   pipeline                       Run the full benchmark + analysis pipeline
+  profile                        Record/analyze runtime profiles with auto-selected backend
 
 Examples:
   dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- pipeline --candidate-top 256 --superopcode-top 256 --reuse-rootfs
+  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto
 """);
         return 0;
     }
@@ -363,13 +367,577 @@ Examples:
         return 0;
     }
 
+    private static int RunProfile(string[] args)
+    {
+        if (args.Length == 0)
+            throw new ArgumentException("Missing profile subcommand. Expected one of: record, analyze, record-and-analyze, compare");
+
+        return args[0] switch
+        {
+            "record" => RunProfileRecord(args[1..]),
+            "analyze" => RunProfileAnalyze(args[1..]),
+            "record-and-analyze" => RunProfileRecordAndAnalyze(args[1..]),
+            "compare" => RunProfileCompare(args[1..]),
+            _ => throw new ArgumentException($"Unknown profile subcommand: {args[0]}")
+        };
+    }
+
+    private static int RunProfileRecord(string[] args)
+    {
+        var options = ParseProfileRecordOptions(args);
+        var outDir = MakeOutputDir(options.OutputDir, options.Name);
+        var runBinary = MakeUniqueBinary(options.BinaryPath, outDir, options.RenamedBinary);
+        var tracePath = GetTracePath(outDir, options.Name, options.BackendKind);
+        WriteRecordCommand(outDir, options, runBinary, tracePath);
+
+        var env = BuildProfileEnvironment(options);
+        options.Backend.Record(options, runBinary, tracePath, env);
+        Console.WriteLine(tracePath);
+        return 0;
+    }
+
+    private static int RunProfileAnalyze(string[] args)
+    {
+        var options = ParseProfileAnalyzeOptions(args);
+        var outDir = MakeOutputDir(options.OutputDir, options.Name);
+        var analysis = options.Backend.Analyze(options, outDir);
+        var topHotspots = analysis.Hotspots.Take(options.Top).ToList();
+        var topSymbols = topHotspots.Take(options.DisasmTop).Select(h => h.Symbol).ToList();
+        var disassembly = topSymbols.Count > 0 ? DisassembleSymbols(options.BinaryPath, topSymbols, outDir) : new Dictionary<string, string>(StringComparer.Ordinal);
+        var written = WriteProfileReport(outDir, options.Name, analysis, options.BinaryPath, disassembly);
+        Console.WriteLine(written.ReportJsonPath);
+        Console.WriteLine(written.ReportMarkdownPath);
+        return 0;
+    }
+
+    private static int RunProfileRecordAndAnalyze(string[] args)
+    {
+        var recordOptions = ParseProfileRecordOptions(args);
+        var outDir = MakeOutputDir(recordOptions.OutputDir, recordOptions.Name);
+        var runBinary = MakeUniqueBinary(recordOptions.BinaryPath, outDir, recordOptions.RenamedBinary);
+        var tracePath = GetTracePath(outDir, recordOptions.Name, recordOptions.BackendKind);
+        WriteRecordCommand(outDir, recordOptions, runBinary, tracePath);
+
+        var env = BuildProfileEnvironment(recordOptions);
+        recordOptions.Backend.Record(recordOptions, runBinary, tracePath, env);
+
+        var analyzeOptions = ParseProfileAnalyzeOptions(args, tracePathOverride: tracePath, binaryOverride: runBinary, outputDirOverride: outDir);
+        var analysis = analyzeOptions.Backend.Analyze(analyzeOptions, outDir);
+        var topHotspots = analysis.Hotspots.Take(analyzeOptions.Top).ToList();
+        var topSymbols = topHotspots.Take(analyzeOptions.DisasmTop).Select(h => h.Symbol).ToList();
+        var disassembly = topSymbols.Count > 0 ? DisassembleSymbols(runBinary, topSymbols, outDir) : new Dictionary<string, string>(StringComparer.Ordinal);
+        var written = WriteProfileReport(outDir, analyzeOptions.Name, analysis, runBinary, disassembly);
+        Console.WriteLine(written.ReportJsonPath);
+        Console.WriteLine(written.ReportMarkdownPath);
+        return 0;
+    }
+
+    private static int RunProfileCompare(string[] args)
+    {
+        var reports = GetMultiValue(args, "--report");
+        if (reports.Count == 0)
+            reports = GetPositionalArgs(args);
+        if (reports.Count == 0)
+            throw new ArgumentException("Missing --report values for profile compare");
+
+        var top = GetIntValue(args, "--top", 25);
+        var output = GetValue(args, "--output");
+        var content = CompareProfileReports(reports.Select(Path.GetFullPath).ToList(), top, output is null ? null : Path.GetFullPath(output));
+        Console.Write(content);
+        return 0;
+    }
+
+    private static ProfileRecordOptions ParseProfileRecordOptions(string[] args)
+    {
+        var backendKind = ResolveProfileBackendKind(GetValue(args, "--backend") ?? "auto");
+        var outputDir = Path.GetFullPath(GetValue(args, "--output-dir") ?? Path.Combine(RepoRoot(), "benchmark", "podish_perf", "results"));
+        var name = GetValue(args, "--name") ?? "coremark-profile";
+        var timeLimitSeconds = GetIntValue(args, "--time-limit", 18);
+        var iterations = GetIntValue(args, "--iterations", 30000);
+        var benchCase = GetValue(args, "--bench-case") ?? "run";
+        var renamedBinary = GetValue(args, "--renamed-binary") ?? "PodishCliProfile";
+        var rootfs = Path.GetFullPath(GetValue(args, "--rootfs") ?? Path.Combine(RepoRoot(), "benchmark", "podish_perf", "rootfs", "coremark_i386_alpine"));
+        var binaryPath = Path.GetFullPath(GetValue(args, "--binary") ?? DefaultProfileBinary());
+        var jitMapDir = GetValue(args, "--jit-map-dir");
+        var backend = CreateProfileBackend(backendKind);
+
+        if (string.IsNullOrWhiteSpace(benchCase) || !new HashSet<string>(new[] { "run", "compile", "compress", "gcc_compile" }, StringComparer.Ordinal).Contains(benchCase))
+            throw new ArgumentException("--bench-case must be one of: run, compile, compress, gcc_compile");
+
+        RefreshDefaultProfileBinary(binaryPath);
+        return new ProfileRecordOptions(
+            backendKind,
+            backend,
+            binaryPath,
+            rootfs,
+            outputDir,
+            name,
+            timeLimitSeconds,
+            iterations,
+            benchCase,
+            renamedBinary,
+            jitMapDir is null ? null : Path.GetFullPath(jitMapDir));
+    }
+
+    private static ProfileAnalyzeOptions ParseProfileAnalyzeOptions(
+        string[] args,
+        string? tracePathOverride = null,
+        string? binaryOverride = null,
+        string? outputDirOverride = null)
+    {
+        var tracePath = Path.GetFullPath(tracePathOverride ?? RequireValue(args, "--trace"));
+        var backendKind = ResolveAnalyzeBackendKind(GetValue(args, "--backend") ?? "auto", tracePath);
+        var outputDir = Path.GetFullPath(outputDirOverride ?? GetValue(args, "--output-dir") ?? Path.Combine(RepoRoot(), "benchmark", "podish_perf", "results"));
+        var name = GetValue(args, "--name") ?? Path.GetFileNameWithoutExtension(tracePath);
+        if (name.EndsWith(".trace", StringComparison.OrdinalIgnoreCase))
+            name = Path.GetFileNameWithoutExtension(name);
+        var warmupSeconds = GetDoubleValue(args, "--warmup-seconds", 4.0);
+        var top = GetIntValue(args, "--top", 25);
+        var disasmTop = GetIntValue(args, "--disasm-top", 8);
+        var jitMapDir = GetValue(args, "--jit-map-dir");
+        var binaryPath = Path.GetFullPath(binaryOverride ?? GetValue(args, "--binary") ?? DefaultProfileBinary());
+        var backend = CreateProfileBackend(backendKind);
+        return new ProfileAnalyzeOptions(
+            backendKind,
+            backend,
+            tracePath,
+            binaryPath,
+            outputDir,
+            name,
+            warmupSeconds,
+            top,
+            disasmTop,
+            jitMapDir is null ? null : Path.GetFullPath(jitMapDir));
+    }
+
+    private static string DefaultProfileBinary()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            return Path.Combine(RepoRoot(), "build", "nativeaot", "podish-cli-static", "Podish.Cli");
+        return Path.Combine(RepoRoot(), "Podish.Cli", "bin", "Debug", "net10.0", "Podish.Cli");
+    }
+
+    private static void RefreshDefaultProfileBinary(string binaryPath)
+    {
+        var resolved = Path.GetFullPath(binaryPath);
+        var defaultMacAot = Path.GetFullPath(Path.Combine(RepoRoot(), "build", "nativeaot", "podish-cli-static", "Podish.Cli"));
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || !string.Equals(resolved, defaultMacAot, StringComparison.Ordinal))
+            return;
+
+        RunCommandChecked(
+            "dotnet",
+            new[]
+            {
+                "publish",
+                "Podish.Cli/Podish.Cli.csproj",
+                "-c",
+                "Release",
+                "-r",
+                "osx-arm64",
+                "-p:PublishAot=true",
+                "-o",
+                Path.GetDirectoryName(defaultMacAot)!
+            },
+            RepoRoot());
+    }
+
+    private static ProfileBackendKind ResolveProfileBackendKind(string backend)
+    {
+        return backend switch
+        {
+            "auto" => RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ProfileBackendKind.XcTrace : ProfileBackendKind.Perf,
+            "xctrace" => ProfileBackendKind.XcTrace,
+            "perf" => ProfileBackendKind.Perf,
+            _ => throw new ArgumentException("--backend must be one of: auto, xctrace, perf")
+        };
+    }
+
+    private static ProfileBackendKind ResolveAnalyzeBackendKind(string backend, string tracePath)
+    {
+        if (!string.Equals(backend, "auto", StringComparison.Ordinal))
+            return ResolveProfileBackendKind(backend);
+        if (tracePath.EndsWith(".trace", StringComparison.OrdinalIgnoreCase))
+            return ProfileBackendKind.XcTrace;
+        if (tracePath.EndsWith(".data", StringComparison.OrdinalIgnoreCase))
+            return ProfileBackendKind.Perf;
+        return ResolveProfileBackendKind("auto");
+    }
+
+    private static IProfileBackend CreateProfileBackend(ProfileBackendKind backendKind)
+        => backendKind switch
+        {
+            ProfileBackendKind.XcTrace => new XcTraceProfileBackend(),
+            ProfileBackendKind.Perf => new PerfProfileBackend(),
+            _ => throw new ArgumentOutOfRangeException(nameof(backendKind), backendKind, null)
+        };
+
+    private static string MakeOutputDir(string baseDir, string name)
+    {
+        var output = Path.Combine(baseDir, name);
+        Directory.CreateDirectory(output);
+        return output;
+    }
+
+    private static string MakeUniqueBinary(string sourceBinary, string outDir, string renamedBinary)
+    {
+        var src = Path.GetFullPath(sourceBinary);
+        if (!File.Exists(src))
+            throw new FileNotFoundException($"Binary not found: {src}");
+
+        foreach (var sibling in Directory.EnumerateFiles(Path.GetDirectoryName(src)!))
+        {
+            if (string.Equals(Path.GetFileName(sibling), Path.GetFileName(src), StringComparison.Ordinal))
+                continue;
+            File.Copy(sibling, Path.Combine(outDir, Path.GetFileName(sibling)), overwrite: true);
+        }
+
+        var dst = Path.Combine(outDir, renamedBinary);
+        File.Copy(src, dst, overwrite: true);
+        TryMarkExecutable(dst);
+        return dst;
+    }
+
+    private static string GetTracePath(string outDir, string name, ProfileBackendKind backendKind)
+        => Path.Combine(outDir, $"{name}.{(backendKind == ProfileBackendKind.XcTrace ? "trace" : "data")}");
+
+    private static void WriteRecordCommand(string outDir, ProfileRecordOptions options, string runBinary, string tracePath)
+    {
+        var podishLaunch = BuildPodishLaunchCommand(runBinary, options.Rootfs, options.Iterations, options.BenchCase);
+        var recordCommand = options.Backend.BuildRecordCommand(options, tracePath, podishLaunch);
+        File.WriteAllText(Path.Combine(outDir, "record-command.txt"), ShellJoin(recordCommand) + Environment.NewLine, Encoding.UTF8);
+    }
+
+    private static Dictionary<string, string> BuildProfileEnvironment(ProfileRecordOptions options)
+    {
+        var env = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(entry => Convert.ToString(entry.Key, CultureInfo.InvariantCulture) ?? "", entry => Convert.ToString(entry.Value, CultureInfo.InvariantCulture) ?? "", StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(options.JitMapDir))
+        {
+            Directory.CreateDirectory(options.JitMapDir);
+            env["FIBERCPU_JIT_PROFILE_MAP_DIR"] = options.JitMapDir;
+        }
+        return env;
+    }
+
+    private static List<string> BuildPodishLaunchCommand(string binary, string rootfs, int iterations, string benchCase)
+    {
+        var guestCommand = DefaultGuestCommand(benchCase, iterations);
+        return new List<string>
+        {
+            binary,
+            "run",
+            "--rm",
+            "--rootfs",
+            rootfs,
+            "--"
+        }.Concat(guestCommand).ToList();
+    }
+
+    private static List<string> DefaultGuestCommand(string benchCase, int iterations)
+        => new() { "/bin/sh", "-lc", BuildGuestScript(benchCase, iterations) };
+
+    private static string BuildGuestScript(string benchCase, int iterations)
+    {
+        var compileCommand = $"make PORT_DIR=linux ITERATIONS={iterations} XCFLAGS=\"-O3 -DPERFORMANCE_RUN=1\" REBUILD=1 compile";
+        return benchCase switch
+        {
+            "compress" => """
+set -eu
+rm -rf /tmp/coremark.tar /tmp/coremark.tar.gz /tmp/coremark-restored.tar /tmp/coremark-unpack
+mkdir -p /tmp/coremark-unpack
+sync >/dev/null 2>&1 || true
+tar -C / -cf /tmp/coremark.tar coremark
+gzip -1 -c /tmp/coremark.tar > /tmp/coremark.tar.gz
+gzip -dc /tmp/coremark.tar.gz > /tmp/coremark-restored.tar
+tar -C /tmp/coremark-unpack -xf /tmp/coremark-restored.tar
+test -f /tmp/coremark-unpack/coremark/Makefile
+""",
+            "compile" or "gcc_compile" => $"""
+set -eu
+cd /coremark
+make clean >/dev/null 2>&1 || true
+sync >/dev/null 2>&1 || true
+{compileCommand}
+test -x /coremark/coremark.exe
+""",
+            "run" => $"""
+set -eu
+cd /coremark
+test -x ./coremark.exe || {compileCommand} >/dev/null
+/coremark/coremark.exe 0x0 0x0 0x66 2000 >/dev/null 2>&1
+./coremark.exe 0x0 0x0 0x66 {iterations}
+""",
+            _ => throw new ArgumentException($"unknown bench case: {benchCase}")
+        };
+    }
+
+    private static string CompareProfileReports(List<string> reportPaths, int top, string? outPath)
+    {
+        var reports = reportPaths.Select(path => JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8)).RootElement.Clone()).ToList();
+        var labels = reportPaths.Select(path => Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(path))).ToList();
+        var perReport = new List<Dictionary<string, double>>(reports.Count);
+        var allSymbols = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var report in reports)
+        {
+            var map = new Dictionary<string, double>(StringComparer.Ordinal);
+            if (report.TryGetProperty("hotspots", out var hotspotsNode) && hotspotsNode.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var hotspot in hotspotsNode.EnumerateArray())
+                {
+                    var symbol = hotspot.TryGetProperty("symbol", out var symbolNode) ? symbolNode.GetString() ?? "" : "";
+                    var selfMs = hotspot.TryGetProperty("self_ms", out var selfNode) ? selfNode.GetDouble() : 0.0;
+                    if (string.IsNullOrWhiteSpace(symbol))
+                        continue;
+                    map[symbol] = selfMs;
+                    allSymbols.Add(symbol);
+                }
+            }
+            perReport.Add(map);
+        }
+
+        var rankedSymbols = allSymbols
+            .OrderByDescending(symbol => perReport.Max(report => report.TryGetValue(symbol, out var value) ? value : 0.0))
+            .Take(top)
+            .ToList();
+
+        var lines = new List<string>
+        {
+            "# hotspot comparison",
+            "",
+            "| Symbol | " + string.Join(" | ", labels.Select(label => $"{label} (ms)")) + " |",
+            "|---|" + string.Join("", labels.Select(_ => "---:|"))
+        };
+        foreach (var symbol in rankedSymbols)
+        {
+            var values = perReport.Select(report => report.TryGetValue(symbol, out var value) ? value : 0.0);
+            lines.Add($"| `{symbol}` | {string.Join(" | ", values.Select(value => value.ToString("F3", CultureInfo.InvariantCulture)))} |");
+        }
+
+        var content = string.Join(Environment.NewLine, lines) + Environment.NewLine;
+        if (!string.IsNullOrWhiteSpace(outPath))
+            File.WriteAllText(outPath, content, Encoding.UTF8);
+        return content;
+    }
+
+    private static ProfileReportPaths WriteProfileReport(
+        string outDir,
+        string name,
+        ProfileAnalysisResult analysis,
+        string binaryPath,
+        Dictionary<string, string> disassembly)
+    {
+        var reportJsonPath = Path.Combine(outDir, $"{name}.report.json");
+        var reportMarkdownPath = Path.Combine(outDir, $"{name}.report.md");
+        var payload = new Dictionary<string, object?>
+        {
+            ["metadata"] = new Dictionary<string, object?>
+            {
+                ["backend"] = analysis.Backend,
+                ["trace_path"] = analysis.TracePath,
+                ["export_path"] = analysis.ExportPath,
+                ["binary_path"] = binaryPath,
+                ["warmup_seconds"] = analysis.WarmupSeconds,
+                ["total_rows"] = analysis.TotalRows,
+                ["kept_rows"] = analysis.KeptRows
+            },
+            ["hotspots"] = analysis.Hotspots.Select(h => h.ToDictionary()).ToList(),
+            ["disassembly"] = disassembly
+        };
+        File.WriteAllText(reportJsonPath, JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8);
+
+        var lines = new List<string>
+        {
+            $"# {name}",
+            "",
+            $"- backend: `{analysis.Backend}`",
+            $"- trace: `{analysis.TracePath}`",
+            $"- export: `{analysis.ExportPath}`",
+            $"- binary: `{binaryPath}`",
+            $"- warmup cutoff: `{analysis.WarmupSeconds:F1}s`",
+            $"- kept samples: `{analysis.KeptRows}/{analysis.TotalRows}`",
+            "",
+            "| Rank | Self ms | Samples | Symbol | Binary |",
+            "|---:|---:|---:|---|---|"
+        };
+        lines.AddRange(analysis.Hotspots.Select(hotspot =>
+            $"| {hotspot.Rank} | {hotspot.SelfMs.ToString("F3", CultureInfo.InvariantCulture)} | {hotspot.SampleCount} | `{hotspot.Symbol}` | `{hotspot.BinaryName ?? ""}` |"));
+        if (disassembly.Count > 0)
+        {
+            lines.Add("");
+            lines.Add("## Disassembly");
+            lines.Add("");
+            foreach (var (symbol, path) in disassembly)
+                lines.Add($"- `{symbol}`: `{path}`");
+        }
+        File.WriteAllText(reportMarkdownPath, string.Join(Environment.NewLine, lines) + Environment.NewLine, Encoding.UTF8);
+        return new ProfileReportPaths(reportJsonPath, reportMarkdownPath);
+    }
+
+    private static Dictionary<string, string> DisassembleSymbols(string binaryPath, List<string> symbols, string outDir)
+    {
+        var index = LoadSymbolIndex(binaryPath);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var objdump = ResolveObjdumpTool();
+        foreach (var symbol in symbols)
+        {
+            if (!TryResolveSymbolName(symbol, index, out var entry))
+                continue;
+
+            var safeName = Regex.Replace(symbol, @"[^A-Za-z0-9_.-]+", "_");
+            if (safeName.Length > 120)
+                safeName = safeName[..120];
+            var outPath = Path.Combine(outDir, $"disasm-{safeName}.txt");
+            var args = new List<string> { "--demangle", "--disassemble", $"--start-address=0x{entry.Address}" };
+            if (!string.IsNullOrWhiteSpace(entry.NextAddress))
+                args.Add($"--stop-address=0x{entry.NextAddress}");
+            args.Add(binaryPath);
+            var text = RunResolvedToolCapture(objdump, args, RepoRoot());
+            File.WriteAllText(outPath, text, Encoding.UTF8);
+            result[symbol] = outPath;
+        }
+        return result;
+    }
+
+    private static Dictionary<string, SymbolEntry> LoadSymbolIndex(string binaryPath)
+    {
+        var nmTool = ResolveNmTool();
+        var mangledOutput = RunResolvedToolCapture(nmTool, new[] { "-n", binaryPath }, RepoRoot());
+        var demangledOutput = RunResolvedToolCapture(nmTool, new[] { "-C", "-n", binaryPath }, RepoRoot());
+        var mangled = ParseNmOutput(mangledOutput);
+        var demangled = ParseNmOutput(demangledOutput);
+        var orderedAddresses = demangled.Keys.OrderBy(address => Convert.ToUInt64(address, 16)).ToList();
+        var index = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal);
+        for (var i = 0; i < orderedAddresses.Count; i++)
+        {
+            var address = orderedAddresses[i];
+            var demangledName = demangled[address].Name;
+            var mangledName = mangled.TryGetValue(address, out var mangledEntry) ? mangledEntry.Name : demangledName;
+            var nextAddress = i + 1 < orderedAddresses.Count ? orderedAddresses[i + 1] : null;
+            index[demangledName] = new SymbolEntry(address, mangledName, demangledName, nextAddress);
+        }
+        return index;
+    }
+
+    private static Dictionary<string, (string Address, string Name)> ParseNmOutput(string text)
+    {
+        var map = new Dictionary<string, (string Address, string Name)>(StringComparer.Ordinal);
+        var regex = new Regex(@"^([0-9a-fA-F]+)\s+\S\s+(.+)$", RegexOptions.Compiled);
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var match = regex.Match(line.Trim());
+            if (!match.Success)
+                continue;
+            map[match.Groups[1].Value] = (match.Groups[1].Value, match.Groups[2].Value);
+        }
+        return map;
+    }
+
+    private static bool TryResolveSymbolName(string symbol, Dictionary<string, SymbolEntry> index, out SymbolEntry entry)
+    {
+        if (index.TryGetValue(symbol, out entry!))
+            return true;
+        foreach (var (demangledName, candidate) in index)
+        {
+            if (demangledName.EndsWith(symbol, StringComparison.Ordinal) || symbol.EndsWith(demangledName, StringComparison.Ordinal))
+            {
+                entry = candidate;
+                return true;
+            }
+        }
+        entry = default!;
+        return false;
+    }
+
+    private static ResolvedTool ResolveObjdumpTool()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && CommandExists("xcrun"))
+            return new ResolvedTool("xcrun", new[] { "llvm-objdump" });
+        if (CommandExists("llvm-objdump"))
+            return new ResolvedTool("llvm-objdump", Array.Empty<string>());
+        if (CommandExists("objdump"))
+            return new ResolvedTool("objdump", Array.Empty<string>());
+        throw new InvalidOperationException("Unable to find disassembler. Install llvm-objdump or objdump.");
+    }
+
+    private static ResolvedTool ResolveNmTool()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && CommandExists("xcrun"))
+            return new ResolvedTool("xcrun", new[] { "llvm-nm" });
+        if (CommandExists("llvm-nm"))
+            return new ResolvedTool("llvm-nm", Array.Empty<string>());
+        if (CommandExists("nm"))
+            return new ResolvedTool("nm", Array.Empty<string>());
+        throw new InvalidOperationException("Unable to find nm-compatible symbol tool. Install llvm-nm or nm.");
+    }
+
+    private static bool CommandExists(string command)
+    {
+        try
+        {
+            var search = RunCommand("bash", new[] { "-lc", $"command -v {EscapeShellSingleArgument(command)} >/dev/null 2>&1" }, RepoRoot(), captureOutput: false, okExitCodes: new HashSet<int> { 0, 1 });
+            return search.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string EscapeShellSingleArgument(string value)
+        => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+
+    private static string RunResolvedToolCapture(ResolvedTool tool, IEnumerable<string> arguments, string? workingDirectory = null)
+        => RunCommandCheckedCapture(tool.FileName, tool.PrefixArgs.Concat(arguments).ToArray(), workingDirectory);
+
+    private static string ShellJoin(IEnumerable<string> parts)
+        => string.Join(" ", parts.Select(ShellQuote));
+
+    private static string ShellQuote(string value)
+    {
+        if (value.Length == 0)
+            return "''";
+        if (value.All(ch => char.IsLetterOrDigit(ch) || "/._-:=+".Contains(ch, StringComparison.Ordinal)))
+            return value;
+        return "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+    }
+
+    private static void TryMarkExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        try
+        {
+            RunCommand("chmod", new[] { "+x", path }, RepoRoot(), captureOutput: false);
+        }
+        catch
+        {
+            // Best-effort only.
+        }
+    }
+
     private static string DefaultAnalysisOutput(string input)
     {
         return Directory.Exists(input) ? Path.Combine(input, "blocks_analysis.json") : "blocks_analysis.json";
     }
 
     private static string RepoRoot()
-        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+    {
+        foreach (var start in new[]
+                 {
+                     Directory.GetCurrentDirectory(),
+                     AppContext.BaseDirectory,
+                     Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."))
+                 })
+        {
+            var candidate = TryFindRepoRoot(start);
+            if (candidate is not null)
+                return candidate;
+        }
+
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+    }
 
     private static string DefaultFibercpuLibrary(string projectRoot)
     {
@@ -1435,6 +2003,153 @@ Examples:
     private static bool GetBool(JsonElement obj, string propertyName)
         => obj.TryGetProperty(propertyName, out var node) && node.ValueKind is JsonValueKind.True or JsonValueKind.False && node.GetBoolean();
 
+    private static string? TryFindRepoRoot(string start)
+    {
+        if (string.IsNullOrWhiteSpace(start))
+            return null;
+
+        var directory = new DirectoryInfo(Path.GetFullPath(start));
+        if (!directory.Exists && directory.Parent is not null)
+            directory = directory.Parent;
+
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Podish.slnx")) ||
+                File.Exists(Path.Combine(directory.FullName, "Podish.sln")) ||
+                File.Exists(Path.Combine(directory.FullName, "Podish.Cli", "Podish.Cli.csproj")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static double GetDoubleValue(string[] args, string option, double defaultValue)
+        => double.TryParse(GetValue(args, option), NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value) ? value : defaultValue;
+
+    private static CommandResult RunCommand(
+        string fileName,
+        IEnumerable<string> arguments,
+        string? workingDirectory,
+        bool captureOutput,
+        IReadOnlySet<int>? okExitCodes = null,
+        IDictionary<string, string>? environment = null)
+    {
+        var startInfo = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = workingDirectory ?? Directory.GetCurrentDirectory(),
+            RedirectStandardOutput = captureOutput,
+            RedirectStandardError = captureOutput,
+            UseShellExecute = false,
+        };
+
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+                startInfo.Environment[key] = value;
+        }
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to start command: {fileName}");
+        var stdout = captureOutput ? process.StandardOutput.ReadToEnd() : string.Empty;
+        var stderr = captureOutput ? process.StandardError.ReadToEnd() : string.Empty;
+        process.WaitForExit();
+
+        var allowed = okExitCodes ?? new HashSet<int> { 0 };
+        if (!allowed.Contains(process.ExitCode))
+        {
+            var rendered = ShellJoin(new[] { fileName }.Concat(arguments));
+            var detail = captureOutput
+                ? $"{rendered}{Environment.NewLine}{stdout}{stderr}".Trim()
+                : rendered;
+            throw new InvalidOperationException($"command failed with exit code {process.ExitCode}: {detail}");
+        }
+
+        return new CommandResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static void RunCommandChecked(string fileName, IEnumerable<string> arguments, string? workingDirectory, IDictionary<string, string>? environment = null)
+        => RunCommand(fileName, arguments, workingDirectory, captureOutput: false, environment: environment);
+
+    private static string RunCommandCheckedCapture(string fileName, IEnumerable<string> arguments, string? workingDirectory, IDictionary<string, string>? environment = null)
+        => RunCommand(fileName, arguments, workingDirectory, captureOutput: true, environment: environment).Stdout;
+
+    private static List<ProfileJitBlockEntry> LoadProfileJitMaps(string? mapDir)
+    {
+        if (string.IsNullOrWhiteSpace(mapDir) || !Directory.Exists(mapDir))
+            return new List<ProfileJitBlockEntry>();
+
+        var entries = new List<ProfileJitBlockEntry>();
+        foreach (var path in Directory.EnumerateFiles(mapDir, "jit_*.map.json").OrderBy(path => path, StringComparer.Ordinal))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+            var root = doc.RootElement;
+            var ops = new List<ProfileJitOpEntry>();
+            if (root.TryGetProperty("ops", out var opsNode) && opsNode.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var op in opsNode.EnumerateArray())
+                {
+                    ops.Add(new ProfileJitOpEntry(
+                        op.TryGetProperty("index", out var indexNode) ? indexNode.GetInt32() : 0,
+                        op.TryGetProperty("name", out var nameNode) ? nameNode.GetString() ?? "" : "",
+                        op.TryGetProperty("runtime_start", out var opRuntimeNode) ? opRuntimeNode.GetInt64() : 0,
+                        op.TryGetProperty("offset", out var offsetNode) ? offsetNode.GetInt32() : 0));
+                }
+            }
+
+            entries.Add(new ProfileJitBlockEntry(
+                root.TryGetProperty("guest_block_start_eip", out var blockNode) ? blockNode.GetInt64() : 0,
+                root.TryGetProperty("runtime_start", out var runtimeNode) ? runtimeNode.GetInt64() : 0,
+                root.TryGetProperty("code_size", out var sizeNode) ? sizeNode.GetInt32() : 0,
+                ops));
+        }
+
+        return entries.OrderBy(entry => entry.RuntimeStart).ToList();
+    }
+
+    private static (string Symbol, string? BinaryName) AnnotateJitSymbol(string symbol, List<ProfileJitBlockEntry> jitMaps)
+    {
+        if (!TryParseHexSymbol(symbol, out var address))
+            return (symbol, null);
+
+        foreach (var block in jitMaps)
+        {
+            if (address < block.RuntimeStart || address >= block.RuntimeStart + block.CodeSize)
+                continue;
+
+            var blockOffset = address - block.RuntimeStart;
+            ProfileJitOpEntry? currentOp = null;
+            foreach (var op in block.Ops)
+            {
+                if (op.RuntimeStart <= address)
+                    currentOp = op;
+                else
+                    break;
+            }
+
+            if (currentOp is null)
+                return ($"jit:block@{block.GuestBlockStartEip:x8}+0x{blockOffset:x}", "jit");
+
+            var opOffset = address - currentOp.RuntimeStart;
+            return ($"jit:block@{block.GuestBlockStartEip:x8}+0x{blockOffset:x} op[{currentOp.Index}] {currentOp.Name}+0x{opOffset:x}", "jit");
+        }
+
+        return (symbol, null);
+    }
+
+    private static bool TryParseHexSymbol(string symbol, out long value)
+    {
+        value = 0;
+        if (!symbol.StartsWith("0x", StringComparison.Ordinal))
+            return false;
+        return long.TryParse(symbol[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
+    }
+
     private static string NormalizeCandidateName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -1769,6 +2484,353 @@ Examples:
         OpSemantics FirstSemantics,
         OpSemantics SecondSemantics,
         string[] LegalityNotes);
+
+    private enum ProfileBackendKind
+    {
+        XcTrace,
+        Perf
+    }
+
+    private interface IProfileBackend
+    {
+        List<string> BuildRecordCommand(ProfileRecordOptions options, string tracePath, List<string> podishLaunch);
+        void Record(ProfileRecordOptions options, string runBinary, string tracePath, Dictionary<string, string> environment);
+        ProfileAnalysisResult Analyze(ProfileAnalyzeOptions options, string outDir);
+    }
+
+    private sealed class XcTraceProfileBackend : IProfileBackend
+    {
+        public List<string> BuildRecordCommand(ProfileRecordOptions options, string tracePath, List<string> podishLaunch)
+        {
+            if (!CommandExists("xcrun"))
+                throw new InvalidOperationException("xctrace backend requires xcrun on macOS.");
+
+            return new List<string>
+            {
+                "xcrun",
+                "xctrace",
+                "record",
+                "--template",
+                "Time Profiler",
+                "--time-limit",
+                $"{options.TimeLimitSeconds}s",
+                "--output",
+                tracePath,
+                "--launch",
+                "--"
+            }.Concat(podishLaunch).ToList();
+        }
+
+        public void Record(ProfileRecordOptions options, string runBinary, string tracePath, Dictionary<string, string> environment)
+        {
+            var command = BuildRecordCommand(options, tracePath, BuildPodishLaunchCommand(runBinary, options.Rootfs, options.Iterations, options.BenchCase));
+            var result = RunCommand(command[0], command.Skip(1), RepoRoot(), captureOutput: false, okExitCodes: new HashSet<int> { 0, 1 }, environment: environment);
+            if (result.ExitCode != 0 && !Directory.Exists(tracePath))
+                throw new InvalidOperationException($"xctrace recording failed and no trace was produced: {tracePath}");
+        }
+
+        public ProfileAnalysisResult Analyze(ProfileAnalyzeOptions options, string outDir)
+        {
+            var exportPath = Path.Combine(outDir, $"{options.Name}.xml");
+            var xml = RunCommandCheckedCapture(
+                "xcrun",
+                new[]
+                {
+                    "xctrace",
+                    "export",
+                    "--input",
+                    options.TracePath,
+                    "--xpath",
+                    "/trace-toc/run/data/table[@schema=\"time-profile\"]"
+                },
+                RepoRoot());
+            File.WriteAllText(exportPath, xml, Encoding.UTF8);
+
+            var doc = System.Xml.Linq.XDocument.Parse(xml);
+            var idIndex = doc.Descendants()
+                .Select(element => new { Element = element, Id = (string?)element.Attribute("id") })
+                .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+                .ToDictionary(item => item.Id!, item => item.Element, StringComparer.Ordinal);
+
+            System.Xml.Linq.XElement? Resolve(System.Xml.Linq.XElement? element)
+            {
+                if (element is null)
+                    return null;
+                var reference = (string?)element.Attribute("ref");
+                return !string.IsNullOrWhiteSpace(reference) && idIndex.TryGetValue(reference, out var resolved) ? resolved : element;
+            }
+
+            string? ElementText(System.Xml.Linq.XElement? element) => Resolve(element)?.Value;
+
+            var jitMaps = LoadProfileJitMaps(options.JitMapDir);
+            var aggregate = new Dictionary<(string Symbol, string? Binary), double>();
+            var counts = new Dictionary<(string Symbol, string? Binary), int>();
+            var rows = doc.Descendants("row").ToList();
+            var totalRows = rows.Count;
+            var keptRows = 0;
+            var warmupNs = (long)(options.WarmupSeconds * 1_000_000_000.0);
+
+            foreach (var row in rows)
+            {
+                var sampleTimeText = ElementText(row.Element("sample-time"));
+                var weightText = ElementText(row.Element("weight"));
+                var backtrace = Resolve(row.Element("backtrace"));
+                var frames = backtrace?.Elements("frame").Select(Resolve).Where(frame => frame is not null).Cast<System.Xml.Linq.XElement>().ToList() ?? new List<System.Xml.Linq.XElement>();
+                var frame = frames.FirstOrDefault(candidate =>
+                {
+                    var name = (string?)candidate.Attribute("name");
+                    return !string.IsNullOrWhiteSpace(name) && !string.Equals(name, "<deduplicated_symbol>", StringComparison.Ordinal);
+                }) ?? frames.FirstOrDefault();
+
+                if (!long.TryParse(sampleTimeText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sampleTime) ||
+                    !long.TryParse(weightText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var weight) ||
+                    frame is null)
+                {
+                    continue;
+                }
+
+                if (sampleTime < warmupNs)
+                    continue;
+
+                var symbol = (string?)frame.Attribute("name") ?? "<unknown>";
+                var binary = Resolve(frame.Element("binary"));
+                var binaryName = (string?)binary?.Attribute("name");
+                if (binaryName is null)
+                {
+                    var annotated = AnnotateJitSymbol(symbol, jitMaps);
+                    symbol = annotated.Symbol;
+                    binaryName = annotated.BinaryName;
+                }
+
+                var key = (symbol, binaryName);
+                aggregate[key] = aggregate.TryGetValue(key, out var selfMs) ? selfMs + weight / 1_000_000.0 : weight / 1_000_000.0;
+                counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
+                keptRows++;
+            }
+
+            var hotspots = aggregate
+                .OrderByDescending(item => item.Value)
+                .Select((item, index) => new ProfileHotspot(index + 1, item.Key.Symbol, Math.Round(item.Value, 3), counts[item.Key], item.Key.Binary))
+                .ToList();
+
+            return new ProfileAnalysisResult("xctrace", options.TracePath, exportPath, options.WarmupSeconds, totalRows, keptRows, hotspots);
+        }
+    }
+
+    private sealed class PerfProfileBackend : IProfileBackend
+    {
+        public List<string> BuildRecordCommand(ProfileRecordOptions options, string tracePath, List<string> podishLaunch)
+        {
+            if (!CommandExists("perf"))
+                throw new InvalidOperationException("perf backend requires the `perf` tool to be installed.");
+
+            var command = new List<string>
+            {
+                "perf",
+                "record",
+                "--call-graph",
+                "dwarf",
+                "-F",
+                "999",
+                "-o",
+                tracePath,
+                "--"
+            }.Concat(podishLaunch).ToList();
+
+            if (options.TimeLimitSeconds > 0 && CommandExists("timeout"))
+            {
+                command = new List<string> { "timeout", "--preserve-status", $"{options.TimeLimitSeconds}s" }
+                    .Concat(command)
+                    .ToList();
+            }
+
+            return command;
+        }
+
+        public void Record(ProfileRecordOptions options, string runBinary, string tracePath, Dictionary<string, string> environment)
+        {
+            var command = BuildRecordCommand(options, tracePath, BuildPodishLaunchCommand(runBinary, options.Rootfs, options.Iterations, options.BenchCase));
+            RunCommandChecked(command[0], command.Skip(1), RepoRoot(), environment);
+        }
+
+        public ProfileAnalysisResult Analyze(ProfileAnalyzeOptions options, string outDir)
+        {
+            var exportPath = Path.Combine(outDir, $"{options.Name}.perf-script.txt");
+            var script = RunCommandCheckedCapture("perf", new[] { "script", "-i", options.TracePath }, RepoRoot());
+            File.WriteAllText(exportPath, script, Encoding.UTF8);
+
+            var jitMaps = LoadProfileJitMaps(options.JitMapDir);
+            var aggregate = new Dictionary<(string Symbol, string? Binary), double>();
+            var counts = new Dictionary<(string Symbol, string? Binary), int>();
+
+            var sampleHeaderRegex = new Regex(@"^\s*(?<comm>\S+)\s+(?<pid>\d+)\s+(?<time>[0-9]+\.[0-9]+):", RegexOptions.Compiled);
+            var lines = script.Split('\n');
+            double? firstTimestamp = null;
+            var totalRows = 0;
+            var keptRows = 0;
+            var inSample = false;
+            var currentSampleKeep = false;
+            string? currentSymbol = null;
+            string? currentBinaryName = null;
+
+            static bool TryParsePerfFrame(string line, out string symbol, out string? binaryName)
+            {
+                symbol = "";
+                binaryName = null;
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0)
+                    return false;
+
+                var openParen = trimmed.LastIndexOf('(');
+                var closeParen = trimmed.LastIndexOf(')');
+                if (openParen < 0 || closeParen < openParen)
+                    return false;
+
+                binaryName = trimmed[(openParen + 1)..closeParen].Trim();
+                var left = trimmed[..openParen].Trim();
+                if (left.Length == 0)
+                    return false;
+
+                    var firstSpace = left.IndexOf(' ');
+                    if (firstSpace >= 0)
+                    {
+                        var maybeAddress = left[..firstSpace];
+                        var rest = left[(firstSpace + 1)..].Trim();
+                        if (!string.IsNullOrWhiteSpace(rest) && maybeAddress.All(Uri.IsHexDigit))
+                        left = rest;
+                    }
+
+                symbol = left;
+                return true;
+            }
+
+            void CommitSample()
+            {
+                if (!inSample || !currentSampleKeep || string.IsNullOrWhiteSpace(currentSymbol))
+                    return;
+
+                var symbol = currentSymbol!;
+                var binaryName = currentBinaryName;
+                if (binaryName is null)
+                {
+                    var annotated = AnnotateJitSymbol(symbol, jitMaps);
+                    symbol = annotated.Symbol;
+                    binaryName = annotated.BinaryName;
+                }
+
+                var key = (symbol, binaryName);
+                aggregate[key] = aggregate.TryGetValue(key, out var selfCount) ? selfCount + 1.0 : 1.0;
+                counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
+                keptRows++;
+            }
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var headerMatch = sampleHeaderRegex.Match(lines[i]);
+                if (!headerMatch.Success)
+                {
+                    if (!inSample)
+                        continue;
+
+                    if (string.IsNullOrWhiteSpace(lines[i]))
+                    {
+                        CommitSample();
+                        inSample = false;
+                        currentSymbol = null;
+                        currentBinaryName = null;
+                    }
+                    else if (TryParsePerfFrame(lines[i], out var symbol, out var binaryName))
+                    {
+                        if (currentSymbol is null &&
+                            !string.IsNullOrWhiteSpace(symbol) &&
+                            !string.Equals(symbol, "<deduplicated_symbol>", StringComparison.Ordinal))
+                        {
+                            currentSymbol = symbol;
+                            currentBinaryName = binaryName;
+                        }
+                    }
+                    continue;
+                }
+
+                totalRows++;
+                if (!double.TryParse(headerMatch.Groups["time"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var timestamp))
+                    continue;
+
+                firstTimestamp ??= timestamp;
+                inSample = true;
+                currentSampleKeep = (timestamp - firstTimestamp.Value) >= options.WarmupSeconds;
+                currentSymbol = null;
+                currentBinaryName = null;
+            }
+
+            CommitSample();
+
+            var hotspots = aggregate
+                .OrderByDescending(item => item.Value)
+                .Select((item, index) => new ProfileHotspot(index + 1, item.Key.Symbol, Math.Round(item.Value, 3), counts[item.Key], item.Key.Binary))
+                .ToList();
+
+            return new ProfileAnalysisResult("perf", options.TracePath, exportPath, options.WarmupSeconds, totalRows, keptRows, hotspots);
+        }
+    }
+
+    private sealed record ProfileRecordOptions(
+        ProfileBackendKind BackendKind,
+        IProfileBackend Backend,
+        string BinaryPath,
+        string Rootfs,
+        string OutputDir,
+        string Name,
+        int TimeLimitSeconds,
+        int Iterations,
+        string BenchCase,
+        string RenamedBinary,
+        string? JitMapDir);
+
+    private sealed record ProfileAnalyzeOptions(
+        ProfileBackendKind BackendKind,
+        IProfileBackend Backend,
+        string TracePath,
+        string BinaryPath,
+        string OutputDir,
+        string Name,
+        double WarmupSeconds,
+        int Top,
+        int DisasmTop,
+        string? JitMapDir);
+
+    private sealed record ProfileAnalysisResult(
+        string Backend,
+        string TracePath,
+        string ExportPath,
+        double WarmupSeconds,
+        int TotalRows,
+        int KeptRows,
+        List<ProfileHotspot> Hotspots);
+
+    private sealed record ProfileHotspot(int Rank, string Symbol, double SelfMs, int SampleCount, string? BinaryName)
+    {
+        public Dictionary<string, object?> ToDictionary() => new()
+        {
+            ["rank"] = Rank,
+            ["symbol"] = Symbol,
+            ["self_ms"] = SelfMs,
+            ["sample_count"] = SampleCount,
+            ["binary_name"] = BinaryName
+        };
+    }
+
+    private sealed record ProfileReportPaths(string ReportJsonPath, string ReportMarkdownPath);
+
+    private sealed record SymbolEntry(string Address, string Mangled, string Demangled, string? NextAddress);
+
+    private sealed record ResolvedTool(string FileName, string[] PrefixArgs);
+
+    private sealed record CommandResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed record ProfileJitOpEntry(int Index, string Name, long RuntimeStart, int Offset);
+
+    private sealed record ProfileJitBlockEntry(long GuestBlockStartEip, long RuntimeStart, int CodeSize, List<ProfileJitOpEntry> Ops);
 
     private sealed record OpSnapshot(uint EaDesc, byte Modrm, byte Meta, byte Prefixes);
 }

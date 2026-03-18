@@ -147,55 +147,56 @@ That pipeline builds an analysis binary with `EnableSuperOpcodes=false`, mines r
 
 The old Python entrypoints remain as compatibility wrappers, but the C# tool is the recommended path for superopcode analysis and generation.
 
-## Record and analyze xctrace
+## Record And Analyze Profiles
 
-Use `benchmark/podish_perf/profile_xctrace.py` to:
+Use `Podish.PerfTools` to record and analyze runtime profiles. The tool picks a backend automatically:
 
-- copy the NativeAOT binary to a unique name to avoid colliding with the Swift app
-- record a Time Profiler trace
-- export raw `time-profile` XML
-- aggregate steady-state hotspots after warmup cutoff
-- dump disassembly for hot symbols
-- compare multiple runs
+- macOS uses `xctrace` Time Profiler
+- Linux uses `perf`
+- disassembly auto-detects `llvm-objdump` / `objdump`
 
 Record and analyze in one step:
 
 ```bash
-python3 benchmark/podish_perf/profile_xctrace.py record-and-analyze \
-  --binary build/nativeaot/podish-cli-static/Podish.Cli \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+  profile record-and-analyze \
+  --backend auto \
   --name coremark-current
 ```
 
 Profile the gcc compile workload instead of the CoreMark run workload:
 
 ```bash
-python3 benchmark/podish_perf/profile_xctrace.py record-and-analyze \
-  --binary build/nativeaot/podish-cli-static/Podish.Cli \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+  profile record-and-analyze \
+  --backend auto \
   --bench-case gcc_compile \
   --name coremark-gcc-compile
 ```
 
-Analyze an existing trace:
+Analyze an existing trace or perf.data file:
 
 ```bash
-python3 benchmark/podish_perf/profile_xctrace.py analyze \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+  profile analyze \
+  --backend auto \
   --trace benchmark/podish_perf/results/coremark-flags-cache-retuned-v2.trace \
-  --binary build/nativeaot/podish-cli-static/PodishCliFlagsRetuned \
   --name coremark-flags-cache-retuned-v2
 ```
 
 Compare saved reports:
 
 ```bash
-python3 benchmark/podish_perf/profile_xctrace.py compare \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+  profile compare \
   --report benchmark/podish_perf/results/run-a/run-a.report.json \
   --report benchmark/podish_perf/results/run-b/run-b.report.json
 ```
 
 Typical outputs:
 
-- `<name>.trace`
-- `<name>.xml`
+- `<name>.trace` on macOS or `<name>.data` on Linux
+- `<name>.xml` or `<name>.perf-script.txt`
 - `<name>.report.json`
 - `<name>.report.md`
 - `disasm-*.txt`
