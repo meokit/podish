@@ -7,7 +7,8 @@ It currently handles two main workflows:
 1. `profile` pipeline
    Records and analyzes runtime hotspots, automatically selecting the backend based on platform.
 2. `superopcode` pipeline
-   Extracts opcode adjacency relationships from guest block dumps, filters candidates, and generates `libfibercpu/generated/superopcodes.generated.cpp`.
+   Extracts opcode adjacency relationships from guest block dumps, filters candidates, and generates
+   `libfibercpu/generated/superopcodes.generated.cpp`.
 
 This README focuses on the complete, usable workflow rather than just listing commands.
 
@@ -53,12 +54,11 @@ Base dependencies:
 Profile-specific additional dependencies:
 
 - macOS:
-  - `xctrace`
-  - `xcrun`
+    - `xctrace`
+    - `xcrun`
 - Linux:
-  - `perf`
-  - `llvm-objdump` or `objdump`
-  - `llvm-nm` or `nm`
+    - `perf`
+    - `llvm-objdump` or `objdump`
 
 Superopcode-specific additional dependencies:
 
@@ -211,15 +211,14 @@ Typical outputs include:
 `Podish.PerfTools` automatically selects available tools:
 
 - Disassembly:
-  - macOS prioritizes `xcrun llvm-objdump`
-  - Other platforms prioritize `llvm-objdump`
-  - Falls back to `objdump`
+    - macOS prioritizes `xcrun llvm-objdump`
+    - Other platforms prioritize `llvm-objdump`
+    - Falls back to `objdump`
 - Symbols:
-  - macOS prioritizes `xcrun llvm-nm`
-  - Other platforms prioritize `llvm-nm`
-  - Falls back to `nm`
+    - Parsed directly from ELF, PE, or Mach-O binaries via built-in object file readers
 
-This means on Linux we don't need to maintain two separate command sets—the tool adapts automatically.
+This means symbol resolution no longer depends on an external `nm` tool, while disassembly still adapts automatically to
+the available objdump implementation.
 
 ### Recommended Usage
 
@@ -249,7 +248,8 @@ The superopcode pipeline consists of four steps:
 - `op_id`
 - `n-gram`
 
-Then `analyze-superopcode-candidates` performs def-use adjacency filtering based on these results to select worthwhile 2-op pairs.
+Then `analyze-superopcode-candidates` performs def-use adjacency filtering based on these results to select worthwhile
+2-op pairs.
 
 ## Step One: Prepare RootFS
 

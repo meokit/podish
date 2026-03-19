@@ -1,18 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-  </PropertyGroup>
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="LibObjectFile" Version="2.1.0" />
-    <Compile Include="Program.cs" />
-    <Compile Include="BenchmarkRunner.cs" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="LibObjectFile" Version="2.1.0"/>
+        <Compile Include="Program.cs"/>
+        <Compile Include="Program.Analysis.cs"/>
+        <Compile Include="Program.Common.cs"/>
+        <Compile Include="Program.Candidates.cs"/>
+        <Compile Include="Program.Profile.cs"/>
+        <Compile Include="Program.Semantics.cs"/>
+        <Compile Include="Program.Superopcodes.cs"/>
+        <Compile Include="BenchmarkRunner.cs"/>
+    </ItemGroup>
 
 </Project>
