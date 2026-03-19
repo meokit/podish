@@ -14,17 +14,31 @@ namespace Podish.PerfTools;
 
 internal static class Program
 {
+    private static readonly string[] GprNames = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+    private const uint CfBit = 1u << 0;
+    private const uint PfBit = 1u << 2;
+    private const uint AfBit = 1u << 4;
+    private const uint ZfBit = 1u << 6;
+    private const uint SfBit = 1u << 7;
+    private const uint OfBit = 1u << 11;
+    private const uint AllStatusFlagsMask = CfBit | PfBit | AfBit | ZfBit | SfBit | OfBit;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+
     private static readonly Regex DispatchWrapperRegex =
         new(@"DispatchWrapper<&(?:[a-zA-Z0-9_]+::)*?(op::Op[A-Za-z0-9_]+)>", RegexOptions.Compiled);
 
     private static readonly Regex DirectLogicRegex =
         new(@"(?:^|::)(op::Op[A-Za-z0-9_]+)(?:\(|$)", RegexOptions.Compiled);
+
+    private static readonly Regex MangledLogicRegex =
+        new(@"(Op[A-Za-z0-9_]+?)EPNS_", RegexOptions.Compiled);
 
     private static readonly Regex OpPrefixRegex =
         new(@"^Op[A-Za-z0-9_]+$", RegexOptions.Compiled);
@@ -48,6 +62,7 @@ internal static class Program
                 "analyze-superopcode-candidates" => RunAnalyzeSuperopcodeCandidates(rest),
                 "gen-superopcodes" => RunGenerateSuperopcodes(rest),
                 "pipeline" => RunPipeline(rest),
+                "runner" => BenchmarkRunner.Run(rest),
                 "profile" => RunProfile(rest),
                 "help" or "--help" or "-h" => PrintUsage(),
                 _ => throw new ArgumentException($"Unknown command: {command}")
@@ -70,10 +85,12 @@ Commands:
   analyze-superopcode-candidates Aggregate candidate pairs from analysis files
   gen-superopcodes               Generate libfibercpu/generated/superopcodes.generated.cpp
   pipeline                       Run the full benchmark + analysis pipeline
+  runner                         Run the benchmark harness and optional block analysis
   profile                        Record/analyze runtime profiles with auto-selected backend
 
 Examples:
   dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- pipeline --candidate-top 256 --superopcode-top 256 --reuse-rootfs
+  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- runner --jit-handler-profile-block-dump --aggregate-superopcode-candidates --candidate-top 256
   dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto
 """);
         return 0;
@@ -89,7 +106,7 @@ Examples:
 
         var result = AnalyzeBlocks(input, libPath, nGram, topNgrams);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
-        File.WriteAllText(output, JsonSerializer.Serialize(result, JsonOptions), Encoding.UTF8);
+        File.WriteAllText(output, JsonSerializer.Serialize(result, JsonOptions), Utf8NoBom);
         Console.WriteLine($"Wrote analysis to {Path.GetFullPath(output)}");
         return 0;
     }
@@ -136,8 +153,8 @@ Examples:
         {
             var data = JsonDocument.Parse(File.ReadAllText(analysisFile, Encoding.UTF8));
             var sampleMeta = InferSampleMetadata(analysisFile);
-            if (ShouldSkipAnalysis(data.RootElement, out var skipReasons))
-            {
+        if (ShouldSkipAnalysis(data.RootElement, out var skipReasons))
+        {
                 skippedSamples.Add(new Dictionary<string, object?>
                 {
                     ["analysis_file"] = analysisFile.ToString(),
@@ -247,11 +264,21 @@ Examples:
             ["candidates"] = candidates,
         };
 
-        File.WriteAllText(outputJson, JsonSerializer.Serialize(output, JsonOptions), Encoding.UTF8);
+        File.WriteAllText(outputJson, JsonSerializer.Serialize(output, JsonOptions), Utf8NoBom);
         Console.WriteLine($"Wrote {candidates.Count} candidates from {includedSamples.Count} samples to {Path.GetFullPath(outputJson)}");
         if (!string.IsNullOrWhiteSpace(outputMd))
         {
-            File.WriteAllText(outputMd, BuildMarkdown(inputs, analysisFiles, includedSamples, skippedSamples, anchors, candidates, anchorTop), Encoding.UTF8);
+            File.WriteAllText(
+                outputMd,
+                BuildMarkdown(
+                    inputs,
+                    analysisFiles,
+                    includedSamples,
+                    skippedSamples,
+                    anchors.Take(Math.Min(anchors.Count, Math.Max(20, anchorTop))).ToList(),
+                    candidates,
+                    anchorTop),
+                Utf8NoBom);
             Console.WriteLine($"Wrote markdown summary to {Path.GetFullPath(outputMd)}");
         }
 
@@ -266,7 +293,7 @@ Examples:
 
         var generated = GenerateSuperopcodes(input, top);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
-        File.WriteAllText(output, generated, Encoding.UTF8);
+        File.WriteAllText(output, generated, Utf8NoBom);
         Console.WriteLine($"Wrote {top} superopcodes to {Path.GetFullPath(output)}");
         return 0;
     }
@@ -295,15 +322,14 @@ Examples:
             resultsDir = Path.Combine(projectRoot, "benchmark", "podish_perf", "results", $"{DateTime.Now:yyyyMMdd-HHmmss}-superopcode");
         resultsDir = Path.GetFullPath(resultsDir);
 
-        var runnerScript = Path.Combine(projectRoot, "benchmark", "podish_perf", "runner.py");
         var runnerArgs = new List<string>
         {
-            runnerScript,
             "--engine", "jit",
             "--jit-handler-profile-block-dump",
             "--disable-superopcodes",
-            "--skip-auto-analyze-block-dump",
-            "--block-n-gram", "0",
+            "--block-n-gram", "2",
+            "--aggregate-superopcode-candidates",
+            "--candidate-top", candidateTop.ToString(CultureInfo.InvariantCulture),
             "--rootfs", rootfs,
             "--repeat", repeat.ToString(CultureInfo.InvariantCulture),
             "--iterations", iterations.ToString(CultureInfo.InvariantCulture),
@@ -319,27 +345,12 @@ Examples:
         if (keepWorkdirs)
             runnerArgs.Add("--keep-workdirs");
 
-        RunProcess("python3", runnerArgs, projectRoot);
-
-        var guestStatsRoot = Path.Combine(resultsDir, "guest-stats");
-        var fibercpuLibrary = DefaultFibercpuLibrary(projectRoot);
-        foreach (var dumpDir in EnumerateGuestStatsDirs(guestStatsRoot))
-        {
-            var output = Path.Combine(dumpDir, "blocks_analysis.json");
-            var analysis = AnalyzeBlocks(Path.Combine(dumpDir, "blocks.bin"), fibercpuLibrary, 2, 100);
-            File.WriteAllText(output, JsonSerializer.Serialize(analysis, JsonOptions), Encoding.UTF8);
-        }
+        var runnerExit = BenchmarkRunner.Run(runnerArgs.ToArray());
+        if (runnerExit != 0)
+            throw new InvalidOperationException($"runner failed with exit code {runnerExit}");
 
         var candidateJson = Path.Combine(resultsDir, "superopcode_candidates.json");
         var candidateMd = Path.Combine(resultsDir, "superopcode_candidates.md");
-        RunAnalyzeSuperopcodeCandidates(new[]
-        {
-            "--input", guestStatsRoot,
-            "--n-gram", "2",
-            "--top", candidateTop.ToString(CultureInfo.InvariantCulture),
-            "--output-json", candidateJson,
-            "--output-md", candidateMd
-        });
 
         var generatedOutputPath = Path.GetFullPath(Path.Combine(projectRoot, generatedOutput));
         RunGenerateSuperopcodes(new[]
@@ -604,7 +615,7 @@ Examples:
     {
         var podishLaunch = BuildPodishLaunchCommand(runBinary, options.Rootfs, options.Iterations, options.BenchCase);
         var recordCommand = options.Backend.BuildRecordCommand(options, tracePath, podishLaunch);
-        File.WriteAllText(Path.Combine(outDir, "record-command.txt"), ShellJoin(recordCommand) + Environment.NewLine, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(outDir, "record-command.txt"), ShellJoin(recordCommand) + Environment.NewLine, Utf8NoBom);
     }
 
     private static Dictionary<string, string> BuildProfileEnvironment(ProfileRecordOptions options)
@@ -717,7 +728,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
 
         var content = string.Join(Environment.NewLine, lines) + Environment.NewLine;
         if (!string.IsNullOrWhiteSpace(outPath))
-            File.WriteAllText(outPath, content, Encoding.UTF8);
+            File.WriteAllText(outPath, content, Utf8NoBom);
         return content;
     }
 
@@ -745,7 +756,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             ["hotspots"] = analysis.Hotspots.Select(h => h.ToDictionary()).ToList(),
             ["disassembly"] = disassembly
         };
-        File.WriteAllText(reportJsonPath, JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8);
+        File.WriteAllText(reportJsonPath, JsonSerializer.Serialize(payload, JsonOptions), Utf8NoBom);
 
         var lines = new List<string>
         {
@@ -771,7 +782,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             foreach (var (symbol, path) in disassembly)
                 lines.Add($"- `{symbol}`: `{path}`");
         }
-        File.WriteAllText(reportMarkdownPath, string.Join(Environment.NewLine, lines) + Environment.NewLine, Encoding.UTF8);
+        File.WriteAllText(reportMarkdownPath, string.Join(Environment.NewLine, lines) + Environment.NewLine, Utf8NoBom);
         return new ProfileReportPaths(reportJsonPath, reportMarkdownPath);
     }
 
@@ -794,7 +805,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                 args.Add($"--stop-address=0x{entry.NextAddress}");
             args.Add(binaryPath);
             var text = RunResolvedToolCapture(objdump, args, RepoRoot());
-            File.WriteAllText(outPath, text, Encoding.UTF8);
+            File.WriteAllText(outPath, text, Utf8NoBom);
             result[symbol] = outPath;
         }
         return result;
@@ -1002,8 +1013,9 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         Console.Error.WriteLine($"[analyze-blocks] loading symbols from {libPath}");
         var symbols = LoadSymbols(libPath);
         Console.Error.WriteLine($"[analyze-blocks] loaded {symbols.Count} symbols");
+        using var opIdResolver = HandlerOpIdResolver.TryCreate(libPath);
         Console.Error.WriteLine($"[analyze-blocks] parsing block dump {dumpFile}");
-        var (baseAddr, count, blocks, warnings) = ParseBlocks(dumpFile, symbols);
+        var (baseAddr, count, blocks, warnings) = ParseBlocks(dumpFile, symbols, opIdResolver);
         Console.Error.WriteLine($"[analyze-blocks] parsed {blocks.Count}/{count} blocks");
         var validation = BuildValidation(summary, count, blocks.Count, warnings);
 
@@ -1058,6 +1070,15 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
 
     private static Dictionary<ulong, string> LoadSymbols(string libPath)
     {
+        var nmSymbols = TryLoadSymbolsWithNm(libPath);
+        if (nmSymbols.Count > 0)
+            return nmSymbols;
+
+        return TryLoadSymbolsWithLibObjectFile(libPath);
+    }
+
+    private static Dictionary<ulong, string> TryLoadSymbolsWithLibObjectFile(string libPath)
+    {
         var rawSymbols = new List<(ulong addr, string name)>();
 
         using (var inStream = File.OpenRead(libPath))
@@ -1089,6 +1110,81 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             }
         }
 
+        return BuildSymbolMap(rawSymbols);
+    }
+
+    private static Dictionary<ulong, string> TryLoadSymbolsWithNm(string libPath)
+    {
+        var commands = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? new[]
+            {
+                new[] { "nm", "-nm", "-C", libPath },
+                new[] { "nm", "-n", "-C", libPath },
+                new[] { "nm", "-nm", libPath },
+                new[] { "nm", "-n", libPath },
+            }
+            : new[]
+            {
+                new[] { "nm", "-n", "-C", libPath },
+                new[] { "nm", "-n", libPath },
+                new[] { "llvm-nm", "-n", "-C", libPath },
+                new[] { "llvm-nm", "-n", libPath },
+            };
+
+        foreach (var cmd in commands)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(cmd[0], string.Join(" ", cmd.Skip(1)))
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                    continue;
+
+                var output = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit();
+                if (proc.ExitCode != 0)
+                    continue;
+
+                var rawSymbols = new List<(ulong addr, string name)>();
+                foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (parts.Length < 2)
+                        continue;
+
+                    if (!ulong.TryParse(parts[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var addr))
+                        continue;
+
+                    var name = parts.Length >= 3
+                        ? string.Join(" ", parts.Skip(2))
+                        : parts[^1];
+                    rawSymbols.Add((addr, name));
+                }
+
+                if (rawSymbols.Count > 0)
+                    return BuildSymbolMap(rawSymbols);
+            }
+            catch
+            {
+                // Try the next nm invocation or fall back to LibObjectFile.
+            }
+        }
+
+        return new Dictionary<ulong, string>();
+    }
+
+    private static Dictionary<ulong, string> BuildSymbolMap(List<(ulong addr, string name)> rawSymbols)
+    {
+        if (rawSymbols.Count == 0)
+            return new Dictionary<ulong, string>();
+
         var demangled = DemangleSymbols(rawSymbols.Select(x => x.name).Distinct(StringComparer.Ordinal).ToArray());
         var symbols = new Dictionary<ulong, string>();
         foreach (var (addr, name) in rawSymbols)
@@ -1097,6 +1193,77 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         }
 
         return symbols;
+    }
+
+    private sealed class HandlerOpIdResolver : IDisposable
+    {
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetOpIdForHandlerDelegate(IntPtr handler);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate IntPtr GetLibAddressDelegate();
+
+        private readonly IntPtr _libraryHandle;
+        private readonly GetOpIdForHandlerDelegate? _getOpIdForHandler;
+        private readonly ulong _libBase;
+        private readonly Dictionary<ulong, int?> _cache = new();
+
+        private HandlerOpIdResolver(
+            IntPtr libraryHandle,
+            GetOpIdForHandlerDelegate? getOpIdForHandler,
+            ulong libBase)
+        {
+            _libraryHandle = libraryHandle;
+            _getOpIdForHandler = getOpIdForHandler;
+            _libBase = libBase;
+        }
+
+        public static HandlerOpIdResolver? TryCreate(string libPath)
+        {
+            try
+            {
+                var handle = NativeLibrary.Load(libPath);
+                var getOpIdForHandler = Marshal.GetDelegateForFunctionPointer<GetOpIdForHandlerDelegate>(
+                    NativeLibrary.GetExport(handle, "X86_GetOpIdForHandler"));
+                var getLibAddress = Marshal.GetDelegateForFunctionPointer<GetLibAddressDelegate>(
+                    NativeLibrary.GetExport(handle, "X86_GetLibAddress"));
+                var libBase = (ulong)getLibAddress().ToInt64();
+                return new HandlerOpIdResolver(handle, getOpIdForHandler, libBase);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[analyze-blocks] warning: failed to load X86_GetOpIdForHandler from {libPath}: {ex.Message}");
+                return null;
+            }
+        }
+
+        public int? Resolve(ulong handlerPtr, ulong handlerOffset)
+        {
+            if (_getOpIdForHandler is null)
+                return null;
+
+            ulong lookupPtr;
+            if (_libBase != 0 && handlerOffset != 0)
+                lookupPtr = _libBase + handlerOffset;
+            else if (handlerPtr != 0)
+                lookupPtr = handlerPtr;
+            else
+                return null;
+
+            if (_cache.TryGetValue(lookupPtr, out var cached))
+                return cached;
+
+            var value = _getOpIdForHandler((IntPtr)unchecked((long)lookupPtr));
+            int? result = value < 0 ? null : value;
+            _cache[lookupPtr] = result;
+            return result;
+        }
+
+        public void Dispose()
+        {
+            if (_libraryHandle != IntPtr.Zero)
+                NativeLibrary.Free(_libraryHandle);
+        }
     }
 
     private static Dictionary<string, string> DemangleSymbols(string[] names)
@@ -1148,7 +1315,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
     }
 
     private static (ulong baseAddr, int count, List<Dictionary<string, object?>> blocks, List<string> warnings) ParseBlocks(
-        string dumpFile, Dictionary<ulong, string> symbols)
+        string dumpFile, Dictionary<ulong, string> symbols, HandlerOpIdResolver? opIdResolver)
     {
         var blocks = new List<Dictionary<string, object?>>();
         var warnings = new List<string>();
@@ -1199,6 +1366,16 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                 var handlerOffset = handlerPtr >= baseAddr ? handlerPtr - baseAddr : 0UL;
                 var symbolName = FindSymbol(handlerOffset, symbols);
                 var logicFunc = NormalizeLogicFuncName(symbolName);
+                var opId = opIdResolver?.Resolve(handlerPtr, handlerOffset);
+                var defUse = AnalyzeDefUse(opId, modrm, meta, prefixes, (int)eaDesc);
+                var defUseNode = defUse?.ToDictionary() ?? new Dictionary<string, object?>
+                {
+                    ["reads"] = Array.Empty<string>(),
+                    ["writes"] = Array.Empty<string>(),
+                    ["notes"] = Array.Empty<string>(),
+                    ["control_flow"] = false,
+                    ["memory_side_effect"] = false
+                };
 
                 ops.Add(new Dictionary<string, object?>
                 {
@@ -1212,8 +1389,8 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                     ["symbol_raw"] = symbolName,
                     ["logic_func"] = logicFunc,
                     ["symbol"] = logicFunc ?? symbolName,
-                    ["op_id"] = null,
-                    ["op_id_hex"] = null,
+                    ["op_id"] = opId,
+                    ["op_id_hex"] = opId is null ? null : $"0x{opId.Value:x}",
                     ["imm"] = imm,
                     ["imm_hex"] = $"0x{imm:x}",
                     ["len"] = len,
@@ -1239,13 +1416,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                         ["segment"] = (eaDesc >> 14) & 0x7,
                         ["segment_hex"] = $"0x{((eaDesc >> 14) & 0x7):x}",
                     },
-                    ["def_use"] = new Dictionary<string, object?>
-                    {
-                        ["reads"] = Array.Empty<string>(),
-                        ["writes"] = Array.Empty<string>(),
-                        ["control_flow"] = false,
-                        ["memory_side_effect"] = false
-                    }
+                    ["def_use"] = defUseNode
                 });
             }
 
@@ -1327,6 +1498,10 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         var directMatch = DirectLogicRegex.Match(symbolName);
         if (directMatch.Success)
             return directMatch.Groups[1].Value;
+
+        var mangledMatch = MangledLogicRegex.Match(symbolName);
+        if (mangledMatch.Success)
+            return "op::" + mangledMatch.Groups[1].Value;
 
         return null;
     }
@@ -1430,6 +1605,15 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                 anchorStats.Occurrences += 1;
                 anchorStats.UniqueBlockStarts.Add(blockStart);
                 anchorStats.Semantics ??= InferSemantics(anchor!);
+                if (anchorStats.ExampleBlocks.Count < 5)
+                {
+                    anchorStats.ExampleBlocks.Add(new Dictionary<string, object?>
+                    {
+                        ["start_eip_hex"] = blockStart,
+                        ["exec_count"] = blockExecCount,
+                        ["anchor_op_index"] = i,
+                    });
+                }
 
                 if (i > 0 && !string.IsNullOrWhiteSpace(seq[i - 1]))
                 {
@@ -1485,6 +1669,22 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         entry.EngineCounts.Add((string?)sampleMeta["engine"]);
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
         entry.Semantics ??= sampleStats.Semantics;
+        if (entry.ExampleSources.Count < 5)
+        {
+            entry.ExampleSources.Add(new Dictionary<string, object?>
+            {
+                ["analysis_file"] = sampleMeta["analysis_file"],
+                ["result_name"] = sampleMeta["result_name"],
+                ["sample_name"] = sampleMeta["sample_name"],
+                ["engine"] = sampleMeta["engine"],
+                ["case"] = sampleMeta["case"],
+                ["iteration"] = sampleMeta["iteration"],
+                ["weighted_exec_count"] = sampleStats.WeightedExecCount,
+                ["occurrences"] = sampleStats.Occurrences,
+                ["unique_block_count"] = sampleStats.UniqueBlockStarts.Count,
+                ["example_blocks"] = sampleStats.ExampleBlocks,
+            });
+        }
     }
 
     private static void MergePairStats(
@@ -1507,6 +1707,22 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
         entry.SharedResourceVariants.Add(string.Join(",", sampleStats.SharedResources));
         entry.RelationKindVariants.Add(sampleStats.RelationKind);
+        if (entry.ExampleSources.Count < 5)
+        {
+            entry.ExampleSources.Add(new Dictionary<string, object?>
+            {
+                ["analysis_file"] = sampleMeta["analysis_file"],
+                ["result_name"] = sampleMeta["result_name"],
+                ["sample_name"] = sampleMeta["sample_name"],
+                ["engine"] = sampleMeta["engine"],
+                ["case"] = sampleMeta["case"],
+                ["iteration"] = sampleMeta["iteration"],
+                ["weighted_exec_count"] = sampleStats.WeightedExecCount,
+                ["occurrences"] = sampleStats.Occurrences,
+                ["unique_block_count"] = sampleStats.UniqueBlockStarts.Count,
+                ["example_blocks"] = sampleStats.ExampleBlocks,
+            });
+        }
     }
 
     private static Dictionary<string, object?> NormalizeAnchorEntry(AnchorAggregate entry)
@@ -1521,6 +1737,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             ["sample_count"] = entry.SampleCount,
             ["engine_counts"] = entry.EngineCounts.ToSortedDictionary(),
             ["case_counts"] = entry.CaseCounts.ToSortedDictionary(),
+            ["example_sources"] = entry.ExampleSources,
             ["semantics"] = entry.Semantics?.ToDictionary(),
         };
     }
@@ -1578,6 +1795,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             ["dominant_shared_resource_ratio"] = entry.Occurrences > 0 ? (double)dominantSharedVariant.Value / entry.Occurrences : 0.0,
             ["relation_kind_variants"] = entry.RelationKindVariants.ToSortedDictionary(),
             ["dominant_relation_kind_count"] = dominantRelationCount,
+            ["example_sources"] = entry.ExampleSources,
             ["legality_notes"] = entry.LegalityNotes,
             ["score"] = baseFrequency * dominantDepWeight * jccWeight,
             ["anchor_weighted_exec_count"] = anchorEntry["weighted_exec_count"],
@@ -1624,7 +1842,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         sb.AppendLine();
         sb.AppendLine("| Rank | Anchor | Weighted Exec | Samples | Occurrences | Unique Blocks |");
         sb.AppendLine("| --- | --- | ---: | ---: | ---: | ---: |");
-        foreach (var (anchor, index) in anchors.Take(anchorTop).Select((a, i) => (a, i + 1)))
+        foreach (var (anchor, index) in anchors.Select((a, i) => (a, i + 1)))
         {
             sb.AppendLine($"| {index} | `{anchor["anchor_display"]}` | {anchor["weighted_exec_count"]} | {anchor["sample_count"]} | {anchor["occurrences"]} | {anchor["unique_block_count"]} |");
         }
@@ -1742,7 +1960,6 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("}  // namespace fiberish");
-        sb.AppendLine();
 
         return sb.ToString();
     }
@@ -1877,6 +2094,21 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
 
     private static OpSemantics GetOpSemantics(JsonElement opNode, string normalizedName)
     {
+        var opId = TryGetNullableInt(opNode, "op_id") ?? TryGetNullableIntFromHex(opNode, "op_id_hex");
+        var modrm = opNode.TryGetProperty("modrm", out var modrmNode) && modrmNode.ValueKind == JsonValueKind.Number ? modrmNode.GetInt32() : 0;
+        var meta = opNode.TryGetProperty("meta", out var metaNode) && metaNode.ValueKind == JsonValueKind.Number ? metaNode.GetInt32() : 0;
+        var prefixes = opNode.TryGetProperty("prefixes", out var prefixesNode) && prefixesNode.ValueKind == JsonValueKind.Number ? prefixesNode.GetInt32() : 0;
+        var eaDesc = 0;
+        if (opNode.TryGetProperty("mem", out var memNode) && memNode.ValueKind == JsonValueKind.Object &&
+            memNode.TryGetProperty("ea_desc", out var eaDescNode) && eaDescNode.ValueKind == JsonValueKind.Number)
+        {
+            eaDesc = eaDescNode.GetInt32();
+        }
+
+        var analyzed = AnalyzeDefUse(opId, modrm, meta, prefixes, eaDesc);
+        if (analyzed is not null)
+            return analyzed;
+
         if (!opNode.TryGetProperty("def_use", out var defUse) || defUse.ValueKind != JsonValueKind.Object)
             return InferSemantics(normalizedName);
 
@@ -1912,6 +2144,500 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             return fallback;
 
         return new OpSemantics(reads, writes, notes, controlFlow, memorySideEffect);
+    }
+
+    private static OpSemantics? AnalyzeDefUse(int? opId, int modrm, int meta, int prefixes, int eaDesc)
+    {
+        _ = prefixes;
+        if (opId is null || opId < 0)
+            return null;
+
+        var id = opId.Value;
+        var hasModrm = (meta & 0x01) != 0;
+        var hasMem = (meta & 0x02) != 0;
+        var state = new DefUseState();
+
+        if ((id >= 0x70 && id <= 0x7F) || (id >= 0x180 && id <= 0x18F) || (id >= 0xE0 && id <= 0xE3))
+        {
+            state.ReadsFlagsMask |= AllStatusFlagsMask;
+            state.ControlFlow = true;
+            if (id >= 0xE0 && id <= 0xE2)
+            {
+                state.ReadsGprMask |= RegMask(1);
+                state.WritesGprMask |= RegMask(1);
+                state.Note("loop family decrements ECX");
+            }
+            else if (id == 0xE3)
+            {
+                state.ReadsGprMask |= RegMask(1);
+                state.Note("jecxz reads ECX");
+            }
+            state.Note("conditional control flow consumes flags");
+            return state.ToOpSemantics();
+        }
+
+        if (id is 0xE9 or 0xEB)
+        {
+            state.Note("unconditional jump");
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0x140 && id <= 0x14F && hasModrm)
+        {
+            state.ReadsFlagsMask |= AllStatusFlagsMask;
+            ApplyRegOperand(state, modrm, "readwrite");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            state.Note("cmov reads destination because the old value is kept on false predicate");
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0x190 && id <= 0x19F && hasModrm)
+        {
+            state.ReadsFlagsMask |= AllStatusFlagsMask;
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x38 or 0x39 or 0x3A or 0x3B or 0x84 or 0x85) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "read");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x89 or 0x200 or 0x201) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "read");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
+            return state.ToOpSemantics();
+        }
+        if ((id is 0x8B or 0x202 or 0x203) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "write");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            return state.ToOpSemantics();
+        }
+        if (id == 0x88 && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "read");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
+            return state.ToOpSemantics();
+        }
+        if (id == 0x8A && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "write");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            return state.ToOpSemantics();
+        }
+        if ((id is 0xC6 or 0xC7) && hasModrm)
+        {
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
+            return state.ToOpSemantics();
+        }
+        if (id == 0x87 && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "readwrite");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0x91 && id <= 0x97)
+        {
+            var reg = id - 0x90;
+            state.ReadsGprMask |= RegMask(0, reg);
+            state.WritesGprMask |= RegMask(0, reg);
+            return state.ToOpSemantics();
+        }
+
+        if (id == 0x8D && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "write");
+            state.ReadsAddrGprMask |= DecodeMemoryAddressRegs(eaDesc);
+            state.Note("lea reads effective-address registers without touching memory");
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x1B6 or 0x1B7 or 0x1BE or 0x1BF) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "write");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x00 or 0x01 or 0x08 or 0x09 or 0x10 or 0x11 or 0x18 or 0x19 or 0x20 or 0x21 or 0x28 or 0x29 or 0x30 or 0x31) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "read");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            if (id is 0x10 or 0x11 or 0x18 or 0x19)
+                state.ReadsFlagsMask |= CfBit;
+            return state.ToOpSemantics();
+        }
+        if ((id is 0x02 or 0x03 or 0x0A or 0x0B or 0x12 or 0x13 or 0x1A or 0x1B or 0x22 or 0x23 or 0x2A or 0x2B or 0x32 or 0x33) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "readwrite");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            if (id is 0x12 or 0x13 or 0x1A or 0x1B)
+                state.ReadsFlagsMask |= CfBit;
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x80 or 0x81 or 0x83) && hasModrm)
+        {
+            var subop = (modrm >> 3) & 7;
+            if (subop == 7)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            }
+            else
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+                if (subop is 2 or 3)
+                    state.ReadsFlagsMask |= CfBit;
+            }
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0xC0 or 0xC1 or 0xD0 or 0xD1 or 0xD2 or 0xD3) && hasModrm)
+        {
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+            if (id is 0xD2 or 0xD3)
+            {
+                state.ReadsGprMask |= RegMask(1);
+                state.Note("shift count comes from CL");
+            }
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0xF6 or 0xF7) && hasModrm)
+        {
+            var subop = (modrm >> 3) & 7;
+            if (subop is 0 or 1)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+                state.WritesFlagsMask |= AllStatusFlagsMask;
+            }
+            else if (subop == 2)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+            }
+            else if (subop == 3)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+                state.WritesFlagsMask |= AllStatusFlagsMask;
+            }
+            else if (subop is 4 or 5)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+                state.ReadsGprMask |= RegMask(0);
+                state.WritesGprMask |= RegMask(0, 2);
+                state.WritesFlagsMask |= AllStatusFlagsMask;
+            }
+            else if (subop is 6 or 7)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+                state.ReadsGprMask |= RegMask(0, 2);
+                state.WritesGprMask |= RegMask(0, 2);
+            }
+            return state.ToOpSemantics();
+        }
+
+        if ((id is 0x1A3 or 0x1AB or 0x1B3 or 0x1BB) && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "read");
+            var rmRole = (id is 0x1AB or 0x1B3 or 0x1BB) ? "readwrite" : "read";
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, rmRole);
+            state.WritesFlagsMask |= CfBit;
+            return state.ToOpSemantics();
+        }
+
+        if (id == 0x1AF && hasModrm)
+        {
+            ApplyRegOperand(state, modrm, "readwrite");
+            ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            state.WritesFlagsMask |= CfBit | OfBit;
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0x50 && id <= 0x57)
+        {
+            state.ReadsGprMask |= RegMask(id - 0x50, 4);
+            state.WritesGprMask |= RegMask(4);
+            state.WritesMemory = true;
+            return state.ToOpSemantics();
+        }
+        if (id >= 0x58 && id <= 0x5F)
+        {
+            state.ReadsGprMask |= RegMask(4);
+            state.WritesGprMask |= RegMask(id - 0x58, 4);
+            state.ReadsMemory = true;
+            return state.ToOpSemantics();
+        }
+        if (id is 0xE8 or 0xC2 or 0xC3)
+        {
+            state.ReadsGprMask |= RegMask(4);
+            state.WritesGprMask |= RegMask(4);
+            state.ReadsMemory = id is 0xC2 or 0xC3;
+            state.WritesMemory = id == 0xE8;
+            return state.ToOpSemantics();
+        }
+        if (id == 0x6A)
+        {
+            state.ReadsGprMask |= RegMask(4);
+            state.WritesGprMask |= RegMask(4);
+            state.WritesMemory = true;
+            return state.ToOpSemantics();
+        }
+
+        if (id == 0xFF && hasModrm)
+        {
+            var subop = (modrm >> 3) & 7;
+            if (subop is 0 or 1)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
+                state.WritesFlagsMask |= AllStatusFlagsMask & ~CfBit;
+            }
+            else if (subop == 2)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+                state.ReadsGprMask |= RegMask(4);
+                state.WritesGprMask |= RegMask(4);
+                state.WritesMemory = true;
+            }
+            else if (subop == 4)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+            }
+            else if (subop == 6)
+            {
+                ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
+                state.ReadsGprMask |= RegMask(4);
+                state.WritesGprMask |= RegMask(4);
+                state.WritesMemory = true;
+            }
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0xB8 && id <= 0xBF)
+        {
+            state.WritesGprMask |= RegMask(id - 0xB8);
+            return state.ToOpSemantics();
+        }
+        if (id >= 0xB0 && id <= 0xB7)
+        {
+            state.WritesGprMask |= RegMask(id - 0xB0);
+            return state.ToOpSemantics();
+        }
+
+        if (id is 0x05 or 0x0D or 0x15 or 0x1D or 0x25 or 0x2D or 0x35 or 0x3D or 0xA9)
+        {
+            state.ReadsGprMask |= RegMask(0);
+            if (id is not 0x3D and not 0xA9)
+                state.WritesGprMask |= RegMask(0);
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            if (id is 0x15 or 0x1D)
+                state.ReadsFlagsMask |= CfBit;
+            return state.ToOpSemantics();
+        }
+        if (id is 0x3C or 0xA8)
+        {
+            state.ReadsGprMask |= RegMask(0);
+            state.WritesFlagsMask |= AllStatusFlagsMask;
+            return state.ToOpSemantics();
+        }
+
+        if (id >= 0x40 && id <= 0x47)
+        {
+            var reg = id - 0x40;
+            state.ReadsGprMask |= RegMask(reg);
+            state.WritesGprMask |= RegMask(reg);
+            state.WritesFlagsMask |= AllStatusFlagsMask & ~CfBit;
+            return state.ToOpSemantics();
+        }
+        if (id >= 0x48 && id <= 0x4F)
+        {
+            var reg = id - 0x48;
+            state.ReadsGprMask |= RegMask(reg);
+            state.WritesGprMask |= RegMask(reg);
+            state.WritesFlagsMask |= AllStatusFlagsMask & ~CfBit;
+            return state.ToOpSemantics();
+        }
+
+        if (id == 0x99)
+        {
+            state.ReadsGprMask |= RegMask(0);
+            state.WritesGprMask |= RegMask(2);
+            return state.ToOpSemantics();
+        }
+        if (id == 0xFC)
+        {
+            state.ReadsFlagsMask &= 0;
+            state.WritesFlagsMask |= 1u << 10;
+            state.Note("cld clears direction flag");
+            return state.ToOpSemantics();
+        }
+
+        if (id is 0xA0 or 0xA1)
+        {
+            state.WritesGprMask |= RegMask(0);
+            state.ReadsMemory = true;
+            return state.ToOpSemantics();
+        }
+        if (id is 0xA2 or 0xA3)
+        {
+            state.ReadsGprMask |= RegMask(0);
+            state.WritesMemory = true;
+            return state.ToOpSemantics();
+        }
+
+        return null;
+    }
+
+    private static uint RegMask(params int[] regs)
+    {
+        var mask = 0u;
+        foreach (var reg in regs)
+        {
+            if (reg >= 0 && reg < GprNames.Length)
+                mask |= 1u << reg;
+        }
+        return mask;
+    }
+
+    private static uint DecodeMemoryAddressRegs(int eaDesc)
+    {
+        var mask = 0u;
+        var baseOffset = eaDesc & 0x3F;
+        var indexOffset = (eaDesc >> 6) & 0x3F;
+
+        if (baseOffset != 32)
+            mask |= 1u << (baseOffset / 4);
+        if (indexOffset != 32)
+            mask |= 1u << (indexOffset / 4);
+        return mask;
+    }
+
+    private static void ApplyRmOperand(DefUseState state, int modrm, bool hasMem, int eaDesc, string role)
+    {
+        if (role == "none")
+            return;
+
+        if (hasMem)
+        {
+            state.ReadsAddrGprMask |= DecodeMemoryAddressRegs(eaDesc);
+            if (role is "read" or "readwrite")
+                state.ReadsMemory = true;
+            if (role is "write" or "readwrite")
+                state.WritesMemory = true;
+            return;
+        }
+
+        var rm = modrm & 7;
+        if (role is "read" or "readwrite")
+            state.ReadsGprMask |= RegMask(rm);
+        if (role is "write" or "readwrite")
+            state.WritesGprMask |= RegMask(rm);
+    }
+
+    private static void ApplyRegOperand(DefUseState state, int modrm, string role)
+    {
+        if (role == "none")
+            return;
+
+        var reg = (modrm >> 3) & 7;
+        if (role is "read" or "readwrite")
+            state.ReadsGprMask |= RegMask(reg);
+        if (role is "write" or "readwrite")
+            state.WritesGprMask |= RegMask(reg);
+    }
+
+    private static List<string> MaskToRegNames(uint mask)
+    {
+        var names = new List<string>();
+        for (var i = 0; i < GprNames.Length; i++)
+        {
+            if ((mask & (1u << i)) != 0)
+                names.Add(GprNames[i]);
+        }
+        return names;
+    }
+
+    private static List<string> MaskToFlagNames(uint mask)
+    {
+        var flags = new List<string>();
+        if ((mask & CfBit) != 0) flags.Add("cf");
+        if ((mask & PfBit) != 0) flags.Add("pf");
+        if ((mask & AfBit) != 0) flags.Add("af");
+        if ((mask & ZfBit) != 0) flags.Add("zf");
+        if ((mask & SfBit) != 0) flags.Add("sf");
+        if ((mask & OfBit) != 0) flags.Add("of");
+        return flags;
+    }
+
+    private sealed class DefUseState
+    {
+        public uint ReadsGprMask { get; set; }
+        public uint ReadsAddrGprMask { get; set; }
+        public uint WritesGprMask { get; set; }
+        public uint ReadsFlagsMask { get; set; }
+        public uint WritesFlagsMask { get; set; }
+        public bool ReadsMemory { get; set; }
+        public bool WritesMemory { get; set; }
+        public bool ControlFlow { get; set; }
+        public List<string>? Notes { get; set; }
+
+        public void Note(string message)
+        {
+            Notes ??= new List<string>();
+            Notes.Add(message);
+        }
+
+        public OpSemantics? ToOpSemantics()
+        {
+            var combinedReads = ReadsGprMask | ReadsAddrGprMask;
+            var reads = new HashSet<string>(MaskToRegNames(combinedReads), StringComparer.Ordinal);
+            var writes = new HashSet<string>(MaskToRegNames(WritesGprMask), StringComparer.Ordinal);
+            foreach (var flag in MaskToFlagNames(ReadsFlagsMask))
+                reads.Add($"flag:{flag}");
+            foreach (var flag in MaskToFlagNames(WritesFlagsMask))
+                writes.Add($"flag:{flag}");
+            if (ReadsMemory)
+                reads.Add("mem");
+            if (WritesMemory)
+                writes.Add("mem");
+
+            var notes = Notes ?? new List<string>();
+            if (reads.Count == 0 && writes.Count == 0 && notes.Count == 0 && !WritesMemory && !ControlFlow)
+                return null;
+
+            var outputNotes = new List<string>(notes);
+            return new OpSemantics(reads, writes, outputNotes, ControlFlow, WritesMemory);
+        }
+    }
+
+    private static int? TryGetNullableInt(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var node))
+            return null;
+        if (node.ValueKind == JsonValueKind.Number && node.TryGetInt32(out var value))
+            return value;
+        if (node.ValueKind == JsonValueKind.String && int.TryParse(node.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            return value;
+        return null;
+    }
+
+    private static int? TryGetNullableIntFromHex(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var node) || node.ValueKind != JsonValueKind.String)
+            return null;
+        var text = node.GetString();
+        if (string.IsNullOrWhiteSpace(text) || !text.StartsWith("0x", StringComparison.Ordinal))
+            return null;
+        return int.TryParse(text[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var value) ? value : null;
     }
 
     private static PairRelation? ClassifyPair(string firstName, string secondName, JsonElement firstOp, JsonElement secondOp)
@@ -2167,6 +2893,9 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         var direct = DirectLogicRegex.Match(text);
         if (direct.Success)
             return direct.Groups[1].Value;
+        var mangled = MangledLogicRegex.Match(text);
+        if (mangled.Success)
+            return "op::" + mangled.Groups[1].Value;
         return "";
     }
 
@@ -2349,6 +3078,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
         public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
+        public List<Dictionary<string, object?>> ExampleBlocks { get; } = new();
         public OpSemantics? Semantics { get; set; }
     }
 
@@ -2379,6 +3109,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
         public CountingMap SharedResourceVariants { get; } = new();
         public CountingMap RelationKindVariants { get; } = new();
+        public List<Dictionary<string, object?>> ExampleBlocks { get; } = new();
 
         public void Add(long blockExecCount, string blockStart, int startOpIndex, PairRelation relation)
         {
@@ -2387,6 +3118,17 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             UniqueBlockStarts.Add(blockStart);
             SharedResourceVariants.Add(string.Join(",", relation.SharedResources));
             RelationKindVariants.Add(relation.RelationKind);
+            if (ExampleBlocks.Count < 3)
+            {
+                ExampleBlocks.Add(new Dictionary<string, object?>
+                {
+                    ["start_eip_hex"] = blockStart,
+                    ["exec_count"] = blockExecCount,
+                    ["start_op_index"] = startOpIndex,
+                    ["anchor_handler"] = AnchorHandler,
+                    ["direction"] = Direction,
+                });
+            }
         }
     }
 
@@ -2400,6 +3142,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         public long SampleCount { get; set; }
         public CountingMap EngineCounts { get; } = new();
         public CountingMap CaseCounts { get; } = new();
+        public List<Dictionary<string, object?>> ExampleSources { get; } = new();
         public OpSemantics? Semantics { get; set; }
     }
 
@@ -2433,6 +3176,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         public CountingMap CaseCounts { get; } = new();
         public CountingMap SharedResourceVariants { get; } = new();
         public CountingMap RelationKindVariants { get; } = new();
+        public List<Dictionary<string, object?>> ExampleSources { get; } = new();
     }
 
     private sealed class CountingMap : Dictionary<string, int>
@@ -2544,7 +3288,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
                     "/trace-toc/run/data/table[@schema=\"time-profile\"]"
                 },
                 RepoRoot());
-            File.WriteAllText(exportPath, xml, Encoding.UTF8);
+            File.WriteAllText(exportPath, xml, Utf8NoBom);
 
             var doc = System.Xml.Linq.XDocument.Parse(xml);
             var idIndex = doc.Descendants()
@@ -2657,7 +3401,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         {
             var exportPath = Path.Combine(outDir, $"{options.Name}.perf-script.txt");
             var script = RunCommandCheckedCapture("perf", new[] { "script", "-i", options.TracePath }, RepoRoot());
-            File.WriteAllText(exportPath, script, Encoding.UTF8);
+            File.WriteAllText(exportPath, script, Utf8NoBom);
 
             var jitMaps = LoadProfileJitMaps(options.JitMapDir);
             var aggregate = new Dictionary<(string Symbol, string? Binary), double>();

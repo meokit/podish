@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="LibObjectFile" Version="2.1.0" />
     <Compile Include="Program.cs" />
+    <Compile Include="BenchmarkRunner.cs" />
   </ItemGroup>
 
 </Project>
