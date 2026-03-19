@@ -26,8 +26,8 @@ internal static class BenchmarkRunner
         var projectRoot = Path.GetFullPath(options.ProjectRoot);
         var baseRootfs = Path.GetFullPath(options.Rootfs);
         var workDir = Path.GetFullPath(options.WorkDir);
-        var fibercpuLibrary = DefaultFibercpuLibrary(projectRoot);
         var jitConfiguration = DefaultJitConfiguration(projectRoot);
+        var fibercpuLibrary = DefaultFibercpuLibrary(projectRoot, jitConfiguration);
         var aotBinary = Path.GetFullPath(options.AotBinary ?? DefaultAotBinary(projectRoot));
 
         if (!Directory.Exists(baseRootfs))
@@ -510,8 +510,19 @@ echo {MarkerEnd}
         return "Release";
     }
 
-    private static string DefaultFibercpuLibrary(string projectRoot)
+    private static string DefaultFibercpuLibrary(string projectRoot, string? jitConfiguration = null)
     {
+        if (!string.IsNullOrWhiteSpace(jitConfiguration))
+        {
+            var cliDir = Path.Combine(projectRoot, "Podish.Cli", "bin", jitConfiguration, "net10.0");
+            foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
+            {
+                var candidate = Path.Combine(cliDir, name);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
         var hostDir = Path.Combine(projectRoot, "Fiberish.X86", "build_native", "host");
         foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
         {
@@ -519,6 +530,7 @@ echo {MarkerEnd}
             if (File.Exists(candidate))
                 return candidate;
         }
+
         return Path.Combine(hostDir, "libfibercpu.dylib");
     }
 

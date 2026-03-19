@@ -950,8 +950,19 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
     }
 
-    private static string DefaultFibercpuLibrary(string projectRoot)
+    private static string DefaultFibercpuLibrary(string projectRoot, string? jitConfiguration = null)
     {
+        if (!string.IsNullOrWhiteSpace(jitConfiguration))
+        {
+            var cliDir = Path.Combine(projectRoot, "Podish.Cli", "bin", jitConfiguration, "net10.0");
+            foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
+            {
+                var candidate = Path.Combine(cliDir, name);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
         var hostDir = Path.Combine(projectRoot, "Fiberish.X86", "build_native", "host");
         foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
         {
@@ -959,7 +970,7 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
             if (File.Exists(candidate))
                 return candidate;
         }
-        return Path.Combine(hostDir, "libfibercpu.so");
+        return Path.Combine(hostDir, "libfibercpu.dylib");
     }
 
     private static IEnumerable<string> EnumerateGuestStatsDirs(string guestStatsRoot)
@@ -1070,114 +1081,60 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
 
     private static Dictionary<ulong, string> LoadSymbols(string libPath)
     {
-        var nmSymbols = TryLoadSymbolsWithNm(libPath);
-        if (nmSymbols.Count > 0)
-            return nmSymbols;
-
-        return TryLoadSymbolsWithLibObjectFile(libPath);
+        return TryLoadSymbolsWithObjectFile(libPath);
     }
 
-    private static Dictionary<ulong, string> TryLoadSymbolsWithLibObjectFile(string libPath)
+    private static Dictionary<ulong, string> TryLoadSymbolsWithObjectFile(string libPath)
+    {
+        try
+        {
+            using var inStream = File.OpenRead(libPath);
+            return DetectBinaryFormat(inStream) switch
+            {
+                BinaryFormat.Elf => TryLoadElfSymbols(inStream),
+                BinaryFormat.Pe => TryLoadPeSymbols(inStream),
+                BinaryFormat.MachO => TryLoadMachOSymbols(inStream),
+                _ => new Dictionary<ulong, string>()
+            };
+        }
+        catch
+        {
+            return new Dictionary<ulong, string>();
+        }
+    }
+
+    private static Dictionary<ulong, string> TryLoadElfSymbols(Stream inStream)
     {
         var rawSymbols = new List<(ulong addr, string name)>();
 
-        using (var inStream = File.OpenRead(libPath))
+        inStream.Position = 0;
+        var elf = ElfFile.Read(inStream);
+        foreach (var section in elf.Sections)
         {
-            var elf = ElfFile.Read(inStream);
-            foreach (var section in elf.Sections)
+            if (section is not ElfSymbolTable symtab)
+                continue;
+
+            foreach (var symbol in symtab.Entries)
             {
-                if (section is not ElfSymbolTable symtab)
+                var symbolName = symbol.Name.ToString();
+                if (string.IsNullOrWhiteSpace(symbolName))
                     continue;
 
-                foreach (var symbol in symtab.Entries)
+                ulong value;
+                try
                 {
-                    var symbolName = symbol.Name.ToString();
-                    if (string.IsNullOrWhiteSpace(symbolName))
-                        continue;
-
-                    ulong value;
-                    try
-                    {
-                        value = Convert.ToUInt64(symbol.Value, CultureInfo.InvariantCulture);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-
-                    rawSymbols.Add((value, symbolName));
+                    value = Convert.ToUInt64(symbol.Value, CultureInfo.InvariantCulture);
                 }
+                catch
+                {
+                    continue;
+                }
+
+                rawSymbols.Add((value, symbolName));
             }
         }
 
         return BuildSymbolMap(rawSymbols);
-    }
-
-    private static Dictionary<ulong, string> TryLoadSymbolsWithNm(string libPath)
-    {
-        var commands = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-            ? new[]
-            {
-                new[] { "nm", "-nm", "-C", libPath },
-                new[] { "nm", "-n", "-C", libPath },
-                new[] { "nm", "-nm", libPath },
-                new[] { "nm", "-n", libPath },
-            }
-            : new[]
-            {
-                new[] { "nm", "-n", "-C", libPath },
-                new[] { "nm", "-n", libPath },
-                new[] { "llvm-nm", "-n", "-C", libPath },
-                new[] { "llvm-nm", "-n", libPath },
-            };
-
-        foreach (var cmd in commands)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo(cmd[0], string.Join(" ", cmd.Skip(1)))
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using var proc = Process.Start(psi);
-                if (proc == null)
-                    continue;
-
-                var output = proc.StandardOutput.ReadToEnd();
-                proc.WaitForExit();
-                if (proc.ExitCode != 0)
-                    continue;
-
-                var rawSymbols = new List<(ulong addr, string name)>();
-                foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (parts.Length < 2)
-                        continue;
-
-                    if (!ulong.TryParse(parts[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var addr))
-                        continue;
-
-                    var name = parts.Length >= 3
-                        ? string.Join(" ", parts.Skip(2))
-                        : parts[^1];
-                    rawSymbols.Add((addr, name));
-                }
-
-                if (rawSymbols.Count > 0)
-                    return BuildSymbolMap(rawSymbols);
-            }
-            catch
-            {
-                // Try the next nm invocation or fall back to LibObjectFile.
-            }
-        }
-
-        return new Dictionary<ulong, string>();
     }
 
     private static Dictionary<ulong, string> BuildSymbolMap(List<(ulong addr, string name)> rawSymbols)
@@ -1194,6 +1151,539 @@ test -x ./coremark.exe || {compileCommand} >/dev/null
 
         return symbols;
     }
+
+    private static Dictionary<ulong, string> TryLoadPeSymbols(Stream inStream)
+    {
+        inStream.Position = 0;
+        using var reader = new BinaryReader(inStream, Encoding.UTF8, leaveOpen: true);
+        var rawSymbols = new List<(ulong addr, string name)>();
+
+        if (reader.ReadUInt16() != 0x5A4D)
+            return new Dictionary<ulong, string>();
+
+        inStream.Position = 0x3C;
+        var peHeaderOffset = reader.ReadUInt32();
+        if (peHeaderOffset >= inStream.Length || peHeaderOffset + 4 > inStream.Length)
+            return new Dictionary<ulong, string>();
+
+        inStream.Position = peHeaderOffset;
+        if (reader.ReadUInt32() != 0x00004550)
+            return new Dictionary<ulong, string>();
+
+        _ = reader.ReadUInt16(); // Machine
+        var numberOfSections = reader.ReadUInt16();
+        _ = reader.ReadUInt32(); // TimeDateStamp
+        var pointerToSymbolTable = reader.ReadUInt32();
+        var numberOfSymbols = reader.ReadUInt32();
+        var sizeOfOptionalHeader = reader.ReadUInt16();
+        _ = reader.ReadUInt16(); // Characteristics
+
+        var optionalHeaderStart = inStream.Position;
+        var optionalMagic = sizeOfOptionalHeader >= 2 ? reader.ReadUInt16() : (ushort)0;
+        uint exportTableRva = 0;
+        uint exportTableSize = 0;
+
+        if (sizeOfOptionalHeader > 0 && optionalHeaderStart + sizeOfOptionalHeader <= inStream.Length)
+        {
+            if (optionalMagic == 0x10B && sizeOfOptionalHeader >= 104)
+            {
+                inStream.Position = optionalHeaderStart + 96;
+                exportTableRva = reader.ReadUInt32();
+                exportTableSize = reader.ReadUInt32();
+            }
+            else if (optionalMagic == 0x20B && sizeOfOptionalHeader >= 120)
+            {
+                inStream.Position = optionalHeaderStart + 112;
+                exportTableRva = reader.ReadUInt32();
+                exportTableSize = reader.ReadUInt32();
+            }
+        }
+
+        inStream.Position = optionalHeaderStart + sizeOfOptionalHeader;
+        var sections = new List<PeSectionInfo>(numberOfSections);
+        for (var i = 0; i < numberOfSections; i++)
+        {
+            if (inStream.Position + 40 > inStream.Length)
+                break;
+
+            _ = reader.ReadBytes(8); // Name
+            var virtualSize = reader.ReadUInt32();
+            var virtualAddress = reader.ReadUInt32();
+            var sizeOfRawData = reader.ReadUInt32();
+            var pointerToRawData = reader.ReadUInt32();
+            _ = reader.ReadUInt32(); // PointerToRelocations
+            _ = reader.ReadUInt32(); // PointerToLineNumbers
+            _ = reader.ReadUInt16(); // NumberOfRelocations
+            _ = reader.ReadUInt16(); // NumberOfLineNumbers
+            _ = reader.ReadUInt32(); // Characteristics
+            sections.Add(new PeSectionInfo(virtualAddress, virtualSize, sizeOfRawData, pointerToRawData));
+        }
+
+        if (pointerToSymbolTable != 0 &&
+            numberOfSymbols != 0 &&
+            pointerToSymbolTable < inStream.Length &&
+            pointerToSymbolTable + (ulong)numberOfSymbols * 18 <= (ulong)inStream.Length)
+        {
+            var stringTableOffset = pointerToSymbolTable + numberOfSymbols * 18;
+            uint stringTableSize = 0;
+            if (stringTableOffset + 4 <= inStream.Length)
+            {
+                inStream.Position = stringTableOffset;
+                stringTableSize = reader.ReadUInt32();
+            }
+
+            inStream.Position = pointerToSymbolTable;
+            for (uint i = 0; i < numberOfSymbols; i++)
+            {
+                if (inStream.Position + 18 > inStream.Length)
+                    break;
+
+                var nameBytes = reader.ReadBytes(8);
+                var value = reader.ReadUInt32();
+                var sectionNumber = reader.ReadInt16();
+                _ = reader.ReadUInt16(); // Type
+                _ = reader.ReadByte(); // StorageClass
+                var numberOfAuxSymbols = reader.ReadByte();
+
+                var name = ReadPeSymbolName(nameBytes, inStream, stringTableOffset, stringTableSize);
+                if (!string.IsNullOrWhiteSpace(name) && sectionNumber > 0 && sectionNumber <= sections.Count)
+                {
+                    var section = sections[sectionNumber - 1];
+                    rawSymbols.Add((section.VirtualAddress + value, name));
+                }
+
+                if (numberOfAuxSymbols > 0)
+                {
+                    var skipBytes = (long)numberOfAuxSymbols * 18;
+                    if (inStream.Position + skipBytes > inStream.Length)
+                        break;
+                    inStream.Position += skipBytes;
+                    i += numberOfAuxSymbols;
+                }
+            }
+        }
+
+        if (exportTableRva != 0 &&
+            exportTableSize >= 40 &&
+            TryMapPeRvaToFileOffset(exportTableRva, sections, out var exportDirectoryOffset) &&
+            exportDirectoryOffset + 40 <= (ulong)inStream.Length)
+        {
+            inStream.Position = (long)exportDirectoryOffset;
+            _ = reader.ReadUInt32(); // Characteristics
+            _ = reader.ReadUInt32(); // TimeDateStamp
+            _ = reader.ReadUInt16(); // MajorVersion
+            _ = reader.ReadUInt16(); // MinorVersion
+            _ = reader.ReadUInt32(); // Name
+            _ = reader.ReadUInt32(); // Base
+            var numberOfFunctions = reader.ReadUInt32();
+            var numberOfNames = reader.ReadUInt32();
+            var addressOfFunctionsRva = reader.ReadUInt32();
+            var addressOfNamesRva = reader.ReadUInt32();
+            var addressOfNameOrdinalsRva = reader.ReadUInt32();
+
+            if (numberOfFunctions > 0 &&
+                numberOfNames > 0 &&
+                TryMapPeRvaToFileOffset(addressOfFunctionsRva, sections, out var addressOfFunctionsOffset) &&
+                TryMapPeRvaToFileOffset(addressOfNamesRva, sections, out var addressOfNamesOffset) &&
+                TryMapPeRvaToFileOffset(addressOfNameOrdinalsRva, sections, out var addressOfNameOrdinalsOffset))
+            {
+                for (uint i = 0; i < numberOfNames; i++)
+                {
+                    var nameEntryOffset = addressOfNamesOffset + i * 4;
+                    var ordinalEntryOffset = addressOfNameOrdinalsOffset + i * 2;
+                    if (nameEntryOffset + 4 > (ulong)inStream.Length || ordinalEntryOffset + 2 > (ulong)inStream.Length)
+                        break;
+
+                    inStream.Position = (long)nameEntryOffset;
+                    var nameRva = reader.ReadUInt32();
+                    inStream.Position = (long)ordinalEntryOffset;
+                    var ordinal = reader.ReadUInt16();
+                    if (ordinal >= numberOfFunctions)
+                        continue;
+
+                    var functionEntryOffset = addressOfFunctionsOffset + (ulong)ordinal * 4;
+                    if (functionEntryOffset + 4 > (ulong)inStream.Length)
+                        continue;
+
+                    inStream.Position = (long)functionEntryOffset;
+                    var functionRva = reader.ReadUInt32();
+                    if (functionRva >= exportTableRva && functionRva < exportTableRva + exportTableSize)
+                        continue;
+
+                    if (!TryMapPeRvaToFileOffset(nameRva, sections, out var nameOffset))
+                        continue;
+
+                    var name = ReadNullTerminatedAscii(inStream, nameOffset, int.MaxValue);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        rawSymbols.Add((functionRva, name));
+                }
+            }
+        }
+
+        return BuildSymbolMap(rawSymbols);
+    }
+
+    private static Dictionary<ulong, string> TryLoadMachOSymbols(Stream inStream)
+    {
+        var rawSymbols = new List<(ulong addr, string name)>();
+        if (!TryReadMachOSlice(inStream, out var sliceOffset, out var is64Bit, out var isLittleEndian))
+            return new Dictionary<ulong, string>();
+
+        uint numberOfCommands;
+        ulong loadCommandsOffset;
+        if (is64Bit)
+        {
+            if (sliceOffset + 32 > (ulong)inStream.Length)
+                return new Dictionary<ulong, string>();
+            numberOfCommands = ReadUInt32(inStream, sliceOffset + 16, isLittleEndian);
+            loadCommandsOffset = sliceOffset + 32;
+        }
+        else
+        {
+            if (sliceOffset + 28 > (ulong)inStream.Length)
+                return new Dictionary<ulong, string>();
+            numberOfCommands = ReadUInt32(inStream, sliceOffset + 16, isLittleEndian);
+            loadCommandsOffset = sliceOffset + 28;
+        }
+
+        ulong? symbolTableOffset = null;
+        uint numberOfSymbols = 0;
+        ulong? stringTableOffset = null;
+        uint stringTableSize = 0;
+        ulong? imageBase = null;
+        var commandOffset = loadCommandsOffset;
+
+        for (uint i = 0; i < numberOfCommands; i++)
+        {
+            if (commandOffset + 8 > (ulong)inStream.Length)
+                break;
+
+            var command = ReadUInt32(inStream, commandOffset, isLittleEndian);
+            var commandSize = ReadUInt32(inStream, commandOffset + 4, isLittleEndian);
+            if (commandSize < 8 || commandOffset + commandSize > (ulong)inStream.Length)
+                break;
+
+            const uint LcSymtab = 0x2;
+            const uint LcSegment = 0x1;
+            const uint LcSegment64 = 0x19;
+
+            if (command == LcSymtab && commandSize >= 24)
+            {
+                symbolTableOffset = ReadUInt32(inStream, commandOffset + 8, isLittleEndian) + sliceOffset;
+                numberOfSymbols = ReadUInt32(inStream, commandOffset + 12, isLittleEndian);
+                stringTableOffset = ReadUInt32(inStream, commandOffset + 16, isLittleEndian) + sliceOffset;
+                stringTableSize = ReadUInt32(inStream, commandOffset + 20, isLittleEndian);
+            }
+            else if (command == LcSegment64 && commandSize >= 72)
+            {
+                var vmaddr = ReadUInt64(inStream, commandOffset + 24, isLittleEndian);
+                var filesize = ReadUInt64(inStream, commandOffset + 40, isLittleEndian);
+                if (filesize != 0 && (!imageBase.HasValue || vmaddr < imageBase.Value))
+                    imageBase = vmaddr;
+            }
+            else if (command == LcSegment && commandSize >= 56)
+            {
+                var vmaddr = ReadUInt32(inStream, commandOffset + 24, isLittleEndian);
+                var filesize = ReadUInt32(inStream, commandOffset + 36, isLittleEndian);
+                if (filesize != 0 && (!imageBase.HasValue || vmaddr < imageBase.Value))
+                    imageBase = vmaddr;
+            }
+
+            commandOffset += commandSize;
+        }
+
+        if (!symbolTableOffset.HasValue ||
+            !stringTableOffset.HasValue ||
+            symbolTableOffset.Value >= (ulong)inStream.Length ||
+            stringTableOffset.Value >= (ulong)inStream.Length)
+            return new Dictionary<ulong, string>();
+
+        var entrySize = is64Bit ? 16u : 12u;
+        var baseAddress = imageBase ?? 0;
+        for (uint i = 0; i < numberOfSymbols; i++)
+        {
+            var entryOffset = symbolTableOffset.Value + i * entrySize;
+            if (entryOffset + entrySize > (ulong)inStream.Length)
+                break;
+
+            var stringIndex = ReadUInt32(inStream, entryOffset, isLittleEndian);
+            var type = ReadByte(inStream, entryOffset + 4);
+            ulong value = is64Bit
+                ? ReadUInt64(inStream, entryOffset + 8, isLittleEndian)
+                : ReadUInt32(inStream, entryOffset + 8, isLittleEndian);
+
+            const byte NStabMask = 0xE0;
+            const byte NTypeMask = 0x0E;
+            const byte NSect = 0x0E;
+            if ((type & NStabMask) != 0 || (type & NTypeMask) != NSect || stringIndex == 0 || value == 0)
+                continue;
+
+            var nameOffset = stringTableOffset.Value + stringIndex;
+            if (nameOffset >= (ulong)inStream.Length || nameOffset >= stringTableOffset.Value + stringTableSize)
+                continue;
+
+            var maxLength = (int)Math.Min(int.MaxValue, stringTableOffset.Value + stringTableSize - nameOffset);
+            var name = ReadNullTerminatedAscii(inStream, nameOffset, maxLength);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var normalizedValue = value >= baseAddress ? value - baseAddress : value;
+            rawSymbols.Add((normalizedValue, name));
+        }
+
+        return BuildSymbolMap(rawSymbols);
+    }
+
+    private static BinaryFormat DetectBinaryFormat(Stream inStream)
+    {
+        if (inStream.Length < 4)
+            return BinaryFormat.Unknown;
+
+        inStream.Position = 0;
+        Span<byte> magic = stackalloc byte[4];
+        inStream.ReadExactly(magic);
+        inStream.Position = 0;
+
+        if (magic[0] == 0x7F && magic[1] == (byte)'E' && magic[2] == (byte)'L' && magic[3] == (byte)'F')
+            return BinaryFormat.Elf;
+
+        if (magic[0] == (byte)'M' && magic[1] == (byte)'Z')
+            return BinaryFormat.Pe;
+
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(magic);
+        return value switch
+        {
+            0xFEEDFACE or 0xCEFAEDFE or 0xFEEDFACF or 0xCFFAEDFE or 0xCAFEBABE or 0xBEBAFECA or 0xCAFEBABF or 0xBFBAFECA => BinaryFormat.MachO,
+            _ => BinaryFormat.Unknown
+        };
+    }
+
+    private static bool TryMapPeRvaToFileOffset(uint rva, List<PeSectionInfo> sections, out ulong fileOffset)
+    {
+        foreach (var section in sections)
+        {
+            var span = Math.Max(section.VirtualSize, section.SizeOfRawData);
+            if (rva < section.VirtualAddress || rva >= section.VirtualAddress + span)
+                continue;
+
+            fileOffset = section.PointerToRawData + (rva - section.VirtualAddress);
+            return true;
+        }
+
+        fileOffset = 0;
+        return false;
+    }
+
+    private static string ReadPeSymbolName(byte[] nameBytes, Stream inStream, long stringTableOffset, uint stringTableSize)
+    {
+        if (nameBytes.Length != 8)
+            return string.Empty;
+
+        if (BinaryPrimitives.ReadUInt32LittleEndian(nameBytes.AsSpan(0, 4)) == 0)
+        {
+            var stringOffset = BinaryPrimitives.ReadUInt32LittleEndian(nameBytes.AsSpan(4, 4));
+            if (stringOffset < 4 || stringOffset >= stringTableSize)
+                return string.Empty;
+
+            return ReadNullTerminatedAscii(inStream, (ulong)(stringTableOffset + stringOffset), (int)(stringTableSize - stringOffset));
+        }
+
+        var terminator = Array.IndexOf(nameBytes, (byte)0);
+        var length = terminator >= 0 ? terminator : nameBytes.Length;
+        return Encoding.ASCII.GetString(nameBytes, 0, length);
+    }
+
+    private static bool TryReadMachOSlice(Stream inStream, out ulong sliceOffset, out bool is64Bit, out bool isLittleEndian)
+    {
+        sliceOffset = 0;
+        is64Bit = false;
+        isLittleEndian = true;
+
+        if (inStream.Length < 4)
+            return false;
+
+        var magic = ReadUInt32(inStream, 0, isLittleEndian: true);
+        switch (magic)
+        {
+            case 0xFEEDFACE:
+                isLittleEndian = true;
+                is64Bit = false;
+                return true;
+            case 0xCEFAEDFE:
+                isLittleEndian = false;
+                is64Bit = false;
+                return true;
+            case 0xFEEDFACF:
+                isLittleEndian = true;
+                is64Bit = true;
+                return true;
+            case 0xCFFAEDFE:
+                isLittleEndian = false;
+                is64Bit = true;
+                return true;
+            case 0xCAFEBABE:
+            case 0xBEBAFECA:
+            case 0xCAFEBABF:
+            case 0xBFBAFECA:
+                return TryReadFatMachOSlice(inStream, magic, out sliceOffset, out is64Bit, out isLittleEndian);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryReadFatMachOSlice(Stream inStream, uint fatMagic, out ulong sliceOffset, out bool is64Bit, out bool isLittleEndian)
+    {
+        sliceOffset = 0;
+        is64Bit = false;
+        isLittleEndian = true;
+
+        var fatIs64 = fatMagic is 0xCAFEBABF or 0xBFBAFECA;
+        var archEntrySize = fatIs64 ? 32 : 20;
+        var numberOfArchitectures = ReadUInt32(inStream, 4, isLittleEndian: false);
+        if (numberOfArchitectures == 0)
+            return false;
+
+        var preferredCpuType = GetPreferredMachOCpuType();
+        ulong? fallbackOffset = null;
+        bool? fallbackIs64 = null;
+        bool? fallbackLittleEndian = null;
+
+        for (uint i = 0; i < numberOfArchitectures; i++)
+        {
+            var entryOffset = 8UL + i * (ulong)archEntrySize;
+            if (entryOffset + (ulong)archEntrySize > (ulong)inStream.Length)
+                break;
+
+            var cpuType = ReadUInt32(inStream, entryOffset, isLittleEndian: false);
+            var offset = fatIs64
+                ? ReadUInt64(inStream, entryOffset + 8, isLittleEndian: false)
+                : ReadUInt32(inStream, entryOffset + 8, isLittleEndian: false);
+            if (offset + 4 > (ulong)inStream.Length)
+                continue;
+
+            var sliceMagic = ReadUInt32(inStream, offset, isLittleEndian: true);
+            if (!TryDecodeThinMachOMagic(sliceMagic, out var sliceIs64, out var sliceLittleEndian))
+                continue;
+
+            fallbackOffset ??= offset;
+            fallbackIs64 ??= sliceIs64;
+            fallbackLittleEndian ??= sliceLittleEndian;
+
+            if (preferredCpuType.HasValue && cpuType == preferredCpuType.Value)
+            {
+                sliceOffset = offset;
+                is64Bit = sliceIs64;
+                isLittleEndian = sliceLittleEndian;
+                return true;
+            }
+        }
+
+        if (fallbackOffset.HasValue && fallbackIs64.HasValue && fallbackLittleEndian.HasValue)
+        {
+            sliceOffset = fallbackOffset.Value;
+            is64Bit = fallbackIs64.Value;
+            isLittleEndian = fallbackLittleEndian.Value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryDecodeThinMachOMagic(uint magic, out bool is64Bit, out bool isLittleEndian)
+    {
+        switch (magic)
+        {
+            case 0xFEEDFACE:
+                is64Bit = false;
+                isLittleEndian = true;
+                return true;
+            case 0xCEFAEDFE:
+                is64Bit = false;
+                isLittleEndian = false;
+                return true;
+            case 0xFEEDFACF:
+                is64Bit = true;
+                isLittleEndian = true;
+                return true;
+            case 0xCFFAEDFE:
+                is64Bit = true;
+                isLittleEndian = false;
+                return true;
+            default:
+                is64Bit = false;
+                isLittleEndian = true;
+                return false;
+        }
+    }
+
+    private static uint? GetPreferredMachOCpuType()
+    {
+        return RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.Arm64 => 0x0100000C,
+            Architecture.X64 => 0x01000007,
+            Architecture.X86 => 7u,
+            Architecture.Arm => 12u,
+            _ => null
+        };
+    }
+
+    private static byte ReadByte(Stream inStream, ulong offset)
+    {
+        inStream.Position = (long)offset;
+        var value = inStream.ReadByte();
+        if (value < 0)
+            throw new EndOfStreamException();
+        return (byte)value;
+    }
+
+    private static uint ReadUInt32(Stream inStream, ulong offset, bool isLittleEndian)
+    {
+        Span<byte> buffer = stackalloc byte[4];
+        inStream.Position = (long)offset;
+        inStream.ReadExactly(buffer);
+        return isLittleEndian
+            ? BinaryPrimitives.ReadUInt32LittleEndian(buffer)
+            : BinaryPrimitives.ReadUInt32BigEndian(buffer);
+    }
+
+    private static ulong ReadUInt64(Stream inStream, ulong offset, bool isLittleEndian)
+    {
+        Span<byte> buffer = stackalloc byte[8];
+        inStream.Position = (long)offset;
+        inStream.ReadExactly(buffer);
+        return isLittleEndian
+            ? BinaryPrimitives.ReadUInt64LittleEndian(buffer)
+            : BinaryPrimitives.ReadUInt64BigEndian(buffer);
+    }
+
+    private static string ReadNullTerminatedAscii(Stream inStream, ulong offset, int maxLength)
+    {
+        if (maxLength <= 0)
+            return string.Empty;
+
+        inStream.Position = (long)offset;
+        using var buffer = new MemoryStream();
+        for (var i = 0; i < maxLength; i++)
+        {
+            var value = inStream.ReadByte();
+            if (value <= 0)
+                break;
+            buffer.WriteByte((byte)value);
+        }
+
+        return Encoding.ASCII.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
+    }
+
+    private enum BinaryFormat
+    {
+        Unknown,
+        Elf,
+        Pe,
+        MachO
+    }
+
+    private sealed record PeSectionInfo(uint VirtualAddress, uint VirtualSize, uint SizeOfRawData, uint PointerToRawData);
 
     private sealed class HandlerOpIdResolver : IDisposable
     {
