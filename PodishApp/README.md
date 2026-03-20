@@ -4,7 +4,7 @@
 
 ## Open in Xcode
 
-Open `Podish/Package.swift` in Xcode.
+Open `PodishApp/Package.swift` in Xcode.
 
 ## Build from the repo root
 
@@ -23,7 +23,7 @@ bash Podish.Core.Native/scripts/publish-static.sh
 This produces:
 
 ```text
-Podish/artifacts/podish-native/PodishCore.xcframework
+PodishApp/artifacts/podish-native/PodishCore.xcframework
 ```
 
 Then build the Swift package:

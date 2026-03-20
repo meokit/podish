@@ -155,7 +155,7 @@ Helpful references:
 
 ## SwiftUI Frontend
 
-The `Podish/` directory contains a SwiftUI app that consumes a native XCFramework built from `Podish.Core.Native`.
+The `PodishApp/` directory contains a SwiftUI app that consumes a native XCFramework built from `Podish.Core.Native`.
 
 Build the Apple XCFramework:
 
@@ -163,14 +163,14 @@ Build the Apple XCFramework:
 bash Podish.Core.Native/scripts/publish-static.sh
 ```
 
-Then open or build the Swift package in `Podish/`.
+Then open or build the Swift package in `PodishApp/`.
 
 ## Repository Layout
 
 - `Podish.Cli/`: main CLI entrypoint
 - `Podish.Core/`: container runtime orchestration and image handling
 - `Podish.Core.Native/`: NativeAOT/static packaging for Apple integration
-- `Podish/`: SwiftUI frontend
+- `PodishApp/`: SwiftUI frontend
 - `Fiberish.Core/`: Linux emulation layer and runtime services
 - `Fiberish.X86/`: .NET wrapper that builds and ships `libfibercpu`
 - `Fiberish.Netstack/`: Rust networking component
