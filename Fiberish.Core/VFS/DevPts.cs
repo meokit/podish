@@ -9,7 +9,7 @@ namespace Fiberish.VFS;
 /// <summary>
 ///     Inode for a PTY slave device in devpts (/dev/pts/N).
 /// </summary>
-public class PtySlaveInode : Inode
+public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     private readonly ILogger _logger;
 
@@ -35,9 +35,9 @@ public class PtySlaveInode : Inode
         return PtyPair.Slave.Read(buffer, linuxFile.Flags);
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile)
+    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
-        await PtyPair.Slave.DataAvailable;
+        await PtyPair.Slave.DataAvailable.WaitAsync(task);
         // Reset after waking up
         PtyPair.Slave.DataAvailable.Reset();
     }
@@ -66,10 +66,36 @@ public class PtySlaveInode : Inode
 
     public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
+        return false;
+    }
+
+    public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
-            PtyPair.Slave.DataAvailable.Register(callback);
+            PtyPair.Slave.DataAvailable.Register(callback, task);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        return RegisterWaitCore(callback, events, dispatcher);
+    }
+
+    private bool RegisterWaitCore(Action callback, short events, IReadyDispatcher? dispatcher)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            if (dispatcher?.Scheduler is { } scheduler)
+                PtyPair.Slave.DataAvailable.Register(callback, scheduler);
+            else
+                throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
             return true;
         }
 
@@ -78,20 +104,34 @@ public class PtySlaveInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
-        const short POLLIN = 0x0001;
-        if ((events & POLLIN) != 0)
-            return PtyPair.Slave.DataAvailable.RegisterCancelable(callback);
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    public IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
     {
-        // Delegate to TTY discipline if available
-        var discipline = PtyPair.Slave.Discipline;
-        if (discipline != null)
-            return discipline.Ioctl(request, arg, engine);
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return PtyPair.Slave.DataAvailable.RegisterCancelable(callback, task);
+        return null;
+    }
 
-        return -(int)Errno.ENOTTY;
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return PtyPair.Slave.DataAvailable.RegisterCancelable(callback, scheduler);
+        return null;
+    }
+
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    {
+        var discipline = PtyPair.Slave.Discipline;
+        return discipline != null
+            ? discipline.Ioctl(task, request, arg)
+            : -(int)Errno.ENOTTY;
     }
 
     public override int Truncate(long size)
@@ -103,7 +143,7 @@ public class PtySlaveInode : Inode
 /// <summary>
 ///     Inode for the PTY master multiplexer (/dev/ptmx).
 /// </summary>
-public class PtmxInode : Inode
+public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     private readonly ISignalBroadcaster _broadcaster;
     private readonly ILogger _logger;
@@ -140,12 +180,12 @@ public class PtmxInode : Inode
         return pair.Master.Read(buffer, linuxFile.Flags);
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile)
+    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
             return;
 
-        await pair.Master.DataAvailable;
+        await pair.Master.DataAvailable.WaitAsync(task);
         pair.Master.DataAvailable.Reset();
     }
 
@@ -179,13 +219,42 @@ public class PtmxInode : Inode
 
     public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
+        return false;
+    }
+
+    public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
         if (linuxFile.PrivateData is not PtyPair pair)
             return false;
 
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
-            pair.Master.DataAvailable.Register(callback);
+            pair.Master.DataAvailable.Register(callback, task);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        return RegisterWaitCore(linuxFile, callback, events, dispatcher);
+    }
+
+    private bool RegisterWaitCore(LinuxFile linuxFile, Action callback, short events, IReadyDispatcher? dispatcher)
+    {
+        if (linuxFile.PrivateData is not PtyPair pair)
+            return false;
+
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            if (dispatcher?.Scheduler is { } scheduler)
+                pair.Master.DataAvailable.Register(callback, scheduler);
+            else
+                throw new InvalidOperationException("PTY master wait requires an explicit scheduler.");
             return true;
         }
 
@@ -194,22 +263,42 @@ public class PtmxInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
+        return null;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
         if (linuxFile.PrivateData is not PtyPair pair)
             return null;
 
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
-            return pair.Master.DataAvailable.RegisterCancelable(callback);
+            return pair.Master.DataAvailable.RegisterCancelable(callback, task);
 
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        if (linuxFile.PrivateData is not PtyPair pair)
+            return null;
+
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("PTY master wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return pair.Master.DataAvailable.RegisterCancelable(callback, scheduler);
+
+        return null;
+    }
+
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;
 
-        return pair.Master.Ioctl(request, arg, engine);
+        return pair.Master.Ioctl(task, request, arg);
     }
 
     public override void Open(LinuxFile linuxFile)

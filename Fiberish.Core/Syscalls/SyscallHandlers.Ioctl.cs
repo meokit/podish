@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -24,7 +25,10 @@ public partial class SyscallManager
         {
             IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} arg=0x{Arg:X} inode={InodeType}",
                 fd, request, arg, inode.GetType().Name);
-            var ret = inode.Ioctl(file, request, arg, sm.Engine);
+            var task = sm.Engine.Owner as FiberTask;
+            if (task == null)
+                return -(int)Errno.EPERM;
+            var ret = inode.Ioctl(file, task, request, arg);
             IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} inode={InodeType} ret={Ret}",
                 fd, request, inode.GetType().Name, ret);
             return ret;

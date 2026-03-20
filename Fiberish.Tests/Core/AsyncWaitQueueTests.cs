@@ -20,7 +20,7 @@ public class AsyncWaitQueueTests
 
         void Entry()
         {
-            var reg = queue.RegisterCancelable(() => fired++, KernelScheduler.Current!.CurrentTask);
+            var reg = queue.RegisterCancelable(() => fired++, task);
             Assert.NotNull(reg);
             reg!.Dispose();
 
@@ -51,8 +51,8 @@ public class AsyncWaitQueueTests
 
         void Entry()
         {
-            var regA = queue.RegisterCancelable(() => firedA++, KernelScheduler.Current!.CurrentTask);
-            var regB = queue.RegisterCancelable(() => firedB++, KernelScheduler.Current!.CurrentTask);
+            var regA = queue.RegisterCancelable(() => firedA++, task);
+            var regB = queue.RegisterCancelable(() => firedB++, task);
 
             Assert.NotNull(regA);
             Assert.NotNull(regB);
@@ -76,7 +76,7 @@ public class AsyncWaitQueueTests
     public void WaitQueueAwaiter_PendingSignal_StillSchedulesContinuation()
     {
         var scheduler = new KernelScheduler();
-        KernelScheduler.Current = scheduler;
+        
         var process = new Process(300, null!, null!);
         scheduler.RegisterProcess(process);
 
@@ -86,7 +86,7 @@ public class AsyncWaitQueueTests
 
         void Entry()
         {
-            var awaiter = queue.GetAwaiter();
+            var awaiter = queue.WaitAsync(task).GetAwaiter();
             awaiter.OnCompleted(() =>
             {
                 resumed = true;
@@ -108,7 +108,7 @@ public class AsyncWaitQueueTests
     public void WaitQueueAwaiter_QueueSignaledRace_WithPendingSignal_MustCompleteAsEvent()
     {
         var scheduler = new KernelScheduler();
-        KernelScheduler.Current = scheduler;
+        
         var process = new Process(400, null!, null!);
         scheduler.RegisterProcess(process);
 
@@ -125,7 +125,7 @@ public class AsyncWaitQueueTests
             queue.Signal();
             task.PostSignal((int)Signal.SIGUSR1);
 
-            var awaiter = queue.GetAwaiter();
+            var awaiter = queue.WaitAsync(task).GetAwaiter();
             awaiter.OnCompleted(() =>
             {
                 resumed = true;
@@ -156,7 +156,7 @@ public class AsyncWaitQueueTests
 
         void Entry()
         {
-            // Bind queue ownership to current scheduler thread.
+            using var reg = queue.RegisterCancelable(() => { }, task);
             queue.Signal();
 
             using var done = new ManualResetEventSlim(false);

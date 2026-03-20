@@ -166,7 +166,7 @@ public class SysVSemManagerTests
             Manager = manager ?? new SysVSemManager();
 
             _kernel = new KernelScheduler();
-            KernelScheduler.Current = _kernel;
+            
             var process = new Process(processId, Vma, null!)
             {
                 EUID = 0,
@@ -182,7 +182,7 @@ public class SysVSemManagerTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
             GC.KeepAlive(Task);
         }
 

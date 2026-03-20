@@ -64,8 +64,9 @@ public class PtyMaster
     /// <summary>
     ///     Handles ioctl requests for the master side.
     /// </summary>
-    public int Ioctl(uint request, uint arg, Engine engine)
+    public int Ioctl(FiberTask task, uint request, uint arg)
     {
+        var engine = task.CPU;
         switch (request)
         {
             case LinuxConstants.TIOCGPTN:
@@ -164,7 +165,7 @@ public class PtySlave
     public int Read(Span<byte> buffer, FileFlags flags)
     {
         if (Discipline != null)
-            return Discipline.Read(buffer, flags);
+            return Discipline.Read(null, buffer, flags);
 
         // Direct read from master's input buffer
         return _pair.Master.InputBuffer.Read(buffer);
@@ -176,7 +177,7 @@ public class PtySlave
     public int Write(ReadOnlySpan<byte> buffer)
     {
         if (Discipline != null)
-            return Discipline.Write(buffer);
+            return Discipline.Write(null, buffer);
 
         // Direct write to master's output buffer
         return _pair.Master.OutputBuffer.Write(buffer);
@@ -206,8 +207,9 @@ public class PtySlaveDriver : ITtyDriver
 
     public bool CanWrite => true;
 
-    public bool RegisterWriteWait(Action callback)
+    public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
     {
+        _ = scheduler;
         return false;
     }
 

@@ -31,5 +31,5 @@ public interface ITtyDriver
     ///     Registers a callback to be invoked when output might become writable.
     ///     Returns true when wait registration is armed; false when no wait is needed.
     /// </summary>
-    bool RegisterWriteWait(Action callback);
+    bool RegisterWriteWait(Action callback, KernelScheduler scheduler);
 }

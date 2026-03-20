@@ -100,9 +100,9 @@ public class KernelSchedulerReparentTests
     [Fact]
     public void SignalProcess_InitPid_ForwardsToDirectChildren_WhenEngineInitEnabled()
     {
-        var previous = KernelScheduler.Current;
+        KernelScheduler? previous = null;
         var scheduler = new KernelScheduler();
-        KernelScheduler.Current = scheduler;
+        
         try
         {
             var init = new Process(1, null!, null!);
@@ -125,7 +125,7 @@ public class KernelSchedulerReparentTests
         }
         finally
         {
-            KernelScheduler.Current = previous;
+            
         }
     }
 

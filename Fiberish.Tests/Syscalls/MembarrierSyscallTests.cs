@@ -82,7 +82,7 @@ public class MembarrierSyscallTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(5001, Vma, SyscallManager);
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
             Task = new FiberTask(5001, Process, Engine, Scheduler);
             Engine.Owner = Task;
         }
@@ -96,7 +96,7 @@ public class MembarrierSyscallTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
             SyscallManager.Close();
             GC.KeepAlive(Task);
         }

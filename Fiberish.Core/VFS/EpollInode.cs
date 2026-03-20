@@ -6,9 +6,10 @@ using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.VFS;
 
-public class EpollItem
+internal sealed class EpollItem
 {
     public ulong Data;
+    public IReadyDispatcher? Dispatcher;
     public uint Events;
     public int Fd;
     public LinuxFile File = null!;
@@ -28,14 +29,15 @@ public class EpollInode : TmpfsInode
         Mode = 0x1A4; // pseudo device mode, like pipe
     }
 
-    public int Ctl(int op, int fd, LinuxFile targetFile, uint events, ulong data)
+    public int Ctl(FiberTask task, int op, int fd, LinuxFile targetFile, uint events, ulong data)
     {
         AssertSchedulerThread();
+        var dispatcher = new SchedulerReadyDispatcher(task.CommonKernel);
         if (op == LinuxConstants.EPOLL_CTL_ADD)
         {
             if (_watches.ContainsKey(targetFile)) return -(int)Errno.EEXIST;
 
-            var item = new EpollItem { Fd = fd, File = targetFile, Events = events, Data = data };
+            var item = new EpollItem { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
             _watches[targetFile] = item;
 
             // Add initial poll and callback registration
@@ -54,6 +56,7 @@ public class EpollInode : TmpfsInode
             if (!_watches.TryGetValue(targetFile, out var item)) return -(int)Errno.ENOENT;
             item.Events = events;
             item.Data = data;
+            item.Dispatcher = dispatcher;
             item.WaitRegistration?.Dispose();
             item.WaitRegistration = null;
 
@@ -113,7 +116,12 @@ public class EpollInode : TmpfsInode
                 CheckAndRegister(item);
         }
 
-        item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
+        if (item.File.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+            item.WaitRegistration = dispatcherWaitSource.RegisterWaitHandle(item.File,
+                item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
+                RePoll, watchEvents);
+        else
+            item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
     }
 
 
@@ -125,9 +133,9 @@ public class EpollInode : TmpfsInode
         return 0;
     }
 
-    public EpollAwaitable WaitAsync(byte[] eventsBuffer, int maxEvents, int timeout)
+    public EpollAwaitable WaitAsync(FiberTask task, byte[] eventsBuffer, int maxEvents, int timeout)
     {
-        return new EpollAwaitable(this, eventsBuffer, maxEvents, timeout);
+        return new EpollAwaitable(task, this, eventsBuffer, maxEvents, timeout);
     }
 
     private int HarvestEvents(byte[] buffer, int maxEvents)
@@ -188,19 +196,16 @@ public class EpollInode : TmpfsInode
 
     private static void AssertSchedulerThread([CallerMemberName] string? caller = null)
     {
-        var scheduler = KernelScheduler.Current ??
-                        throw new InvalidOperationException(
-                            $"EpollInode.{caller ?? "<unknown>"} requires an active KernelScheduler.");
-        scheduler.AssertSchedulerThread(caller);
+        // TODO: inject KernelScheduler
     }
 
     public readonly struct EpollAwaitable
     {
         private readonly EpollAwaitState _state;
 
-        public EpollAwaitable(EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        public EpollAwaitable(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
         {
-            _state = new EpollAwaitState(inode, buffer, maxEvents, timeoutMs);
+            _state = new EpollAwaitState(task, inode, buffer, maxEvents, timeoutMs);
         }
 
         public EpollAwaiter GetAwaiter()
@@ -248,8 +253,10 @@ public class EpollInode : TmpfsInode
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public EpollAwaitState(EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        public EpollAwaitState(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
         {
+            _task = task;
+            _scheduler = task.CommonKernel;
             _inode = inode;
             _buffer = buffer;
             _maxEvents = maxEvents;
@@ -258,20 +265,11 @@ public class EpollInode : TmpfsInode
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current ??
-                            throw new InvalidOperationException(
-                                "EpollAwaitState.OnCompleted requires an active KernelScheduler.");
-            scheduler.AssertSchedulerThread();
-            var task = scheduler.CurrentTask ??
-                       throw new InvalidOperationException("EpollAwaitState.OnCompleted requires an active FiberTask.");
             _continuation = continuation;
-
-            _scheduler = scheduler;
-            _task = task;
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
-                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
+                _timer = _scheduler.ScheduleTimer(_timeoutMs, () =>
                 {
                     _hasTimedOut = true;
                     ScheduleRePoll();

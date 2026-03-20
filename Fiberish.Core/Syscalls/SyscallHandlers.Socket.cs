@@ -249,7 +249,7 @@ public partial class SyscallManager
 
             try
             {
-                return await sockInode.ConnectAsync(file, endpoint);
+                return await sockInode.ConnectAsync(file, task, endpoint);
             }
             catch (SocketException ex)
             {
@@ -261,7 +261,7 @@ public partial class SyscallManager
         {
             var endpoint = ReadSockaddr(sm.Engine, addrPtr, addrLen) as IPEndPoint;
             if (endpoint == null) return -(int)Errno.EINVAL;
-            return await netInode.ConnectAsync(file, endpoint);
+            return await netInode.ConnectAsync(file, task, endpoint);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -552,7 +552,7 @@ public partial class SyscallManager
         if (file == null) return -(int)Errno.EBADF;
         if (file.OpenedInode is UnixSocketInode unixSock)
         {
-            var accepted = await unixSock.AcceptAsync(file, flags);
+            var accepted = await unixSock.AcceptAsync(file, task, flags);
             if (accepted.Rc != 0 || accepted.Inode == null)
                 return accepted.Rc;
 
@@ -572,7 +572,7 @@ public partial class SyscallManager
         if (file.OpenedInode is HostSocketInode sockInode)
             try
             {
-                var newSock = await sockInode.AcceptAsync(file, flags);
+                var newSock = await sockInode.AcceptAsync(file, task, flags);
 
                 var newInode = new HostSocketInode(0, sm.MemfdSuperBlock, newSock);
                 var fileFlags = FileFlags.O_RDWR;
@@ -596,7 +596,7 @@ public partial class SyscallManager
 
         if (file.OpenedInode is NetstackSocketInode netInode)
         {
-            var accepted = await netInode.AcceptAsync(file, flags);
+            var accepted = await netInode.AcceptAsync(file, task, flags);
             if (accepted.Rc != 0 || accepted.Inode == null)
                 return accepted.Rc;
 
@@ -719,7 +719,7 @@ public partial class SyscallManager
                     return unixAddr.IsAbstract ? -(int)Errno.ECONNREFUSED : -(int)Errno.ECONNREFUSED;
             }
 
-            var rc = await unixSock.SendMessageAsync(file, buf, null, flags, explicitPeer);
+            var rc = await unixSock.SendMessageAsync(file, task, buf, null, flags, explicitPeer);
             if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
             return rc;
         }
@@ -734,13 +734,13 @@ public partial class SyscallManager
                     var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen);
                     if (endpoint == null) return -(int)Errno.EINVAL;
 
-                    var ret = await sockInode.SendToAsync(file, buf, hostFlags, endpoint);
+                    var ret = await sockInode.SendToAsync(file, task, buf, hostFlags, endpoint);
                     if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
                     return ret;
                 }
                 else
                 {
-                    var ret = await sockInode.SendAsync(file, buf, hostFlags);
+                    var ret = await sockInode.SendAsync(file, task, buf, hostFlags);
                     if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
                     return ret;
                 }
@@ -756,10 +756,10 @@ public partial class SyscallManager
             {
                 var endpoint = ReadSockaddr(sm.Engine, destAddrPtr, destAddrLen) as IPEndPoint;
                 if (endpoint == null) return -(int)Errno.EINVAL;
-                return await netInode.SendToAsync(file, buf, endpoint, flags);
+                return await netInode.SendToAsync(file, task, buf, endpoint, flags);
             }
 
-            return await netInode.SendAsync(file, buf, flags);
+            return await netInode.SendAsync(file, task, buf, flags);
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
@@ -788,7 +788,7 @@ public partial class SyscallManager
 
         if (file.OpenedInode is UnixSocketInode unixSock)
         {
-            var res = await unixSock.RecvMessageAsync(file, buf, flags, len);
+            var res = await unixSock.RecvMessageAsync(file, task, buf, flags, len);
             var bytes = res.BytesRead;
             if (bytes < 0) return bytes;
 
@@ -819,7 +819,7 @@ public partial class SyscallManager
                         ? new IPEndPoint(IPAddress.IPv6Any, 0)
                         : new IPEndPoint(IPAddress.Any, 0);
 
-                    var result = await sockInode.RecvFromAsync(file, buf, hostFlags, remoteEp);
+                    var result = await sockInode.RecvFromAsync(file, task, buf, hostFlags, remoteEp);
                     bytes = result.Bytes;
 
                     if (bytes >= 0 && result.RemoteEp != null)
@@ -827,7 +827,7 @@ public partial class SyscallManager
                 }
                 else
                 {
-                    bytes = await sockInode.RecvAsync(file, buf, hostFlags);
+                    bytes = await sockInode.RecvAsync(file, task, buf, hostFlags);
                 }
 
                 if (bytes > 0)
@@ -846,13 +846,13 @@ public partial class SyscallManager
             EndPoint? remoteEp = null;
             if (srcAddrPtr != 0 && addrLenPtr != 0)
             {
-                var result = await netInode.RecvFromAsync(file, buf, flags);
+                var result = await netInode.RecvFromAsync(file, task, buf, flags);
                 bytes = result.Bytes;
                 remoteEp = result.RemoteEndPoint;
             }
             else
             {
-                bytes = await netInode.RecvAsync(file, buf, flags);
+                bytes = await netInode.RecvAsync(file, task, buf, flags);
             }
 
             if (bytes > 0)
@@ -868,7 +868,7 @@ public partial class SyscallManager
 
         if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
         {
-            var bytes = await netlinkInode.RecvAsync(file, buf, flags);
+            var bytes = await netlinkInode.RecvAsync(file, task, buf, flags);
             if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
                 return -(int)Errno.EFAULT;
             if (bytes > 0 && srcAddrPtr != 0 && addrLenPtr != 0)
@@ -978,7 +978,7 @@ public partial class SyscallManager
 
         if (file.OpenedInode is UnixSocketInode unixSock)
         {
-            var ret = await unixSock.SendMessageAsync(file, data, fds.Count > 0 ? fds : null, flags);
+            var ret = await unixSock.SendMessageAsync(file, task, data, fds.Count > 0 ? fds : null, flags);
             if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
             return ret;
         }
@@ -986,7 +986,7 @@ public partial class SyscallManager
         if (file.OpenedInode is HostSocketInode hostSock)
         {
             // Host sockets don't support SCM_RIGHTS, fallback to basic send
-            var ret = await hostSock.SendAsync(file, data, flags);
+            var ret = await hostSock.SendAsync(file, task, data, flags);
             if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
             return ret;
         }
@@ -996,7 +996,7 @@ public partial class SyscallManager
             if (fds.Count > 0)
                 return -(int)Errno.EOPNOTSUPP;
 
-            var ret = await netSock.SendAsync(file, data, flags);
+            var ret = await netSock.SendAsync(file, task, data, flags);
             if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
             return ret;
         }
@@ -1057,7 +1057,7 @@ public partial class SyscallManager
 
         if (file.OpenedInode is UnixSocketInode unixSock)
         {
-            var res = await unixSock.RecvMessageAsync(file, buffer, flags);
+            var res = await unixSock.RecvMessageAsync(file, task, buffer, flags);
             if (res.BytesRead < 0) return res.BytesRead;
             bytesRead = res.BytesRead;
             receivedFds = res.Fds;
@@ -1071,7 +1071,7 @@ public partial class SyscallManager
                 : new IPEndPoint(IPAddress.Any, 0);
 
             var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-            var res = await hostSock.RecvFromAsync(file, buffer, hostFlags, remoteEp);
+            var res = await hostSock.RecvFromAsync(file, task, buffer, hostFlags, remoteEp);
 
             if (res.Bytes < 0) return res.Bytes;
             bytesRead = res.Bytes;
@@ -1081,7 +1081,7 @@ public partial class SyscallManager
         }
         else if (file.OpenedInode is NetstackSocketInode netSock)
         {
-            bytesRead = await netSock.RecvAsync(file, buffer, flags);
+            bytesRead = await netSock.RecvAsync(file, task, buffer, flags);
             if (bytesRead < 0) return bytesRead;
 
             if (bytesRead >= 0 && namePtr != 0 && netSock.RemoteEndPoint != null)
@@ -1089,7 +1089,7 @@ public partial class SyscallManager
         }
         else if (file.OpenedInode is NetlinkRouteSocketInode netlinkSock)
         {
-            bytesRead = await netlinkSock.RecvAsync(file, buffer, flags);
+            bytesRead = await netlinkSock.RecvAsync(file, task, buffer, flags);
             if (bytesRead < 0) return bytesRead;
             if (bytesRead >= 0 && namePtr != 0)
                 WriteSockaddrNetlink(sm.Engine, namePtr, nameLenPtr);

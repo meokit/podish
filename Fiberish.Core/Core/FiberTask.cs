@@ -1460,7 +1460,7 @@ public class FiberTask
                 Logger.LogInformation(
                     "[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
                     TID, child.TID);
-                await vforkEvent;
+                await vforkEvent.WaitAsync(this);
                 Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
                     TID, child.TID);
             }

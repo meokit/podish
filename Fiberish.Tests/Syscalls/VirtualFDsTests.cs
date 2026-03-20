@@ -76,7 +76,7 @@ public class VirtualFDsTests
     public void TimerFd_SetAndGetTime()
     {
         using var env = new TestEnv();
-        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock, env.Scheduler);
         var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
@@ -91,7 +91,7 @@ public class VirtualFDsTests
     public void TimerFd_Expiration_Read()
     {
         using var env = new TestEnv();
-        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock, env.Scheduler);
         var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
@@ -133,7 +133,7 @@ public class VirtualFDsTests
 
         // Reading should return siginfo
         var buf = new byte[128];
-        var readLen = inode.Read(sfd, buf, 0);
+        var readLen = inode.Read(env.Task, sfd, buf);
         Assert.Equal(128, readLen);
 
         Assert.Equal((uint)Signal.SIGUSR1, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)));
@@ -143,7 +143,7 @@ public class VirtualFDsTests
         Assert.Equal(42UL, BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(56, 8)));
 
         // Next read should EAGAIN
-        readLen = inode.Read(sfd, buf, 0);
+        readLen = inode.Read(env.Task, sfd, buf);
         Assert.Equal(-(int)Errno.EAGAIN, readLen);
     }
 
@@ -170,7 +170,7 @@ public class VirtualFDsTests
             FileFlags.O_NONBLOCK, null!);
 
         var fired = 0;
-        using var reg = inode.RegisterWaitHandle(sfd, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
+        using var reg = inode.RegisterWaitHandle(env.Task, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
 
         env.Task.PostSignalInfo(new SigInfo
         {
@@ -190,7 +190,6 @@ public class VirtualFDsTests
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
 
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
@@ -198,6 +197,7 @@ public class VirtualFDsTests
             var vma = new VMAManager();
             var engine = new Engine();
             Process = new Process(100, vma, null!);
+            Scheduler.RegisterProcess(Process);
             Task = new FiberTask(100, Process, engine, Scheduler);
 
             typeof(KernelScheduler).GetProperty("CurrentTask")!.SetValue(Scheduler, Task);
@@ -210,7 +210,7 @@ public class VirtualFDsTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
         }
     }
 }

@@ -89,7 +89,7 @@ public class WaitChildStateRegressionTests
         public WaitEnv()
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
 
             ParentEngine = new Engine();
             ParentMem = new VMAManager();
@@ -132,7 +132,7 @@ public class WaitChildStateRegressionTests
         public void Dispose()
         {
             Scheduler.CurrentTask = null;
-            KernelScheduler.Current = null;
+            
         }
 
         public bool DrainEvents()

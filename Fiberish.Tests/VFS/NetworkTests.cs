@@ -26,7 +26,7 @@ public class NetworkTests
         // Register file into epoll via EPOLL_CTL_ADD
         var events = (uint)LinuxConstants.POLLIN;
         ulong data = 42;
-        var res = epoll.Ctl(LinuxConstants.EPOLL_CTL_ADD, 8, file, events, data);
+        var res = epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, events, data);
         Assert.Equal(0, res);
 
         // Trigger eventfd
@@ -39,7 +39,7 @@ public class NetworkTests
         var readEvents = 0;
 
         // Since eventfd is already signaled, wait should complete immediately
-        var awaiter = epoll.WaitAsync(buffer, 1, 0).GetAwaiter();
+        var awaiter = epoll.WaitAsync(env.Task, buffer, 1, 0).GetAwaiter();
         awaiter.OnCompleted(() => { readEvents = awaiter.GetResult(); });
 
         Assert.Equal(1, readEvents);
@@ -73,12 +73,12 @@ public class NetworkTests
         var fdsToPass = new List<LinuxFile> { dummyFile };
         byte[] payload = { 1, 2, 3, 4 };
 
-        var sent = await sock1.SendMessageAsync(file1, payload, fdsToPass, 0);
+        var sent = await sock1.SendMessageAsync(file1, env.Task, payload, fdsToPass, 0);
         Assert.Equal(4, sent);
 
         var recvBuf = new byte[10];
         // The receive is async, but data is already there so it completes synchronously essentially
-        var recvRes = await sock2.RecvMessageAsync(file2, recvBuf, 0);
+        var recvRes = await sock2.RecvMessageAsync(file2, env.Task, recvBuf, 0);
         Assert.Equal(4, recvRes.BytesRead);
         Assert.NotNull(recvRes.Fds);
         Assert.Single(recvRes.Fds);
@@ -104,11 +104,11 @@ public class NetworkTests
         Assert.NotNull(readWaitField);
         var readWaitQueue = Assert.IsType<AsyncWaitQueue>(readWaitField!.GetValue(sock2));
 
-        var sent = await sock1.SendMessageAsync(file1, [0x2A], null, 0);
+        var sent = await sock1.SendMessageAsync(file1, env.Task, [0x2A], null, 0);
         Assert.Equal(1, sent);
         Assert.True(readWaitQueue.IsSignaled);
 
-        var recv = await sock2.RecvMessageAsync(file2, new byte[8], 0);
+        var recv = await sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0);
         Assert.Equal(1, recv.BytesRead);
 
         // After draining the only queued packet, future waits must block until new data arrives.
@@ -132,7 +132,7 @@ public class NetworkTests
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
 
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
@@ -152,7 +152,7 @@ public class NetworkTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
         }
     }
 }

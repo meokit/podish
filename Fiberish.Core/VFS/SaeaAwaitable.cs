@@ -28,8 +28,8 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
 
     public void OnCompleted(Action continuation)
     {
-        _scheduler = KernelScheduler.Current;
-        if (_task == null) _task = _scheduler?.CurrentTask;
+        if (_task == null && _scheduler == null) 
+            throw new InvalidOperationException("SaeaOperation requires BeginWait to be called with a FiberTask before awaiting.");
         Logger.LogTrace(
             "[SaeaAwaitable] OnCompleted register: task={TaskId} scheduler={HasScheduler} isCompleted={IsCompleted} bytes={Bytes} error={Error}",
             _task?.TID, _scheduler != null, _isCompleted, BytesTransferred, SocketError);
@@ -115,7 +115,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     public void BeginWait(FiberTask task, bool enableSignalSafetyNet = true)
     {
         _task = task;
-        _scheduler = KernelScheduler.Current;
+        _scheduler = task.CommonKernel;
         _enableSignalSafetyNet = enableSignalSafetyNet;
         if (enableSignalSafetyNet)
             _waitToken = task.BeginWaitToken();

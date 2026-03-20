@@ -448,7 +448,7 @@ public partial class SyscallManager
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
                     // Otherwise wait for data (pipe read-ready)
-                    await fileIn.OpenedInode.WaitForRead(fileIn);
+                    await fileIn.OpenedInode.WaitForRead(fileIn, task);
                     continue;
                 }
 
@@ -472,7 +472,7 @@ public partial class SyscallManager
                         if (totalTransferred > 0) break;
                         if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                             return -(int)Errno.EAGAIN;
-                        await fileOut.OpenedInode.WaitForWrite(fileOut);
+                        await fileOut.OpenedInode.WaitForWrite(fileOut, task);
                         continue;
                     }
 
@@ -554,7 +554,7 @@ public partial class SyscallManager
                 {
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    await fileIn.OpenedInode.WaitForRead(fileIn);
+                    await fileIn.OpenedInode.WaitForRead(fileIn, task);
                     continue; // retry after data arrives
                 }
 
@@ -565,7 +565,7 @@ public partial class SyscallManager
                 {
                     if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    await fileOut.OpenedInode.WaitForWrite(fileOut);
+                    await fileOut.OpenedInode.WaitForWrite(fileOut, task);
                     continue;
                 }
 

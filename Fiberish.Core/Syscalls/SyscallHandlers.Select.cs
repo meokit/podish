@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Timer = Fiberish.Core.Timer;
 
@@ -159,7 +160,8 @@ public partial class SyscallManager
         long timeoutMs)
     {
         // 1. Scan
-        var ready = ScanSelect(sm, n, inp, outp, exp, out var resIn, out var resOut, out var resEx);
+        var ready = ScanSelect(sm, n, inp, outp, exp, sm.Engine.Owner as FiberTask, out var resIn, out var resOut,
+            out var resEx);
         if (ready > 0)
         {
             WriteSelectResults(sm, inp, outp, exp, resIn, resOut, resEx);
@@ -169,9 +171,12 @@ public partial class SyscallManager
         if (timeoutMs == 0) return 0;
 
         // 2. Await
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
         try
         {
-            var ret = await new SelectAwaitable(sm, n, inp, outp, exp, timeoutMs);
+            var ret = await new SelectAwaitable(task, sm.FDs, n, inp, outp, exp, timeoutMs);
             // If success, we assume SelectAwaiter re-scanned and returned the count?
             // Actually SelectAwaiter.GetResult() logic needs to handle re-scan or partial result.
             // But standard Select returns the count and modifies the sets.
@@ -180,7 +185,8 @@ public partial class SyscallManager
             // Re-scan to populate sets
             if (ret >= 0)
             {
-                ready = ScanSelect(sm, n, inp, outp, exp, out resIn, out resOut, out resEx);
+                ready = ScanSelect(sm, n, inp, outp, exp, sm.Engine.Owner as FiberTask, out resIn, out resOut,
+                    out resEx);
                 WriteSelectResults(sm, inp, outp, exp, resIn, resOut, resEx);
                 return ready;
             }
@@ -196,11 +202,13 @@ public partial class SyscallManager
     private static async ValueTask<int> DoPoll(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
     {
         // 1. Scan
-        var ready = ScanPoll(sm, fdsAddr, nfds);
+        var ready = ScanPoll(sm, fdsAddr, nfds, sm.Engine.Owner as FiberTask);
         if (ready > 0 || timeoutMs == 0) return ready;
 
         // 2. Await
-        return await new PollAwaitable(sm, fdsAddr, nfds, timeoutMs);
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        return await new PollAwaitable(task, sm.FDs, fdsAddr, nfds, timeoutMs);
     }
 
     private static bool TryReadPselectSigmask(SyscallManager sm, uint sigArgPtr, out bool hasMask, out ulong mask,
@@ -316,7 +324,14 @@ public partial class SyscallManager
     }
 
     private static int ScanSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp,
+        FiberTask? task,
         out uint[] resIn, out uint[] resOut, out uint[] resEx)
+    {
+        return ScanSelect(sm.Engine, sm.FDs, n, inp, outp, exp, task, out resIn, out resOut, out resEx);
+    }
+
+    private static int ScanSelect(Engine engine, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+        FiberTask? task, out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
         var ready = 0;
         var intCount = (n + NFDBITS - 1) / NFDBITS;
@@ -330,9 +345,9 @@ public partial class SyscallManager
         var outSets = new uint[intCount];
         var exSets = new uint[intCount];
 
-        if (inp != 0) ReadSpan(sm.Engine, inp, inSets);
-        if (outp != 0) ReadSpan(sm.Engine, outp, outSets);
-        if (exp != 0) ReadSpan(sm.Engine, exp, exSets);
+        if (inp != 0) ReadSpan(engine, inp, inSets);
+        if (outp != 0) ReadSpan(engine, outp, outSets);
+        if (exp != 0) ReadSpan(engine, exp, exSets);
 
         for (var i = 0; i < n; i++)
         {
@@ -346,14 +361,16 @@ public partial class SyscallManager
 
             if (!checkRead && !checkWrite && !checkEx) continue;
 
-            if (!sm.FDs.TryGetValue(i, out var file)) return -(int)Errno.EBADF;
+            if (!fds.TryGetValue(i, out var file)) return -(int)Errno.EBADF;
 
             short pollEvents = 0;
             if (checkRead) pollEvents |= PollEvents.POLLIN;
             if (checkWrite) pollEvents |= PollEvents.POLLOUT;
             if (checkEx) pollEvents |= PollEvents.POLLPRI;
 
-            var revents = file.OpenedInode!.Poll(file, pollEvents);
+            var revents = file.OpenedInode is SignalFdInode signalfd && task != null
+                ? signalfd.Poll(task, pollEvents)
+                : file.OpenedInode!.Poll(file, pollEvents);
 
             if ((revents & (PollEvents.POLLIN | PollEvents.POLLHUP | PollEvents.POLLERR)) != 0 && checkRead)
             {
@@ -385,7 +402,13 @@ public partial class SyscallManager
         if (exp != 0) WriteSpan(sm.Engine, exp, resEx);
     }
 
-    private static int ScanPoll(SyscallManager sm, uint fdsAddr, uint nfds)
+    private static int ScanPoll(SyscallManager sm, uint fdsAddr, uint nfds, FiberTask? task)
+    {
+        return ScanPoll(sm.Engine, sm.FDs, fdsAddr, nfds, task);
+    }
+
+    private static int ScanPoll(Engine engine, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds,
+        FiberTask? task)
     {
         var readyCount = 0;
         var sizeOfPollfd = Marshal.SizeOf<Pollfd>();
@@ -394,14 +417,16 @@ public partial class SyscallManager
         {
             var itemAddr = fdsAddr + i * (uint)sizeOfPollfd;
             Pollfd pfd;
-            pfd = ReadStruct<Pollfd>(sm.Engine, itemAddr);
+            pfd = ReadStruct<Pollfd>(engine, itemAddr);
             pfd.Revents = 0;
 
             if (pfd.Fd >= 0)
             {
-                if (sm.FDs.TryGetValue(pfd.Fd, out var file))
+                if (fds.TryGetValue(pfd.Fd, out var file))
                 {
-                    var revents = file.OpenedInode!.Poll(file, pfd.Events);
+                    var revents = file.OpenedInode is SignalFdInode signalfd && task != null
+                        ? signalfd.Poll(task, pfd.Events)
+                        : file.OpenedInode!.Poll(file, pfd.Events);
                     Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
                         pfd.Events, revents, file.OpenedInode!.GetType().Name);
 
@@ -423,7 +448,7 @@ public partial class SyscallManager
                 Logger.LogTrace("[ScanPoll] FD={Fd} (IGNORED)", pfd.Fd);
             }
 
-            WriteStruct(sm.Engine, itemAddr, pfd);
+            WriteStruct(engine, itemAddr, pfd);
         }
 
         return readyCount;
@@ -486,9 +511,10 @@ public partial class SyscallManager
     {
         private readonly SelectAwaitState _state;
 
-        public SelectAwaitable(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
+        public SelectAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+            long timeoutMs)
         {
-            _state = new SelectAwaitState(sm, n, inp, outp, exp, timeoutMs);
+            _state = new SelectAwaitState(task, fds, n, inp, outp, exp, timeoutMs);
         }
 
         public SelectAwaiter GetAwaiter()
@@ -522,10 +548,11 @@ public partial class SyscallManager
     internal sealed class SelectAwaitState
     {
         private readonly uint _exp;
+        private readonly Dictionary<int, LinuxFile> _fds;
         private readonly uint _inp;
         private readonly int _n;
         private readonly uint _outp;
-        private readonly SyscallManager _sm;
+        private readonly FiberTask _task;
         private readonly long _timeoutMs;
         private readonly List<IDisposable> _waitRegistrations = [];
         private bool _completed;
@@ -533,13 +560,14 @@ public partial class SyscallManager
         private bool _hasTimedOut;
         private int _reschedulePending;
         private int _result;
-        private FiberTask _task = null!;
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public SelectAwaitState(SyscallManager sm, int n, uint inp, uint outp, uint exp, long timeoutMs)
+        public SelectAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+            long timeoutMs)
         {
-            _sm = sm;
+            _task = task;
+            _fds = fds;
             _n = n;
             _inp = inp;
             _outp = outp;
@@ -549,10 +577,9 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current!;
-            _task = (_sm.Engine.Owner as FiberTask)!;
             _continuation = continuation;
             _token = _task.BeginWaitToken();
+            var scheduler = _task.CommonKernel;
 
             if (_timeoutMs > 0)
                 _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
@@ -577,11 +604,11 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                KernelScheduler.Current!.Schedule(() =>
+                _task.CommonKernel.Schedule(() =>
                 {
                     _reschedulePending = 0;
                     DoPoll();
-                });
+                }, _task);
         }
 
         private void DoPoll()
@@ -598,7 +625,7 @@ public partial class SyscallManager
                 return;
             }
 
-            var ready = ScanSelect(_sm, _n, _inp, _outp, _exp, out _, out _, out _);
+            var ready = ScanSelect(_task.CPU, _fds, _n, _inp, _outp, _exp, _task, out _, out _, out _);
             if (ready > 0)
             {
                 _timer?.Cancel();
@@ -629,9 +656,9 @@ public partial class SyscallManager
             var outSets = new uint[intCount];
             var exSets = new uint[intCount];
 
-            if (_inp != 0) ReadSpan(_sm.Engine, _inp, inSets);
-            if (_outp != 0) ReadSpan(_sm.Engine, _outp, outSets);
-            if (_exp != 0) ReadSpan(_sm.Engine, _exp, exSets);
+            if (_inp != 0) ReadSpan(_task.CPU, _inp, inSets);
+            if (_outp != 0) ReadSpan(_task.CPU, _outp, outSets);
+            if (_exp != 0) ReadSpan(_task.CPU, _exp, exSets);
 
             for (var i = 0; i < _n; i++)
             {
@@ -645,7 +672,7 @@ public partial class SyscallManager
 
                 if (!checkRead && !checkWrite && !checkEx) continue;
 
-                if (_sm.FDs.TryGetValue(i, out var file))
+                if (_fds.TryGetValue(i, out var file))
                 {
                     short events = 0;
                     if (checkRead) events |= PollEvents.POLLIN;
@@ -654,7 +681,14 @@ public partial class SyscallManager
 
                     if (events != 0)
                     {
-                        var registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
+                        var dispatcher = new SchedulerReadyDispatcher(_task.CommonKernel);
+                        IDisposable? registration;
+                        if (file.OpenedInode is SignalFdInode signalfd)
+                            registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, events);
+                        else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+                            registration = dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll, events);
+                        else
+                            registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
                         if (registration != null) _waitRegistrations.Add(registration);
                     }
                 }
@@ -673,9 +707,9 @@ public partial class SyscallManager
     {
         private readonly PollAwaitState _state;
 
-        public PollAwaitable(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+        public PollAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds, int timeoutMs)
         {
-            _state = new PollAwaitState(sm, fdsAddr, nfds, timeoutMs);
+            _state = new PollAwaitState(task, fds, fdsAddr, nfds, timeoutMs);
         }
 
         public PollAwaiter GetAwaiter()
@@ -708,9 +742,10 @@ public partial class SyscallManager
 
     internal sealed class PollAwaitState
     {
+        private readonly Dictionary<int, LinuxFile> _fds;
         private readonly uint _fdsAddr;
         private readonly uint _nfds;
-        private readonly SyscallManager _sm;
+        private readonly FiberTask _task;
         private readonly int _timeoutMs;
         private readonly List<IDisposable> _waitRegistrations = [];
         private bool _completed;
@@ -718,13 +753,13 @@ public partial class SyscallManager
         private bool _hasTimedOut;
         private int _reschedulePending;
         private int _result;
-        private FiberTask _task = null!;
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public PollAwaitState(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+        public PollAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds, int timeoutMs)
         {
-            _sm = sm;
+            _task = task;
+            _fds = fds;
             _fdsAddr = fdsAddr;
             _nfds = nfds;
             _timeoutMs = timeoutMs;
@@ -732,10 +767,9 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current!;
-            _task = (_sm.Engine.Owner as FiberTask)!;
             _continuation = continuation;
             _token = _task.BeginWaitToken();
+            var scheduler = _task.CommonKernel;
 
             if (_timeoutMs > 0)
                 _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
@@ -760,11 +794,11 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                KernelScheduler.Current!.Schedule(() =>
+                _task.CommonKernel.Schedule(() =>
                 {
                     _reschedulePending = 0;
                     DoPoll();
-                });
+                }, _task);
         }
 
         private void DoPoll()
@@ -781,7 +815,7 @@ public partial class SyscallManager
                 return;
             }
 
-            var ready = ScanPoll(_sm, _fdsAddr, _nfds);
+            var ready = ScanPoll(_task.CPU, _fds, _fdsAddr, _nfds, _task);
             if (ready > 0)
             {
                 _timer?.Cancel();
@@ -809,10 +843,18 @@ public partial class SyscallManager
             for (uint i = 0; i < _nfds; i++)
             {
                 var itemAddr = _fdsAddr + i * (uint)sizeOfPollfd;
-                var pfd = ReadStruct<Pollfd>(_sm.Engine, itemAddr);
-                if (pfd.Fd >= 0 && _sm.FDs.TryGetValue(pfd.Fd, out var file))
+                var pfd = ReadStruct<Pollfd>(_task.CPU, itemAddr);
+                if (pfd.Fd >= 0 && _fds.TryGetValue(pfd.Fd, out var file))
                 {
-                    var registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
+                    var dispatcher = new SchedulerReadyDispatcher(_task.CommonKernel);
+                    IDisposable? registration;
+                    if (file.OpenedInode is SignalFdInode signalfd)
+                        registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, pfd.Events);
+                    else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+                        registration = dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll,
+                            pfd.Events);
+                    else
+                        registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
                     if (registration != null) _waitRegistrations.Add(registration);
                 }
             }

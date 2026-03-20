@@ -981,8 +981,9 @@ public sealed class ContainerRuntimeService
 
         public bool CanWrite => true;
 
-        public bool RegisterWriteWait(Action callback)
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
         {
+            _ = scheduler;
             return false;
         }
 
@@ -1072,11 +1073,11 @@ public sealed class ContainerRuntimeService
             }
         }
 
-        public bool RegisterWriteWait(Action callback)
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
         {
             if (CanWrite)
                 return false;
-            _writeReady.Register(callback);
+            _writeReady.Register(callback, scheduler);
             return true;
         }
 

@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
-public sealed class HostSocketInode : Inode
+public sealed class HostSocketInode : Inode, IDispatcherWaitSource
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
@@ -31,8 +31,7 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger,
-            new SchedulerReadyDispatcher(KernelScheduler.Current));
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger);
     }
 
     // Wrap an accepted socket
@@ -45,8 +44,7 @@ public sealed class HostSocketInode : Inode
         NativeSocket.Blocking = false;
         Type = InodeType.Socket;
         Mode = 0x1ED; // 755
-        _readiness = new HostSocketReadiness(this, NativeSocket, Logger,
-            new SchedulerReadyDispatcher(KernelScheduler.Current));
+        _readiness = new HostSocketReadiness(this, NativeSocket, Logger);
     }
 
     public Socket NativeSocket { get; }
@@ -62,12 +60,34 @@ public sealed class HostSocketInode : Inode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
-        return _readiness.RegisterWait(file, callback, events);
+        return false;
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
-        return _readiness.RegisterWaitHandle(file, callback, events);
+        return null;
+    }
+
+    internal bool RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        return _readiness.RegisterWait(file, dispatcher, callback, events);
+    }
+
+    internal IDisposable? RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        return _readiness.RegisterWaitHandle(file, dispatcher, callback, events);
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        return RegisterWait(linuxFile, dispatcher, callback, events);
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
     }
 
     protected override void OnEvictCache()
@@ -76,9 +96,9 @@ public sealed class HostSocketInode : Inode
         base.OnEvictCache();
     }
 
-    private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
+    private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, FiberTask task, short events)
     {
-        return _readiness.WaitForSocketEventAsync(file, events);
+        return _readiness.WaitForSocketEventAsync(file, task, events);
     }
 
     private void ClearReadyBits(short bits)
@@ -96,8 +116,9 @@ public sealed class HostSocketInode : Inode
         return _readiness.HasBufferedAcceptedSocket();
     }
 
-    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
+        var engine = task.CPU;
         switch (request)
         {
             case LinuxConstants.FIONBIO:
@@ -122,7 +143,7 @@ public sealed class HostSocketInode : Inode
         }
     }
 
-    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
+    public async ValueTask<int> RecvAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return 0;
@@ -149,7 +170,7 @@ public sealed class HostSocketInode : Inode
                     return -(int)Errno.EAGAIN;
                 }
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
                     return -(int)Errno.ERESTARTSYS;
             }
@@ -163,7 +184,7 @@ public sealed class HostSocketInode : Inode
             }
     }
 
-    public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, byte[] buffer, int flags,
+    public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
         EndPoint remoteEpTemplate)
     {
         while (true)
@@ -186,7 +207,7 @@ public sealed class HostSocketInode : Inode
                     return (-(int)Errno.EAGAIN, null);
                 }
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
                     return (-(int)Errno.ERESTARTSYS, null);
             }
@@ -200,7 +221,7 @@ public sealed class HostSocketInode : Inode
             }
     }
 
-    public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
+    public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
         byte[]? rented = null;
         ArraySegment<byte> segment;
@@ -237,7 +258,7 @@ public sealed class HostSocketInode : Inode
                         return -(int)Errno.EAGAIN;
                     }
 
-                    var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                     if (!ready)
                         return -(int)Errno.ERESTARTSYS;
                 }
@@ -257,7 +278,7 @@ public sealed class HostSocketInode : Inode
         }
     }
 
-    public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
     {
         byte[]? rented = null;
         ArraySegment<byte> segment;
@@ -290,7 +311,7 @@ public sealed class HostSocketInode : Inode
                         return -(int)Errno.EAGAIN;
                     }
 
-                    var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                     if (!ready)
                         return -(int)Errno.ERESTARTSYS;
                 }
@@ -310,7 +331,7 @@ public sealed class HostSocketInode : Inode
         }
     }
 
-    public async ValueTask<int> ConnectAsync(LinuxFile file, EndPoint endpoint)
+    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, EndPoint endpoint)
     {
         while (true)
             try
@@ -331,7 +352,7 @@ public sealed class HostSocketInode : Inode
                     return -(int)Errno.EINPROGRESS;
                 }
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLOUT);
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                 if (!ready)
                     return -(int)Errno.ERESTARTSYS;
 
@@ -356,7 +377,7 @@ public sealed class HostSocketInode : Inode
             }
     }
 
-    public async ValueTask<Socket> AcceptAsync(LinuxFile file, int flags)
+    public async ValueTask<Socket> AcceptAsync(LinuxFile file, FiberTask task, int flags)
     {
         if (TryDequeueAcceptedSocket(out var queued))
         {
@@ -379,7 +400,7 @@ public sealed class HostSocketInode : Inode
                 if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                     throw new SocketException((int)SocketError.WouldBlock);
 
-                var ready = await WaitForSocketEventAsync(file, PollEvents.POLLIN);
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
                     throw new SocketException((int)SocketError.Interrupted);
             }

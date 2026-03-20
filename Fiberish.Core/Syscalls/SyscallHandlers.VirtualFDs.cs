@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using System.Buffers.Binary;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -47,7 +48,7 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.TFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.TFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-        var inode = new TimerFdInode(0, sm.MemfdSuperBlock);
+        var inode = new TimerFdInode(0, sm.MemfdSuperBlock, (sm.Engine.Owner as FiberTask)!.CommonKernel);
         var dentry = new Dentry("anon_inode:[timerfd]", inode, null, sm.MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, sm.AnonMount);
 

@@ -36,11 +36,20 @@ public class ExecveErrorMappingTests
             MapUserPage(mm, engine, filenameAddr);
             WriteCString(engine, filenameAddr, "/hello_static");
 
-            // Force subsequent strict anonymous page allocation to fail inside exec path.
-            ExternalPageManager.MemoryQuotaBytes = ExternalPageManager.GetAllocatedBytes();
+            // Keep one page pinned so exec's first strict allocation reliably trips the quota
+            // even if the old address space releases pages before loading the new image.
+            var reservedPage = ExternalPageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+            try
+            {
+                ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
 
-            var rc = await Call(sm, "SysExecve", filenameAddr);
-            Assert.Equal(-(int)Errno.ENOMEM, rc);
+                var rc = await Call(sm, "SysExecve", filenameAddr);
+                Assert.Equal(-(int)Errno.ENOMEM, rc);
+            }
+            finally
+            {
+                ExternalPageManager.ReleasePtr(reservedPage);
+            }
         }
         finally
         {

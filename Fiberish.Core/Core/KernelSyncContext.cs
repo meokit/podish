@@ -50,4 +50,6 @@ internal sealed class KernelSyncContext : SynchronizationContext
         if (ReferenceEquals(task, _taskContext)) return this;
         return new KernelSyncContext(_scheduler, task);
     }
+
+    internal KernelScheduler Scheduler => _scheduler;
 }

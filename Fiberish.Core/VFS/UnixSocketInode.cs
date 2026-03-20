@@ -13,7 +13,7 @@ public class UnixMessage
     public byte[]? SourceSunPathRaw { get; init; }
 }
 
-public class UnixSocketInode : Inode
+public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     // Backpressure: track queued bytes to limit memory usage
     private const int MaxSendBuffer = 262144; // 256KB
@@ -86,7 +86,7 @@ public class UnixSocketInode : Inode
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        
         return default;
     }
 
@@ -137,7 +137,7 @@ public class UnixSocketInode : Inode
         }
     }
 
-    public async ValueTask<(int Rc, UnixSocketInode? Inode)> AcceptAsync(LinuxFile file, int flags)
+    public async ValueTask<(int Rc, UnixSocketInode? Inode)> AcceptAsync(LinuxFile file, FiberTask task, int flags)
     {
         using (EnterStateScope())
         {
@@ -159,13 +159,12 @@ public class UnixSocketInode : Inode
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 return (-(int)Errno.EAGAIN, null);
 
-            var task = KernelScheduler.Current?.CurrentTask;
-            if (task != null && task.HasUnblockedPendingSignal())
+            if (task.HasUnblockedPendingSignal())
                 return (-(int)Errno.ERESTARTSYS, null);
 
-            await _readWaitQueue.WaitAsync();
+            await _readWaitQueue.WaitAsync(task);
 
-            if (task != null && task.HasUnblockedPendingSignal())
+            if (task.HasUnblockedPendingSignal())
                 return (-(int)Errno.ERESTARTSYS, null);
         }
     }
@@ -321,16 +320,43 @@ public class UnixSocketInode : Inode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
+        return false;
+    }
+
+    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
+    {
         var registered = false;
         if ((events & PollEvents.POLLIN) != 0)
         {
-            _readWaitQueue.Register(callback);
+            _readWaitQueue.Register(callback, task);
             registered = true;
         }
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            _writeWaitQueue.Register(callback);
+            _writeWaitQueue.Register(callback, task);
+            registered = true;
+        }
+
+        return registered;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Unix socket readiness wait requires an explicit scheduler.");
+        var registered = false;
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            _readWaitQueue.Register(callback, scheduler);
+            registered = true;
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            _writeWaitQueue.Register(callback, scheduler);
             registered = true;
         }
 
@@ -339,16 +365,48 @@ public class UnixSocketInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
+        return null;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
         var registrations = new List<IDisposable>(2);
         if ((events & PollEvents.POLLIN) != 0)
         {
-            var reg = _readWaitQueue.RegisterCancelable(callback);
+            var reg = _readWaitQueue.RegisterCancelable(callback, task);
             if (reg != null) registrations.Add(reg);
         }
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            var reg = _writeWaitQueue.RegisterCancelable(callback);
+            var reg = _writeWaitQueue.RegisterCancelable(callback, task);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Unix socket readiness wait requires an explicit scheduler.");
+        var registrations = new List<IDisposable>(2);
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            var reg = _readWaitQueue.RegisterCancelable(callback, scheduler);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            var reg = _writeWaitQueue.RegisterCancelable(callback, scheduler);
             if (reg != null) registrations.Add(reg);
         }
 
@@ -394,7 +452,7 @@ public class UnixSocketInode : Inode
     }
 
     public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw)> RecvMessageAsync(
-        LinuxFile file,
+        LinuxFile file, FiberTask task,
         byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
@@ -454,21 +512,20 @@ public class UnixSocketInode : Inode
 
             if (nonBlocking) return (-(int)Errno.EAGAIN, null, null);
 
-            var task = KernelScheduler.Current?.CurrentTask;
-            if (task != null && task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
 
-            await _readWaitQueue.WaitAsync();
+            await _readWaitQueue.WaitAsync(task);
 
-            if (task != null && task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
         }
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags)
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds, int flags)
     {
-        return await SendMessageAsync(file, data, fds, flags, null);
+        return await SendMessageAsync(file, task, data, fds, flags, null);
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, byte[] data, List<LinuxFile>? fds, int flags,
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds, int flags,
         UnixSocketInode? explicitPeer)
     {
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||
@@ -497,7 +554,7 @@ public class UnixSocketInode : Inode
             if (nonBlocking)
                 return -(int)Errno.EAGAIN;
 
-            await peer._writeWaitQueue.WaitAsync();
+            await peer._writeWaitQueue.WaitAsync(task);
 
             // Re-check connection after wakeup
             using (EnterStateScope())

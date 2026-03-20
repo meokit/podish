@@ -17,9 +17,13 @@ public class WaitSyscallTests
     private static ValueTask<int> Invoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, a1, a2, a3, a4, a5, a6])!;
+        return env.Invoke(methodName, a1, a2, a3, a4, a5, a6);
+    }
+
+    private static Task<int> StartInvoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        return Task.Run(async () => await env.Invoke(methodName, a1, a2, a3, a4, a5, a6));
     }
 
     [Fact]
@@ -126,7 +130,7 @@ public class WaitSyscallTests
         BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
         env.Write(tsPtr, ts);
 
-        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
         Assert.False(pending.IsCompleted);
 
         var payload = new byte[8];
@@ -201,7 +205,7 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
         Assert.False(pending.IsCompleted);
 
         using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -241,7 +245,7 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
         Assert.False(pending.IsCompleted);
 
         var payload = new byte[] { 0x41 };
@@ -287,7 +291,7 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLOUT, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = Invoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0).AsTask();
+        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
 
         await DrainUntilCompleted(env, pending);
         var rc = await pending;
@@ -327,6 +331,8 @@ public class WaitSyscallTests
     {
         private static readonly MethodInfo DrainEventsMethod =
             typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        private static readonly FieldInfo OwnerThreadIdField =
+            typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
         public TestEnv()
         {
@@ -336,7 +342,7 @@ public class WaitSyscallTests
             Scheduler = new KernelScheduler();
             Task = new FiberTask(100, Process, Engine, Scheduler);
             Engine.Owner = Task;
-            KernelScheduler.Current = Scheduler;
+            Task.Status = FiberTaskStatus.Waiting;
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             SyscallManager.MountRootHostfs(".");
@@ -351,7 +357,45 @@ public class WaitSyscallTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
+        }
+
+        public ValueTask<int> Invoke(string methodName, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        {
+            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            async void Entry()
+            {
+                try
+                {
+                    var pending = (ValueTask<int>)method!.Invoke(null, [Engine.State, a1, a2, a3, a4, a5, a6])!;
+                    var rc = await pending;
+                    tcs.TrySetResult(rc);
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException != null)
+                {
+                    tcs.TrySetException(ex.InnerException);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+                finally
+                {
+                    Scheduler.Running = false;
+                    Scheduler.WakeUp();
+                }
+            }
+
+            Task.Continuation = Entry;
+            Scheduler.Running = true;
+            Scheduler.Schedule(Task);
+            Scheduler.Run();
+            OwnerThreadIdField.SetValue(Scheduler, 0);
+            return new ValueTask<int>(tcs.Task);
         }
 
         public void MapUserPage(uint addr)

@@ -1,23 +1,20 @@
 using System.Net.Sockets;
+using Fiberish.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
 internal sealed class HostSocketReadiness : IDisposable
 {
-    private readonly IReadyDispatcher _dispatcher;
     private readonly HostSocketProbeEngine _probeEngine;
     private readonly ReadinessWaiter _waiter;
 
-    public HostSocketReadiness(HostSocketInode owner, Socket socket, ILogger logger,
-        IReadyDispatcher? dispatcher = null)
+    public HostSocketReadiness(HostSocketInode owner, Socket socket, ILogger logger)
     {
-        _dispatcher = dispatcher ?? SchedulerReadyDispatcher.FromCurrent();
-        _probeEngine = new HostSocketProbeEngine(owner, socket, logger, _dispatcher);
+        _probeEngine = new HostSocketProbeEngine(owner, socket, logger);
         _waiter = new ReadinessWaiter(
             (file, events) => _probeEngine.Poll(events),
-            (file, callback, events) => _probeEngine.RegisterWaitHandle(file, callback, events),
-            () => _dispatcher.CurrentTask);
+            (file, dispatcher, callback, events) => _probeEngine.RegisterWaitHandle(file, dispatcher, callback, events));
     }
 
     public void Dispose()
@@ -30,19 +27,20 @@ internal sealed class HostSocketReadiness : IDisposable
         return _probeEngine.Poll(events);
     }
 
-    public bool RegisterWait(LinuxFile file, Action callback, short events)
+    public bool RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
     {
-        return _probeEngine.RegisterWaitHandle(file, callback, events) != null;
+        return _probeEngine.RegisterWaitHandle(file, dispatcher, callback, events) != null;
     }
 
-    public IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    public IDisposable? RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
     {
-        return _probeEngine.RegisterWaitHandle(file, callback, events);
+        return _probeEngine.RegisterWaitHandle(file, dispatcher, callback, events);
     }
 
-    public ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, short events)
+    public ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, FiberTask task, short events)
     {
-        return _waiter.WaitAsync(file, events);
+        var dispatcher = new SchedulerReadyDispatcher(task.CommonKernel);
+        return _waiter.WaitAsync(file, dispatcher, task, events);
     }
 
     public void ClearReadyBits(short bits)

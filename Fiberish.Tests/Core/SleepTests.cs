@@ -29,7 +29,7 @@ public class SleepTests
         async void RunSleepTask()
         {
             sb.Append($"SleepStart@{kernel.CurrentTick};");
-            await new SleepAwaitable(5);
+            await new SleepAwaitable(5, tSleep);
             sb.Append($"SleepEnd@{kernel.CurrentTick};");
             tSleep.Exited = true;
             tSleep.Status = FiberTaskStatus.Terminated;
@@ -39,7 +39,7 @@ public class SleepTests
 
         kernel.RegisterTask(tSleep);
 
-        // Run(1000) automatically sets KernelScheduler.Current
+        // Run(1000) automatically sets null
         kernel.Run(1000);
 
         var result = sb.ToString();

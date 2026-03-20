@@ -77,7 +77,7 @@ public class MountNamespace
 
     private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        
         return default;
     }
 

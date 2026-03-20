@@ -239,7 +239,7 @@ public class PipeTests
                 Scheduler = new KernelScheduler();
                 Task = new FiberTask(100, Process, Engine, Scheduler);
                 Engine.Owner = Task;
-                KernelScheduler.Current = Scheduler;
+                
             }
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
@@ -255,7 +255,7 @@ public class PipeTests
 
         public void Dispose()
         {
-            if (Scheduler != null) KernelScheduler.Current = null;
+            if (Scheduler != null) 
             GC.KeepAlive(Task);
         }
 

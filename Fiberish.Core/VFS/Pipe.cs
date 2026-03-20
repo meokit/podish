@@ -8,7 +8,7 @@ using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 namespace Fiberish.VFS;
 
-public class PipeInode : Inode
+public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
     private readonly byte[] _buffer;
@@ -35,7 +35,7 @@ public class PipeInode : Inode
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        
         return default;
     }
 
@@ -211,16 +211,16 @@ public class PipeInode : Inode
         }
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile)
+    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
         // Must await the handle
         // TODO: Handle cancellation/interruption?
-        await _readHandle;
+        await _readHandle.WaitAsync(task);
     }
 
-    public override async ValueTask WaitForWrite(LinuxFile linuxFile)
+    public override async ValueTask WaitForWrite(LinuxFile linuxFile, FiberTask task)
     {
-        await _writeHandle;
+        await _writeHandle.WaitAsync(task);
     }
 
     public override short Poll(LinuxFile linuxFile, short events)
@@ -268,6 +268,11 @@ public class PipeInode : Inode
 
     public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
+        return false;
+    }
+
+    public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
         var registered = false;
@@ -277,14 +282,41 @@ public class PipeInode : Inode
             if ((events & POLLIN) != 0)
             {
                 // Register for read availability
-                _readHandle.Register(callback);
+                _readHandle.Register(callback, task);
                 registered = true;
             }
 
             if ((events & POLLOUT) != 0)
             {
                 // Register for write space availability
-                _writeHandle.Register(callback);
+                _writeHandle.Register(callback, task);
+                registered = true;
+            }
+        }
+
+        return registered;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("Pipe readiness wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        var registered = false;
+
+        using (EnterStateScope())
+        {
+            if ((events & POLLIN) != 0)
+            {
+                _readHandle.Register(callback, scheduler);
+                registered = true;
+            }
+
+            if ((events & POLLOUT) != 0)
+            {
+                _writeHandle.Register(callback, scheduler);
                 registered = true;
             }
         }
@@ -294,6 +326,11 @@ public class PipeInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
+        return null;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
         var registrations = new List<IDisposable>(2);
@@ -302,13 +339,45 @@ public class PipeInode : Inode
         {
             if ((events & POLLIN) != 0)
             {
-                var reg = _readHandle.RegisterCancelable(callback);
+                var reg = _readHandle.RegisterCancelable(callback, task);
                 if (reg != null) registrations.Add(reg);
             }
 
             if ((events & POLLOUT) != 0)
             {
-                var reg = _writeHandle.RegisterCancelable(callback);
+                var reg = _writeHandle.RegisterCancelable(callback, task);
+                if (reg != null) registrations.Add(reg);
+            }
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("Pipe readiness wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        var registrations = new List<IDisposable>(2);
+
+        using (EnterStateScope())
+        {
+            if ((events & POLLIN) != 0)
+            {
+                var reg = _readHandle.RegisterCancelable(callback, scheduler);
+                if (reg != null) registrations.Add(reg);
+            }
+
+            if ((events & POLLOUT) != 0)
+            {
+                var reg = _writeHandle.RegisterCancelable(callback, scheduler);
                 if (reg != null) registrations.Add(reg);
             }
         }

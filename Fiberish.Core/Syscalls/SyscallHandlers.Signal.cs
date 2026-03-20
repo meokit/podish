@@ -216,7 +216,8 @@ public partial class SyscallManager
         if (tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var target = KernelScheduler.Current!.GetTask(tid);
+        var kernel = (sm.Engine.Owner as FiberTask)!.CommonKernel;
+        var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
 
         if (sig != 0) target.PostSignal(sig);
@@ -239,7 +240,8 @@ public partial class SyscallManager
         if (tgid <= 0 || tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var target = KernelScheduler.Current!.GetTask(tid);
+        var kernel = (sm.Engine.Owner as FiberTask)!.CommonKernel;
+        var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid) return -(int)Errno.ESRCH;
 
@@ -368,7 +370,7 @@ public partial class SyscallManager
 
         var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
 
-        var kernel = task?.CommonKernel ?? KernelScheduler.Current!;
+        var kernel = task?.CommonKernel !;
         if (sig != 0 && !kernel.SignalProcessInfo(pid, sig, info)) return -(int)Errno.ESRCH;
         return 0;
     }
@@ -388,7 +390,8 @@ public partial class SyscallManager
 
         var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
 
-        var kernel = KernelScheduler.Current!;
+        var task = (FiberTask)sm.Engine.Owner!;
+        var kernel = task.CommonKernel;
         var targetTask = kernel.GetTask(tid);
         if (targetTask == null) return -(int)Errno.ESRCH;
         if (targetTask.Process.TGID != tgid) return -(int)Errno.ESRCH;

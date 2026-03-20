@@ -131,7 +131,7 @@ public class PosixTimerTests
             SyscallManager.MountRootHostfs(".");
             Manager = new PosixTimerManager();
 
-            KernelScheduler.Current = Scheduler; // Set static current for tests
+             // Set static current for tests
         }
 
         public Engine Engine { get; }
@@ -144,7 +144,7 @@ public class PosixTimerTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
             GC.KeepAlive(Task);
         }
 

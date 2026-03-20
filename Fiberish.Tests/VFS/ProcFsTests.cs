@@ -44,9 +44,7 @@ public class ProcFsTests
     [Fact]
     public void ProcPidFiles_ShouldBeGeneratedFromProcessState()
     {
-        var scheduler = new KernelScheduler();
-        var previous = KernelScheduler.Current;
-        KernelScheduler.Current = scheduler;
+        using var ctx = new ProcTestContext();
 
         try
         {
@@ -57,10 +55,10 @@ public class ProcFsTests
                 SID = 4242,
                 State = ProcessState.Running
             };
-            scheduler.RegisterProcess(process);
+            ctx.Scheduler.RegisterProcess(process);
 
             var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", null);
+            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
             var mount = new Mount(sb, sb.Root)
             {
                 Source = "proc",
@@ -89,7 +87,7 @@ public class ProcFsTests
         }
         finally
         {
-            KernelScheduler.Current = previous;
+            
         }
     }
 
@@ -97,8 +95,8 @@ public class ProcFsTests
     public void ProcSystemFiles_ShouldExposeStatUptimeLoadavgAndSysctl()
     {
         var scheduler = new KernelScheduler();
-        var previous = KernelScheduler.Current;
-        KernelScheduler.Current = scheduler;
+        KernelScheduler? previous = null;
+        
 
         try
         {
@@ -126,36 +124,34 @@ public class ProcFsTests
         }
         finally
         {
-            KernelScheduler.Current = previous;
+            
         }
     }
 
     [Fact]
     public void ProcPidLookup_ShouldDisappearAfterReap()
     {
-        var scheduler = new KernelScheduler();
-        var previous = KernelScheduler.Current;
-        KernelScheduler.Current = scheduler;
+        using var ctx = new ProcTestContext();
 
         try
         {
             var child = new Process(5555, null!, null!) { State = ProcessState.Zombie };
-            scheduler.RegisterProcess(child);
+            ctx.Scheduler.RegisterProcess(child);
 
             var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", null);
+            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
 
             var first = sb.Root.Inode!.Lookup("5555");
             Assert.NotNull(first);
 
-            scheduler.UnregisterProcess(5555);
+            ctx.Scheduler.UnregisterProcess(5555);
 
             var second = sb.Root.Inode!.Lookup("5555");
             Assert.Null(second);
         }
         finally
         {
-            KernelScheduler.Current = previous;
+            
         }
     }
 
@@ -165,9 +161,7 @@ public class ProcFsTests
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
 
-        var scheduler = new KernelScheduler();
-        var previous = KernelScheduler.Current;
-        KernelScheduler.Current = scheduler;
+        using var ctx = new ProcTestContext();
 
         try
         {
@@ -184,10 +178,10 @@ public class ProcFsTests
             Assert.NotNull(exeProp);
             exeProp!.SetValue(process, "/bin/test-app");
 
-            scheduler.RegisterProcess(process);
+            ctx.Scheduler.RegisterProcess(process);
 
             var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", runtime.Syscalls);
+            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
             var mount = new Mount(sb, sb.Root)
             {
                 Source = "proc",
@@ -227,7 +221,7 @@ public class ProcFsTests
         }
         finally
         {
-            KernelScheduler.Current = previous;
+            
             if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
         }
     }
@@ -691,5 +685,33 @@ public class ProcFsTests
         var task = new FiberTask(process.TGID, process, runtime.Engine, scheduler);
         runtime.Engine.Owner = task;
         return task;
+    }
+
+    private sealed class ProcTestContext : IDisposable
+    {
+        public ProcTestContext()
+        {
+            Engine = new Engine();
+            Memory = new VMAManager();
+            SyscallManager = new SyscallManager(Engine, Memory, 0);
+            Scheduler = new KernelScheduler();
+            Process = new Process(1, Memory, SyscallManager);
+            Scheduler.RegisterProcess(Process);
+            Task = new FiberTask(1, Process, Engine, Scheduler);
+            Engine.Owner = Task;
+            Scheduler.CurrentTask = Task;
+        }
+
+        public Engine Engine { get; }
+        public VMAManager Memory { get; }
+        public SyscallManager SyscallManager { get; }
+        public KernelScheduler Scheduler { get; }
+        public Process Process { get; }
+        public FiberTask Task { get; }
+
+        public void Dispose()
+        {
+            GC.KeepAlive(Task);
+        }
     }
 }

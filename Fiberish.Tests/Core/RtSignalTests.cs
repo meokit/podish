@@ -170,7 +170,7 @@ public class RtSignalTests
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
             Engine = new Engine();
             Process = new Process(100, new VMAManager(), null!);
             Task = new FiberTask(100, Process, Engine, Scheduler);
@@ -183,7 +183,7 @@ public class RtSignalTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
         }
     }
 }

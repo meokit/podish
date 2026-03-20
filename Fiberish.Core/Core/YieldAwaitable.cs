@@ -4,13 +4,27 @@ namespace Fiberish.Core;
 
 public struct YieldAwaitable
 {
+    private readonly FiberTask _task;
+
+    public YieldAwaitable(FiberTask task)
+    {
+        _task = task;
+    }
+
     public readonly YieldAwaiter GetAwaiter()
     {
-        return new YieldAwaiter();
+        return new YieldAwaiter(_task);
     }
 
     public readonly struct YieldAwaiter : ICriticalNotifyCompletion
     {
+        private readonly FiberTask _task;
+
+        public YieldAwaiter(FiberTask task)
+        {
+            _task = task;
+        }
+
         public bool IsCompleted => false; // Always force async continuation
 
         public void GetResult()
@@ -24,10 +38,8 @@ public struct YieldAwaitable
 
         public void UnsafeOnCompleted(Action continuation)
         {
-            var scheduler = KernelScheduler.Current ??
-                            throw new InvalidOperationException("YieldAwaitable: No active KernelScheduler.");
-            var task = scheduler.CurrentTask ??
-                       throw new InvalidOperationException("YieldAwaitable: No active FiberTask.");
+            var task = _task;
+            var scheduler = task.CommonKernel;
 
             // Update task state
             task.Continuation = continuation;

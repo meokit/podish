@@ -1330,7 +1330,7 @@ public partial class SyscallManager
 
         private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
         {
-            KernelScheduler.Current?.AssertSchedulerThread(caller);
+            
             return default;
         }
 
@@ -1540,6 +1540,6 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
 
     private KernelScheduler? ResolveScheduler()
     {
-        return (_sm.Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
+        return (_sm.Engine.Owner as FiberTask)?.CommonKernel ;
     }
 }

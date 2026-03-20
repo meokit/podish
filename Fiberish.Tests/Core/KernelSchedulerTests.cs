@@ -35,9 +35,9 @@ public class KernelSchedulerTests
         async void RunTask1()
         {
             sb.Append("T1-Start;");
-            await new YieldAwaitable();
+            await new YieldAwaitable(t1);
             sb.Append("T1-Mid;");
-            await new YieldAwaitable();
+            await new YieldAwaitable(t1);
             sb.Append("T1-End;");
             t1.Exited = true; // Mark as exited
             t1.Status = FiberTaskStatus.Terminated;
@@ -46,9 +46,9 @@ public class KernelSchedulerTests
         async void RunTask2()
         {
             sb.Append("T2-Start;");
-            await new YieldAwaitable();
+            await new YieldAwaitable(t2);
             sb.Append("T2-Mid;");
-            await new YieldAwaitable();
+            await new YieldAwaitable(t2);
             sb.Append("T2-End;");
             t2.Exited = true;
             t2.Status = FiberTaskStatus.Terminated;
@@ -57,7 +57,7 @@ public class KernelSchedulerTests
         // Register tasks
         // When we call the async method (RunTask1), it runs synchronously until the first await.
         // The first await (YieldAwaitable) will capture the continuation and register it with the Kernel.
-        // BUT, YieldAwaitable.UnsafeOnCompleted needs KernelScheduler.Current to be set!
+        // BUT, YieldAwaitable.UnsafeOnCompleted needs null to be set!
 
         // So we must invoke the initial calls INSIDE the kernel run loop or with Current set.
 

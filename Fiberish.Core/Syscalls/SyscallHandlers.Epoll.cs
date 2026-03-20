@@ -80,7 +80,7 @@ public partial class SyscallManager
             data = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(4, 8));
         }
 
-        return epollInode.Ctl(op, fd, targetFile, events, data);
+        return epollInode.Ctl(task, op, fd, targetFile, events, data);
     }
 
     private static async ValueTask<int> SysEpollWait(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -165,7 +165,7 @@ public partial class SyscallManager
             return ready;
         }
 
-        var result = await epollInode.WaitAsync(buf, maxevents, timeoutMs);
+        var result = await epollInode.WaitAsync(task, buf, maxevents, timeoutMs);
         if (result > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, result * 12)))
             return -(int)Errno.EFAULT;
 

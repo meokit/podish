@@ -45,7 +45,7 @@ public class AsyncWaitQueue
         _waiters.Clear();
 
         // Resume all waiters after queue state has been updated.
-        // Use the captured scheduler reference (not KernelScheduler.Current) for explicit ownership.
+        // Use the captured scheduler reference (not (KernelScheduler?)null) for explicit ownership.
         foreach (var (_, continuation, context, token, scheduler) in toWake)
             ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
     }
@@ -57,9 +57,9 @@ public class AsyncWaitQueue
         _waiters.Clear();
     }
 
-    public WaitQueueAwaitable WaitAsync()
+    public WaitQueueAwaitable WaitAsync(FiberTask currentTask)
     {
-        return new WaitQueueAwaitable(this);
+        return new WaitQueueAwaitable(this, currentTask);
     }
 
     // For compatibility with previous WaitHandle usage
@@ -68,51 +68,43 @@ public class AsyncWaitQueue
         Signal();
     }
 
-    public void Register(Action continuation, FiberTask.WaitToken? token = null)
+    public void Register(Action continuation, FiberTask context, FiberTask.WaitToken? token = null)
     {
-        var scheduler = KernelScheduler.Current;
-        var context = scheduler?.CurrentTask;
-        RegisterCancelable(continuation, context, token, scheduler);
+        RegisterCancelable(continuation, context, token, context.CommonKernel);
     }
 
-    public void Register(Action continuation, FiberTask? context, FiberTask.WaitToken? token = null)
+    public void Register(Action continuation, KernelScheduler scheduler)
     {
-        var scheduler = KernelScheduler.Current;
-        RegisterCancelable(continuation, context, token, scheduler);
+        RegisterCancelable(continuation, null, null, scheduler);
     }
 
-    public IDisposable? RegisterCancelable(Action continuation, FiberTask? context = null,
+    public IDisposable? RegisterCancelable(Action continuation, FiberTask context,
         FiberTask.WaitToken? token = null)
     {
-        var scheduler = KernelScheduler.Current;
-        return RegisterCancelable(continuation, context ?? scheduler?.CurrentTask, token, scheduler);
+        return RegisterCancelable(continuation, context, token, context.CommonKernel);
+    }
+
+    public IDisposable? RegisterCancelable(Action continuation, KernelScheduler scheduler)
+    {
+        return RegisterCancelable(continuation, null, null, scheduler);
     }
 
     private IDisposable? RegisterCancelable(Action continuation, FiberTask? context, FiberTask.WaitToken? token,
-        KernelScheduler? scheduler)
+        KernelScheduler scheduler)
     {
-        var effectiveScheduler = scheduler ?? context?.CommonKernel;
-        if (effectiveScheduler != null)
-            AssertSchedulerThread(effectiveScheduler);
-        else
-            AssertSchedulerThread();
+        var effectiveContext = context;
+        var effectiveScheduler = scheduler;
+        AssertSchedulerThread(effectiveScheduler);
 
         if (_isSignaled)
         {
             // If already signaled, schedule immediately
-            if (effectiveScheduler != null)
-                ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, context, token);
-            else
-                continuation();
+            ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, effectiveContext, token);
             return NoopRegistration.Instance;
         }
 
-        if (effectiveScheduler == null)
-            throw new InvalidOperationException(
-                "AsyncWaitQueue.RegisterCancelable requires an active scheduler or a FiberTask context.");
-
         var id = ++_nextWaiterId;
-        _waiters.Add((id, continuation, context, token, effectiveScheduler));
+        _waiters.Add((id, continuation, effectiveContext, token, effectiveScheduler));
         return new WaitRegistration(this, id);
     }
 
@@ -154,9 +146,8 @@ public class AsyncWaitQueue
 
     private void AssertSchedulerThread(KernelScheduler? schedulerHint = null, [CallerMemberName] string? caller = null)
     {
-        var scheduler = schedulerHint ?? _ownerScheduler ?? KernelScheduler.Current;
-        if (scheduler == null)
-            return;
+        var scheduler = schedulerHint ?? _ownerScheduler;
+        if (scheduler == null) return;
 
         if (_ownerScheduler == null)
             _ownerScheduler = scheduler;
@@ -168,11 +159,6 @@ public class AsyncWaitQueue
     }
 
     // Support for GetAwaiter directly on the instance (like Task)
-    public WaitQueueAwaiter GetAwaiter()
-    {
-        return new WaitQueueAwaiter(this);
-    }
-
     private sealed class NoopRegistration : IDisposable
     {
         public static readonly NoopRegistration Instance = new();
@@ -204,61 +190,59 @@ public class AsyncWaitQueue
 public readonly struct WaitQueueAwaitable
 {
     private readonly AsyncWaitQueue _queue;
+    private readonly FiberTask _currentTask;
 
-    public WaitQueueAwaitable(AsyncWaitQueue queue)
+    public WaitQueueAwaitable(AsyncWaitQueue queue, FiberTask currentTask)
     {
         _queue = queue;
+        _currentTask = currentTask;
     }
 
     public WaitQueueAwaiter GetAwaiter()
     {
-        return new WaitQueueAwaiter(_queue);
+        return new WaitQueueAwaiter(_queue, _currentTask);
     }
 }
 
 public struct WaitQueueAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue _queue;
+    private readonly FiberTask _currentTask;
     private FiberTask.WaitToken? _token;
 
-    public WaitQueueAwaiter(AsyncWaitQueue queue)
+    public WaitQueueAwaiter(AsyncWaitQueue queue, FiberTask currentTask)
     {
         _queue = queue;
+        _currentTask = currentTask;
     }
 
     public bool IsCompleted => _queue.IsSignaled;
 
     public void OnCompleted(Action continuation)
     {
-        var currentTask = KernelScheduler.Current?.CurrentTask;
-        if (currentTask != null)
+        var currentTask = _currentTask;
+        _token = currentTask.BeginWaitToken();
+        var called = 0;
+
+        void RunOnce()
         {
-            _token = currentTask.BeginWaitToken();
-            var called = 0;
-
-            void RunOnce()
-            {
-                if (Interlocked.Exchange(ref called, 1) != 0) return;
-                continuation();
-            }
-
-            _queue.Register(RunOnce, currentTask, _token);
-            currentTask.ArmSignalSafetyNet(_token, () =>
-            {
-                if (Interlocked.Exchange(ref called, 1) != 0) return;
-                currentTask.Continuation = continuation;
-                currentTask.CommonKernel.Schedule(currentTask);
-            });
-            return;
+            if (Interlocked.Exchange(ref called, 1) != 0) return;
+            continuation();
         }
 
-        _queue.Register(continuation);
+        _queue.Register(RunOnce, currentTask, _token);
+        currentTask.ArmSignalSafetyNet(_token, () =>
+        {
+            if (Interlocked.Exchange(ref called, 1) != 0) return;
+            currentTask.Continuation = continuation;
+            currentTask.CommonKernel.Schedule(currentTask);
+        });
     }
 
     public AwaitResult GetResult()
     {
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task == null || _token == null) return AwaitResult.Completed;
+        var task = _currentTask;
+        if (_token == null) return AwaitResult.Completed;
 
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
@@ -268,35 +252,39 @@ public struct WaitQueueAwaiter : INotifyCompletion
 
 public static class SchedulerUtils
 {
-    public static SelectAwaitable WaitAny(params AsyncWaitQueue[] queues)
+    public static SelectAwaitable WaitAny(FiberTask currentTask, params AsyncWaitQueue[] queues)
     {
-        return new SelectAwaitable(queues);
+        return new SelectAwaitable(queues, currentTask);
     }
 }
 
 public readonly struct SelectAwaitable
 {
     private readonly AsyncWaitQueue[] _queues;
+    private readonly FiberTask _currentTask;
 
-    public SelectAwaitable(AsyncWaitQueue[] queues)
+    public SelectAwaitable(AsyncWaitQueue[] queues, FiberTask currentTask)
     {
         _queues = queues;
+        _currentTask = currentTask;
     }
 
     public SelectAwaiter GetAwaiter()
     {
-        return new SelectAwaiter(_queues);
+        return new SelectAwaiter(_queues, _currentTask);
     }
 }
 
 public struct SelectAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue[] _queues;
+    private readonly FiberTask _currentTask;
     private FiberTask.WaitToken? _token;
 
-    public SelectAwaiter(AsyncWaitQueue[] queues)
+    public SelectAwaiter(AsyncWaitQueue[] queues, FiberTask currentTask)
     {
         _queues = queues;
+        _currentTask = currentTask;
     }
 
     public bool IsCompleted
@@ -312,31 +300,20 @@ public struct SelectAwaiter : INotifyCompletion
 
     public void OnCompleted(Action continuation)
     {
-        var currentTask = KernelScheduler.Current?.CurrentTask;
+        var currentTask = _currentTask;
         var runOnce = new RunOnceAction(continuation);
         var action = runOnce.Invoke;
-
-        if (currentTask != null)
-        {
-            _token = currentTask.BeginWaitToken();
-            foreach (var q in _queues) q.Register(action, currentTask, _token);
-            currentTask.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
-            return;
-        }
-
-        foreach (var q in _queues) q.Register(action);
+        _token = currentTask.BeginWaitToken();
+        foreach (var q in _queues) q.Register(action, currentTask, _token);
+        currentTask.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
     }
 
     public AwaitResult GetResult()
     {
-        var task = KernelScheduler.Current?.CurrentTask;
-        if (task != null && _token != null)
-        {
-            var reason = task.CompleteWaitToken(_token);
-            if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
-            return AwaitResult.Completed;
-        }
-
+        var task = _currentTask;
+        if (_token == null) return AwaitResult.Completed;
+        var reason = task.CompleteWaitToken(_token);
+        if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
     }
 
@@ -364,14 +341,15 @@ public readonly struct ChildStateAwaitable
     private readonly KernelScheduler _scheduler;
     private readonly FiberTask _task;
 
-    public ChildStateAwaitable(Process parent, int targetPid, bool wantStopped = true, bool wantContinued = true)
+    public ChildStateAwaitable(Process parent, FiberTask task, int targetPid, bool wantStopped = true,
+        bool wantContinued = true)
     {
         _parent = parent;
         _targetPid = targetPid;
         _wantStopped = wantStopped;
         _wantContinued = wantContinued;
-        _scheduler = KernelScheduler.Current ?? throw new InvalidOperationException("No active KernelScheduler");
-        _task = _scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
+        _scheduler = task.CommonKernel;
+        _task = task;
     }
 
     public ChildStateAwaiter GetAwaiter()

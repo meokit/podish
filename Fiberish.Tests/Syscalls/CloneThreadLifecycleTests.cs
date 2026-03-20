@@ -325,7 +325,7 @@ public class CloneThreadLifecycleTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(tgid, Vma, SyscallManager);
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
             Task = new FiberTask(tid, Process, Engine, Scheduler);
             Engine.Owner = Task;
         }
@@ -339,7 +339,7 @@ public class CloneThreadLifecycleTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
+            
             GC.KeepAlive(Task);
         }
 

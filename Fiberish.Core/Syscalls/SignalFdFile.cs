@@ -6,11 +6,8 @@ using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
-public class SignalFdInode : TmpfsInode
+public class SignalFdInode : TmpfsInode, ITaskWaitSource
 {
-    private readonly List<Action> _waiters = [];
-    private int _activeHandleCount;
-    private FiberTask? _hookedTask;
     private ulong _sigMask;
 
     public SignalFdInode(ulong ino, SuperBlock superBlock, ulong sigMask) : base(ino, superBlock)
@@ -20,7 +17,6 @@ public class SignalFdInode : TmpfsInode
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
         return default;
     }
 
@@ -32,62 +28,15 @@ public class SignalFdInode : TmpfsInode
         }
     }
 
-    public override void Open(LinuxFile file)
+    public int Read(FiberTask task, LinuxFile file, Span<byte> buffer)
     {
-        Interlocked.Increment(ref _activeHandleCount);
-    }
-
-    public override void Release(LinuxFile file)
-    {
-        if (Interlocked.Decrement(ref _activeHandleCount) == 0)
-            using (EnterStateScope())
-            {
-                if (_hookedTask != null)
-                {
-                    _hookedTask.SignalPosted -= OnTaskSignalPosted;
-                    _hookedTask = null;
-                }
-
-                _waiters.Clear();
-            }
-
-        base.Release(file);
-    }
-
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
-    {
-        // struct signalfd_siginfo is 128 bytes
         if (buffer.Length < 128) return -(int)Errno.EINVAL;
 
         using (EnterStateScope())
         {
-            var task = KernelScheduler.Current?.CurrentTask;
-            if (task == null) return -(int)Errno.EINVAL;
-
-            SigInfo? sigInfo = null;
-            var pendingMatched = 0;
-            if (task.PendingSignals > 0)
-                for (var i = 1; i <= 64; i++)
-                    if ((task.PendingSignals & (1UL << (i - 1))) != 0)
-                        if (IsSignalInMask((ulong)i, _sigMask))
-                        {
-                            pendingMatched = i;
-                            break;
-                        }
-
-            if (pendingMatched == 0)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return 0; // Simulated block
-            }
-
-            sigInfo = task.DequeueSignalUnsafe(pendingMatched);
-
+            var sigInfo = TryConsumeNextSignalUnsafe(task);
             if (!sigInfo.HasValue)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return 0;
-            }
+                return (file.Flags & FileFlags.O_NONBLOCK) != 0 ? -(int)Errno.EAGAIN : 0;
 
             var info = sigInfo.Value;
             buffer.Clear();
@@ -104,113 +53,118 @@ public class SignalFdInode : TmpfsInode
             BinaryPrimitives.WriteUInt64LittleEndian(buffer.Slice(40, 8), (ulong)info.Utime);
             BinaryPrimitives.WriteUInt64LittleEndian(buffer.Slice(48, 8), (ulong)info.Stime);
             BinaryPrimitives.WriteUInt64LittleEndian(buffer.Slice(56, 8), info.Value);
-
             return 128;
         }
     }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    public short Poll(FiberTask task, short events)
     {
-        return -(int)Errno.EINVAL; // Invalid argument to write to signalfd
-    }
+        if ((events & LinuxConstants.POLLIN) == 0)
+            return 0;
 
-    public override short Poll(LinuxFile file, short events)
-    {
-        short revents = 0;
         using (EnterStateScope())
         {
-            var task = KernelScheduler.Current?.CurrentTask;
-            if (task != null && (events & LinuxConstants.POLLIN) != 0)
-                for (var i = 1; i <= 64; i++)
-                    if ((task.PendingSignals & (1UL << (i - 1))) != 0)
-                        if (IsSignalInMask((ulong)i, _sigMask))
-                        {
-                            revents |= LinuxConstants.POLLIN;
-                            break;
-                        }
+            return HasPendingMatchedSignalUnsafe(task) ? (short)LinuxConstants.POLLIN : (short)0;
         }
-
-        return revents;
     }
 
-    public override bool RegisterWait(LinuxFile file, Action callback, short events)
+    public bool RegisterWait(FiberTask task, Action callback, short events)
     {
-        var task = KernelScheduler.Current?.CurrentTask;
-        using (EnterStateScope())
-        {
-            EnsureTaskHooked(task);
-            if (task != null && HasPendingMatchedSignalUnsafe(task))
-                return false;
-            _waiters.Add(callback);
-        }
-
-        return true;
+        return RegisterWaitHandle(task, callback, events) != null;
     }
 
-    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    public IDisposable? RegisterWaitHandle(FiberTask task, Action callback, short events)
     {
-        var task = KernelScheduler.Current?.CurrentTask;
+        if ((events & LinuxConstants.POLLIN) == 0)
+            return null;
+
         using (EnterStateScope())
         {
-            EnsureTaskHooked(task);
-            if (task != null && HasPendingMatchedSignalUnsafe(task))
+            if (HasPendingMatchedSignalUnsafe(task))
             {
                 callback();
                 return NoopWaitRegistration.Instance;
             }
-
-            _waiters.Add(callback);
         }
 
-        return new CallbackRegistration(this, _waiters, callback);
+        return new SignalWaitRegistration(task, GetMask(), callback);
     }
 
-    private void OnTaskSignalPosted(int sig)
+    public SignalFdAwaitable WaitAsync(FiberTask task)
     {
-        ulong mask;
+        return new SignalFdAwaitable(this, task);
+    }
+
+    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    {
+        return -(int)Errno.EINVAL;
+    }
+
+    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return -(int)Errno.EINVAL;
+    }
+
+    public override short Poll(LinuxFile file, short events)
+    {
+        return 0;
+    }
+
+    public override bool RegisterWait(LinuxFile file, Action callback, short events)
+    {
+        return false;
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        return null;
+    }
+
+    bool ITaskWaitSource.RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        return RegisterWait(task, callback, events);
+    }
+
+    IDisposable? ITaskWaitSource.RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        return RegisterWaitHandle(task, callback, events);
+    }
+
+    private ulong GetMask()
+    {
         using (EnterStateScope())
         {
-            mask = _sigMask;
+            return _sigMask;
         }
-
-        if (IsSignalInMask((ulong)sig, mask)) NotifyWaiters();
     }
 
-    private void NotifyWaiters()
+    private SigInfo? TryConsumeNextSignalUnsafe(FiberTask task)
     {
-        Action[] toWake;
-        using (EnterStateScope())
-        {
-            toWake = [.._waiters];
-            _waiters.Clear();
-        }
-
-        foreach (var action in toWake) action();
-    }
-
-    private void EnsureTaskHooked(FiberTask? task)
-    {
-        if (task == null || ReferenceEquals(_hookedTask, task))
-            return;
-        if (_hookedTask != null) _hookedTask.SignalPosted -= OnTaskSignalPosted;
-
-        _hookedTask = task;
-        _hookedTask.SignalPosted += OnTaskSignalPosted;
+        var pendingMatched = FindNextMatchedSignalUnsafe(task);
+        if (pendingMatched == 0)
+            return null;
+        return task.DequeueSignalUnsafe(pendingMatched);
     }
 
     private bool HasPendingMatchedSignalUnsafe(FiberTask task)
     {
+        return FindNextMatchedSignalUnsafe(task) != 0;
+    }
+
+    private int FindNextMatchedSignalUnsafe(FiberTask task)
+    {
         if (task.PendingSignals == 0)
-            return false;
+            return 0;
+
         for (var i = 1; i <= 64; i++)
         {
             if ((task.PendingSignals & (1UL << (i - 1))) == 0)
                 continue;
             if (IsSignalInMask((ulong)i, _sigMask))
-                return true;
+                return i;
         }
 
-        return false;
+        return 0;
     }
 
     private static bool IsSignalInMask(ulong sig, ulong mask)
@@ -226,27 +180,99 @@ public class SignalFdInode : TmpfsInode
         }
     }
 
-    private sealed class CallbackRegistration : IDisposable
+    private sealed class SignalWaitRegistration : IDisposable
     {
         private readonly Action _callback;
-        private readonly SignalFdInode _owner;
-        private List<Action>? _waiters;
+        private readonly ulong _mask;
+        private readonly FiberTask _task;
+        private int _disposed;
 
-        public CallbackRegistration(SignalFdInode owner, List<Action> waiters, Action callback)
+        public SignalWaitRegistration(FiberTask task, ulong mask, Action callback)
         {
-            _owner = owner;
-            _waiters = waiters;
+            _task = task;
+            _mask = mask;
             _callback = callback;
+            _task.SignalPosted += OnSignalPosted;
         }
 
         public void Dispose()
         {
-            var waiters = Interlocked.Exchange(ref _waiters, null);
-            if (waiters == null) return;
-            using (_owner.EnterStateScope())
-            {
-                waiters.Remove(_callback);
-            }
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            _task.SignalPosted -= OnSignalPosted;
         }
+
+        private void OnSignalPosted(int sig)
+        {
+            if (!IsSignalInMask((ulong)sig, _mask))
+                return;
+            Dispose();
+            _callback();
+        }
+    }
+}
+
+public readonly struct SignalFdAwaitable
+{
+    private readonly SignalFdInode _inode;
+    private readonly FiberTask _task;
+
+    public SignalFdAwaitable(SignalFdInode inode, FiberTask task)
+    {
+        _inode = inode;
+        _task = task;
+    }
+
+    public SignalFdAwaiter GetAwaiter()
+    {
+        return new SignalFdAwaiter(_inode, _task);
+    }
+}
+
+public struct SignalFdAwaiter : INotifyCompletion
+{
+    private readonly SignalFdInode _inode;
+    private readonly FiberTask _task;
+    private FiberTask.WaitToken? _token;
+    private IDisposable? _registration;
+
+    public SignalFdAwaiter(SignalFdInode inode, FiberTask task)
+    {
+        _inode = inode;
+        _task = task;
+    }
+
+    public bool IsCompleted => (_inode.Poll(_task, LinuxConstants.POLLIN) & LinuxConstants.POLLIN) != 0;
+
+    public void OnCompleted(Action continuation)
+    {
+        _token = _task.BeginWaitToken();
+        var task = _task;
+        var token = _token;
+        var called = 0;
+        IDisposable? registration = null;
+
+        void RunOnce()
+        {
+            if (Interlocked.Exchange(ref called, 1) != 0)
+                return;
+            registration?.Dispose();
+            if (token != null)
+                task.TrySetWaitReason(token, WakeReason.IO);
+            task.CommonKernel.Schedule(continuation, task);
+        }
+
+        registration = _inode.RegisterWaitHandle(task, RunOnce, LinuxConstants.POLLIN);
+        _registration = registration;
+        task.ArmSignalSafetyNet(token, RunOnce);
+    }
+
+    public AwaitResult GetResult()
+    {
+        _registration?.Dispose();
+        if (_token == null) return AwaitResult.Completed;
+
+        var reason = _task.CompleteWaitToken(_token);
+        return reason == WakeReason.None || reason == WakeReason.IO ? AwaitResult.Completed : AwaitResult.Interrupted;
     }
 }

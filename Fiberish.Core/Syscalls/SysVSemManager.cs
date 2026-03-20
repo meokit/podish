@@ -210,7 +210,7 @@ public class SysVSemManager
                     }
                 }
 
-                if (waken) KernelScheduler.Current?.WakeUp();
+                if (waken) /* WakeUp needed */;
 
                 return 0; // Success
             }
@@ -251,7 +251,7 @@ public class SysVSemManager
                     waiter.Continuation?.Invoke();
                 }
 
-                KernelScheduler.Current?.WakeUp();
+                /* WakeUp needed */;
                 return 0;
 
             case LinuxConstants.IPC_STAT:
@@ -280,7 +280,7 @@ public class SysVSemManager
                     waiter.Continuation?.Invoke();
                 }
 
-                KernelScheduler.Current?.WakeUp();
+                /* WakeUp needed */;
                 return 0;
 
             case LinuxConstants.GETALL:

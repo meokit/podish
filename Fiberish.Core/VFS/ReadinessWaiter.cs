@@ -6,52 +6,44 @@ namespace Fiberish.VFS;
 internal sealed class ReadinessWaiter
 {
     private static readonly ConcurrentBag<AsyncWaitQueue> WaitQueuePool = new();
-    private readonly Func<FiberTask?> _currentTaskAccessor;
-
     private readonly Func<LinuxFile, short, short> _poll;
-    private readonly Func<LinuxFile, Action, short, IDisposable?> _registerWaitHandle;
+    private readonly Func<LinuxFile, IReadyDispatcher, Action, short, IDisposable?> _registerWaitHandle;
 
     public ReadinessWaiter(
         Func<LinuxFile, short, short> poll,
-        Func<LinuxFile, Action, short, IDisposable?> registerWaitHandle,
-        Func<FiberTask?> currentTaskAccessor)
+        Func<LinuxFile, IReadyDispatcher, Action, short, IDisposable?> registerWaitHandle)
     {
         _poll = poll;
         _registerWaitHandle = registerWaitHandle;
-        _currentTaskAccessor = currentTaskAccessor;
     }
 
-    public async ValueTask<bool> WaitAsync(LinuxFile file, short events)
+    public async ValueTask<bool> WaitAsync(LinuxFile file, IReadyDispatcher dispatcher, FiberTask task, short events)
     {
         while (true)
         {
             if ((_poll(file, events) & events) != 0)
                 return true;
 
-            var task = _currentTaskAccessor();
-            var scheduler = task?.CommonKernel;
-            if (task != null && task.HasUnblockedPendingSignal())
+            if (task.HasUnblockedPendingSignal())
                 return false;
 
             var waitQueue = RentWaitQueue();
             IDisposable? registration = null;
             try
             {
-                registration = _registerWaitHandle(file, () => DispatchSignal(waitQueue, scheduler), events);
+                registration = _registerWaitHandle(file, dispatcher, () => DispatchSignal(waitQueue, dispatcher), events);
 
                 if (registration == null)
                 {
                     if ((_poll(file, events) & events) != 0)
                         return true;
-                    var spin = scheduler != null && task != null
-                        ? await new SleepAwaitable(1, task)
-                        : await new SleepAwaitable(1);
+                    var spin = await new SleepAwaitable(1, task);
                     if (spin == AwaitResult.Interrupted)
                         return false;
                     continue;
                 }
 
-                var result = await waitQueue.WaitAsync();
+                var result = await waitQueue.WaitAsync(task);
                 if (result == AwaitResult.Interrupted)
                     return false;
             }
@@ -76,11 +68,22 @@ internal sealed class ReadinessWaiter
         WaitQueuePool.Add(queue);
     }
 
-    private static void DispatchSignal(AsyncWaitQueue queue, KernelScheduler? scheduler)
+    private static void DispatchSignal(AsyncWaitQueue queue, IReadyDispatcher dispatcher)
     {
-        if (scheduler == null)
+        if (!dispatcher.CanDispatch)
             throw new InvalidOperationException(
-                "ReadinessWaiter callback requires an active scheduler-bound task context.");
-        scheduler.ScheduleFromAnyThread(queue.Signal);
+                "ReadinessWaiter callback requires an explicit dispatch-capable context.");
+        dispatcher.Post(queue.Signal);
+    }
+
+    private bool WaitSynchronously(LinuxFile file, short events)
+    {
+        SpinWait spin = new();
+        while (true)
+        {
+            if ((_poll(file, events) & events) != 0)
+                return true;
+            spin.SpinOnce();
+        }
     }
 }

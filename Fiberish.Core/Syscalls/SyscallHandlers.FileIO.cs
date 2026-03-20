@@ -612,6 +612,16 @@ public partial class SyscallManager
         const int O_ACCMODE = 3;
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
             return -(int)Errno.EBADF;
+        if (f.OpenedInode is ConsoleInode consoleRead && consoleRead.IsTty)
+        {
+            if (offset != -1) return -(int)Errno.ESPIPE;
+            return await DoReadVTty(sm, f, consoleRead, iovs, iovCnt, flags);
+        }
+        if (f.OpenedInode is SignalFdInode signalfd)
+        {
+            if (offset != -1) return -(int)Errno.ESPIPE;
+            return await DoReadVSignalFd(sm, f, signalfd, iovs, iovCnt, flags);
+        }
         if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
@@ -686,6 +696,11 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        if (f.OpenedInode is ConsoleInode consoleWrite && consoleWrite.IsTty)
+        {
+            if (offset != -1) return -(int)Errno.ESPIPE;
+            return await DoWriteVTty(sm, f, consoleWrite, iovs, iovCnt, flags);
+        }
         if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
@@ -777,9 +792,109 @@ public partial class SyscallManager
         return FinalizeWriteResult(totalWritten);
     }
 
+    private static async ValueTask<int> DoReadVSignalFd(SyscallManager sm, LinuxFile file, SignalFdInode inode, Iovec[] iovs,
+        int iovCnt, int flags)
+    {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var totalRead = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                while (true)
+                {
+                    var n = inode.Read(task, file, buf.AsSpan(0, (int)iov.Len));
+
+                    if (n == 0)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+
+                        if (await inode.WaitAsync(task) == AwaitResult.Interrupted)
+                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
+                        continue;
+                    }
+
+                    if (n < 0)
+                        return totalRead > 0 ? totalRead : n;
+
+                    if (!sm.Engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
+                    totalRead += n;
+                    if (n < iov.Len)
+                        return totalRead;
+                    break;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
+        }
+
+        return totalRead;
+    }
+
+    private static async ValueTask<int> DoReadVTty(SyscallManager sm, LinuxFile file, ConsoleInode inode, Iovec[] iovs,
+        int iovCnt, int flags)
+    {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var totalRead = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                while (true)
+                {
+                    var n = inode.Read(task, file, buf.AsSpan(0, (int)iov.Len), 0);
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+
+                        if (await new IOAwaitable(file, true, task) == AwaitResult.Interrupted)
+                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        if (!sm.Engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
+                        totalRead += n;
+                        if (n < iov.Len)
+                            return totalRead;
+                        break;
+                    }
+
+                    return n == 0 ? totalRead : totalRead > 0 ? totalRead : n;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
+        }
+
+        return totalRead;
+    }
+
     private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt,
         int flags)
     {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
         var totalWritten = 0;
         for (var i = 0; i < iovCnt; i++)
         {
@@ -795,14 +910,14 @@ public partial class SyscallManager
                 var payload = data.AsMemory(0, (int)iov.Len);
                 var n = file.OpenedInode switch
                 {
-                    HostSocketInode host => await host.SendAsync(file, payload, flags),
-                    NetstackSocketInode netstack => await netstack.SendAsync(file, payload, flags),
+                    HostSocketInode host => await host.SendAsync(file, task, payload, flags),
+                    NetstackSocketInode netstack => await netstack.SendAsync(file, task, payload, flags),
                     NetlinkRouteSocketInode netlink => await netlink.SendAsync(file, payload, flags),
-                    UnixSocketInode unix => await unix.SendMessageAsync(file, payload.ToArray(), null, flags),
+                    UnixSocketInode unix => await unix.SendMessageAsync(file, task, payload.ToArray(), null, flags),
                     _ => -(int)Errno.ENOTSOCK
                 };
 
-                if (n == -(int)Errno.EPIPE && sm.Engine.Owner is FiberTask task)
+                if (n == -(int)Errno.EPIPE)
                     task.PostSignal((int)Signal.SIGPIPE);
                 if (n < 0)
                     return totalWritten > 0 ? totalWritten : n;
@@ -820,9 +935,63 @@ public partial class SyscallManager
         return totalWritten;
     }
 
+    private static async ValueTask<int> DoWriteVTty(SyscallManager sm, LinuxFile file, ConsoleInode inode, Iovec[] iovs,
+        int iovCnt, int flags)
+    {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var totalWritten = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
+            try
+            {
+                if (!sm.Engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len)))
+                    return -(int)Errno.EFAULT;
+
+                while (true)
+                {
+                    var n = inode.Write(task, file, data.AsSpan(0, (int)iov.Len), 0);
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
+                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
+
+                        if (await new IOAwaitable(file, false, task) == AwaitResult.Interrupted)
+                            return totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS;
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        totalWritten += n;
+                        if (n < iov.Len)
+                            return totalWritten;
+                        break;
+                    }
+
+                    return totalWritten > 0 ? totalWritten : n;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(data);
+            }
+        }
+
+        return totalWritten;
+    }
+
     private static async ValueTask<int> DoReadVSocket(SyscallManager sm, LinuxFile file, Iovec[] iovs, int iovCnt,
         int flags)
     {
+        var task = sm.Engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
         var totalRead = 0;
         for (var i = 0; i < iovCnt; i++)
         {
@@ -834,10 +1003,10 @@ public partial class SyscallManager
             {
                 var n = file.OpenedInode switch
                 {
-                    HostSocketInode host => await host.RecvAsync(file, buffer, flags, (int)iov.Len),
-                    NetstackSocketInode netstack => await netstack.RecvAsync(file, buffer, flags, (int)iov.Len),
-                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, buffer, flags, (int)iov.Len),
-                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, buffer, flags, (int)iov.Len)).BytesRead,
+                    HostSocketInode host => await host.RecvAsync(file, task, buffer, flags, (int)iov.Len),
+                    NetstackSocketInode netstack => await netstack.RecvAsync(file, task, buffer, flags, (int)iov.Len),
+                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, task, buffer, flags, (int)iov.Len),
+                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, task, buffer, flags, (int)iov.Len)).BytesRead,
                     _ => -(int)Errno.ENOTSOCK
                 };
 
@@ -1172,13 +1341,20 @@ public partial class SyscallManager
                 (int)file.Flags);
 
             var runOnce = new RunOnceAction(continuation, task);
-
-            var registered = file.OpenedInode!.RegisterWait(file, () =>
-            {
-                if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
-                Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
-                runOnce.Invoke();
-            }, (short)(forRead ? 0x0001 : 0x0004));
+            var inode = file.OpenedInode!;
+            var registered = inode is ITaskWaitSource taskWaitSource
+                ? taskWaitSource.RegisterWait(file, task, () =>
+                {
+                    if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
+                    Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
+                    runOnce.Invoke();
+                }, (short)(forRead ? 0x0001 : 0x0004))
+                : inode.RegisterWait(file, () =>
+                {
+                    if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
+                    Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
+                    runOnce.Invoke();
+                }, (short)(forRead ? 0x0001 : 0x0004));
 
             if (!registered)
             {
@@ -1211,7 +1387,7 @@ public partial class SyscallManager
                 if (Interlocked.Exchange(ref _called, 1) == 0)
                     // Post continuation as a scheduler event to avoid racing with the
                     // current RunSlice transition to Waiting.
-                    KernelScheduler.Current?.Schedule(action, task);
+                    task.CommonKernel.Schedule(action, task);
             }
         }
     }

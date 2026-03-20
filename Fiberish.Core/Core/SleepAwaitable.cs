@@ -8,33 +8,21 @@ public readonly struct SleepAwaitable
     private readonly KernelScheduler _scheduler;
     private readonly FiberTask _task;
 
-    public SleepAwaitable(long tickDuration)
-    {
-        _tickDuration = tickDuration;
-        _scheduler = KernelScheduler.Current ?? throw new InvalidOperationException("No active KernelScheduler");
-        _task = _scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
-    }
 
-    public SleepAwaitable(long tickDuration, FiberTask task)
+    public SleepAwaitable(long tickDuration, FiberTask task, KernelScheduler? scheduler = null)
     {
         _tickDuration = tickDuration;
-        _scheduler = task.CommonKernel;
+        _scheduler = scheduler ?? task.CommonKernel;
         _task = task;
     }
 
-    public SleepAwaitable(long tickDuration, KernelScheduler scheduler, FiberTask task)
-    {
-        _tickDuration = tickDuration;
-        _scheduler = scheduler;
-        _task = task;
-    }
 
     public SleepAwaiter GetAwaiter()
     {
-        return new SleepAwaiter(_tickDuration, _scheduler, _task);
+        return new SleepAwaiter(_tickDuration, _task, _scheduler);
     }
 
-    public readonly struct SleepAwaiter(long tickDuration, KernelScheduler scheduler, FiberTask task)
+    public readonly struct SleepAwaiter(long tickDuration, FiberTask task, KernelScheduler scheduler)
         : INotifyCompletion
     {
         private readonly long _tickDuration = tickDuration;

@@ -14,7 +14,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private static readonly ConcurrentBag<SocketAsyncEventArgs> AcceptProbeArgsPool = new();
     private static readonly EventHandler<SocketAsyncEventArgs> StaticProbeCompleted = OnProbeCompletedStatic;
     private readonly Queue<Socket> _acceptedProbeQueue = new();
-    private readonly IReadyDispatcher _dispatcher;
     private readonly ILogger _logger;
 
     private readonly HostSocketInode _owner;
@@ -26,25 +25,20 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private SocketAsyncEventArgs? _acceptProbeArgs;
     private int _acceptProbeInFlight;
     private int _disposed;
-    private int _notifyDispatchScheduled;
-    private int _readNotifyPending;
-
     private SocketAsyncEventArgs? _readProbeArgs;
 
     private int _readProbeInFlight;
 
     private short _readyCacheBits;
     private long _readyCacheExpireAtMs;
-    private int _writeNotifyPending;
     private SocketAsyncEventArgs? _writeProbeArgs;
     private int _writeProbeInFlight;
 
-    public HostSocketProbeEngine(HostSocketInode owner, Socket socket, ILogger logger, IReadyDispatcher dispatcher)
+    public HostSocketProbeEngine(HostSocketInode owner, Socket socket, ILogger logger)
     {
         _owner = owner;
         _socket = socket;
         _logger = logger;
-        _dispatcher = dispatcher;
     }
 
     public void Dispose()
@@ -96,9 +90,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
         return PollEvents.POLLERR;
     }
 
-    public IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
+    public IDisposable? RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
     {
-        if (!_dispatcher.CanDispatch) return null;
+        if (!dispatcher.CanDispatch) return null;
         _logger.LogTrace("Host socket RegisterWait ino={Ino} events=0x{Events:X}", _owner.Ino, events);
 
         IDisposable? regIn = null;
@@ -106,7 +100,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
         if ((events & PollEvents.POLLIN) != 0)
         {
-            regIn = RegisterWaiter(callback, PollEvents.POLLIN);
+            regIn = RegisterWaiter(dispatcher, callback, PollEvents.POLLIN);
             if (IsListeningSocket())
                 ArmAcceptProbe();
             else
@@ -115,7 +109,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            regOut = RegisterWaiter(callback, PollEvents.POLLOUT);
+            regOut = RegisterWaiter(dispatcher, callback, PollEvents.POLLOUT);
             if (IsNonBlockingConnectPending(file))
                 ArmConnectProbe();
             else
@@ -287,7 +281,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
     private void MaybeArmProbesForPoll(short events)
     {
-        if (!_dispatcher.CanDispatch || Volatile.Read(ref _disposed) != 0)
+        if (Volatile.Read(ref _disposed) != 0)
             return;
 
         if ((events & PollEvents.POLLIN) != 0)
@@ -427,7 +421,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (e.UserToken is not ProbeTag tag || tag.Owner == null)
             return;
         var owner = tag.Owner;
-        owner._dispatcher.Post(() => owner.HandleProbeCompleted(e, tag.Kind));
+        owner.HandleProbeCompleted(e, tag.Kind);
     }
 
     private void HandleProbeCompleted(SocketAsyncEventArgs e, ProbeKind kind)
@@ -508,77 +502,48 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (readyHint == 0)
             return;
 
-        if (notifyRead)
-            Volatile.Write(ref _readNotifyPending, 1);
-        if (notifyWrite)
-            Volatile.Write(ref _writeNotifyPending, 1);
+        WaiterRegistration[]? readArr = null;
+        WaiterRegistration[]? writeArr = null;
+        var readCount = 0;
+        var writeCount = 0;
 
-        if (Interlocked.Exchange(ref _notifyDispatchScheduled, 1) == 0)
-            _dispatcher.Post(FlushPendingWaiterNotifications);
-    }
-
-    private void FlushPendingWaiterNotifications()
-    {
         try
         {
-            while (true)
+            lock (_waitersLock)
             {
-                var doRead = Interlocked.Exchange(ref _readNotifyPending, 0) != 0;
-                var doWrite = Interlocked.Exchange(ref _writeNotifyPending, 0) != 0;
-                if (!doRead && !doWrite)
-                    break;
-
-                WaiterRegistration[]? readArr = null;
-                WaiterRegistration[]? writeArr = null;
-                var readCount = 0;
-                var writeCount = 0;
-
-                try
+                if (notifyRead && _readWaiters.Count > 0)
                 {
-                    lock (_waitersLock)
-                    {
-                        if (doRead && _readWaiters.Count > 0)
-                        {
-                            readCount = _readWaiters.Count;
-                            readArr = ArrayPool<WaiterRegistration>.Shared.Rent(readCount);
-                            _readWaiters.CopyTo(readArr, 0);
-                        }
-
-                        if (doWrite && _writeWaiters.Count > 0)
-                        {
-                            writeCount = _writeWaiters.Count;
-                            writeArr = ArrayPool<WaiterRegistration>.Shared.Rent(writeCount);
-                            _writeWaiters.CopyTo(writeArr, 0);
-                        }
-                    }
-
-                    for (var i = 0; i < readCount; i++)
-                        readArr![i].TryInvoke();
-                    for (var i = 0; i < writeCount; i++)
-                        writeArr![i].TryInvoke();
+                    readCount = _readWaiters.Count;
+                    readArr = ArrayPool<WaiterRegistration>.Shared.Rent(readCount);
+                    _readWaiters.CopyTo(readArr, 0);
                 }
-                finally
-                {
-                    if (readArr != null)
-                    {
-                        Array.Clear(readArr, 0, readCount);
-                        ArrayPool<WaiterRegistration>.Shared.Return(readArr);
-                    }
 
-                    if (writeArr != null)
-                    {
-                        Array.Clear(writeArr, 0, writeCount);
-                        ArrayPool<WaiterRegistration>.Shared.Return(writeArr);
-                    }
+                if (notifyWrite && _writeWaiters.Count > 0)
+                {
+                    writeCount = _writeWaiters.Count;
+                    writeArr = ArrayPool<WaiterRegistration>.Shared.Rent(writeCount);
+                    _writeWaiters.CopyTo(writeArr, 0);
                 }
             }
+
+            for (var i = 0; i < readCount; i++)
+                readArr![i].TryInvoke();
+            for (var i = 0; i < writeCount; i++)
+                writeArr![i].TryInvoke();
         }
         finally
         {
-            Interlocked.Exchange(ref _notifyDispatchScheduled, 0);
-            if (Volatile.Read(ref _readNotifyPending) != 0 || Volatile.Read(ref _writeNotifyPending) != 0)
-                if (Interlocked.Exchange(ref _notifyDispatchScheduled, 1) == 0)
-                    _dispatcher.Post(FlushPendingWaiterNotifications);
+            if (readArr != null)
+            {
+                Array.Clear(readArr, 0, readCount);
+                ArrayPool<WaiterRegistration>.Shared.Return(readArr);
+            }
+
+            if (writeArr != null)
+            {
+                Array.Clear(writeArr, 0, writeCount);
+                ArrayPool<WaiterRegistration>.Shared.Return(writeArr);
+            }
         }
     }
 
@@ -595,9 +560,9 @@ internal sealed class HostSocketProbeEngine : IDisposable
         };
     }
 
-    private IDisposable RegisterWaiter(Action callback, short eventMask)
+    private IDisposable RegisterWaiter(IReadyDispatcher dispatcher, Action callback, short eventMask)
     {
-        var reg = new WaiterRegistration(this, callback, eventMask);
+        var reg = new WaiterRegistration(this, dispatcher, callback, eventMask);
         lock (_waitersLock)
         {
             if ((eventMask & PollEvents.POLLIN) != 0)
@@ -699,12 +664,14 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private sealed class WaiterRegistration : IDisposable
     {
         private readonly Action _callback;
+        private readonly IReadyDispatcher _dispatcher;
         private int _disposed;
         private HostSocketProbeEngine? _owner;
 
-        public WaiterRegistration(HostSocketProbeEngine owner, Action callback, short eventMask)
+        public WaiterRegistration(HostSocketProbeEngine owner, IReadyDispatcher dispatcher, Action callback, short eventMask)
         {
             _owner = owner;
+            _dispatcher = dispatcher;
             _callback = callback;
             EventMask = eventMask;
         }
@@ -723,7 +690,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         {
             if (Volatile.Read(ref _disposed) != 0)
                 return;
-            _callback();
+            _dispatcher.Post(_callback);
         }
     }
 

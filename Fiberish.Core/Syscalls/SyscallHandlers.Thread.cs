@@ -261,7 +261,7 @@ public partial class SyscallManager
         }
         else
         {
-            targetTask = KernelScheduler.Current?.GetTask(pid);
+            targetTask = (sm.Engine.Owner as FiberTask)?.CommonKernel.GetTask(pid);
             if (targetTask == null) return -(int)Errno.ESRCH;
         }
 

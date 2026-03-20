@@ -121,7 +121,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        var oldCurrent = KernelScheduler.Current;
+        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -130,7 +130,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            KernelScheduler.Current = scheduler;
+            
             var process = new Process(5001, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5001, process, engine, scheduler);
@@ -159,7 +159,7 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            KernelScheduler.Current = oldCurrent;
+            
             Directory.Delete(root, true);
         }
     }
@@ -172,7 +172,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        var oldCurrent = KernelScheduler.Current;
+        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -181,7 +181,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            KernelScheduler.Current = scheduler;
+            
             var process = new Process(5002, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5002, process, engine, scheduler);
@@ -207,7 +207,7 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            KernelScheduler.Current = oldCurrent;
+            
             Directory.Delete(root, true);
         }
     }
@@ -220,7 +220,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        var oldCurrent = KernelScheduler.Current;
+        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -229,7 +229,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            KernelScheduler.Current = scheduler;
+            
             var process = new Process(5003, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5003, process, engine, scheduler);
@@ -259,7 +259,7 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            KernelScheduler.Current = oldCurrent;
+            
             Directory.Delete(root, true);
         }
     }
@@ -308,7 +308,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "ABCDE");
 
-        var oldCurrent = KernelScheduler.Current;
+        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine1 = new Engine();
@@ -321,7 +321,7 @@ public class HostfsPageCacheWritebackTests
             sm2.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            KernelScheduler.Current = scheduler;
+            
             scheduler.RegisterProcess(new Process(1001, mm1, sm1));
             scheduler.RegisterProcess(new Process(1002, mm2, sm2));
 
@@ -343,7 +343,7 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            KernelScheduler.Current = oldCurrent;
+            
             Directory.Delete(root, true);
         }
     }
@@ -356,7 +356,7 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "ABCDE");
 
-        var oldCurrent = KernelScheduler.Current;
+        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine1 = new Engine();
@@ -368,7 +368,7 @@ public class HostfsPageCacheWritebackTests
             sm2.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            KernelScheduler.Current = scheduler;
+            
 
             var process1 = new Process(1011, mm, sm1);
             var process2 = new Process(1012, mm, sm2);
@@ -398,7 +398,7 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            KernelScheduler.Current = oldCurrent;
+            
             Directory.Delete(root, true);
         }
     }

@@ -133,7 +133,7 @@ public sealed class NetstackSocketInode : Inode
         return 0;
     }
 
-    public async ValueTask<int> ConnectAsync(LinuxFile file, IPEndPoint endpoint)
+    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, IPEndPoint endpoint)
     {
         if (_socketType == SocketType.Dgram)
         {
@@ -164,10 +164,10 @@ public sealed class NetstackSocketInode : Inode
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             return _stream.State == 4 ? 0 : -(int)Errno.EINPROGRESS;
 
-        return await WaitForAsync(file, PollEvents.POLLOUT, () => _stream.State == 4) ? 0 : -(int)Errno.ERESTARTSYS;
+        return await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.State == 4) ? 0 : -(int)Errno.ERESTARTSYS;
     }
 
-    public async ValueTask<(int Rc, NetstackSocketInode? Inode)> AcceptAsync(LinuxFile file, int flags)
+    public async ValueTask<(int Rc, NetstackSocketInode? Inode)> AcceptAsync(LinuxFile file, FiberTask task, int flags)
     {
         if (_socketType != SocketType.Stream)
             return (-(int)Errno.EOPNOTSUPP, null);
@@ -179,7 +179,7 @@ public sealed class NetstackSocketInode : Inode
 
         if (!_listener.AcceptPending)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _listener.AcceptPending);
+            var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _listener.AcceptPending);
             if (!ok)
                 return (-(int)Errno.ERESTARTSYS, null);
         }
@@ -188,13 +188,13 @@ public sealed class NetstackSocketInode : Inode
         return (0, new NetstackSocketInode(0, SuperBlock, _namespace, accepted));
     }
 
-    public async ValueTask<int> SendAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, int flags)
+    public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
         if (_socketType == SocketType.Dgram)
         {
             if (_connectedDatagramPeer == null)
                 return -(int)Errno.EDESTADDRREQ;
-            return await SendToAsync(file, buffer, _connectedDatagramPeer, flags);
+            return await SendToAsync(file, task, buffer, _connectedDatagramPeer, flags);
         }
 
         if (_socketType != SocketType.Stream)
@@ -211,7 +211,7 @@ public sealed class NetstackSocketInode : Inode
 
         if (!_stream.CanWrite)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLOUT, () => _stream.CanWrite || IsTerminalWriteClosed());
+            var ok = await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.CanWrite || IsTerminalWriteClosed());
             if (!ok)
                 return -(int)Errno.ERESTARTSYS;
             if (_shutdownWrite || IsTerminalWriteClosed())
@@ -221,7 +221,7 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Send(buffer.Span);
     }
 
-    public async ValueTask<int> RecvAsync(LinuxFile file, byte[] buffer, int flags, int maxBytes = -1)
+    public async ValueTask<int> RecvAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return 0;
@@ -232,7 +232,7 @@ public sealed class NetstackSocketInode : Inode
 
             while (true)
             {
-                var result = await RecvFromAsync(file, buffer, flags, recvLen);
+                var result = await RecvFromAsync(file, task, buffer, flags, recvLen);
                 if (result.Bytes < 0)
                     return result.Bytes;
                 if (result.RemoteEndPoint == null || result.RemoteEndPoint.Equals(_connectedDatagramPeer))
@@ -254,7 +254,7 @@ public sealed class NetstackSocketInode : Inode
 
         if (!_stream.CanRead)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _stream.CanRead || HasReadEof());
+            var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _stream.CanRead || HasReadEof());
             if (!ok)
                 return -(int)Errno.ERESTARTSYS;
             if (HasReadEof())
@@ -264,7 +264,7 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Receive(buffer.AsSpan(0, recvLen));
     }
 
-    public async ValueTask<int> SendToAsync(LinuxFile file, ReadOnlyMemory<byte> buffer, IPEndPoint endpoint, int flags)
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, IPEndPoint endpoint, int flags)
     {
         if (_socketType != SocketType.Dgram)
             return -(int)Errno.EISCONN;
@@ -282,7 +282,7 @@ public sealed class NetstackSocketInode : Inode
 
         if (!_udp.CanWrite)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLOUT, () => _udp.CanWrite);
+            var ok = await WaitForAsync(task, PollEvents.POLLOUT, () => _udp.CanWrite);
             if (!ok)
                 return -(int)Errno.ERESTARTSYS;
         }
@@ -291,7 +291,7 @@ public sealed class NetstackSocketInode : Inode
         return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
     }
 
-    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, byte[] buffer,
+    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer,
         int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
@@ -306,7 +306,7 @@ public sealed class NetstackSocketInode : Inode
 
         if (!_udp.CanRead)
         {
-            var ok = await WaitForAsync(file, PollEvents.POLLIN, () => _udp.CanRead);
+            var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _udp.CanRead);
             if (!ok)
                 return (-(int)Errno.ERESTARTSYS, null);
         }
@@ -352,9 +352,9 @@ public sealed class NetstackSocketInode : Inode
         return revents;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
-        return NetDeviceIoctlHelper.Handle(engine, request, arg);
+        return NetDeviceIoctlHelper.Handle(task.CPU, request, arg);
     }
 
     public int Shutdown(int how)
@@ -393,7 +393,7 @@ public sealed class NetstackSocketInode : Inode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
-        var scheduler = KernelScheduler.Current;
+        KernelScheduler? scheduler = null;
         if (scheduler == null)
             return null;
 
@@ -418,24 +418,19 @@ public sealed class NetstackSocketInode : Inode
         _namespace.Poll(Environment.TickCount64);
     }
 
-    private async ValueTask<bool> WaitForAsync(LinuxFile file, short events, Func<bool> ready)
+    private async ValueTask<bool> WaitForAsync(FiberTask currentTask, short events, Func<bool> ready)
     {
-        var currentScheduler = KernelScheduler.Current;
-        var currentTask = currentScheduler?.CurrentTask;
-        if (currentTask == null)
-            return WaitSynchronously(ready);
-
         while (true)
         {
             Drive();
             if (ready())
                 return true;
 
-            if (currentTask != null && currentTask.HasUnblockedPendingSignal())
+            if (currentTask.HasUnblockedPendingSignal())
                 return false;
 
             var delay = Math.Max(1, _namespace.Poll(Environment.TickCount64));
-            var result = await new SleepAwaitable(delay);
+            var result = await new SleepAwaitable(delay, currentTask);
             if (result == AwaitResult.Interrupted)
                 return false;
         }

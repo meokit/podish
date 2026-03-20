@@ -200,7 +200,7 @@ public partial class SyscallManager
     /// </summary>
     public void SyncContainerPageCache()
     {
-        var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ?? KernelScheduler.Current;
+        var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ;
         var managers = new HashSet<SyscallManager>();
         var mmTargets = new Dictionary<VMAManager, (Engine Engine, Process? Process)>();
         if (scheduler != null)

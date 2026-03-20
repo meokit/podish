@@ -38,7 +38,7 @@ public class VforkTests
         {
             sb.Append("P-Before;");
             // Parent awaits the vfork event (simulating what Clone does)
-            await vforkEvent;
+            await vforkEvent.WaitAsync(parent);
             sb.Append("P-After;");
             parent.Exited = true;
             parent.Status = FiberTaskStatus.Terminated;
@@ -48,7 +48,7 @@ public class VforkTests
         {
             sb.Append("C-Run;");
             // Child does work, then signals vfork done (simulating _exit)
-            await new YieldAwaitable();
+            await new YieldAwaitable(child);
             sb.Append("C-Exit;");
             child.SignalVforkDone();
             child.Exited = true;
@@ -86,7 +86,7 @@ public class VforkTests
         async void RunParent()
         {
             sb.Append("P-Before;");
-            await vforkEvent; // Should complete immediately since already signaled
+            await vforkEvent.WaitAsync(parent); // Should complete immediately since already signaled
             sb.Append("P-After;");
             parent.Exited = true;
             parent.Status = FiberTaskStatus.Terminated;
@@ -163,12 +163,12 @@ public class VforkTests
         async void RunParent()
         {
             sb.Append("P-Start;");
-            while (await event1 != AwaitResult.Completed)
+            while (await event1.WaitAsync(parent) != AwaitResult.Completed)
             {
             }
 
             sb.Append("P-Mid;");
-            while (await event2 != AwaitResult.Completed)
+            while (await event2.WaitAsync(parent) != AwaitResult.Completed)
             {
             }
 

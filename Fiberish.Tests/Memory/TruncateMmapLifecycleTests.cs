@@ -154,7 +154,7 @@ public class TruncateMmapLifecycleTests
         Assert.Equal(FaultResult.Handled,
             env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
 
-        KernelScheduler.Current = null;
+        
 
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
         ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize,
@@ -168,7 +168,7 @@ public class TruncateMmapLifecycleTests
     public async Task NotifyInodeTruncated_SharedAddressSpacePeerEngine_UsesSequenceInvalidation()
     {
         var scheduler = new KernelScheduler();
-        KernelScheduler.Current = scheduler;
+        
         try
         {
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
@@ -234,7 +234,7 @@ public class TruncateMmapLifecycleTests
         }
         finally
         {
-            KernelScheduler.Current = null;
+            
         }
     }
 
@@ -322,7 +322,7 @@ public class TruncateMmapLifecycleTests
         public MultiProcessEnv()
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
 
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "truncate-mm-multi", null);
@@ -386,7 +386,7 @@ public class TruncateMmapLifecycleTests
             File2.Close();
             Engine1.Dispose();
             Engine2.Dispose();
-            KernelScheduler.Current = null;
+            
         }
     }
 
@@ -395,7 +395,7 @@ public class TruncateMmapLifecycleTests
         public MixedMappingEnv(MapFlags flags1, MapFlags flags2)
         {
             Scheduler = new KernelScheduler();
-            KernelScheduler.Current = Scheduler;
+            
 
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
@@ -455,7 +455,7 @@ public class TruncateMmapLifecycleTests
             File2.Close();
             Engine1.Dispose();
             Engine2.Dispose();
-            KernelScheduler.Current = null;
+            
         }
 
         public byte ReadByte1()

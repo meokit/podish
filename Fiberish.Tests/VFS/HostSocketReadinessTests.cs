@@ -72,7 +72,7 @@ public class HostSocketReadinessTests
             new Dentry("readiness-stalled-dispatcher", inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
-            Logging.CreateLogger<HostSocketReadinessTests>(), new StalledReadyDispatcher());
+            Logging.CreateLogger<HostSocketReadinessTests>());
 
         _ = client.Send([0x43]);
         short revents = 0;
@@ -108,7 +108,7 @@ public class HostSocketReadinessTests
             Logging.CreateLogger<HostSocketReadinessTests>());
 
         _ = client.Send([0x42]);
-        var completed = await readiness.WaitForSocketEventAsync(file, PollEvents.POLLIN);
+        var completed = await readiness.WaitForSocketEventAsync(file, env.Task, PollEvents.POLLIN);
         Assert.True(completed);
     }
 
@@ -128,7 +128,8 @@ public class HostSocketReadinessTests
             Logging.CreateLogger<HostSocketReadinessTests>());
 
         var fired = 0;
-        using var reg = readiness.RegisterWaitHandle(file, () => fired++, PollEvents.POLLIN);
+        using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => fired++, PollEvents.POLLIN);
         Assert.NotNull(reg);
 
         using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -187,7 +188,8 @@ public class HostSocketReadinessTests
             Logging.CreateLogger<HostSocketReadinessTests>());
 
         var fired = 0;
-        var reg = readiness.RegisterWaitHandle(file, () => fired++, PollEvents.POLLIN);
+        var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => fired++, PollEvents.POLLIN);
         Assert.NotNull(reg);
         reg.Dispose();
 
@@ -213,8 +215,10 @@ public class HostSocketReadinessTests
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
 
-        using var reg1 = readiness.RegisterWaitHandle(file, () => { }, PollEvents.POLLIN);
-        using var reg2 = readiness.RegisterWaitHandle(file, () => { }, PollEvents.POLLIN);
+        using var reg1 = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => { }, PollEvents.POLLIN);
+        using var reg2 = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => { }, PollEvents.POLLIN);
         Assert.NotNull(reg1);
         Assert.NotNull(reg2);
 
@@ -246,7 +250,8 @@ public class HostSocketReadinessTests
             Logging.CreateLogger<HostSocketReadinessTests>());
 
         var fired = 0;
-        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
+        using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
         Assert.NotNull(reg);
 
         for (var i = 0; i < 20; i++)
@@ -279,7 +284,8 @@ public class HostSocketReadinessTests
             Logging.CreateLogger<HostSocketReadinessTests>());
 
         var fired = 0;
-        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
+        using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => Interlocked.Increment(ref fired), PollEvents.POLLIN);
         Assert.NotNull(reg);
 
         _ = client.Send([0x33]);
@@ -302,7 +308,7 @@ public class HostSocketReadinessTests
         var file = new LinuxFile(new Dentry("host-connect-refused", inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
 
-        var rc = await inode.ConnectAsync(file, new IPEndPoint(IPAddress.Loopback, closedPort));
+        var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, closedPort));
         Assert.Contains(rc, [-(int)Errno.EINPROGRESS, -(int)Errno.ECONNREFUSED]);
     }
 
@@ -325,7 +331,7 @@ public class HostSocketReadinessTests
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
 
-        var rc = await inode.ConnectAsync(file, new IPEndPoint(IPAddress.Loopback, closedPort));
+        var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, closedPort));
         if (rc != -(int)Errno.EINPROGRESS)
             return; // Host stack may return ECONNREFUSED synchronously; skip inconclusive path.
 
@@ -365,7 +371,8 @@ public class HostSocketReadinessTests
                 [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
         }
 
-        using var reg = readiness.RegisterWaitHandle(file, static () => { }, PollEvents.POLLOUT);
+        using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            static () => { }, PollEvents.POLLOUT);
         if (reg == null)
             await DrainUntil(() =>
             {
@@ -403,7 +410,8 @@ public class HostSocketReadinessTests
 
         var fired = 0;
         using var accepted = listener.Accept();
-        using var reg = readiness.RegisterWaitHandle(file, () => Interlocked.Increment(ref fired), PollEvents.POLLOUT);
+        using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
+            () => Interlocked.Increment(ref fired), PollEvents.POLLOUT);
         if (reg != null)
         {
             await DrainUntil(() => Volatile.Read(ref fired) > 0, env, 300);
@@ -439,7 +447,7 @@ public class HostSocketReadinessTests
             Scheduler = new KernelScheduler();
             Task = new FiberTask(200, Process, Engine, Scheduler);
             Engine.Owner = Task;
-            KernelScheduler.Current = Scheduler;
+            
             Scheduler.CurrentTask = Task;
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
@@ -455,7 +463,6 @@ public class HostSocketReadinessTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
             GC.KeepAlive(Task);
         }
 
@@ -469,6 +476,7 @@ public class HostSocketReadinessTests
     {
         public bool CanDispatch => true;
         public FiberTask? CurrentTask => null;
+        public KernelScheduler? Scheduler => null;
 
         public void Post(Action callback)
         {

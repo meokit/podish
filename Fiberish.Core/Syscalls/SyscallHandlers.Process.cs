@@ -147,7 +147,8 @@ public partial class SyscallManager
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.ECHILD;
 
         var currentProc = fiberTask.Process;
-        var kernel = KernelScheduler.Current!;
+        var task = (FiberTask)sm.Engine.Owner!;
+        var kernel = task.CommonKernel;
 
         // Loop for retrying wait
         while (true)
@@ -231,7 +232,7 @@ public partial class SyscallManager
 
             if (hang) return 0;
 
-            await new ChildStateAwaitable(currentProc, pidVal, wantStopped, wantContinued);
+            await new ChildStateAwaitable(currentProc, fiberTask, pidVal, wantStopped, wantContinued);
             if (fiberTask.HasUnblockedPendingSignal())
             {
                 // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
@@ -259,7 +260,8 @@ public partial class SyscallManager
 
         // Logic similar to SysWait4 but with idtype
         var currentProc = fiberTask.Process;
-        var kernel = KernelScheduler.Current!;
+        var task = (FiberTask)sm.Engine.Owner!;
+        var kernel = task.CommonKernel;
 
         var wnohang = ((int)options & 1) != 0;
         var wexited = ((int)options & 4) != 0;
@@ -348,7 +350,7 @@ public partial class SyscallManager
             if (!hasChildren) return -(int)Errno.ECHILD;
             if (wnohang) return 0;
 
-            await new ChildStateAwaitable(currentProc, (int)id);
+            await new ChildStateAwaitable(currentProc, fiberTask, (int)id);
             if (fiberTask.HasUnblockedPendingSignal())
             {
                 // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
@@ -807,7 +809,8 @@ public partial class SyscallManager
     {
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
-        var kernel = KernelScheduler.Current!;
+        var task = (FiberTask)sm.Engine.Owner!;
+        var kernel = task.CommonKernel;
 
         var targetPid = (int)pid == 0 ? (sm.Engine.Owner as FiberTask)!.Process.TGID : (int)pid;
         var targetProc = kernel.GetProcess(targetPid);

@@ -16,138 +16,116 @@ public class SocketSyscallTests
 {
     private static ValueTask<int> CallSysSocket(TestEnv env, uint domain, uint type, uint protocol)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSocket", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, domain, type, protocol, 0u, 0u, 0u])!;
+        return env.Invoke("SysSocket", domain, type, protocol, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysSetSockOpt(TestEnv env, uint fd, uint level, uint optname, uint optval,
         uint optlen)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSetSockOpt", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, level, optname, optval, optlen, 0u])!;
+        return env.Invoke("SysSetSockOpt", fd, level, optname, optval, optlen, 0u);
     }
 
     private static ValueTask<int> CallSysGetSockOpt(TestEnv env, uint fd, uint level, uint optname, uint optval,
         uint optlenPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysGetSockOpt", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, level, optname, optval, optlenPtr, 0u])!;
+        return env.Invoke("SysGetSockOpt", fd, level, optname, optval, optlenPtr, 0u);
     }
 
     private static ValueTask<int> CallSysBind(TestEnv env, uint fd, uint addrPtr, uint addrLen)
     {
-        var method = typeof(SyscallManager).GetMethod("SysBind", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLen, 0u, 0u, 0u])!;
+        return env.Invoke("SysBind", fd, addrPtr, addrLen, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysListen(TestEnv env, uint fd, uint backlog)
     {
-        var method = typeof(SyscallManager).GetMethod("SysListen", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, backlog, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysListen", fd, backlog, 0u, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysConnect(TestEnv env, uint fd, uint addrPtr, uint addrLen)
     {
-        var method = typeof(SyscallManager).GetMethod("SysConnect", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLen, 0u, 0u, 0u])!;
+        return env.Invoke("SysConnect", fd, addrPtr, addrLen, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysGetSockName(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysGetSockName", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+        return env.Invoke("SysGetSockName", fd, addrPtr, addrLenPtr, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysGetPeerName(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysGetPeerName", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+        return env.Invoke("SysGetPeerName", fd, addrPtr, addrLenPtr, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysAccept(TestEnv env, uint fd, uint addrPtr, uint addrLenPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysAccept", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, addrPtr, addrLenPtr, 0u, 0u, 0u])!;
+        return env.Invoke("SysAccept", fd, addrPtr, addrLenPtr, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysSocketPair(TestEnv env, uint domain, uint type, uint protocol, uint svPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSocketPair", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, domain, type, protocol, svPtr, 0u, 0u])!;
+        return env.Invoke("SysSocketPair", domain, type, protocol, svPtr, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysSendMsg(TestEnv env, uint fd, uint msgPtr, uint flags)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSendMsg", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, msgPtr, flags, 0u, 0u, 0u])!;
+        return env.Invoke("SysSendMsg", fd, msgPtr, flags, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysRecvMsg(TestEnv env, uint fd, uint msgPtr, uint flags)
     {
-        var method = typeof(SyscallManager).GetMethod("SysRecvMsg", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, msgPtr, flags, 0u, 0u, 0u])!;
+        return env.Invoke("SysRecvMsg", fd, msgPtr, flags, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysShutdown(TestEnv env, uint fd, uint how)
     {
-        var method = typeof(SyscallManager).GetMethod("SysShutdown", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, how, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysShutdown", fd, how, 0u, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysSend(TestEnv env, uint fd, uint bufPtr, uint len, uint flags = 0)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSend", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, flags, 0u, 0u])!;
+        return env.Invoke("SysSend", fd, bufPtr, len, flags, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysSendTo(TestEnv env, uint fd, uint bufPtr, uint len, uint flags,
         uint addrPtr = 0, uint addrLen = 0)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSendTo", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, flags, addrPtr, addrLen])!;
+        return env.Invoke("SysSendTo", fd, bufPtr, len, flags, addrPtr, addrLen);
     }
 
     private static ValueTask<int> CallSysRecvFrom(TestEnv env, uint fd, uint bufPtr, uint len, uint flags,
         uint addrPtr = 0, uint addrLen = 0)
     {
-        var method = typeof(SyscallManager).GetMethod("SysRecvFrom", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, flags, addrPtr, addrLen])!;
+        return env.Invoke("SysRecvFrom", fd, bufPtr, len, flags, addrPtr, addrLen);
     }
 
     private static ValueTask<int> CallSysIoctl(TestEnv env, uint fd, uint request, uint arg)
     {
-        var method = typeof(SyscallManager).GetMethod("SysIoctl", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, request, arg, 0u, 0u, 0u])!;
+        return env.Invoke("SysIoctl", fd, request, arg, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysWrite(TestEnv env, uint fd, uint bufPtr, uint len)
     {
-        var method = typeof(SyscallManager).GetMethod("SysWrite", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufPtr, len, 0u, 0u, 0u])!;
+        return env.Invoke("SysWrite", fd, bufPtr, len, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysUnlink(TestEnv env, uint pathPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysUnlink", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, pathPtr, 0u, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysUnlink", pathPtr, 0u, 0u, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysLink(TestEnv env, uint oldPathPtr, uint newPathPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysLink", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysLink", oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysRename(TestEnv env, uint oldPathPtr, uint newPathPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysRename", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysRename", oldPathPtr, newPathPtr, 0u, 0u, 0u, 0u);
     }
 
     private static ValueTask<int> CallSysClose(TestEnv env, uint fd)
     {
-        var method = typeof(SyscallManager).GetMethod("SysClose", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, 0u, 0u, 0u, 0u, 0u])!;
+        return env.Invoke("SysClose", fd, 0u, 0u, 0u, 0u, 0u);
     }
 
     [Fact]
@@ -1205,7 +1183,7 @@ public class SocketSyscallTests
             Scheduler = new KernelScheduler();
             Task = new FiberTask(100, Process, Engine, Scheduler);
             Engine.Owner = Task;
-            KernelScheduler.Current = Scheduler;
+            Task.Status = FiberTaskStatus.Waiting;
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             SyscallManager.MountRootHostfs(".");
@@ -1220,8 +1198,45 @@ public class SocketSyscallTests
 
         public void Dispose()
         {
-            KernelScheduler.Current = null;
             GC.KeepAlive(Task);
+        }
+
+        public ValueTask<int> Invoke(string methodName, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        {
+            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var tcs = new System.Threading.Tasks.TaskCompletionSource<int>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            async void Entry()
+            {
+                try
+                {
+                    var pending = (ValueTask<int>)method!.Invoke(null, [Engine.State, a1, a2, a3, a4, a5, a6])!;
+                    var rc = await pending;
+                    tcs.TrySetResult(rc);
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException != null)
+                {
+                    tcs.TrySetException(ex.InnerException);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+                finally
+                {
+                    Scheduler.Running = false;
+                    Scheduler.WakeUp();
+                }
+            }
+
+            Task.Continuation = Entry;
+            Scheduler.Running = true;
+            Scheduler.Schedule(Task);
+            Scheduler.Run();
+            return new ValueTask<int>(tcs.Task);
         }
 
         public void MapUserPage(uint addr)

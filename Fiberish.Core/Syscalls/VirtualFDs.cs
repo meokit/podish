@@ -21,7 +21,6 @@ public class EventFdInode : TmpfsInode
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
         return default;
     }
 
@@ -187,13 +186,16 @@ public class TimerFdInode : TmpfsInode
     private Timer? _timer;
     private long _valueTicks; // Absolute expiration tick
 
-    public TimerFdInode(ulong ino, SuperBlock superBlock) : base(ino, superBlock)
+    private readonly KernelScheduler _scheduler;
+
+    public TimerFdInode(ulong ino, SuperBlock superBlock, KernelScheduler scheduler) : base(ino, superBlock)
     {
+        _scheduler = scheduler;
     }
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        KernelScheduler.Current?.AssertSchedulerThread(caller);
+        _scheduler.AssertSchedulerThread(caller);
         return default;
     }
 
@@ -208,7 +210,7 @@ public class TimerFdInode : TmpfsInode
 
             if (valueTicks > 0)
             {
-                var scheduler = KernelScheduler.Current!;
+                var scheduler = _scheduler;
                 _valueTicks = isAbsolute ? valueTicks : scheduler.CurrentTick + valueTicks;
 
                 var delay = Math.Max(0, _valueTicks - scheduler.CurrentTick);
@@ -228,7 +230,7 @@ public class TimerFdInode : TmpfsInode
             intervalTicks = _intervalTicks;
             if (_valueTicks > 0)
             {
-                var scheduler = KernelScheduler.Current;
+                var scheduler = _scheduler;
                 if (scheduler == null)
                 {
                     valueTicks = 0;
@@ -255,7 +257,7 @@ public class TimerFdInode : TmpfsInode
             if (_intervalTicks > 0)
             {
                 _valueTicks += _intervalTicks;
-                var scheduler = KernelScheduler.Current;
+                var scheduler = _scheduler;
                 if (scheduler != null)
                 {
                     var delay = Math.Max(0, _valueTicks - scheduler.CurrentTick);

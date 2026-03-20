@@ -6,6 +6,18 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
+internal interface ITaskWaitSource
+{
+    bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events);
+    IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events);
+}
+
+internal interface IDispatcherWaitSource
+{
+    bool RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
+    IDisposable? RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
+}
+
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
 
 public readonly record struct ReadaheadRequest(long StartPageIndex, int PageCount);
@@ -603,7 +615,7 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal void RegisterMappedAddressSpace(VMAManager addressSpace)
     {
-        KernelScheduler.Current?.AssertSchedulerThread();
+        
         foreach (var mapped in _mappedAddressSpaces)
             if (ReferenceEquals(mapped, addressSpace))
                 return;
@@ -615,7 +627,7 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal void UnregisterMappedAddressSpace(VMAManager addressSpace)
     {
-        KernelScheduler.Current?.AssertSchedulerThread();
+        
         var index = -1;
         for (var i = 0; i < _mappedAddressSpaces.Length; i++)
             if (ReferenceEquals(_mappedAddressSpaces[i], addressSpace))
@@ -641,7 +653,7 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal VMAManager[] SnapshotMappedAddressSpaces()
     {
-        KernelScheduler.Current?.AssertSchedulerThread();
+        
         return _mappedAddressSpaces;
     }
 
@@ -963,13 +975,15 @@ public abstract class Inode : IAddressSpaceOperations
     }
 
     // Async blocking support
-    public virtual ValueTask WaitForRead(LinuxFile linuxFile)
+    public virtual ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
+        _ = task;
         return ValueTask.CompletedTask;
     }
 
-    public virtual ValueTask WaitForWrite(LinuxFile linuxFile)
+    public virtual ValueTask WaitForWrite(LinuxFile linuxFile, FiberTask task)
     {
+        _ = task;
         return ValueTask.CompletedTask;
     }
 
@@ -1017,7 +1031,7 @@ public abstract class Inode : IAddressSpaceOperations
     /// <summary>
     ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.
     /// </summary>
-    public virtual int Ioctl(LinuxFile linuxFile, uint request, uint arg, Engine engine)
+    public virtual int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
         return -(int)Errno.ENOTTY;
     }

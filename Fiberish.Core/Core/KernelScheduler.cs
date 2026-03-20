@@ -18,7 +18,6 @@ public class KernelScheduler
     // Global instance (or dependency injected)
     // public static KernelScheduler Instance { get; set; } = new();
 
-    private static readonly AsyncLocal<KernelScheduler?> _current = new();
 
     private readonly Channel<(Action, FiberTask?)> _events =
         Channel.CreateUnbounded<(Action, FiberTask?)>(new UnboundedChannelOptions
@@ -64,11 +63,6 @@ public class KernelScheduler
     public int InitPid => Volatile.Read(ref _initPid);
     public bool EngineInitReaperEnabled => Volatile.Read(ref _engineInitReaperEnabled) != 0;
 
-    public static KernelScheduler? Current
-    {
-        get => _current.Value;
-        set => _current.Value = value;
-    }
 
     public int OwnerThreadId => Volatile.Read(ref _ownerThreadId);
 
@@ -373,15 +367,14 @@ public class KernelScheduler
         return timer;
     }
 
-    public static TimerAwaiter Sleep(long ticks)
+    public static TimerAwaiter Sleep(long ticks, KernelScheduler scheduler)
     {
-        return new TimerAwaiter(ticks);
+        return new TimerAwaiter(ticks, scheduler);
     }
 
     public void Run(long maxTicks = -1)
     {
         BindOwnerThreadIfNeeded();
-        Current = this;
         var previousSyncContext = SynchronizationContext.Current;
         var schedulerSyncContext = new KernelSyncContext(this);
         SynchronizationContext.SetSynchronizationContext(schedulerSyncContext);
@@ -499,7 +492,6 @@ public class KernelScheduler
             SynchronizationContext.SetSynchronizationContext(previousSyncContext);
             Logger.LogInformation("KernelScheduler stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
                 Running, CurrentTick);
-            Current = null;
         }
     }
 
@@ -538,8 +530,7 @@ public class KernelScheduler
         var oldTask = CurrentTask;
         CurrentTask = ctx;
         var previousSyncContext = SynchronizationContext.Current;
-        if (Current == this)
-            SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this, ctx));
+        SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this, ctx));
         try
         {
             cont();
@@ -796,16 +787,16 @@ public class KernelScheduler
 
         return false;
     }
-
-    public readonly struct TimerAwaiter(long ticks) : INotifyCompletion
+    public readonly struct TimerAwaiter(long ticks, KernelScheduler scheduler) : INotifyCompletion
     {
         private readonly long _ticks = ticks;
+        private readonly KernelScheduler _scheduler = scheduler;
 
         public bool IsCompleted => _ticks <= 0;
 
         public void OnCompleted(Action continuation)
         {
-            Current!.ScheduleTimer(_ticks, continuation);
+            _scheduler.ScheduleTimer(_ticks, continuation);
         }
 
         public void GetResult()

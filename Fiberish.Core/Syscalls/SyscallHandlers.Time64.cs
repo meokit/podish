@@ -83,7 +83,7 @@ public partial class SyscallManager
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
-        var scheduler = KernelScheduler.Current;
+        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var remainingSeconds = 0;
@@ -113,7 +113,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = KernelScheduler.Current;
+        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
@@ -140,7 +140,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = KernelScheduler.Current;
+        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
@@ -201,7 +201,8 @@ public partial class SyscallManager
 
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
-            var remainingMs = timer.ActiveTimer.ExpirationTick - KernelScheduler.Current!.CurrentTick;
+            var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+            var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
             valueNsec = remainingMs % 1000 * 1000000;
@@ -237,7 +238,8 @@ public partial class SyscallManager
 
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
-            var remainingMs = timer.ActiveTimer.ExpirationTick - KernelScheduler.Current!.CurrentTick;
+            var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+            var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
             valueNsec = remainingMs % 1000 * 1000000;
@@ -262,7 +264,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = KernelScheduler.Current;
+        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var proc = task.Process;
@@ -349,7 +351,7 @@ public partial class SyscallManager
         var sm = Get(state);
         if (sm == null) return -(int)Errno.EPERM;
         if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = KernelScheduler.Current;
+        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var proc = task.Process;
@@ -419,7 +421,7 @@ public partial class SyscallManager
                     targetDelayMs = (long)valueMs - now;
                     if (targetDelayMs < 0) targetDelayMs = 0;
                 }
-                else // CLOCK_MONOTONIC uses KernelScheduler.CurrentTick
+                else // CLOCK_MONOTONIC uses (KernelScheduler?)nullTick
                 {
                     targetDelayMs = (long)valueMs - scheduler.CurrentTick;
                     if (targetDelayMs < 0) targetDelayMs = 0;
