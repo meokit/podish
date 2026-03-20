@@ -1,6 +1,7 @@
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.SilkFS;
+using Microsoft.Win32.SafeHandles;
 
 namespace Fiberish.VFS;
 
@@ -160,11 +161,11 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 public sealed class SilkInode : IndexedMemoryInode
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
+    private readonly object _dirtyPageLock = new();
     private readonly object _mappedCacheLock = new();
     private readonly SilkMetadataStore _metadata;
-    private readonly object _persistLock = new();
     private readonly SilkRepository _repository;
-    private bool _hasPendingPageWriteback;
+    private readonly HashSet<long> _dirtyPageIndexes = [];
     private MappedFilePageCache? _mappedPageCache;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
@@ -221,20 +222,12 @@ public sealed class SilkInode : IndexedMemoryInode
 
     public void LoadDataFromMetadata()
     {
-        if (Type != InodeType.File && Type != InodeType.Symlink) return;
+        if (Type != InodeType.Symlink) return;
         var data = _repository.ReadLiveInodeData((long)Ino);
         if (data == null) return;
 
-        if (Type == InodeType.Symlink)
-        {
-            SymlinkData = data.Length == 0 ? Array.Empty<byte>() : [.. data];
-            Size = (ulong)SymlinkData.Length;
-            return;
-        }
-
-        _ = base.Truncate(0);
-        if (data.Length > 0)
-            _ = base.Write(null!, data, 0);
+        SymlinkData = data.Length == 0 ? Array.Empty<byte>() : [.. data];
+        Size = (ulong)SymlinkData.Length;
     }
 
     private void SyncSelf()
@@ -250,83 +243,28 @@ public sealed class SilkInode : IndexedMemoryInode
             (long)Size);
     }
 
-    private void PersistData()
-    {
-        if (Type != InodeType.File && Type != InodeType.Symlink) return;
-        var data = ReadAllData();
-        _repository.WriteLiveInodeData((long)Ino, data);
-    }
-
-    private byte[] ReadAllData()
-    {
-        var len = checked((int)Math.Min(int.MaxValue, Size));
-        if (len == 0) return Array.Empty<byte>();
-
-        var result = new byte[len];
-        var pos = 0;
-        while (pos < len)
-        {
-            var n = Read(null!, result.AsSpan(pos), pos);
-            if (n <= 0) break;
-            pos += n;
-        }
-
-        return pos == len ? result : result[..pos];
-    }
-
     protected override int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
-        lock (Lock)
+        if (Type == InodeType.Directory) return 0;
+        if (Type == InodeType.Symlink)
         {
-            if (Type == InodeType.Directory) return 0;
-            if (Type == InodeType.Symlink)
+            lock (Lock)
             {
                 EnsureSymlinkDataLoadedLocked();
                 return base.BackendRead(linuxFile, buffer, offset);
             }
-
-            if (offset < 0) return -(int)Errno.EINVAL;
-
-            var fileSize = (long)Size;
-            if (offset >= fileSize) return 0;
-            var count = Math.Min(buffer.Length, (int)(fileSize - offset));
-            var persisted = ReadPersistedSnapshot();
-            var copied = 0;
-            var pageCache = EnsurePageCacheLocked();
-
-            while (copied < count)
-            {
-                var absolute = offset + copied;
-                var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
-                var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
-                var chunk = Math.Min(count - copied, LinuxConstants.PageSize - pageOffset);
-                var pagePtr = pageCache.GetPage(pageIndex);
-                if (pagePtr != IntPtr.Zero)
-                {
-                    unsafe
-                    {
-                        var src = (byte*)pagePtr + pageOffset;
-                        fixed (byte* dst = &buffer[copied])
-                        {
-                            Buffer.MemoryCopy(src, dst, chunk, chunk);
-                        }
-                    }
-                }
-                else
-                {
-                    var available = Math.Max(0, persisted.Length - (int)absolute);
-                    var fromPersisted = Math.Min(chunk, available);
-                    if (fromPersisted > 0)
-                        persisted.AsSpan((int)absolute, fromPersisted).CopyTo(buffer.Slice(copied, fromPersisted));
-                    if (fromPersisted < chunk)
-                        buffer.Slice(copied + fromPersisted, chunk - fromPersisted).Clear();
-                }
-
-                copied += chunk;
-            }
-
-            return count;
         }
+
+        if (offset < 0) return -(int)Errno.EINVAL;
+
+        var fileSize = (long)Size;
+        if (offset >= fileSize) return 0;
+
+        if (linuxFile?.PrivateData is SafeFileHandle handle)
+            return RandomAccess.Read(handle, buffer, offset);
+
+        using var tempHandle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.OpenOrCreate, FileAccess.Read);
+        return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
     public override string Readlink()
@@ -454,7 +392,7 @@ public sealed class SilkInode : IndexedMemoryInode
         if (Type != InodeType.Symlink) return;
         if (SymlinkData != null) return;
 
-        var data = ReadPersistedSnapshot();
+        var data = _repository.ReadLiveInodeData((long)Ino) ?? Array.Empty<byte>();
         SymlinkData = data.Length == 0 ? Array.Empty<byte>() : data;
         Size = (ulong)SymlinkData.Length;
     }
@@ -489,7 +427,12 @@ public sealed class SilkInode : IndexedMemoryInode
             tx.ClearWhiteout((long)Ino, created.Name);
         });
         if (created.Inode is SilkInode child)
-            child.PersistData();
+        {
+            if (child.Type == InodeType.Symlink)
+                child.PersistSymlinkData();
+            else if (child.Type == InodeType.File)
+                child.EnsureRegularFileBackingExists();
+        }
         return created;
     }
 
@@ -536,7 +479,7 @@ public sealed class SilkInode : IndexedMemoryInode
             tx.ClearWhiteout((long)Ino, created.Name);
         });
         if (created.Inode is SilkInode child)
-            child.PersistData();
+            child.PersistSymlinkData();
         return created;
     }
 
@@ -550,6 +493,39 @@ public sealed class SilkInode : IndexedMemoryInode
             tx.ClearWhiteout((long)Ino, created.Name);
         });
         return created;
+    }
+
+    public override void Open(LinuxFile linuxFile)
+    {
+        if (Type != InodeType.File) return;
+
+        var mode = FileMode.Open;
+        var access = FileAccess.ReadWrite;
+
+        var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
+        var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
+        if (hasCreate && hasExcl) mode = FileMode.CreateNew;
+        else if (hasCreate) mode = FileMode.OpenOrCreate;
+
+        linuxFile.PrivateData = _repository.OpenLiveInodeHandle((long)Ino, mode, access);
+    }
+
+    public override void Release(LinuxFile linuxFile)
+    {
+        if (linuxFile.PrivateData is SafeFileHandle handle)
+        {
+            Flock(linuxFile, LinuxConstants.LOCK_UN);
+            handle.Dispose();
+            linuxFile.PrivateData = null;
+        }
+
+        base.Release(linuxFile);
+    }
+
+    public override void Sync(LinuxFile linuxFile)
+    {
+        if (linuxFile.PrivateData is SafeFileHandle handle)
+            RandomAccess.FlushToDisk(handle);
     }
 
     public override void Unlink(string name)
@@ -612,59 +588,165 @@ public sealed class SilkInode : IndexedMemoryInode
         });
     }
 
+    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
+    }
+
+    protected override int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (Type == InodeType.Symlink) return -(int)Errno.EINVAL;
+        if (offset < 0) return -(int)Errno.EINVAL;
+
+        SafeFileHandle? handle = null;
+        try
+        {
+            handle = linuxFile?.PrivateData as SafeFileHandle ??
+                     _repository.OpenLiveInodeHandle((long)Ino, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+            RandomAccess.Write(handle, buffer, offset);
+            var fileSize = RandomAccess.GetLength(handle);
+            if ((ulong)fileSize > Size) Size = (ulong)fileSize;
+            MTime = DateTime.Now;
+            return buffer.Length;
+        }
+        finally
+        {
+            if (linuxFile?.PrivateData is not SafeFileHandle)
+                handle?.Dispose();
+        }
+    }
+
     public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        var rc = base.Write(linuxFile, buffer, offset);
+        var rc = WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
         if (rc > 0)
-        {
             SyncSelf();
-            PersistData();
-            ClearPageCacheDirtyState();
+        return rc;
+    }
+
+    protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0) return 0;
+        if (!sync) return 0;
+
+        int rc;
+        GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+        try
+        {
+            rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        }
+        finally
+        {
+            GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
         }
 
-        return rc;
-    }
-
-    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
-    {
-        var rc = base.WritePage(linuxFile, request, pageBuffer, sync);
-        if (rc == 0 && request.Length > 0)
-            lock (_persistLock)
-            {
-                _hasPendingPageWriteback = true;
-            }
-
-        return rc;
-    }
-
-    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
-    {
-        var rc = base.WritePages(linuxFile, request);
         if (rc < 0) return rc;
-        if (!request.Sync) return 0;
-
-        lock (_persistLock)
+        lock (_dirtyPageLock)
         {
-            if (!_hasPendingPageWriteback) return 0;
-            SyncSelf();
-            PersistData();
-            ClearPageCacheDirtyState();
-            _hasPendingPageWriteback = false;
+            _dirtyPageIndexes.Remove(request.PageIndex);
         }
 
+        if (request.PageIndex >= 0 && request.PageIndex <= uint.MaxValue)
+            Mapping?.ClearDirty((uint)request.PageIndex);
+        SyncRegularFileIfNeeded();
         return 0;
     }
 
-    public override int SetPageDirty(long pageIndex)
+    protected override int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
-        var rc = base.SetPageDirty(pageIndex);
-        if (rc == 0)
-            lock (_persistLock)
+        if (!request.Sync) return 0;
+        if (Mapping == null) return 0;
+
+        List<long> toFlush;
+        lock (_dirtyPageLock)
+        {
+            toFlush = _dirtyPageIndexes
+                .Where(i => i >= request.StartPageIndex && i <= request.EndPageIndex)
+                .ToList();
+        }
+
+        foreach (var pageIndex in toFlush)
+        {
+            var pagePtr = Mapping.PeekPage((uint)pageIndex);
+            if (pagePtr == IntPtr.Zero)
             {
-                _hasPendingPageWriteback = true;
+                lock (_dirtyPageLock)
+                {
+                    _dirtyPageIndexes.Remove(pageIndex);
+                }
+
+                if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                    Mapping.ClearDirty((uint)pageIndex);
+                continue;
             }
 
-        return rc;
+            var fileOffset = pageIndex * LinuxConstants.PageSize;
+            var remaining = (long)Size - fileOffset;
+            if (remaining <= 0)
+            {
+                lock (_dirtyPageLock)
+                {
+                    _dirtyPageIndexes.Remove(pageIndex);
+                }
+
+                if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                    Mapping.ClearDirty((uint)pageIndex);
+                continue;
+            }
+
+            var writeLen = (int)Math.Min(LinuxConstants.PageSize, remaining);
+            unsafe
+            {
+                ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
+                int rc;
+                GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+                try
+                {
+                    rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
+                }
+                finally
+                {
+                    GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+                }
+
+                if (rc < 0) return rc;
+            }
+
+            lock (_dirtyPageLock)
+            {
+                _dirtyPageIndexes.Remove(pageIndex);
+            }
+
+            if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+                Mapping.ClearDirty((uint)pageIndex);
+        }
+
+        SyncRegularFileIfNeeded();
+        return 0;
+    }
+
+    protected override int AopsSetPageDirty(long pageIndex)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Add(pageIndex);
+        }
+
+        return 0;
     }
 
     public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
@@ -681,40 +763,58 @@ public sealed class SilkInode : IndexedMemoryInode
         return rc;
     }
 
-    private byte[] ReadPersistedSnapshot()
-    {
-        if (Type != InodeType.File && Type != InodeType.Symlink) return Array.Empty<byte>();
-        var live = _repository.ReadLiveInodeData((long)Ino);
-        if (live != null) return live;
-        return Array.Empty<byte>();
-    }
-
     private void ClearPageCacheDirtyState()
     {
-        lock (Lock)
+        lock (_dirtyPageLock)
         {
             if (Mapping != null)
                 foreach (var state in Mapping.SnapshotPageStates())
                     Mapping.ClearDirty(state.PageIndex);
 
-            DirtyPageIndexes.Clear();
+            _dirtyPageIndexes.Clear();
         }
     }
 
     public override int Truncate(long size)
     {
-        var rc = base.Truncate(size);
+        int rc;
+        if (Type == InodeType.Symlink)
+        {
+            rc = base.Truncate(size);
+            if (rc == 0)
+                PersistSymlinkData();
+            return rc;
+        }
+
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (size < 0) return -(int)Errno.EINVAL;
+
+        using (var handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.OpenOrCreate, FileAccess.ReadWrite))
+        {
+            RandomAccess.SetLength(handle, size);
+        }
+
+        if (Mapping != null)
+        {
+            Mapping.TruncateToSize(size);
+            var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+            lock (_dirtyPageLock)
+            {
+                _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+            }
+        }
+
+        Size = (ulong)size;
+        MTime = DateTime.Now;
+        rc = 0;
         if (rc == 0)
         {
-            _repository.TruncateLiveInodeData((long)Ino, size);
             lock (_mappedCacheLock)
             {
                 _mappedPageCache?.Truncate(size);
             }
 
             SyncSelf();
-            PersistData();
-            ClearPageCacheDirtyState();
         }
 
         return rc;
@@ -741,19 +841,24 @@ public sealed class SilkInode : IndexedMemoryInode
 
     public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
     {
+        if (Type == InodeType.File)
+            return false;
+
         lock (_mappedCacheLock)
         {
             if (_mappedPageCache?.TryFlushPage(pageIndex) != true)
                 return false;
         }
 
-        lock (Lock)
+        lock (_dirtyPageLock)
         {
-            DirtyPageIndexes.Remove(pageIndex);
-            if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
-                Mapping?.ClearDirty((uint)pageIndex);
+            _dirtyPageIndexes.Remove(pageIndex);
         }
 
+        if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
+            Mapping?.ClearDirty((uint)pageIndex);
+        if (linuxFile != null) Sync(linuxFile);
+        SyncRegularFileIfNeeded();
         return true;
     }
 
@@ -786,6 +891,24 @@ public sealed class SilkInode : IndexedMemoryInode
         }
 
         base.OnFinalizeDelete();
+    }
+
+    private void PersistSymlinkData()
+    {
+        if (Type != InodeType.Symlink) return;
+        _repository.WriteLiveInodeData((long)Ino, SymlinkData ?? Array.Empty<byte>());
+    }
+
+    private void EnsureRegularFileBackingExists()
+    {
+        if (Type != InodeType.File) return;
+        _repository.EnsureLiveInodeDataFile((long)Ino);
+    }
+
+    private void SyncRegularFileIfNeeded()
+    {
+        if (Type == InodeType.File)
+            SyncSelf();
     }
 
     private sealed class NamespaceMutationScope : IDisposable

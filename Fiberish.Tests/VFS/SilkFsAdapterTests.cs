@@ -797,6 +797,13 @@ public class SilkFsAdapterTests
             Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
             wf.Close();
 
+            var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
+            const uint mapAddr = 0x4E000000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
+            Assert.True(mm.HandleFault(mapAddr, false, engine));
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+
             var silkInode = Assert.IsType<SilkInode>(file.Inode);
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
@@ -861,6 +868,13 @@ public class SilkFsAdapterTests
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
             wf.Close();
+
+            var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
+            const uint mapAddr = 0x4F000000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
+            Assert.True(mm.HandleFault(mapAddr, false, engine));
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
             var silkInode = Assert.IsType<SilkInode>(file.Inode);
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
@@ -1000,6 +1014,176 @@ public class SilkFsAdapterTests
             Assert.Equal(payload, Encoding.UTF8.GetString(buffer, 0, n));
             rf.Close();
             sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_Remount_PreservesLargeFilePartialRead()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-partial-read-{Guid.NewGuid():N}");
+        var payload = Enumerable.Range(0, LinuxConstants.PageSize * 3 + 257)
+            .Select(i => (byte)('a' + (i % 26)))
+            .ToArray();
+
+        try
+        {
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+                var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+                var file = new Dentry("big.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+                var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+                Assert.Equal(payload.Length, file.Inode!.Write(wf, payload, 0));
+                wf.Close();
+                sm.Close();
+            }
+
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var fileLoc = sm.PathWalkWithFlags("/mnt/big.bin", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
+                var offset = LinuxConstants.PageSize - 19;
+                var slice = new byte[113];
+                var n = fileLoc.Dentry!.Inode!.Read(rf, slice, offset);
+                rf.Close();
+
+                Assert.Equal(slice.Length, n);
+                Assert.Equal(payload.AsSpan(offset, slice.Length).ToArray(), slice);
+                sm.Close();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_TruncateShrinkAndGrow_PersistsAcrossRemount()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-truncate-{Guid.NewGuid():N}");
+
+        try
+        {
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+                var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+                var file = new Dentry("resize.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+                var wf = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
+                Assert.Equal(10, file.Inode!.Write(wf, "abcdefghij"u8.ToArray(), 0));
+                Assert.Equal(0, file.Inode.Truncate(4));
+                Assert.Equal(0, file.Inode.Truncate(12));
+                Assert.Equal(2, file.Inode.Write(wf, "XY"u8.ToArray(), 10));
+                wf.Close();
+                sm.Close();
+            }
+
+            using (var engine = new Engine())
+            {
+                var vma = new VMAManager();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.Children["mnt"] = mntDentry;
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var fileLoc = sm.PathWalkWithFlags("/mnt/resize.bin", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                Assert.Equal<ulong>(12, fileLoc.Dentry!.Inode!.Size);
+
+                var rf = new LinuxFile(fileLoc.Dentry, FileFlags.O_RDONLY, fileLoc.Mount!);
+                var buf = new byte[16];
+                var n = fileLoc.Dentry.Inode.Read(rf, buf, 0);
+                rf.Close();
+
+                Assert.Equal(12, n);
+                Assert.Equal((byte)'a', buf[0]);
+                Assert.Equal((byte)'d', buf[3]);
+                Assert.Equal(0, buf[4]);
+                Assert.Equal(0, buf[9]);
+                Assert.Equal((byte)'X', buf[10]);
+                Assert.Equal((byte)'Y', buf[11]);
+                sm.Close();
+            }
         }
         finally
         {

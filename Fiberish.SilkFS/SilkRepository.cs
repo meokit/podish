@@ -1,3 +1,5 @@
+using Microsoft.Win32.SafeHandles;
+
 namespace Fiberish.SilkFS;
 
 public sealed class SilkRepository
@@ -29,6 +31,18 @@ public sealed class SilkRepository
         return Path.Combine(Options.LiveDataPath, $"{ino}.bin");
     }
 
+    public SafeFileHandle OpenLiveInodeHandle(long ino, FileMode mode, FileAccess access)
+    {
+        var path = GetLiveInodePath(ino);
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
+        return File.OpenHandle(path, mode, access, FileShare.ReadWrite | FileShare.Delete);
+    }
+
+    public void EnsureLiveInodeDataFile(long ino)
+    {
+        using var handle = OpenLiveInodeHandle(ino, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+    }
+
     public byte[]? ReadLiveInodeData(long ino)
     {
         var path = GetLiveInodePath(ino);
@@ -37,13 +51,7 @@ public sealed class SilkRepository
 
     public void WriteLiveInodeData(long ino, ReadOnlySpan<byte> data)
     {
-        var path = GetLiveInodePath(ino);
-        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
-        using var handle = File.OpenHandle(
-            path,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.ReadWrite | FileShare.Delete);
+        using var handle = OpenLiveInodeHandle(ino, FileMode.OpenOrCreate, FileAccess.ReadWrite);
         RandomAccess.SetLength(handle, data.Length);
         if (!data.IsEmpty)
             RandomAccess.Write(handle, data, 0);
@@ -51,11 +59,8 @@ public sealed class SilkRepository
 
     public void TruncateLiveInodeData(long ino, long size)
     {
-        var path = GetLiveInodePath(ino);
-        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Options.LiveDataPath);
-        using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
-            FileShare.ReadWrite | FileShare.Delete);
-        fs.SetLength(Math.Max(0, size));
+        using var handle = OpenLiveInodeHandle(ino, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        RandomAccess.SetLength(handle, Math.Max(0, size));
     }
 
     public void DeleteLiveInodeData(long ino)

@@ -261,6 +261,71 @@ public class LayerSilkOverlayTests
     }
 
     [Fact]
+    public void Overlay_ModifyLowerRegularFile_InSilkfsUpper_PersistsAcrossRemount()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-copyup-write-{Guid.NewGuid():N}");
+        try
+        {
+            var payload = Encoding.UTF8.GetBytes("abcdef");
+            var index = new LayerIndex();
+            index.AddEntry(new LayerIndexEntry("/etc", InodeType.Directory, 0x1ED));
+            index.AddEntry(new LayerIndexEntry(
+                "/etc/config.txt",
+                InodeType.File,
+                0x1A4,
+                Size: (ulong)payload.Length,
+                InlineData: payload));
+
+            using (var engine = new Engine())
+            {
+                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var layerType = FileSystemRegistry.Get("layerfs")!;
+                var lowerSb = layerType.CreateFileSystem().ReadSuper(
+                    layerType,
+                    0,
+                    "test-lower",
+                    new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
+                sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+                var fileLoc = sm.PathWalkWithFlags("/etc/config.txt", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var wf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDWR, fileLoc.Mount!);
+                Assert.Equal(2, fileLoc.Dentry!.Inode!.Write(wf, "ZZ"u8.ToArray(), 2));
+                wf.Close();
+
+                sm.Close();
+            }
+
+            using (var engine = new Engine())
+            {
+                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var layerType = FileSystemRegistry.Get("layerfs")!;
+                var lowerSb = layerType.CreateFileSystem().ReadSuper(
+                    layerType,
+                    0,
+                    "test-lower",
+                    new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
+                sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+                var fileLoc = sm.PathWalkWithFlags("/etc/config.txt", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
+                var buf = new byte[16];
+                var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
+                rf.Close();
+                Assert.Equal(6, n);
+                Assert.Equal("abZZef", Encoding.UTF8.GetString(buf, 0, n));
+
+                sm.Close();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public void Overlay_MknodCharDevice_InSilkfsUpper_PersistsAcrossRemount()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-mknod-char-{Guid.NewGuid():N}");
