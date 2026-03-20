@@ -12,6 +12,17 @@
 
 namespace fiberish {
 
+enum class OpsizeSpec : uint8_t {
+    Dynamic = 0,
+    Opsize16,
+    Opsize32,
+};
+
+enum class AddrModeSpec : uint8_t {
+    Dynamic = 0,
+    ModReg,
+};
+
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdd_EbGb_Internal(LogicFuncParams) {
     // 00: ADD r/m8, r8
@@ -29,27 +40,51 @@ FORCE_INLINE LogicFlow OpAdd_EbGb_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <bool UpdateFlags, Specialized S = Specialized::None>
+template <bool UpdateFlags, OpsizeSpec Opsize = OpsizeSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAdd_EvGv_Internal(LogicFuncParams) {
     // 01: ADD r/m16/32, r16/32
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+    const bool opsize = Opsize == OpsizeSpec::Opsize16   ? true
+                        : Opsize == OpsizeSpec::Opsize32 ? false
+                                                         : op->prefixes.flags.opsize;
+    if (opsize) {
+        uint8_t rm = op->modrm & 7;
+        uint16_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = static_cast<uint16_t>(GetReg(state, rm));
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint16_t src = GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            uint32_t reg = GetReg(state, rm);
+            SetReg(state, rm, (reg & 0xFFFF0000u) | res);
+        } else {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint8_t rm = op->modrm & 7;
+        uint32_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = GetReg(state, rm);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            SetReg(state, rm, res);
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
     return LogicFlow::Continue;
 }
@@ -180,28 +215,52 @@ FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <bool UpdateFlags>
+template <bool UpdateFlags, OpsizeSpec Opsize = OpsizeSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSub_EvGv_Internal(LogicFuncParams) {
     // 29: SUB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+    const bool opsize = Opsize == OpsizeSpec::Opsize16   ? true
+                        : Opsize == OpsizeSpec::Opsize32 ? false
+                                                         : op->prefixes.flags.opsize;
+    if (opsize) {
+        uint8_t rm = op->modrm & 7;
+        uint16_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = static_cast<uint16_t>(GetReg(state, rm));
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            uint32_t reg_value = GetReg(state, rm);
+            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+        } else {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint8_t rm = op->modrm & 7;
+        uint32_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = GetReg(state, rm);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            SetReg(state, rm, res);
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
     return LogicFlow::Continue;
 }
@@ -220,28 +279,52 @@ FORCE_INLINE LogicFlow OpAnd_EbGb_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <bool UpdateFlags>
+template <bool UpdateFlags, OpsizeSpec Opsize = OpsizeSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAnd_EvGv_Internal(LogicFuncParams) {
     // 21: AND r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+    const bool opsize = Opsize == OpsizeSpec::Opsize16   ? true
+                        : Opsize == OpsizeSpec::Opsize32 ? false
+                                                         : op->prefixes.flags.opsize;
+    if (opsize) {
+        uint8_t rm = op->modrm & 7;
+        uint16_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = static_cast<uint16_t>(GetReg(state, rm));
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            uint32_t reg_value = GetReg(state, rm);
+            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+        } else {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint8_t rm = op->modrm & 7;
+        uint32_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = GetReg(state, rm);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            SetReg(state, rm, res);
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
     return LogicFlow::Continue;
 }
@@ -289,54 +372,102 @@ FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <bool UpdateFlags>
+template <bool UpdateFlags, OpsizeSpec Opsize = OpsizeSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpOr_EvGv_Internal(LogicFuncParams) {
     // 09: OR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+    const bool opsize = Opsize == OpsizeSpec::Opsize16   ? true
+                        : Opsize == OpsizeSpec::Opsize32 ? false
+                                                         : op->prefixes.flags.opsize;
+    if (opsize) {
+        uint8_t rm = op->modrm & 7;
+        uint16_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = static_cast<uint16_t>(GetReg(state, rm));
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            uint32_t reg_value = GetReg(state, rm);
+            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+        } else {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint8_t rm = op->modrm & 7;
+        uint32_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = GetReg(state, rm);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            SetReg(state, rm, res);
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
     return LogicFlow::Continue;
 }
 
-template <bool UpdateFlags>
+template <bool UpdateFlags, OpsizeSpec Opsize = OpsizeSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXor_EvGv_Internal(LogicFuncParams) {
     // 31: XOR r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
+    const bool opsize = Opsize == OpsizeSpec::Opsize16   ? true
+                        : Opsize == OpsizeSpec::Opsize32 ? false
+                                                         : op->prefixes.flags.opsize;
+    if (opsize) {
+        uint8_t rm = op->modrm & 7;
+        uint16_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = static_cast<uint16_t>(GetReg(state, rm));
+        } else {
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            uint32_t reg_value = GetReg(state, rm);
+            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+        } else {
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
+        uint8_t rm = op->modrm & 7;
+        uint32_t dest;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            dest = GetReg(state, rm);
+        } else {
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!dest_res) return LogicFlow::RestartMemoryOp;
+            dest = *dest_res;
+        }
 
         uint32_t src = GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        if constexpr (AddrMode == AddrModeSpec::ModReg) {
+            SetReg(state, rm, res);
+        } else {
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        }
     }
     return LogicFlow::Continue;
 }
@@ -870,8 +1001,11 @@ FORCE_INLINE LogicFlow OpAdd_EbGb_NF(LogicFuncParams) { return OpAdd_EbGb_Intern
 
 FORCE_INLINE LogicFlow OpAdd_EvGv(LogicFuncParams) { return OpAdd_EvGv_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpAdd_EvGv_NF(LogicFuncParams) { return OpAdd_EvGv_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpAdd_EvGv_NF_32_ModReg(LogicFuncParams) {
+    return OpAdd_EvGv_Internal<false, OpsizeSpec::Opsize32, AddrModeSpec::ModReg>(LogicPassParams);
+}
 FORCE_INLINE LogicFlow OpAdd_EvGv_Eax(LogicFuncParams) {
-    return OpAdd_EvGv_Internal<true, Specialized::RegEax>(LogicPassParams);
+    return OpAdd_EvGv_Internal<true, OpsizeSpec::Dynamic, AddrModeSpec::ModReg>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpAdd_GbEb(LogicFuncParams) { return OpAdd_GbEb_Internal<true>(LogicPassParams); }
@@ -892,6 +1026,9 @@ FORCE_INLINE LogicFlow OpOr_EbGb_NF(LogicFuncParams) { return OpOr_EbGb_Internal
 
 FORCE_INLINE LogicFlow OpOr_EvGv(LogicFuncParams) { return OpOr_EvGv_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpOr_EvGv_NF(LogicFuncParams) { return OpOr_EvGv_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpOr_EvGv_NF_32_ModReg(LogicFuncParams) {
+    return OpOr_EvGv_Internal<false, OpsizeSpec::Opsize32, AddrModeSpec::ModReg>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpOr_GbEb(LogicFuncParams) { return OpOr_GbEb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpOr_GbEb_NF(LogicFuncParams) { return OpOr_GbEb_Internal<false>(LogicPassParams); }
@@ -949,6 +1086,9 @@ FORCE_INLINE LogicFlow OpAnd_EbGb_NF(LogicFuncParams) { return OpAnd_EbGb_Intern
 
 FORCE_INLINE LogicFlow OpAnd_EvGv(LogicFuncParams) { return OpAnd_EvGv_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpAnd_EvGv_NF(LogicFuncParams) { return OpAnd_EvGv_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpAnd_EvGv_NF_32_ModReg(LogicFuncParams) {
+    return OpAnd_EvGv_Internal<false, OpsizeSpec::Opsize32, AddrModeSpec::ModReg>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpAnd_GbEb(LogicFuncParams) { return OpAnd_GbEb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpAnd_GbEb_NF(LogicFuncParams) { return OpAnd_GbEb_Internal<false>(LogicPassParams); }
@@ -968,6 +1108,9 @@ FORCE_INLINE LogicFlow OpSub_EbGb_NF(LogicFuncParams) { return OpSub_EbGb_Intern
 
 FORCE_INLINE LogicFlow OpSub_EvGv(LogicFuncParams) { return OpSub_EvGv_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpSub_EvGv_NF(LogicFuncParams) { return OpSub_EvGv_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpSub_EvGv_NF_32_ModReg(LogicFuncParams) {
+    return OpSub_EvGv_Internal<false, OpsizeSpec::Opsize32, AddrModeSpec::ModReg>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpSub_GbEb(LogicFuncParams) { return OpSub_GbEb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpSub_GbEb_NF(LogicFuncParams) { return OpSub_GbEb_Internal<false>(LogicPassParams); }
@@ -987,6 +1130,9 @@ FORCE_INLINE LogicFlow OpXor_EbGb_NF(LogicFuncParams) { return OpXor_EbGb_Intern
 
 FORCE_INLINE LogicFlow OpXor_EvGv(LogicFuncParams) { return OpXor_EvGv_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpXor_EvGv_NF(LogicFuncParams) { return OpXor_EvGv_Internal<false>(LogicPassParams); }
+FORCE_INLINE LogicFlow OpXor_EvGv_NF_32_ModReg(LogicFuncParams) {
+    return OpXor_EvGv_Internal<false, OpsizeSpec::Opsize32, AddrModeSpec::ModReg>(LogicPassParams);
+}
 
 FORCE_INLINE LogicFlow OpXor_GbEb(LogicFuncParams) { return OpXor_GbEb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpXor_GbEb_NF(LogicFuncParams) { return OpXor_GbEb_Internal<false>(LogicPassParams); }

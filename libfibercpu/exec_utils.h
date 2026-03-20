@@ -355,7 +355,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
-    if (mod == 3) {
+    if (mod == 3) [[likely]] {
         // Register Operand
         return ReadRegGeneric<T>(state, rm);
     } else {
@@ -367,7 +367,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
         } else {
             // Restart or Retry (though Retry for Read is unusual, treating as Restart)
             auto value = state->mmu.read<T, true>(addr, utlb, op);
-            if (!value) {
+            if (!value) [[unlikely]] {
                 // For Read, we always need to check pending if we want to restart
                 // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
                 // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
@@ -387,7 +387,7 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, m
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
-    if (mod == 3) {
+    if (mod == 3) [[likely]] {
         // Register Operand
         WriteRegGeneric<T>(state, rm, val);
         return {};
@@ -399,7 +399,7 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, m
             return state->mmu.write<T, false>(addr, val, utlb, op);
         } else {
             auto result = state->mmu.write<T, true>(addr, val, utlb, op);
-            if (!result) {
+            if (!result) [[unlikely]] {
                 if constexpr (Strategy == OpOnTLBMiss::Restart) {
                     result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
                 } else {
@@ -421,7 +421,7 @@ inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb,
         return state->mmu.read<T, false>(addr, utlb, op);
     } else {
         auto value = state->mmu.read<T, true>(addr, utlb, op);
-        if (!value) {
+        if (!value) [[unlikely]] {
             value = state->request_read_and_check_pending<T>(addr, op->next_eip);
         }
         return value;
@@ -437,7 +437,7 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem
         return state->mmu.write<T, false>(addr, val, utlb, op);
     } else {
         auto result = state->mmu.write<T, true>(addr, val, utlb, op);
-        if (!result) {
+        if (!result) [[unlikely]] {
             if constexpr (Strategy == OpOnTLBMiss::Restart) {
                 result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
             } else {
@@ -462,7 +462,7 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, D
     auto res = state->mmu.write<T, fail_on_tlb_miss>(esp - size, val, utlb, op);
 
     // Request a write and return
-    if (!res && fail_on_tlb_miss) {
+    if (!res && fail_on_tlb_miss) [[unlikely]] {
         // Push can satisfy "Retry" semantics (update ESP only on success)
         res = state->request_write_and_check_pending<T>(esp - size, val, op->next_eip);
     }
@@ -481,7 +481,7 @@ FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* o
 
     // Read from memory (ESP)
     auto res = state->mmu.read<T, fail_on_tlb_miss>(esp, utlb, op);
-    if (!res && fail_on_tlb_miss) {
+    if (!res && fail_on_tlb_miss) [[unlikely]] {
         res = state->request_read_and_check_pending<T>(esp, op->next_eip);
     }
 

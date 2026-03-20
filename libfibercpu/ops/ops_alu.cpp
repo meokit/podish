@@ -4,12 +4,24 @@ namespace fiberish {
 void RegisterAluOps() {
     using namespace op;
 
+#define REGISTER_EVGV_NF_32_MODREG(opcode, func)                 \
+    {                                                            \
+        SpecCriteria c;                                          \
+        c.mod_mask = 0x03;                                       \
+        c.mod_val = 0x03;                                        \
+        c.prefix_mask = 0x40;                                    \
+        c.prefix_val = 0x00;                                     \
+        c.no_flags = true;                                       \
+        DispatchRegistrar<func>::RegisterSpecialized(opcode, c); \
+    }
+
     g_Handlers[0x00] = DispatchWrapper<OpAdd_EbGb>;
     DispatchRegistrar<OpAdd_EbGb_NF>::RegisterNF(0x00);
 
     // 01: ADD r/m16/32, r16/32
     DispatchRegistrar<OpAdd_EvGv>::Register(0x01);
     DispatchRegistrar<OpAdd_EvGv_NF>::RegisterNF(0x01);
+    REGISTER_EVGV_NF_32_MODREG(0x01, OpAdd_EvGv_NF_32_ModReg);
 
     // Specialization: ADD EAX, r32 (Mod=3, RM=0)
     // OpAdd_EvGv_Eax
@@ -37,6 +49,7 @@ void RegisterAluOps() {
 
     g_Handlers[0x09] = DispatchWrapper<OpOr_EvGv>;
     DispatchRegistrar<OpOr_EvGv_NF>::RegisterNF(0x09);
+    REGISTER_EVGV_NF_32_MODREG(0x09, OpOr_EvGv_NF_32_ModReg);
 
     g_Handlers[0x0A] = DispatchWrapper<OpOr_GbEb>;
     DispatchRegistrar<OpOr_GbEb_NF>::RegisterNF(0x0A);
@@ -92,6 +105,7 @@ void RegisterAluOps() {
 
     g_Handlers[0x21] = DispatchWrapper<OpAnd_EvGv>;
     DispatchRegistrar<OpAnd_EvGv_NF>::RegisterNF(0x21);
+    REGISTER_EVGV_NF_32_MODREG(0x21, OpAnd_EvGv_NF_32_ModReg);
 
     g_Handlers[0x22] = DispatchWrapper<OpAnd_GbEb>;
     DispatchRegistrar<OpAnd_GbEb_NF>::RegisterNF(0x22);
@@ -110,6 +124,7 @@ void RegisterAluOps() {
 
     g_Handlers[0x29] = DispatchWrapper<OpSub_EvGv>;
     DispatchRegistrar<OpSub_EvGv_NF>::RegisterNF(0x29);
+    REGISTER_EVGV_NF_32_MODREG(0x29, OpSub_EvGv_NF_32_ModReg);
 
     g_Handlers[0x2A] = DispatchWrapper<OpSub_GbEb>;
     DispatchRegistrar<OpSub_GbEb_NF>::RegisterNF(0x2A);
@@ -128,6 +143,7 @@ void RegisterAluOps() {
 
     g_Handlers[0x31] = DispatchWrapper<OpXor_EvGv>;
     DispatchRegistrar<OpXor_EvGv_NF>::RegisterNF(0x31);
+    REGISTER_EVGV_NF_32_MODREG(0x31, OpXor_EvGv_NF_32_ModReg);
 
     g_Handlers[0x32] = DispatchWrapper<OpXor_GbEb>;
     DispatchRegistrar<OpXor_GbEb_NF>::RegisterNF(0x32);
@@ -160,5 +176,7 @@ void RegisterAluOps() {
     g_Handlers[0x3F] = DispatchWrapper<op::OpAas>;
     g_Handlers[0xD4] = DispatchWrapper<op::OpAam>;
     g_Handlers[0xD5] = DispatchWrapper<op::OpAad>;
+
+#undef REGISTER_EVGV_NF_32_MODREG
 }
 }  // namespace fiberish
