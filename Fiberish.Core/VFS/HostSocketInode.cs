@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -12,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
-public sealed class HostSocketInode : Inode, IDispatcherWaitSource
+public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps, ISocketOptionOps
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
@@ -63,6 +64,567 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
         Action callback, short events)
     {
         return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
+    }
+
+    public async ValueTask<int> RecvAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes = -1)
+    {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return 0;
+        Logger.LogTrace(
+            "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
+            Ino, recvLen, flags, (int)file.Flags, NativeSocket.Connected);
+
+        while (true)
+            try
+            {
+                var n = NativeSocket.Receive(buffer, 0, recvLen, (SocketFlags)flags);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLIN);
+                Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
+                return n;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                ClearReadyBits(PollEvents.POLLIN);
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
+                    return -(int)Errno.EAGAIN;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
+            }
+    }
+
+    public async ValueTask<RecvMessageResult> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
+        int maxBytes = -1)
+    {
+        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
+        if (recvLen <= 0) return new RecvMessageResult(0);
+        var remoteEpTemplate = HostAddressFamily == AddressFamily.InterNetworkV6
+            ? (EndPoint)new IPEndPoint(IPAddress.IPv6Any, 0)
+            : new IPEndPoint(IPAddress.Any, 0);
+        while (true)
+            try
+            {
+                var remoteEp = remoteEpTemplate;
+                var n = NativeSocket.ReceiveFrom(buffer, 0, recvLen, (SocketFlags)flags, ref remoteEp);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLIN);
+                return new RecvMessageResult(n, null, remoteEp);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                ClearReadyBits(PollEvents.POLLIN);
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
+                    return new RecvMessageResult(-(int)Errno.EAGAIN);
+                }
+
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+                if (!ready)
+                    return new RecvMessageResult(-(int)Errno.ERESTARTSYS);
+            }
+            catch (SocketException ex)
+            {
+                return new RecvMessageResult(MapSocketError(ex.SocketErrorCode));
+            }
+            catch (ObjectDisposedException)
+            {
+                return new RecvMessageResult(-(int)Errno.ENOTCONN);
+            }
+    }
+
+    public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
+    {
+        byte[]? rented = null;
+        ArraySegment<byte> segment;
+        if (!MemoryMarshal.TryGetArray(buffer, out segment))
+        {
+            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+            buffer.Span.CopyTo(rented);
+            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
+        }
+
+        Logger.LogTrace(
+            "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
+            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
+
+        try
+        {
+            while (true)
+                try
+                {
+                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                    if (n > 0)
+                        ClearReadyBits(PollEvents.POLLOUT);
+                    Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
+                    return n;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                                 ex.SocketErrorCode == SocketError.IOPending)
+                {
+                    ClearReadyBits(PollEvents.POLLOUT);
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    {
+                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
+                            (int)file.Flags);
+                        return -(int)Errno.EAGAIN;
+                    }
+
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+                    if (!ready)
+                        return -(int)Errno.ERESTARTSYS;
+                }
+                catch (SocketException ex)
+                {
+                    return MapSocketError(ex.SocketErrorCode);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return -(int)Errno.ENOTCONN;
+                }
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags,
+        object remoteEpObj)
+    {
+        if (remoteEpObj is not EndPoint remoteEp) return -(int)Errno.EAFNOSUPPORT;
+        byte[]? rented = null;
+        ArraySegment<byte> segment;
+        if (!MemoryMarshal.TryGetArray(buffer, out segment))
+        {
+            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+            buffer.Span.CopyTo(rented);
+            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
+        }
+
+        try
+        {
+            while (true)
+                try
+                {
+                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags,
+                        remoteEp);
+                    if (n > 0)
+                        ClearReadyBits(PollEvents.POLLOUT);
+                    return n;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                                 ex.SocketErrorCode == SocketError.IOPending)
+                {
+                    ClearReadyBits(PollEvents.POLLOUT);
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    {
+                        Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
+                            (int)file.Flags);
+                        return -(int)Errno.EAGAIN;
+                    }
+
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+                    if (!ready)
+                        return -(int)Errno.ERESTARTSYS;
+                }
+                catch (SocketException ex)
+                {
+                    return MapSocketError(ex.SocketErrorCode);
+                }
+                catch (ObjectDisposedException)
+                {
+                    return -(int)Errno.ENOTCONN;
+                }
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public async ValueTask<int> SendMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, List<LinuxFile>? fds,
+        int flags, object? endpoint)
+    {
+        if (endpoint != null)
+            return await SendToAsync(file, task, buffer, flags, endpoint);
+        return await SendAsync(file, task, buffer, flags);
+    }
+
+    public ValueTask<RecvMessageResult> RecvMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
+        int maxBytes = -1)
+    {
+        return RecvFromAsync(file, task, buffer, flags, maxBytes);
+    }
+
+    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpointObj)
+    {
+        if (endpointObj is not EndPoint endpoint) return -(int)Errno.EAFNOSUPPORT;
+        while (true)
+            try
+            {
+                NativeSocket.Connect(endpoint);
+                return 0;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending ||
+                                             ex.SocketErrorCode == SocketError.InProgress ||
+                                             ex.SocketErrorCode == SocketError.AlreadyInProgress)
+            {
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
+                        Ino,
+                        (int)file.Flags, endpoint);
+                    return -(int)Errno.EINPROGRESS;
+                }
+
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+                if (!ready)
+                    return -(int)Errno.ERESTARTSYS;
+
+                var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                if (so is not int soInt)
+                    return -(int)Errno.EIO;
+                var err = (SocketError)soInt;
+                if (err == SocketError.Success || err == SocketError.IsConnected)
+                    return 0;
+                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                    or SocketError.AlreadyInProgress)
+                    continue;
+                return MapSocketError(err);
+            }
+            catch (SocketException ex)
+            {
+                return MapSocketError(ex.SocketErrorCode);
+            }
+            catch (ObjectDisposedException)
+            {
+                return -(int)Errno.ENOTCONN;
+            }
+    }
+
+    public async ValueTask<AcceptedSocketResult> AcceptAsync(LinuxFile file, FiberTask task, int flags)
+    {
+        if (TryDequeueAcceptedSocket(out var queued))
+        {
+            if (!HasBufferedAcceptedSocket())
+                ClearReadyBits(PollEvents.POLLIN);
+            var newIno = new HostSocketInode(0, SuperBlock, queued);
+            return new AcceptedSocketResult(0, newIno, queued.RemoteEndPoint);
+        }
+
+        while (true)
+            try
+            {
+                var accepted = NativeSocket.Accept();
+                if (!HasBufferedAcceptedSocket())
+                    ClearReadyBits(PollEvents.POLLIN);
+                var newIno = new HostSocketInode(0, SuperBlock, accepted);
+                return new AcceptedSocketResult(0, newIno, accepted.RemoteEndPoint);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    return new AcceptedSocketResult(-(int)Errno.EAGAIN, null);
+
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+                if (!ready)
+                    return new AcceptedSocketResult(-(int)Errno.ERESTARTSYS, null);
+            }
+            catch (SocketException ex)
+            {
+                return new AcceptedSocketResult(MapSocketError(ex.SocketErrorCode), null);
+            }
+            catch (ObjectDisposedException)
+            {
+                return new AcceptedSocketResult(-(int)Errno.ENOTCONN, null);
+            }
+    }
+
+
+    // --- Capability Methods ---
+    public int Bind(LinuxFile file, FiberTask task, object endpoint)
+    {
+        if (endpoint is not EndPoint ep) return -(int)Errno.EAFNOSUPPORT;
+        try
+        {
+            NativeSocket!.Bind(ep);
+            return 0;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+    }
+
+    public int Listen(LinuxFile file, FiberTask task, int backlog)
+    {
+        try
+        {
+            NativeSocket!.Listen(backlog);
+            return 0;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+    }
+
+    public SocketAddressResult GetSockName(LinuxFile file, FiberTask task)
+    {
+        EndPoint? ep;
+        try
+        {
+            ep = NativeSocket!.LocalEndPoint;
+        }
+        catch
+        {
+            ep = null;
+        }
+
+        if (ep == null)
+            ep = HostAddressFamily == AddressFamily.InterNetworkV6
+                ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                : new IPEndPoint(IPAddress.Any, 0);
+        return new SocketAddressResult(ep);
+    }
+
+    public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
+    {
+        EndPoint? ep;
+        try
+        {
+            ep = NativeSocket!.RemoteEndPoint;
+        }
+        catch
+        {
+            ep = null;
+        }
+
+        return new SocketAddressResult(ep);
+    }
+
+    public int Shutdown(LinuxFile file, FiberTask task, int how)
+    {
+        try
+        {
+            var mode = how switch
+            {
+                0 => SocketShutdown.Receive,
+                1 => SocketShutdown.Send,
+                2 => SocketShutdown.Both,
+                _ => throw new ArgumentOutOfRangeException(nameof(how))
+            };
+            NativeSocket!.Shutdown(mode);
+            return 0;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return -(int)Errno.EINVAL;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+        catch (ObjectDisposedException)
+        {
+            return -(int)Errno.ENOTCONN;
+        }
+    }
+
+    public int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> optval)
+    {
+        try
+        {
+            if (level == LinuxConstants.SOL_SOCKET)
+                switch (optname)
+                {
+                    case LinuxConstants.SO_REUSEADDR:
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval) != 0);
+                        return 0;
+                    case LinuxConstants.SO_KEEPALIVE:
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval) != 0);
+                        return 0;
+                    case LinuxConstants.SO_OOBINLINE:
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.OutOfBandInline,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval) != 0);
+                        return 0;
+                    case LinuxConstants.SO_SNDBUF:
+                        NativeSocket.SendBufferSize = BinaryPrimitives.ReadInt32LittleEndian(optval);
+                        return 0;
+                    case LinuxConstants.SO_RCVBUF:
+                        NativeSocket.ReceiveBufferSize = BinaryPrimitives.ReadInt32LittleEndian(optval);
+                        return 0;
+                    case LinuxConstants.SO_LINGER:
+                        if (optval.Length < 8) return -(int)Errno.EINVAL;
+                        var lingerOn = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(0, 4)) != 0;
+                        var lingerSec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(4, 4));
+                        if (lingerSec < 0) lingerSec = 0;
+                        NativeSocket.LingerState = new LingerOption(lingerOn, lingerSec);
+                        return 0;
+                    case LinuxConstants.SO_REUSEPORT:
+                        return 0;
+                    case LinuxConstants.SO_RCVTIMEO:
+                        if (optval.Length >= 8)
+                        {
+                            long sec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(0, 4));
+                            long usec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(4, 4));
+                            NativeSocket.ReceiveTimeout = (int)(sec * 1000 + usec / 1000);
+                        }
+
+                        return 0;
+                    case LinuxConstants.SO_SNDTIMEO:
+                        if (optval.Length >= 8)
+                        {
+                            long sec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(0, 4));
+                            long usec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(4, 4));
+                            NativeSocket.SendTimeout = (int)(sec * 1000 + usec / 1000);
+                        }
+
+                        return 0;
+                    default:
+                        return -(int)Errno.ENOPROTOOPT;
+                }
+
+            if (level == LinuxConstants.IPPROTO_TCP)
+                switch (optname)
+                {
+                    case LinuxConstants.TCP_NODELAY:
+                        NativeSocket.NoDelay = BinaryPrimitives.ReadInt32LittleEndian(optval) != 0;
+                        return 0;
+                    case LinuxConstants.TCP_KEEPIDLE:
+                    case LinuxConstants.TCP_KEEPINTVL:
+                    case LinuxConstants.TCP_KEEPCNT:
+                        return 0;
+                    default:
+                        return -(int)Errno.ENOPROTOOPT;
+                }
+
+            if (level == LinuxConstants.IPPROTO_IPV6)
+            {
+                if (optname == LinuxConstants.IPV6_V6ONLY)
+                {
+                    NativeSocket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only,
+                        BinaryPrimitives.ReadInt32LittleEndian(optval) != 0);
+                    return 0;
+                }
+
+                return -(int)Errno.ENOPROTOOPT;
+            }
+
+            if (level == LinuxConstants.IPPROTO_ICMPV6 && optname == LinuxConstants.ICMPV6_FILTER)
+                return 0;
+
+            return -(int)Errno.ENOPROTOOPT;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
+    }
+
+    public int GetSocketOption(LinuxFile file, FiberTask task, int level, int optname, Span<byte> optval,
+        out int written)
+    {
+        written = 4;
+        try
+        {
+            if (level == LinuxConstants.SOL_SOCKET)
+                switch (optname)
+                {
+                    case LinuxConstants.SO_REUSEADDR:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval,
+                            NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) is int
+                                v1
+                                ? v1
+                                : 0);
+                        return 0;
+                    case LinuxConstants.SO_KEEPALIVE:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval,
+                            NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2
+                                ? v2
+                                : 0);
+                        return 0;
+                    case LinuxConstants.SO_ERROR:
+                        var cachedSoError = ConsumeCachedSocketError();
+                        if (cachedSoError != 0)
+                        {
+                            BinaryPrimitives.WriteInt32LittleEndian(optval, cachedSoError);
+                            return 0;
+                        }
+
+                        var soErrorObj = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                        var soError = soErrorObj switch
+                        {
+                            int i => (SocketError)i, SocketError se => se, _ => SocketError.Success
+                        };
+                        var linuxErr = soError == SocketError.Success ? 0 : -MapSocketError(soError);
+                        BinaryPrimitives.WriteInt32LittleEndian(optval, linuxErr);
+                        return 0;
+                    case LinuxConstants.SO_SNDBUF:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval, NativeSocket.SendBufferSize);
+                        return 0;
+                    case LinuxConstants.SO_RCVBUF:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval, NativeSocket.ReceiveBufferSize);
+                        return 0;
+                    case LinuxConstants.SO_LINGER:
+                        var linger = NativeSocket.LingerState ?? new LingerOption(false, 0);
+                        BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(0, 4), linger.Enabled ? 1 : 0);
+                        BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(4, 4), linger.LingerTime);
+                        written = 8;
+                        return 0;
+                    case LinuxConstants.SO_TYPE:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval, LinuxSocketType switch
+                        {
+                            SocketType.Stream => LinuxConstants.SOCK_STREAM,
+                            SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
+                            SocketType.Raw => LinuxConstants.SOCK_RAW,
+                            SocketType.Seqpacket => LinuxConstants.SOCK_SEQPACKET,
+                            _ => 0
+                        });
+                        return 0;
+                    default:
+                        return -(int)Errno.ENOPROTOOPT;
+                }
+
+            if (level == LinuxConstants.IPPROTO_TCP)
+                switch (optname)
+                {
+                    case LinuxConstants.TCP_NODELAY:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval, NativeSocket.NoDelay ? 1 : 0);
+                        return 0;
+                    default:
+                        return -(int)Errno.ENOPROTOOPT;
+                }
+
+            return -(int)Errno.ENOPROTOOPT;
+        }
+        catch (SocketException ex)
+        {
+            return MapSocketError(ex.SocketErrorCode);
+        }
     }
 
     public override short Poll(LinuxFile file, short events)
@@ -144,275 +706,6 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
                     return -(int)Errno.EPERM;
                 return NetDeviceIoctlHelper.Handle(sm, engine, request, arg);
         }
-    }
-
-    public async ValueTask<int> RecvAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes = -1)
-    {
-        var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
-        if (recvLen <= 0) return 0;
-        Logger.LogTrace(
-            "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, recvLen, flags, (int)file.Flags, NativeSocket.Connected);
-
-        while (true)
-            try
-            {
-                var n = NativeSocket.Receive(buffer, 0, recvLen, (SocketFlags)flags);
-                if (n > 0)
-                    ClearReadyBits(PollEvents.POLLIN);
-                Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
-                return n;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                ClearReadyBits(PollEvents.POLLIN);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                {
-                    Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
-                    return -(int)Errno.EAGAIN;
-                }
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
-                if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
-            }
-            catch (SocketException ex)
-            {
-                return MapSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
-    }
-
-    public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer,
-        int flags,
-        EndPoint remoteEpTemplate)
-    {
-        while (true)
-            try
-            {
-                var remoteEp = remoteEpTemplate;
-                var n = NativeSocket.ReceiveFrom(buffer, 0, buffer.Length, (SocketFlags)flags, ref remoteEp);
-                if (n > 0)
-                    ClearReadyBits(PollEvents.POLLIN);
-                return (n, remoteEp);
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                ClearReadyBits(PollEvents.POLLIN);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                {
-                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
-                        (int)file.Flags);
-                    return (-(int)Errno.EAGAIN, null);
-                }
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
-                if (!ready)
-                    return (-(int)Errno.ERESTARTSYS, null);
-            }
-            catch (SocketException ex)
-            {
-                return (MapSocketError(ex.SocketErrorCode), null);
-            }
-            catch (ObjectDisposedException)
-            {
-                return (-(int)Errno.ENOTCONN, null);
-            }
-    }
-
-    public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
-    {
-        byte[]? rented = null;
-        ArraySegment<byte> segment;
-        if (!MemoryMarshal.TryGetArray(buffer, out segment))
-        {
-            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
-            buffer.Span.CopyTo(rented);
-            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
-        }
-
-        Logger.LogTrace(
-            "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
-
-        try
-        {
-            while (true)
-                try
-                {
-                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
-                    if (n > 0)
-                        ClearReadyBits(PollEvents.POLLOUT);
-                    Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
-                    return n;
-                }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                                 ex.SocketErrorCode == SocketError.IOPending)
-                {
-                    ClearReadyBits(PollEvents.POLLOUT);
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                    {
-                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
-                            (int)file.Flags);
-                        return -(int)Errno.EAGAIN;
-                    }
-
-                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                    if (!ready)
-                        return -(int)Errno.ERESTARTSYS;
-                }
-                catch (SocketException ex)
-                {
-                    return MapSocketError(ex.SocketErrorCode);
-                }
-                catch (ObjectDisposedException)
-                {
-                    return -(int)Errno.ENOTCONN;
-                }
-        }
-        finally
-        {
-            if (rented != null)
-                ArrayPool<byte>.Shared.Return(rented);
-        }
-    }
-
-    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags,
-        EndPoint remoteEp)
-    {
-        byte[]? rented = null;
-        ArraySegment<byte> segment;
-        if (!MemoryMarshal.TryGetArray(buffer, out segment))
-        {
-            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
-            buffer.Span.CopyTo(rented);
-            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
-        }
-
-        try
-        {
-            while (true)
-                try
-                {
-                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags,
-                        remoteEp);
-                    if (n > 0)
-                        ClearReadyBits(PollEvents.POLLOUT);
-                    return n;
-                }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                                 ex.SocketErrorCode == SocketError.IOPending)
-                {
-                    ClearReadyBits(PollEvents.POLLOUT);
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                    {
-                        Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
-                            (int)file.Flags);
-                        return -(int)Errno.EAGAIN;
-                    }
-
-                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                    if (!ready)
-                        return -(int)Errno.ERESTARTSYS;
-                }
-                catch (SocketException ex)
-                {
-                    return MapSocketError(ex.SocketErrorCode);
-                }
-                catch (ObjectDisposedException)
-                {
-                    return -(int)Errno.ENOTCONN;
-                }
-        }
-        finally
-        {
-            if (rented != null)
-                ArrayPool<byte>.Shared.Return(rented);
-        }
-    }
-
-    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, EndPoint endpoint)
-    {
-        while (true)
-            try
-            {
-                NativeSocket.Connect(endpoint);
-                return 0;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending ||
-                                             ex.SocketErrorCode == SocketError.InProgress ||
-                                             ex.SocketErrorCode == SocketError.AlreadyInProgress)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                {
-                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
-                        Ino,
-                        (int)file.Flags, endpoint);
-                    return -(int)Errno.EINPROGRESS;
-                }
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
-
-                var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-                if (so is not int soInt)
-                    return -(int)Errno.EIO;
-                var err = (SocketError)soInt;
-                if (err == SocketError.Success || err == SocketError.IsConnected)
-                    return 0;
-                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
-                    or SocketError.AlreadyInProgress)
-                    continue;
-                return MapSocketError(err);
-            }
-            catch (SocketException ex)
-            {
-                return MapSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
-    }
-
-    public async ValueTask<Socket> AcceptAsync(LinuxFile file, FiberTask task, int flags)
-    {
-        if (TryDequeueAcceptedSocket(out var queued))
-        {
-            if (!HasBufferedAcceptedSocket())
-                ClearReadyBits(PollEvents.POLLIN);
-            return queued;
-        }
-
-        while (true)
-            try
-            {
-                var accepted = NativeSocket.Accept();
-                if (!HasBufferedAcceptedSocket())
-                    ClearReadyBits(PollEvents.POLLIN);
-                return accepted;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                    throw new SocketException((int)SocketError.WouldBlock);
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
-                if (!ready)
-                    throw new SocketException((int)SocketError.Interrupted);
-            }
-            catch (ObjectDisposedException)
-            {
-                throw new SocketException((int)SocketError.NotConnected);
-            }
     }
 
     public override int Read(LinuxFile file, Span<byte> buffer, long offset)

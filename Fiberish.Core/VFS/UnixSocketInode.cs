@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Syscalls;
@@ -13,7 +14,8 @@ public class UnixMessage
     public byte[]? SourceSunPathRaw { get; init; }
 }
 
-public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
+    ISocketOptionOps
 {
     // Backpressure: track queued bytes to limit memory usage
     private const int MaxSendBuffer = 262144; // 256KB
@@ -84,9 +86,360 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Unix socket readiness wait requires an explicit scheduler.");
+        var registered = false;
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            _readWaitQueue.Register(callback, scheduler);
+            registered = true;
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            _writeWaitQueue.Register(callback, scheduler);
+            registered = true;
+        }
+
+        return registered;
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Unix socket readiness wait requires an explicit scheduler.");
+        var registrations = new List<IDisposable>(2);
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            var reg = _readWaitQueue.RegisterCancelable(callback, scheduler);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            var reg = _writeWaitQueue.RegisterCancelable(callback, scheduler);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
+    public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
+    {
+        var rc = await SendMessageAsync(file, task, buffer.ToArray(), null, flags, null);
+        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        return rc;
+    }
+
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags,
+        object endpoint)
+    {
+        UnixSocketInode? explicitPeer = null;
+
+        if (endpoint is UnixSockaddrInfo unixAddr)
+        {
+            if (UnixSocketType != SocketType.Dgram) return -(int)Errno.EISCONN;
+            var sm = task.CPU.CurrentSyscallManager;
+            if (sm == null) return -(int)Errno.ENOSYS;
+
+            if (unixAddr.IsAbstract)
+            {
+                explicitPeer = sm.LookupUnixAbstractSocket(unixAddr.AbstractKey);
+            }
+            else
+            {
+                var loc = sm.PathWalk(unixAddr.Path);
+                if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
+                if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
+                explicitPeer = sm.LookupUnixPathSocket(loc.Dentry.Inode);
+            }
+
+            if (explicitPeer == null) return -(int)Errno.ECONNREFUSED;
+        }
+        else if (endpoint != null)
+        {
+            return -(int)Errno.EAFNOSUPPORT;
+        }
+
+        var rc = await SendMessageAsync(file, task, buffer.ToArray(), null, flags, explicitPeer);
+        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        return rc;
+    }
+
+    public async ValueTask<int> RecvAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes = -1)
+    {
+        var res = await RecvMessageAsync(file, task, buffer, flags, maxBytes);
+        var bytes = res.BytesRead;
+        if (bytes > 0 && res.Fds != null)
+            foreach (var f in res.Fds)
+                f.Close();
+        return bytes;
+    }
+
+    async ValueTask<RecvMessageResult> ISocketDataOps.RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer,
+        int flags, int maxBytes)
+    {
+        var res = await RecvMessageAsync(file, task, buffer, flags, maxBytes);
+        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw);
+    }
+
+    public async ValueTask<int> SendMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, List<LinuxFile>? fds,
+        int flags, object? endpoint)
+    {
+        UnixSocketInode? explicitPeer = null;
+
+        if (endpoint is UnixSockaddrInfo unixAddr)
+        {
+            if (UnixSocketType != SocketType.Dgram) return -(int)Errno.EISCONN;
+            var sm = task.CPU.CurrentSyscallManager;
+            if (sm == null) return -(int)Errno.ENOSYS;
+
+            if (unixAddr.IsAbstract)
+            {
+                explicitPeer = sm.LookupUnixAbstractSocket(unixAddr.AbstractKey);
+            }
+            else
+            {
+                var loc = sm.PathWalk(unixAddr.Path);
+                if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
+                if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
+                explicitPeer = sm.LookupUnixPathSocket(loc.Dentry.Inode);
+            }
+
+            if (explicitPeer == null) return -(int)Errno.ECONNREFUSED;
+        }
+
+        var rc = await SendMessageAsync(file, task, buffer, fds, flags, explicitPeer);
+        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        return rc;
+    }
+
+    async ValueTask<RecvMessageResult> ISocketDataOps.RecvMsgAsync(LinuxFile file, FiberTask task, byte[] buffer,
+        int flags, int maxBytes)
+    {
+        var res = await RecvMessageAsync(file, task, buffer, flags, maxBytes);
+        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw);
+    }
+
+
+    // --- Capability Methods ---
+    public int Bind(LinuxFile file, FiberTask task, object endpoint)
+    {
+        if (endpoint is not UnixSockaddrInfo unixAddr) return -(int)Errno.EAFNOSUPPORT;
+        if (IsBound) return -(int)Errno.EINVAL;
+        if (unixAddr.SunPathRaw.Length == 0) return -(int)Errno.EINVAL;
+
+        var sm = task.CPU.CurrentSyscallManager;
+        if (sm == null) return -(int)Errno.ENOSYS;
+
+        if (unixAddr.IsAbstract)
+        {
+            if (!sm.TryBindUnixAbstractSocket(unixAddr.AbstractKey, this))
+                return -(int)Errno.EADDRINUSE;
+            SetLocalSunPathRaw(unixAddr.SunPathRaw);
+            SetReleaseUnbindCallback(sm.UnbindUnixSocket);
+            return 0;
+        }
+
+        var (parent, name, createErr) = sm.PathWalkForCreate(unixAddr.Path);
+        if (createErr < 0) return createErr;
+        if (!parent.IsValid || string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
+        if (parent.Mount != null && parent.Mount.IsReadOnly) return -(int)Errno.EROFS;
+
+        var existing = sm.PathWalk(unixAddr.Path);
+        if (existing.IsValid) return -(int)Errno.EADDRINUSE;
+
+        var uid = task.Process.EUID;
+        var gid = task.Process.EGID;
+        var mode = DacPolicy.ApplyUmask(Mode & 0x0FFF, task.Process.Umask);
+        var socketDentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
+
+        try
+        {
+            parent.Dentry.Inode!.Mknod(socketDentry, mode, uid, gid, InodeType.Socket, 0);
+        }
+        catch (Exception)
+        {
+            return -(int)Errno.EACCES;
+        }
+
+        if (socketDentry.Inode == null)
+        {
+            try
+            {
+                parent.Dentry.Inode!.Unlink(name);
+                _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.mknod-null-inode", out _);
+            }
+            catch
+            {
+            }
+
+            return -(int)Errno.EIO;
+        }
+
+        if (!sm.TryBindUnixPathSocket(socketDentry.Inode, this))
+        {
+            try
+            {
+                parent.Dentry.Inode!.Unlink(name);
+                _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.bind-failed", out _);
+            }
+            catch
+            {
+            }
+
+            return -(int)Errno.EADDRINUSE;
+        }
+
+        SetLocalSunPathRaw(unixAddr.SunPathRaw);
+        SetReleaseUnbindCallback(sm.UnbindUnixSocket);
+        return 0;
+    }
+
+    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpoint)
+    {
+        if (endpoint is not UnixSockaddrInfo unixAddr) return -(int)Errno.EAFNOSUPPORT;
+
+        var sm = task.CPU.CurrentSyscallManager;
+        if (sm == null) return -(int)Errno.ENOSYS;
+
+        UnixSocketInode? target = null;
+        if (unixAddr.IsAbstract)
+        {
+            target = sm.LookupUnixAbstractSocket(unixAddr.AbstractKey);
+        }
+        else
+        {
+            var loc = sm.PathWalk(unixAddr.Path);
+            if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
+            if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
+            target = sm.LookupUnixPathSocket(loc.Dentry.Inode);
+        }
+
+        if (target == null) return -(int)Errno.ECONNREFUSED;
+        if (UnixSocketType != target.UnixSocketType) return -(int)Errno.EPROTOTYPE;
+
+        if (UnixSocketType == SocketType.Dgram)
+        {
+            ConnectPair(target);
+            SetPeerSunPathRaw(target.GetLocalSunPathRaw());
+            return 0;
+        }
+
+        if (IsConnected) return -(int)Errno.EISCONN;
+        if (!target.IsListening) return -(int)Errno.ECONNREFUSED;
+
+        var serverConn = new UnixSocketInode(0, SuperBlock, UnixSocketType);
+        ConnectPair(serverConn);
+        serverConn.ConnectPair(this);
+        SetPeerSunPathRaw(target.GetLocalSunPathRaw());
+        serverConn.SetLocalSunPathRaw(target.GetLocalSunPathRaw());
+        serverConn.SetPeerSunPathRaw(GetLocalSunPathRaw());
+
+        var enqueueRc = target.EnqueueConnection(serverConn);
+        if (enqueueRc < 0)
+        {
+            DisconnectPeer();
+            return enqueueRc;
+        }
+
+        return 0;
+    }
+
+    int ISocketEndpointOps.Listen(LinuxFile file, FiberTask task, int backlog)
+    {
+        return Listen(backlog);
+    }
+
+    async ValueTask<AcceptedSocketResult> ISocketEndpointOps.AcceptAsync(LinuxFile file, FiberTask task, int flags)
+    {
+        var (rc, inode) = await AcceptAsync(file, task, flags);
+        if (rc != 0 || inode == null) return new AcceptedSocketResult(rc, null);
+        return new AcceptedSocketResult(0, inode, null, inode.GetPeerSunPathRaw());
+    }
+
+    public SocketAddressResult GetSockName(LinuxFile file, FiberTask task)
+    {
+        return new SocketAddressResult(null, GetLocalSunPathRaw());
+    }
+
+    public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
+    {
+        if (!IsConnected) return new SocketAddressResult();
+        return new SocketAddressResult(null, GetPeerSunPathRaw());
+    }
+
+    int ISocketEndpointOps.Shutdown(LinuxFile file, FiberTask task, int how)
+    {
+        return Shutdown(how);
+    }
+
+    public int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> optval)
+    {
+        return -(int)Errno.ENOPROTOOPT;
+    }
+
+    public int GetSocketOption(LinuxFile file, FiberTask task, int level, int optname, Span<byte> optval,
+        out int written)
+    {
+        written = 0;
+        return -(int)Errno.ENOPROTOOPT;
+    }
+
+    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        var registered = false;
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            _readWaitQueue.Register(callback, task);
+            registered = true;
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            _writeWaitQueue.Register(callback, task);
+            registered = true;
+        }
+
+        return registered;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        var registrations = new List<IDisposable>(2);
+        if ((events & PollEvents.POLLIN) != 0)
+        {
+            var reg = _readWaitQueue.RegisterCancelable(callback, task);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        if ((events & PollEvents.POLLOUT) != 0)
+        {
+            var reg = _writeWaitQueue.RegisterCancelable(callback, task);
+            if (reg != null) registrations.Add(reg);
+        }
+
+        return registrations.Count switch
+        {
+            0 => null,
+            1 => registrations[0],
+            _ => new CompositeDisposable(registrations)
+        };
+    }
+
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        
         return default;
     }
 
@@ -323,99 +676,9 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return false;
     }
 
-    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        var registered = false;
-        if ((events & PollEvents.POLLIN) != 0)
-        {
-            _readWaitQueue.Register(callback, task);
-            registered = true;
-        }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            _writeWaitQueue.Register(callback, task);
-            registered = true;
-        }
-
-        return registered;
-    }
-
-    bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
-        short events)
-    {
-        var scheduler = dispatcher.Scheduler
-                        ?? throw new InvalidOperationException(
-                            "Unix socket readiness wait requires an explicit scheduler.");
-        var registered = false;
-        if ((events & PollEvents.POLLIN) != 0)
-        {
-            _readWaitQueue.Register(callback, scheduler);
-            registered = true;
-        }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            _writeWaitQueue.Register(callback, scheduler);
-            registered = true;
-        }
-
-        return registered;
-    }
-
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
-    }
-
-    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        var registrations = new List<IDisposable>(2);
-        if ((events & PollEvents.POLLIN) != 0)
-        {
-            var reg = _readWaitQueue.RegisterCancelable(callback, task);
-            if (reg != null) registrations.Add(reg);
-        }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            var reg = _writeWaitQueue.RegisterCancelable(callback, task);
-            if (reg != null) registrations.Add(reg);
-        }
-
-        return registrations.Count switch
-        {
-            0 => null,
-            1 => registrations[0],
-            _ => new CompositeDisposable(registrations)
-        };
-    }
-
-    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
-        Action callback, short events)
-    {
-        var scheduler = dispatcher.Scheduler
-                        ?? throw new InvalidOperationException(
-                            "Unix socket readiness wait requires an explicit scheduler.");
-        var registrations = new List<IDisposable>(2);
-        if ((events & PollEvents.POLLIN) != 0)
-        {
-            var reg = _readWaitQueue.RegisterCancelable(callback, scheduler);
-            if (reg != null) registrations.Add(reg);
-        }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            var reg = _writeWaitQueue.RegisterCancelable(callback, scheduler);
-            if (reg != null) registrations.Add(reg);
-        }
-
-        return registrations.Count switch
-        {
-            0 => null,
-            1 => registrations[0],
-            _ => new CompositeDisposable(registrations)
-        };
     }
 
     public void EnqueueMessage(UnixMessage msg)
@@ -520,12 +783,14 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds, int flags)
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds,
+        int flags)
     {
         return await SendMessageAsync(file, task, data, fds, flags, null);
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds, int flags,
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds,
+        int flags,
         UnixSocketInode? explicitPeer)
     {
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||

@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Net.Sockets;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -22,126 +21,28 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var level = (int)a2;
         var optname = (int)a3;
-        var optval = a4;
+        var optvalPtr = a4;
         var optlen = (int)a5;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        // Read the option value bytes from guest memory
-        var buf = new byte[Math.Max(optlen, 4)];
-        if (optlen > 0 && !task.CPU.CopyFromUser(optval, buf.AsSpan(0, optlen)))
-            return -(int)Errno.EFAULT;
+        if (optvalPtr == 0 && optlen > 0) return -(int)Errno.EFAULT;
+        if (optlen < 0) return -(int)Errno.EINVAL;
 
-        if (file.OpenedInode is HostSocketInode hostSock)
-        {
-            var sock = hostSock.NativeSocket!;
-            try
-            {
-                if (level == LinuxConstants.SOL_SOCKET)
-                    switch (optname)
-                    {
-                        case LinuxConstants.SO_REUSEADDR:
-                            sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress,
-                                BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
-                            return 0;
-                        case LinuxConstants.SO_KEEPALIVE:
-                            sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive,
-                                BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
-                            return 0;
-                        case LinuxConstants.SO_OOBINLINE:
-                            sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.OutOfBandInline,
-                                BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
-                            return 0;
-                        case LinuxConstants.SO_SNDBUF:
-                            sock.SendBufferSize = BinaryPrimitives.ReadInt32LittleEndian(buf);
-                            return 0;
-                        case LinuxConstants.SO_RCVBUF:
-                            sock.ReceiveBufferSize = BinaryPrimitives.ReadInt32LittleEndian(buf);
-                            return 0;
-                        case LinuxConstants.SO_LINGER:
-                            if (optlen < 8)
-                                return -(int)Errno.EINVAL;
-                            var lingerOn = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4)) != 0;
-                            var lingerSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-                            if (lingerSec < 0)
-                                lingerSec = 0;
-                            sock.LingerState = new LingerOption(lingerOn, lingerSec);
-                            return 0;
-                        case LinuxConstants.SO_REUSEPORT:
-                            // .NET exposes this on Linux/macOS via SocketOptionName.ReuseAddress
-                            return 0;
-                        case LinuxConstants.SO_RCVTIMEO:
-                            if (optlen >= 8)
-                            {
-                                long sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-                                long usec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-                                sock.ReceiveTimeout = (int)(sec * 1000 + usec / 1000);
-                            }
+        var optval = new byte[optlen];
+        if (optlen > 0 && !task.CPU.CopyFromUser(optvalPtr, optval)) return -(int)Errno.EFAULT;
 
-                            return 0;
-                        case LinuxConstants.SO_SNDTIMEO:
-                            if (optlen >= 8)
-                            {
-                                long sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-                                long usec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-                                sock.SendTimeout = (int)(sec * 1000 + usec / 1000);
-                            }
+        if (file.TryGetSocketOptionOps(out var ops))
+            return ops.SetSocketOption(file, task, level, optname, optval);
 
-                            return 0;
-                        default:
-                            return -(int)Errno.ENOPROTOOPT;
-                    }
+        if (file.OpenedInode is NetlinkRouteSocketInode)
+            return 0; // Netlink stub
 
-                if (level == LinuxConstants.IPPROTO_TCP)
-                    switch (optname)
-                    {
-                        case LinuxConstants.TCP_NODELAY:
-                            sock.NoDelay = BinaryPrimitives.ReadInt32LittleEndian(buf) != 0;
-                            return 0;
-                        case LinuxConstants.TCP_KEEPIDLE:
-                        case LinuxConstants.TCP_KEEPINTVL:
-                        case LinuxConstants.TCP_KEEPCNT:
-                            return 0;
-                        default:
-                            return -(int)Errno.ENOPROTOOPT;
-                    }
-
-                if (level == LinuxConstants.IPPROTO_IPV6)
-                {
-                    if (optname == LinuxConstants.IPV6_V6ONLY)
-                    {
-                        sock.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only,
-                            BinaryPrimitives.ReadInt32LittleEndian(buf) != 0);
-                        return 0;
-                    }
-
-                    return -(int)Errno.ENOPROTOOPT;
-                }
-
-                if (level == LinuxConstants.IPPROTO_ICMPV6)
-                {
-                    if (optname == LinuxConstants.ICMPV6_FILTER)
-                        return 0;
-                    return -(int)Errno.ENOPROTOOPT;
-                }
-
-                return -(int)Errno.ENOPROTOOPT;
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netSock)
-            return netSock.SetSocketOption(level, optname, buf.AsSpan(0, optlen));
-
-        return -(int)Errno.ENOPROTOOPT;
+        return -(int)Errno.ENOTSOCK;
     }
 
     private async ValueTask<int> SysGetSockOpt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -149,124 +50,44 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var level = (int)a2;
         var optname = (int)a3;
-        var optval = a4;
+        var optvalPtr = a4;
         var optlenPtr = a5;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        // Read user-supplied optlen
-        var lenBuf = new byte[4];
+        if (optlenPtr == 0) return -(int)Errno.EFAULT;
+
+        Span<byte> lenBuf = stackalloc byte[4];
         if (!task.CPU.CopyFromUser(optlenPtr, lenBuf)) return -(int)Errno.EFAULT;
         var optlen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+        if (optlen < 0) return -(int)Errno.EINVAL;
 
-        var outBuf = new byte[Math.Max(optlen, 8)];
-        var written = 4; // default: return a single int
+        if (optvalPtr == 0 && optlen > 0) return -(int)Errno.EFAULT;
 
-        if (file.OpenedInode is HostSocketInode hostSock)
+        var optval = new byte[optlen];
+
+        if (file.TryGetSocketOptionOps(out var ops))
         {
-            var sock = hostSock.NativeSocket!;
-            try
-            {
-                if (level == LinuxConstants.SOL_SOCKET)
-                    switch (optname)
-                    {
-                        case LinuxConstants.SO_REUSEADDR:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress) is int v1
-                                    ? v1
-                                    : 0);
-                            break;
-                        case LinuxConstants.SO_KEEPALIVE:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive) is int v2
-                                    ? v2
-                                    : 0);
-                            break;
-                        case LinuxConstants.SO_ERROR:
-                            var cachedSoError = hostSock.ConsumeCachedSocketError();
-                            if (cachedSoError != 0)
-                            {
-                                BinaryPrimitives.WriteInt32LittleEndian(outBuf, cachedSoError);
-                                break;
-                            }
+            var rc = ops.GetSocketOption(file, task, level, optname, optval, out var written);
+            if (rc < 0) return rc;
 
-                            var soErrorObj = sock.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-                            var soError = soErrorObj switch
-                            {
-                                int i => (SocketError)i,
-                                SocketError se => se,
-                                _ => SocketError.Success
-                            };
-                            var linuxErr = soError == SocketError.Success ? 0 : LinuxToWindowsSocketError(soError);
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, linuxErr);
-                            break;
-                        case LinuxConstants.SO_SNDBUF:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.SendBufferSize);
-                            break;
-                        case LinuxConstants.SO_RCVBUF:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.ReceiveBufferSize);
-                            break;
-                        case LinuxConstants.SO_LINGER:
-                            var linger = sock.LingerState ?? new LingerOption(false, 0);
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf.AsSpan(0, 4), linger.Enabled ? 1 : 0);
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf.AsSpan(4, 4), linger.LingerTime);
-                            written = 8;
-                            break;
-                        case LinuxConstants.SO_TYPE:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf,
-                                hostSock.LinuxSocketType switch
-                                {
-                                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
-                                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
-                                    SocketType.Raw => LinuxConstants.SOCK_RAW,
-                                    SocketType.Seqpacket => LinuxConstants.SOCK_SEQPACKET,
-                                    _ => 0
-                                });
-                            break;
-                        default:
-                            return -(int)Errno.ENOPROTOOPT;
-                    }
-                else if (level == LinuxConstants.IPPROTO_TCP)
-                    switch (optname)
-                    {
-                        case LinuxConstants.TCP_NODELAY:
-                            BinaryPrimitives.WriteInt32LittleEndian(outBuf, sock.NoDelay ? 1 : 0);
-                            break;
-                        default:
-                            return -(int)Errno.ENOPROTOOPT;
-                    }
-                else
-                    return -(int)Errno.ENOPROTOOPT;
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-        }
-        else
-        {
-            if (file.OpenedInode is NetstackSocketInode netSock)
-            {
-                var rc = netSock.GetSocketOption(level, optname, outBuf, out written);
-                if (rc != 0) return rc;
-            }
-            else
-            {
-                return -(int)Errno.ENOPROTOOPT;
-            }
+            if (written > 0 && optvalPtr != 0)
+                if (!task.CPU.CopyToUser(optvalPtr, optval.AsSpan(0, written)))
+                    return -(int)Errno.EFAULT;
+
+            BinaryPrimitives.WriteInt32LittleEndian(lenBuf, written);
+            if (!task.CPU.CopyToUser(optlenPtr, lenBuf)) return -(int)Errno.EFAULT;
+            return 0;
         }
 
-        written = Math.Min(written, optlen);
-        if (!task.CPU.CopyToUser(optval, outBuf.AsSpan(0, written))) return -(int)Errno.EFAULT;
-        BinaryPrimitives.WriteInt32LittleEndian(lenBuf, written);
-        if (!task.CPU.CopyToUser(optlenPtr, lenBuf)) return -(int)Errno.EFAULT;
+        if (file.OpenedInode is NetlinkRouteSocketInode)
+            return -(int)Errno.ENOPROTOOPT;
 
-        return 0;
+        return -(int)Errno.ENOTSOCK;
     }
 
     // ── sendmmsg ─────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.VFS;
 
-public sealed class NetstackSocketInode : Inode
+public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketDataOps, ISocketOptionOps
 {
     private readonly LoopbackNetNamespace _namespace;
     private readonly SocketType _socketType;
@@ -54,147 +54,13 @@ public sealed class NetstackSocketInode : Inode
 
     public IPEndPoint? RemoteEndPoint => _stream?.RemoteEndPoint ?? _lastDatagramPeer;
 
-    public int Bind(IPEndPoint endpoint)
-    {
-        if (!IsValidBindAddress(endpoint.Address))
-            return -(int)Errno.EADDRNOTAVAIL;
-        _boundEndPoint = endpoint;
-        if (_socketType == SocketType.Dgram)
-        {
-            _udp ??= _namespace.CreateUdpSocket();
-            _udp.Bind((ushort)endpoint.Port);
-        }
-
-        return 0;
-    }
-
-    public int SetSocketOption(int level, int optname, ReadOnlySpan<byte> value)
-    {
-        if (level != LinuxConstants.SOL_SOCKET)
-            return -(int)Errno.ENOPROTOOPT;
-
-        switch (optname)
-        {
-            case LinuxConstants.SO_REUSEADDR:
-                _reuseAddress = value.Length >= 4 && BitConverter.ToInt32(value[..4]) != 0;
-                return 0;
-            case LinuxConstants.SO_RCVTIMEO:
-                _receiveTimeoutMs = ParseTimevalMs(value);
-                return 0;
-            case LinuxConstants.SO_SNDTIMEO:
-                _sendTimeoutMs = ParseTimevalMs(value);
-                return 0;
-            default:
-                return -(int)Errno.ENOPROTOOPT;
-        }
-    }
-
-    public int GetSocketOption(int level, int optname, Span<byte> destination, out int written)
-    {
-        written = 4;
-        if (level != LinuxConstants.SOL_SOCKET)
-            return -(int)Errno.ENOPROTOOPT;
-
-        switch (optname)
-        {
-            case LinuxConstants.SO_TYPE:
-                BitConverter.TryWriteBytes(destination, _socketType switch
-                {
-                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
-                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
-                    _ => 0
-                });
-                return 0;
-            case LinuxConstants.SO_ERROR:
-                BitConverter.TryWriteBytes(destination, _socketError);
-                _socketError = 0;
-                return 0;
-            case LinuxConstants.SO_REUSEADDR:
-                BitConverter.TryWriteBytes(destination, _reuseAddress ? 1 : 0);
-                return 0;
-            default:
-                return -(int)Errno.ENOPROTOOPT;
-        }
-    }
-
-    public int Listen(int backlog)
-    {
-        if (_socketType != SocketType.Stream)
-            return -(int)Errno.EOPNOTSUPP;
-        if (_boundEndPoint == null)
-            return -(int)Errno.EINVAL;
-
-        _stream?.Dispose();
-        _stream = null;
-
-        _listener ??= _namespace.CreateTcpListener();
-        _listener.Listen((ushort)_boundEndPoint.Port, (uint)Math.Max(backlog, 1));
-        _backlog = backlog;
-        return 0;
-    }
-
-    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, IPEndPoint endpoint)
-    {
-        if (_socketType == SocketType.Dgram)
-        {
-            if (!IsValidConnectAddress(endpoint.Address))
-                return -(int)Errno.ENETUNREACH;
-            if (_boundEndPoint == null)
-            {
-                _udp ??= _namespace.CreateUdpSocket();
-                _udp.Bind(0);
-                _boundEndPoint = _udp.LocalEndPoint;
-            }
-
-            _connectedDatagramPeer = endpoint;
-            _lastDatagramPeer = endpoint;
-            return 0;
-        }
-
-        if (_socketType != SocketType.Stream)
-            return -(int)Errno.EOPNOTSUPP;
-        if (!IsValidConnectAddress(endpoint.Address))
-            return -(int)Errno.ENETUNREACH;
-        _listener?.Dispose();
-        _listener = null;
-
-        _stream ??= _namespace.CreateTcpStream();
-        _stream.Connect(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port);
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-            return _stream.State == 4 ? 0 : -(int)Errno.EINPROGRESS;
-
-        return await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.State == 4) ? 0 : -(int)Errno.ERESTARTSYS;
-    }
-
-    public async ValueTask<(int Rc, NetstackSocketInode? Inode)> AcceptAsync(LinuxFile file, FiberTask task, int flags)
-    {
-        if (_socketType != SocketType.Stream)
-            return (-(int)Errno.EOPNOTSUPP, null);
-        if (_listener == null)
-            return (-(int)Errno.EINVAL, null);
-
-        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_listener.AcceptPending)
-            return (-(int)Errno.EAGAIN, null);
-
-        if (!_listener.AcceptPending)
-        {
-            var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _listener.AcceptPending);
-            if (!ok)
-                return (-(int)Errno.ERESTARTSYS, null);
-        }
-
-        var accepted = _listener.Accept();
-        return (0, new NetstackSocketInode(0, SuperBlock, _namespace, accepted));
-    }
-
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
         if (_socketType == SocketType.Dgram)
         {
             if (_connectedDatagramPeer == null)
                 return -(int)Errno.EDESTADDRREQ;
-            return await SendToAsync(file, task, buffer, _connectedDatagramPeer, flags);
+            return await SendToAsyncImpl(file, task, buffer, _connectedDatagramPeer, flags);
         }
 
         if (_socketType != SocketType.Stream)
@@ -232,7 +98,7 @@ public sealed class NetstackSocketInode : Inode
 
             while (true)
             {
-                var result = await RecvFromAsync(file, task, buffer, flags, recvLen);
+                var result = await RecvFromAsyncImpl(file, task, buffer, flags, recvLen);
                 if (result.Bytes < 0)
                     return result.Bytes;
                 if (result.RemoteEndPoint == null || result.RemoteEndPoint.Equals(_connectedDatagramPeer))
@@ -264,7 +130,237 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Receive(buffer.AsSpan(0, recvLen));
     }
 
-    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer,
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags,
+        object endpoint)
+    {
+        if (endpoint is not IPEndPoint ipEp) return -(int)Errno.EAFNOSUPPORT;
+        return await SendToAsyncImpl(file, task, buffer, ipEp, flags);
+    }
+
+    public async ValueTask<RecvMessageResult> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
+        int maxBytes = -1)
+    {
+        var (bytes, ep) = await RecvFromAsyncImpl(file, task, buffer, flags, maxBytes);
+        return new RecvMessageResult(bytes, null, ep);
+    }
+
+    public async ValueTask<int> SendMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, List<LinuxFile>? fds,
+        int flags, object? endpoint)
+    {
+        if (endpoint != null) return await SendToAsync(file, task, buffer, flags, endpoint);
+        return await SendAsync(file, task, buffer, flags);
+    }
+
+    public ValueTask<RecvMessageResult> RecvMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
+        int maxBytes = -1)
+    {
+        if (_socketType == SocketType.Stream)
+        {
+            return RecvStreamAsRecvResult(file, task, buffer, flags, maxBytes);
+        }
+        return RecvFromAsync(file, task, buffer, flags, maxBytes);
+    }
+
+    private async ValueTask<RecvMessageResult> RecvStreamAsRecvResult(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes)
+    {
+        var n = await RecvAsync(file, task, buffer, flags, maxBytes);
+        return new RecvMessageResult(n, null, null);
+    }
+
+    public int Bind(LinuxFile file, FiberTask task, object endpoint)
+    {
+        if (endpoint is not IPEndPoint ipEp) return -(int)Errno.EAFNOSUPPORT;
+        return BindImpl(ipEp);
+    }
+
+    public int Listen(LinuxFile file, FiberTask task, int backlog)
+    {
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.EOPNOTSUPP;
+        if (_boundEndPoint == null)
+            return -(int)Errno.EINVAL;
+
+        _stream?.Dispose();
+        _stream = null;
+
+        _listener ??= _namespace.CreateTcpListener();
+        _listener.Listen((ushort)_boundEndPoint.Port, (uint)Math.Max(backlog, 1));
+        _backlog = backlog;
+        return 0;
+    }
+
+    public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpoint)
+    {
+        if (endpoint is not IPEndPoint ipEp) return -(int)Errno.EAFNOSUPPORT;
+        return await ConnectAsyncImpl(file, task, ipEp);
+    }
+
+    public async ValueTask<AcceptedSocketResult> AcceptAsync(LinuxFile file, FiberTask task, int flags)
+    {
+        if (_socketType != SocketType.Stream)
+            return new AcceptedSocketResult(-(int)Errno.EOPNOTSUPP, null);
+        if (_listener == null)
+            return new AcceptedSocketResult(-(int)Errno.EINVAL, null);
+
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 && !_listener.AcceptPending)
+            return new AcceptedSocketResult(-(int)Errno.EAGAIN, null);
+
+        if (!_listener.AcceptPending)
+        {
+            var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _listener.AcceptPending);
+            if (!ok)
+                return new AcceptedSocketResult(-(int)Errno.ERESTARTSYS, null);
+        }
+
+        var accepted = _listener.Accept();
+        var newIno = new NetstackSocketInode(0, SuperBlock, _namespace, accepted);
+        return new AcceptedSocketResult(0, newIno, newIno.RemoteEndPoint);
+    }
+
+
+    public SocketAddressResult GetSockName(LinuxFile file, FiberTask task)
+    {
+        return new SocketAddressResult(LocalEndPoint);
+    }
+
+    public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
+    {
+        return new SocketAddressResult(RemoteEndPoint);
+    }
+
+    public int Shutdown(LinuxFile file, FiberTask task, int how)
+    {
+        if (_socketType != SocketType.Stream)
+            return 0;
+        if (_stream == null)
+            return -(int)Errno.ENOTCONN;
+
+        switch (how)
+        {
+            case 0:
+                _shutdownRead = true;
+                return 0;
+            case 1:
+                if (!_shutdownWrite)
+                {
+                    _stream.CloseWrite();
+                    _shutdownWrite = true;
+                }
+
+                return 0;
+            case 2:
+                _shutdownRead = true;
+                if (!_shutdownWrite)
+                {
+                    _stream.CloseWrite();
+                    _shutdownWrite = true;
+                }
+
+                return 0;
+            default:
+                return -(int)Errno.EINVAL;
+        }
+    }
+
+    public int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> value)
+    {
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_REUSEADDR:
+                _reuseAddress = value.Length >= 4 && BitConverter.ToInt32(value[..4]) != 0;
+                return 0;
+            case LinuxConstants.SO_RCVTIMEO:
+                _receiveTimeoutMs = ParseTimevalMs(value);
+                return 0;
+            case LinuxConstants.SO_SNDTIMEO:
+                _sendTimeoutMs = ParseTimevalMs(value);
+                return 0;
+            default:
+                return -(int)Errno.ENOPROTOOPT;
+        }
+    }
+
+    public int GetSocketOption(LinuxFile file, FiberTask task, int level, int optname, Span<byte> destination,
+        out int written)
+    {
+        written = 4;
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_TYPE:
+                BitConverter.TryWriteBytes(destination, _socketType switch
+                {
+                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
+                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
+                    _ => 0
+                });
+                return 0;
+            case LinuxConstants.SO_ERROR:
+                BitConverter.TryWriteBytes(destination, _socketError);
+                _socketError = 0;
+                return 0;
+            case LinuxConstants.SO_REUSEADDR:
+                BitConverter.TryWriteBytes(destination, _reuseAddress ? 1 : 0);
+                return 0;
+            default:
+                return -(int)Errno.ENOPROTOOPT;
+        }
+    }
+
+    private int BindImpl(IPEndPoint endpoint)
+    {
+        if (!IsValidBindAddress(endpoint.Address))
+            return -(int)Errno.EADDRNOTAVAIL;
+        _boundEndPoint = endpoint;
+        if (_socketType == SocketType.Dgram)
+        {
+            _udp ??= _namespace.CreateUdpSocket();
+            _udp.Bind((ushort)endpoint.Port);
+        }
+
+        return 0;
+    }
+
+    private async ValueTask<int> ConnectAsyncImpl(LinuxFile file, FiberTask task, IPEndPoint endpoint)
+    {
+        if (_socketType == SocketType.Dgram)
+        {
+            if (!IsValidConnectAddress(endpoint.Address))
+                return -(int)Errno.ENETUNREACH;
+            if (_boundEndPoint == null)
+            {
+                _udp ??= _namespace.CreateUdpSocket();
+                _udp.Bind(0);
+                _boundEndPoint = _udp.LocalEndPoint;
+            }
+
+            _connectedDatagramPeer = endpoint;
+            _lastDatagramPeer = endpoint;
+            return 0;
+        }
+
+        if (_socketType != SocketType.Stream)
+            return -(int)Errno.EOPNOTSUPP;
+        if (!IsValidConnectAddress(endpoint.Address))
+            return -(int)Errno.ENETUNREACH;
+        _listener?.Dispose();
+        _listener = null;
+
+        _stream ??= _namespace.CreateTcpStream();
+        _stream.Connect(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port);
+
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+            return _stream.State == 4 ? 0 : -(int)Errno.EINPROGRESS;
+
+        return await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.State == 4) ? 0 : -(int)Errno.ERESTARTSYS;
+    }
+
+    private async ValueTask<int> SendToAsyncImpl(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer,
         IPEndPoint endpoint, int flags)
     {
         if (_socketType != SocketType.Dgram)
@@ -292,9 +388,8 @@ public sealed class NetstackSocketInode : Inode
         return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
     }
 
-    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, FiberTask task,
-        byte[] buffer,
-        int flags, int maxBytes = -1)
+    private async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsyncImpl(LinuxFile file, FiberTask task,
+        byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return (0, null);
@@ -360,40 +455,6 @@ public sealed class NetstackSocketInode : Inode
         if (sm == null)
             return -(int)Errno.EPERM;
         return NetDeviceIoctlHelper.Handle(sm, task.CPU, request, arg);
-    }
-
-    public int Shutdown(int how)
-    {
-        if (_socketType != SocketType.Stream)
-            return 0;
-        if (_stream == null)
-            return -(int)Errno.ENOTCONN;
-
-        switch (how)
-        {
-            case 0:
-                _shutdownRead = true;
-                return 0;
-            case 1:
-                if (!_shutdownWrite)
-                {
-                    _stream.CloseWrite();
-                    _shutdownWrite = true;
-                }
-
-                return 0;
-            case 2:
-                _shutdownRead = true;
-                if (!_shutdownWrite)
-                {
-                    _stream.CloseWrite();
-                    _shutdownWrite = true;
-                }
-
-                return 0;
-            default:
-                return -(int)Errno.EINVAL;
-        }
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)

@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Native;
@@ -182,84 +181,19 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var addrPtr = a2;
         var addrLen = (int)a3;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
-        {
-            var parsed = ReadUnixSockaddr(engine, addrPtr, addrLen);
-            if (parsed.Error < 0) return parsed.Error;
-            var unixAddr = parsed.Address;
-            if (unixAddr == null) return -(int)Errno.EINVAL;
 
-            UnixSocketInode? target = null;
-            if (unixAddr.IsAbstract)
-            {
-                target = LookupUnixAbstractSocket(unixAddr.AbstractKey);
-            }
-            else
-            {
-                var loc = PathWalk(unixAddr.Path);
-                if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
-                if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
-                target = LookupUnixPathSocket(loc.Dentry.Inode);
-            }
+        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen);
+        if (err < 0) return err;
+        if (endpoint == null) return -(int)Errno.EINVAL;
 
-            if (target == null) return -(int)Errno.ECONNREFUSED;
-            if (unixSock.UnixSocketType != target.UnixSocketType) return -(int)Errno.EPROTOTYPE;
-
-            if (unixSock.UnixSocketType == SocketType.Dgram)
-            {
-                unixSock.ConnectPair(target);
-                unixSock.SetPeerSunPathRaw(target.GetLocalSunPathRaw());
-                return 0;
-            }
-
-            if (unixSock.IsConnected) return -(int)Errno.EISCONN;
-            if (!target.IsListening) return -(int)Errno.ECONNREFUSED;
-
-            var serverConn = new UnixSocketInode(0, MemfdSuperBlock, unixSock.UnixSocketType);
-            unixSock.ConnectPair(serverConn);
-            serverConn.ConnectPair(unixSock);
-            unixSock.SetPeerSunPathRaw(target.GetLocalSunPathRaw());
-            serverConn.SetLocalSunPathRaw(target.GetLocalSunPathRaw());
-            serverConn.SetPeerSunPathRaw(unixSock.GetLocalSunPathRaw());
-
-            var enqueueRc = target.EnqueueConnection(serverConn);
-            if (enqueueRc < 0)
-            {
-                unixSock.DisconnectPeer();
-                return enqueueRc;
-            }
-
-            return 0;
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-        {
-            var endpoint = ReadSockaddr(engine, addrPtr, addrLen);
-            if (endpoint == null) return -(int)Errno.EINVAL;
-
-            try
-            {
-                return await sockInode.ConnectAsync(file, task, endpoint);
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            var endpoint = ReadSockaddr(engine, addrPtr, addrLen) as IPEndPoint;
-            if (endpoint == null) return -(int)Errno.EINVAL;
-            return await netInode.ConnectAsync(file, task, endpoint);
-        }
+        if (file.TryGetSocketEndpointOps(out var ops))
+            return await ops.ConnectAsync(file, task, endpoint);
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -268,120 +202,21 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var addrPtr = a2;
         var addrLen = (int)a3;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
-        {
-            if (unixSock.IsBound) return -(int)Errno.EINVAL;
 
-            var parsed = ReadUnixSockaddr(engine, addrPtr, addrLen);
-            if (parsed.Error < 0) return parsed.Error;
-            var unixAddr = parsed.Address;
-            if (unixAddr == null || unixAddr.SunPathRaw.Length == 0) return -(int)Errno.EINVAL;
+        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen);
+        if (err < 0) return err;
+        if (endpoint == null) return -(int)Errno.EINVAL;
 
-            if (unixAddr.IsAbstract)
-            {
-                if (!TryBindUnixAbstractSocket(unixAddr.AbstractKey, unixSock))
-                    return -(int)Errno.EADDRINUSE;
-                unixSock.SetLocalSunPathRaw(unixAddr.SunPathRaw);
-                unixSock.SetReleaseUnbindCallback(UnbindUnixSocket);
-                return 0;
-            }
+        if (file.TryGetSocketEndpointOps(out var ops))
+            return ops.Bind(file, task, endpoint);
 
-            var (parent, name, createErr) = PathWalkForCreate(unixAddr.Path);
-            if (createErr < 0) return createErr;
-            if (!parent.IsValid || string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
-            if (parent.Mount != null && parent.Mount.IsReadOnly) return -(int)Errno.EROFS;
-
-            var existing = PathWalk(unixAddr.Path);
-            if (existing.IsValid) return -(int)Errno.EADDRINUSE;
-
-            var currentTask = engine.Owner as FiberTask;
-            var uid = currentTask?.Process.EUID ?? 0;
-            var gid = currentTask?.Process.EGID ?? 0;
-            var mode = DacPolicy.ApplyUmask(unixSock.Mode & 0x0FFF, currentTask?.Process.Umask ?? 0);
-            var socketDentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
-
-            try
-            {
-                parent.Dentry.Inode!.Mknod(socketDentry, mode, uid, gid, InodeType.Socket, 0);
-            }
-            catch (Exception ex)
-            {
-                return MapFsExceptionToErrno(ex, Errno.EACCES);
-            }
-
-            if (socketDentry.Inode == null)
-            {
-                try
-                {
-                    parent.Dentry.Inode!.Unlink(name);
-                    _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.mknod-null-inode", out _);
-                }
-                catch
-                {
-                    // Best effort rollback.
-                }
-
-                return -(int)Errno.EIO;
-            }
-
-            if (!TryBindUnixPathSocket(socketDentry.Inode, unixSock))
-            {
-                try
-                {
-                    parent.Dentry.Inode!.Unlink(name);
-                    _ = parent.Dentry.TryUncacheChild(name, "SysBind.rollback.bind-failed", out _);
-                }
-                catch
-                {
-                    // Best effort rollback.
-                }
-
-                return -(int)Errno.EADDRINUSE;
-            }
-
-            unixSock.SetLocalSunPathRaw(unixAddr.SunPathRaw);
-            unixSock.SetReleaseUnbindCallback(UnbindUnixSocket);
-            return 0;
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-        {
-            var endpoint = ReadSockaddr(engine, addrPtr, addrLen);
-            if (endpoint == null) return -(int)Errno.EINVAL;
-            Logger.LogTrace("[Socket] bind fd={Fd} endpoint={Endpoint} addrLen={AddrLen}", fd, endpoint, addrLen);
-
-            try
-            {
-                sockInode.NativeSocket!.Bind(endpoint);
-                return 0;
-            }
-            catch (SocketException ex)
-            {
-                Logger.LogWarning(ex,
-                    "[Socket] bind failed fd={Fd} endpoint={Endpoint} addrLen={AddrLen} socketError={SocketError}",
-                    fd, endpoint, addrLen, ex.SocketErrorCode);
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            var endpoint = ReadSockaddr(engine, addrPtr, addrLen) as IPEndPoint;
-            if (endpoint == null) return -(int)Errno.EINVAL;
-            return netInode.Bind(endpoint);
-        }
-
-        if (file.OpenedInode is NetlinkRouteSocketInode)
-            // Userspace (iproute2/busybox ip) binds AF_NETLINK sockets before dump requests.
-            // For our in-process route socket, bind has no side effects.
-            return 0;
+        if (file.OpenedInode is NetlinkRouteSocketInode) return 0;
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -390,28 +225,14 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var backlog = (int)a2;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
-            return unixSock.Listen(backlog);
 
-        if (file.OpenedInode is HostSocketInode sockInode)
-            try
-            {
-                sockInode.NativeSocket!.Listen(backlog);
-                return 0;
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-            return netInode.Listen(backlog);
+        if (file.TryGetSocketEndpointOps(out var ops))
+            return ops.Listen(file, task, backlog);
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -432,36 +253,11 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
+
+        if (file.TryGetSocketEndpointOps(out var ops))
         {
-            WriteSockaddrUnix(engine, addrPtr, addrLenPtr, unixSock.GetLocalSunPathRaw());
-            return 0;
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-        {
-            EndPoint? ep;
-            try
-            {
-                ep = sockInode.NativeSocket!.LocalEndPoint;
-            }
-            catch
-            {
-                ep = null;
-            }
-
-            if (ep == null)
-                ep = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
-                    ? new IPEndPoint(IPAddress.IPv6Any, 0)
-                    : new IPEndPoint(IPAddress.Any, 0);
-
-            WriteSockaddr(engine, addrPtr, addrLenPtr, ep);
-            return 0;
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            WriteSockaddr(engine, addrPtr, addrLenPtr, netInode.LocalEndPoint ?? new IPEndPoint(IPAddress.Any, 0));
+            var res = ops.GetSockName(file, engine.Owner as FiberTask ?? throw new InvalidOperationException());
+            WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
             return 0;
         }
 
@@ -485,40 +281,20 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
+
+        if (file.TryGetSocketEndpointOps(out var ops))
         {
-            if (!unixSock.IsConnected) return -(int)Errno.ENOTCONN;
-            WriteSockaddrUnix(engine, addrPtr, addrLenPtr, unixSock.GetPeerSunPathRaw());
+            var res = ops.GetPeerName(file, engine.Owner as FiberTask ?? throw new InvalidOperationException());
+            if (res.EndPoint == null && res.UnixAddressRaw == null && file.OpenedInode is not UnixSocketInode)
+                return -(int)Errno.ENOTCONN;
+            if (res.EndPoint == null && res.UnixAddressRaw == null && file.OpenedInode is UnixSocketInode ui &&
+                !ui.IsConnected)
+                return -(int)Errno.ENOTCONN;
+            WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
             return 0;
         }
 
-        if (file.OpenedInode is HostSocketInode sockInode)
-        {
-            EndPoint? ep;
-            try
-            {
-                ep = sockInode.NativeSocket!.RemoteEndPoint;
-            }
-            catch
-            {
-                ep = null;
-            }
-
-            if (ep == null) return -(int)Errno.ENOTCONN;
-
-            WriteSockaddr(engine, addrPtr, addrLenPtr, ep);
-            return 0;
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            if (netInode.RemoteEndPoint == null) return -(int)Errno.ENOTCONN;
-            WriteSockaddr(engine, addrPtr, addrLenPtr, netInode.RemoteEndPoint);
-            return 0;
-        }
-
-        if (file.OpenedInode is NetlinkRouteSocketInode)
-            return -(int)Errno.ENOTCONN;
+        if (file.OpenedInode is NetlinkRouteSocketInode) return -(int)Errno.ENOTCONN;
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -527,7 +303,6 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var addrPtr = a2;
         var addrLenPtr = a3;
@@ -535,65 +310,25 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is UnixSocketInode unixSock)
+
+        if (file.TryGetSocketEndpointOps(out var ops))
         {
-            var accepted = await unixSock.AcceptAsync(file, task, flags);
+            var accepted = await ops.AcceptAsync(file, task, flags);
             if (accepted.Rc != 0 || accepted.Inode == null)
                 return accepted.Rc;
 
             var fileFlags = FileFlags.O_RDWR;
-            if ((flags & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-            if ((flags & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
+            if ((flags & LinuxConstants.SOCK_NONBLOCK) != 0 || (flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
+            if ((flags & LinuxConstants.SOCK_CLOEXEC) != 0 || (flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
             var dentry = new Dentry($"socket:[{accepted.Inode.Ino}]", accepted.Inode, null, MemfdSuperBlock);
             var newFile = new LinuxFile(dentry, fileFlags, AnonMount);
 
             if (addrPtr != 0 && addrLenPtr != 0)
-                WriteSockaddrUnix(engine, addrPtr, addrLenPtr, accepted.Inode.GetPeerSunPathRaw());
-
-            return AllocFD(newFile);
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-            try
             {
-                var newSock = await sockInode.AcceptAsync(file, task, flags);
-
-                var newInode = new HostSocketInode(0, MemfdSuperBlock, newSock);
-                var fileFlags = FileFlags.O_RDWR;
-                if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-                if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
-
-                var dentry = new Dentry($"socket:[{newInode.Ino}]", newInode, null, MemfdSuperBlock);
-                var newFile = new LinuxFile(dentry, fileFlags, AnonMount);
-
-                if (addrPtr != 0 && addrLenPtr != 0)
-                    WriteSockaddr(engine, addrPtr, addrLenPtr, newSock.RemoteEndPoint);
-
-                return AllocFD(newFile);
+                var addrRes = new SocketAddressResult(accepted.PeerEndPoint, accepted.PeerUnixAddressRaw);
+                WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, addrRes);
             }
-            catch (SocketException ex)
-            {
-                if (ex.SocketErrorCode == SocketError.Interrupted)
-                    return -(int)Errno.ERESTARTSYS;
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            var accepted = await netInode.AcceptAsync(file, task, flags);
-            if (accepted.Rc != 0 || accepted.Inode == null)
-                return accepted.Rc;
-
-            var fileFlags = FileFlags.O_RDWR;
-            if ((flags & 0x800) != 0) fileFlags |= FileFlags.O_NONBLOCK;
-            if ((flags & 0x80000) != 0) fileFlags |= FileFlags.O_CLOEXEC;
-
-            var dentry = new Dentry($"socket:[{accepted.Inode.Ino}]", accepted.Inode, null, MemfdSuperBlock);
-            var newFile = new LinuxFile(dentry, fileFlags, AnonMount);
-
-            if (addrPtr != 0 && addrLenPtr != 0 && accepted.Inode.RemoteEndPoint != null)
-                WriteSockaddr(engine, addrPtr, addrLenPtr, accepted.Inode.RemoteEndPoint);
 
             return AllocFD(newFile);
         }
@@ -618,37 +353,8 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        if (file.OpenedInode is UnixSocketInode unixInode)
-            return unixInode.Shutdown(how);
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-            try
-            {
-                var mode = how switch
-                {
-                    0 => SocketShutdown.Receive,
-                    1 => SocketShutdown.Send,
-                    2 => SocketShutdown.Both,
-                    _ => throw new ArgumentOutOfRangeException(nameof(how))
-                };
-                sockInode.NativeSocket!.Shutdown(mode);
-                return 0;
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return -(int)Errno.EINVAL;
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
-            return netInode.Shutdown(how);
+        if (file.TryGetSocketEndpointOps(out var ops))
+            return ops.Shutdown(file, engine.Owner as FiberTask ?? throw new InvalidOperationException(), how);
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -670,76 +376,17 @@ public partial class SyscallManager
         var buf = new byte[len];
         if (!task.CPU.CopyFromUser(bufPtr, buf)) return -(int)Errno.EFAULT;
 
-        if (file.OpenedInode is UnixSocketInode unixSock)
-        {
-            UnixSocketInode? explicitPeer = null;
-            if (destAddrPtr != 0)
-            {
-                if (unixSock.UnixSocketType != SocketType.Dgram)
-                    return -(int)Errno.EISCONN;
-
-                var parsed = ReadUnixSockaddr(engine, destAddrPtr, destAddrLen);
-                if (parsed.Error < 0) return parsed.Error;
-                var unixAddr = parsed.Address;
-                if (unixAddr == null) return -(int)Errno.EINVAL;
-
-                if (unixAddr.IsAbstract)
-                {
-                    explicitPeer = LookupUnixAbstractSocket(unixAddr.AbstractKey);
-                }
-                else
-                {
-                    var loc = PathWalk(unixAddr.Path);
-                    if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
-                    if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
-                    explicitPeer = LookupUnixPathSocket(loc.Dentry.Inode);
-                }
-
-                if (explicitPeer == null)
-                    return unixAddr.IsAbstract ? -(int)Errno.ECONNREFUSED : -(int)Errno.ECONNREFUSED;
-            }
-
-            var rc = await unixSock.SendMessageAsync(file, task, buf, null, flags, explicitPeer);
-            if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-            return rc;
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-            try
-            {
-                var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-
-                if (destAddrPtr != 0)
-                {
-                    var endpoint = ReadSockaddr(engine, destAddrPtr, destAddrLen);
-                    if (endpoint == null) return -(int)Errno.EINVAL;
-
-                    var ret = await sockInode.SendToAsync(file, task, buf, hostFlags, endpoint);
-                    if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-                    return ret;
-                }
-                else
-                {
-                    var ret = await sockInode.SendAsync(file, task, buf, hostFlags);
-                    if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-                    return ret;
-                }
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
-            }
-
-        if (file.OpenedInode is NetstackSocketInode netInode)
+        if (file.TryGetSocketDataOps(out var ops))
         {
             if (destAddrPtr != 0)
             {
-                var endpoint = ReadSockaddr(engine, destAddrPtr, destAddrLen) as IPEndPoint;
+                var (endpoint, err) = ReadAnySockaddr(engine, file, destAddrPtr, destAddrLen);
+                if (err < 0) return err;
                 if (endpoint == null) return -(int)Errno.EINVAL;
-                return await netInode.SendToAsync(file, task, buf, endpoint, flags);
+                return await ops.SendToAsync(file, task, buf, flags, endpoint);
             }
 
-            return await netInode.SendAsync(file, task, buf, flags);
+            return await ops.SendAsync(file, task, buf, flags);
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
@@ -764,93 +411,38 @@ public partial class SyscallManager
         if (file == null) return -(int)Errno.EBADF;
         var buf = new byte[len];
 
-        if (file.OpenedInode is UnixSocketInode unixSock)
+        if (file.TryGetSocketDataOps(out var ops))
         {
-            var res = await unixSock.RecvMessageAsync(file, task, buf, flags, len);
+            var res = await ops.RecvFromAsync(file, task, buf, flags, len);
             var bytes = res.BytesRead;
             if (bytes < 0) return bytes;
 
             if (bytes > 0)
                 if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
                 {
-                    ReleaseReceivedRights(res.Fds);
+                    if (res.Fds != null)
+                        foreach (var f in res.Fds)
+                            f.Close();
                     return -(int)Errno.EFAULT;
                 }
 
             if (srcAddrPtr != 0 && addrLenPtr != 0)
-                WriteSockaddrUnix(engine, srcAddrPtr, addrLenPtr, res.SourceSunPathRaw);
-
-            // recv/recvfrom cannot return SCM_RIGHTS; discard ancillary rights.
-            ReleaseReceivedRights(res.Fds);
-            return bytes;
-        }
-
-        if (file.OpenedInode is HostSocketInode sockInode)
-            try
             {
-                var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-                int bytes;
-
-                if (srcAddrPtr != 0 && addrLenPtr != 0)
-                {
-                    EndPoint remoteEp = sockInode.HostAddressFamily == AddressFamily.InterNetworkV6
-                        ? new IPEndPoint(IPAddress.IPv6Any, 0)
-                        : new IPEndPoint(IPAddress.Any, 0);
-
-                    var result = await sockInode.RecvFromAsync(file, task, buf, hostFlags, remoteEp);
-                    bytes = result.Bytes;
-
-                    if (bytes >= 0 && result.RemoteEp != null)
-                        WriteSockaddr(engine, srcAddrPtr, addrLenPtr, result.RemoteEp);
-                }
-                else
-                {
-                    bytes = await sockInode.RecvAsync(file, task, buf, hostFlags);
-                }
-
-                if (bytes > 0)
-                    if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
-                        return -(int)Errno.EFAULT;
-                return bytes;
-            }
-            catch (SocketException ex)
-            {
-                return -LinuxToWindowsSocketError(ex.SocketErrorCode);
+                var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
+                WriteAnySockaddr(engine, file, srcAddrPtr, addrLenPtr, addrRes);
             }
 
-        if (file.OpenedInode is NetstackSocketInode netInode)
-        {
-            int bytes;
-            EndPoint? remoteEp = null;
-            if (srcAddrPtr != 0 && addrLenPtr != 0)
-            {
-                var result = await netInode.RecvFromAsync(file, task, buf, flags);
-                bytes = result.Bytes;
-                remoteEp = result.RemoteEndPoint;
-            }
-            else
-            {
-                bytes = await netInode.RecvAsync(file, task, buf, flags);
-            }
-
-            if (bytes > 0)
-            {
-                if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
-                    return -(int)Errno.EFAULT;
-                if (srcAddrPtr != 0 && addrLenPtr != 0 && remoteEp != null)
-                    WriteSockaddr(engine, srcAddrPtr, addrLenPtr, remoteEp);
-            }
-
+            if (res.Fds != null)
+                foreach (var f in res.Fds)
+                    f.Close();
             return bytes;
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
         {
-            var bytes = await netlinkInode.RecvAsync(file, task, buf, flags);
-            if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
-                return -(int)Errno.EFAULT;
-            if (bytes > 0 && srcAddrPtr != 0 && addrLenPtr != 0)
-                WriteSockaddrNetlink(engine, srcAddrPtr, addrLenPtr);
+            var bytes = await netlinkInode.RecvAsync(file, task, buf, flags, len);
+            if (bytes < 0) return bytes;
+            if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes))) return -(int)Errno.EFAULT;
             return bytes;
         }
 
@@ -861,7 +453,6 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var msgPtr = a2;
         var flags = (int)a3;
@@ -869,120 +460,35 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        var msgRaw = new byte[28];
-        if (!task.CPU.CopyFromUser(msgPtr, msgRaw))
+        var msgRes = ReadMsgHdr(engine, msgPtr);
+        if (msgRes.Error < 0) return msgRes.Error;
+        var msg = msgRes.Value;
+
+        object? endpoint = null;
+        if (msg.msg_name != 0 && msg.msg_namelen > 0)
         {
-            Logger.LogWarning("[Socket] recvmsg failed to read msghdr fd={Fd} msgPtr=0x{MsgPtr:X8}", fd, msgPtr);
-            return -(int)Errno.EFAULT;
+            var (ep, err) = ReadAnySockaddr(engine, file, msg.msg_name, (int)msg.msg_namelen);
+            if (err < 0) return err;
+            endpoint = ep;
         }
 
-        var iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
-        var iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
-        var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
-        var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
-        if (iovLen < 0 || iovLen > 1024)
+        var bufRes = ReadIovecs(engine, msg.msg_iov, msg.msg_iovlen);
+        if (bufRes.Error < 0) return bufRes.Error;
+        var buf = bufRes.Buffer;
+
+        List<LinuxFile>? fds = null;
+        if (msg.msg_control != 0 && msg.msg_controllen >= 16)
         {
-            Logger.LogWarning("[Socket] sendmsg invalid iovLen fd={Fd} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}", fd,
-                iovLen, msgPtr);
-            return -(int)Errno.EINVAL;
+            var res = ReadCmsgFds(engine, msg.msg_control, msg.msg_controllen);
+            if (!res.Success) return -(int)Errno.EINVAL;
+            fds = res.Fds;
         }
 
-        if (controlLen < 0 || controlLen > 1 << 20) return -(int)Errno.EINVAL;
+        if (file.TryGetSocketDataOps(out var ops))
+            return await ops.SendMsgAsync(file, task, buf, fds, flags | msg.msg_flags, endpoint);
 
-        long totalBytes = 0;
-        var iovs = new (uint Base, int Len)[iovLen];
-        for (var i = 0; i < iovLen; i++)
-        {
-            var iovRaw = new byte[8];
-            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw))
-            {
-                Logger.LogWarning(
-                    "[Socket] recvmsg failed to read iov fd={Fd} iovPtr=0x{IovPtr:X8} i={I} iovLen={IovLen} msgPtr=0x{MsgPtr:X8}",
-                    fd, iovPtr, i, iovLen, msgPtr);
-                return -(int)Errno.EFAULT;
-            }
-
-            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
-                BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
-            if (iovs[i].Len < 0) return -(int)Errno.EINVAL;
-            totalBytes += iovs[i].Len;
-            if (totalBytes > int.MaxValue) return -(int)Errno.EINVAL;
-        }
-
-        var data = new byte[(int)totalBytes];
-        var offset = 0;
-        foreach (var iov in iovs)
-            if (iov.Len > 0)
-            {
-                if (!task.CPU.CopyFromUser(iov.Base, data.AsSpan(offset, iov.Len))) return -(int)Errno.EFAULT;
-                offset += iov.Len;
-            }
-
-        var fds = new List<LinuxFile>();
-        if (controlPtr != 0 && controlLen > 0)
-        {
-            var cmsgRaw = new byte[controlLen];
-            if (!task.CPU.CopyFromUser(controlPtr, cmsgRaw)) return -(int)Errno.EFAULT;
-
-            var cmsgOffset = 0;
-            while (cmsgOffset + 12 <= controlLen)
-            {
-                var cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset, 4));
-                if (cmsgLen < 12) return -(int)Errno.EINVAL;
-                if (cmsgOffset + cmsgLen > controlLen) return -(int)Errno.EINVAL;
-                var level = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 4, 4));
-                var type = BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 8, 4));
-
-                if (level == 1 /* SOL_SOCKET */ && type == 1 /* SCM_RIGHTS */)
-                {
-                    if (((cmsgLen - 12) & 3) != 0) return -(int)Errno.EINVAL;
-                    var fdCount = (cmsgLen - 12) / 4;
-                    for (var i = 0; i < fdCount; i++)
-                    {
-                        var passedFd =
-                            BinaryPrimitives.ReadInt32LittleEndian(cmsgRaw.AsSpan(cmsgOffset + 12 + i * 4, 4));
-                        var passedFile = GetFD(passedFd);
-                        if (passedFile == null) return -(int)Errno.EBADF;
-                        fds.Add(passedFile);
-                    }
-                }
-
-                cmsgOffset += Math.Max(cmsgLen, 12);
-                cmsgOffset = (cmsgOffset + 3) & ~3; // align to 4 bytes
-            }
-        }
-
-        if (file.OpenedInode is UnixSocketInode unixSock)
-        {
-            var ret = await unixSock.SendMessageAsync(file, task, data, fds.Count > 0 ? fds : null, flags);
-            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-            return ret;
-        }
-
-        if (file.OpenedInode is HostSocketInode hostSock)
-        {
-            // Host sockets don't support SCM_RIGHTS, fallback to basic send
-            var ret = await hostSock.SendAsync(file, task, data, flags);
-            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-            return ret;
-        }
-
-        if (file.OpenedInode is NetstackSocketInode netSock)
-        {
-            if (fds.Count > 0)
-                return -(int)Errno.EOPNOTSUPP;
-
-            var ret = await netSock.SendAsync(file, task, data, flags);
-            if (ret == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
-            return ret;
-        }
-
-        if (file.OpenedInode is NetlinkRouteSocketInode netlinkSock)
-        {
-            if (fds.Count > 0)
-                return -(int)Errno.EOPNOTSUPP;
-            return await netlinkSock.SendAsync(file, data, flags);
-        }
+        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
+            return await netlinkInode.SendAsync(file, buf, flags | msg.msg_flags);
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -991,7 +497,6 @@ public partial class SyscallManager
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-
         var fd = (int)a1;
         var msgPtr = a2;
         var flags = (int)a3;
@@ -999,160 +504,79 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        var msgRaw = new byte[28];
-        if (!task.CPU.CopyFromUser(msgPtr, msgRaw)) return -(int)Errno.EFAULT;
+        var msgRes = ReadMsgHdr(engine, msgPtr);
+        if (msgRes.Error < 0) return msgRes.Error;
+        var msg = msgRes.Value;
 
-        var iovPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4));
-        var iovLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4));
-        var controlPtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4));
-        var controlLen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4));
-        if (iovLen < 0 || iovLen > 1024) return -(int)Errno.EINVAL;
-        if (controlLen < 0 || controlLen > 1 << 20) return -(int)Errno.EINVAL;
+        var totalLen = 0;
+        var iovsRes = ReadIovecsDef(engine, msg.msg_iov, msg.msg_iovlen);
+        if (iovsRes.Error < 0) return iovsRes.Error;
 
-        long totalBytes = 0;
-        var iovs = new (uint Base, int Len)[iovLen];
-        for (var i = 0; i < iovLen; i++)
+        foreach (var iov in iovsRes.Iovecs)
+            totalLen += (int)iov.Len;
+
+        var buf = new byte[totalLen];
+
+        if (file.TryGetSocketDataOps(out var ops))
         {
-            var iovRaw = new byte[8];
-            if (!task.CPU.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return -(int)Errno.EFAULT;
-            iovs[i] = (BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
-                BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4)));
-            if (iovs[i].Len < 0) return -(int)Errno.EINVAL;
-            totalBytes += iovs[i].Len;
-            if (totalBytes > int.MaxValue) return -(int)Errno.EINVAL;
-        }
+            var res = await ops.RecvMsgAsync(file, task, buf, flags | msg.msg_flags, totalLen);
+            var bytes = res.BytesRead;
+            if (bytes < 0) return bytes;
 
-        var buffer = new byte[(int)totalBytes];
-        var bytesRead = 0;
-        List<LinuxFile>? receivedFds = null;
-
-        var namePtr = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(0, 4));
-        var nameLenPtr = msgPtr + 4; // msg_namelen is at offset 4
-
-        if (file.OpenedInode is UnixSocketInode unixSock)
-        {
-            var res = await unixSock.RecvMessageAsync(file, task, buffer, flags);
-            if (res.BytesRead < 0) return res.BytesRead;
-            bytesRead = res.BytesRead;
-            receivedFds = res.Fds;
-            if (bytesRead >= 0 && namePtr != 0)
-                WriteSockaddrUnix(engine, namePtr, nameLenPtr, res.SourceSunPathRaw);
-        }
-        else if (file.OpenedInode is HostSocketInode hostSock)
-        {
-            EndPoint remoteEp = hostSock.HostAddressFamily == AddressFamily.InterNetworkV6
-                ? new IPEndPoint(IPAddress.IPv6Any, 0)
-                : new IPEndPoint(IPAddress.Any, 0);
-
-            var hostFlags = flags & ~LinuxConstants.MSG_NOSIGNAL;
-            var res = await hostSock.RecvFromAsync(file, task, buffer, hostFlags, remoteEp);
-
-            if (res.Bytes < 0) return res.Bytes;
-            bytesRead = res.Bytes;
-
-            if (bytesRead >= 0 && namePtr != 0 && res.RemoteEp != null)
-                WriteSockaddr(engine, namePtr, nameLenPtr, res.RemoteEp);
-        }
-        else if (file.OpenedInode is NetstackSocketInode netSock)
-        {
-            bytesRead = await netSock.RecvAsync(file, task, buffer, flags);
-            if (bytesRead < 0) return bytesRead;
-
-            if (bytesRead >= 0 && namePtr != 0 && netSock.RemoteEndPoint != null)
-                WriteSockaddr(engine, namePtr, nameLenPtr, netSock.RemoteEndPoint);
-        }
-        else if (file.OpenedInode is NetlinkRouteSocketInode netlinkSock)
-        {
-            bytesRead = await netlinkSock.RecvAsync(file, task, buffer, flags);
-            if (bytesRead < 0) return bytesRead;
-            if (bytesRead >= 0 && namePtr != 0)
-                WriteSockaddrNetlink(engine, namePtr, nameLenPtr);
-        }
-        else
-        {
-            return -(int)Errno.ENOTSOCK;
-        }
-
-        var offset = 0;
-        foreach (var iov in iovs)
-            if (iov.Len > 0 && offset < bytesRead)
+            var writeRc = WriteIovecs(engine, buf.AsSpan(0, bytes), iovsRes.Iovecs);
+            if (writeRc < 0)
             {
-                var toCopy = Math.Min(iov.Len, bytesRead - offset);
-                if (!task.CPU.CopyToUser(iov.Base, buffer.AsSpan(offset, toCopy)))
-                {
-                    ReleaseReceivedRights(receivedFds);
-                    return -(int)Errno.EFAULT;
-                }
-
-                offset += toCopy;
+                if (res.Fds != null)
+                    foreach (var f in res.Fds)
+                        f.Close();
+                return writeRc;
             }
 
-        var outputControlLen = 0;
-        var outputMsgFlags = 0;
-        List<int>? allocatedFds = null;
-
-        if (receivedFds != null && receivedFds.Count > 0)
-        {
-            if (controlPtr != 0 && controlLen >= 12)
+            if (msg.msg_name != 0 && msg.msg_namelen > 0)
             {
-                var fdCapacity = (controlLen - 12) / 4;
-                var deliverCount = Math.Min(receivedFds.Count, fdCapacity);
-                if (deliverCount < receivedFds.Count) outputMsgFlags |= LinuxConstants.MSG_CTRUNC;
+                var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
+                WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+            }
 
-                if (deliverCount > 0)
-                {
-                    allocatedFds = new List<int>(deliverCount);
-                    var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
-                    for (var i = 0; i < deliverCount; i++)
-                    {
-                        var newFd = DupFD(receivedFds[i], closeOnExec: cloexec);
-                        if (newFd < 0)
-                        {
-                            RollbackAllocatedFds(this, allocatedFds);
-                            ReleaseReceivedRights(receivedFds);
-                            return newFd;
-                        }
+            var outMsgFlags = 0;
 
-                        allocatedFds.Add(newFd);
-                    }
-                }
-
-                var cmsgLen = 12 + (allocatedFds?.Count ?? 0) * 4;
-                outputControlLen = cmsgLen > 12 ? cmsgLen : 0;
-                if (cmsgLen > 12)
-                {
-                    var cmsgRaw = new byte[cmsgLen];
-                    BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(0, 4), cmsgLen);
-                    BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(4, 4), 1); // SOL_SOCKET
-                    BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(8, 4), 1); // SCM_RIGHTS
-                    for (var i = 0; i < allocatedFds!.Count; i++)
-                        BinaryPrimitives.WriteInt32LittleEndian(cmsgRaw.AsSpan(12 + i * 4, 4), allocatedFds[i]);
-
-                    if (!task.CPU.CopyToUser(controlPtr, cmsgRaw))
-                    {
-                        RollbackAllocatedFds(this, allocatedFds);
-                        ReleaseReceivedRights(receivedFds);
-                        return -(int)Errno.EFAULT;
-                    }
-                }
+            if (res.Fds != null && res.Fds.Count > 0 && msg.msg_control != 0 && msg.msg_controllen >= 16)
+            {
+                var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
+                WriteCmsgFds(engine, msg.msg_control, msg.msg_controllen, res.Fds, out var outCtlLen, cloexec);
+                if (outCtlLen < 12 + res.Fds.Count * 4)
+                    outMsgFlags |= LinuxConstants.MSG_CTRUNC;
+                WriteBackMsgControllen(engine, msgPtr, outCtlLen);
             }
             else
             {
-                outputMsgFlags |= LinuxConstants.MSG_CTRUNC;
+                if (res.Fds != null)
+                {
+                    if (res.Fds.Count > 0) outMsgFlags |= LinuxConstants.MSG_CTRUNC;
+                    foreach (var f in res.Fds)
+                        f.Close();
+                }
+                WriteBackMsgControllen(engine, msgPtr, 0);
             }
+
+            WriteBackMsgFlags(engine, msgPtr, outMsgFlags);
+
+            return bytes;
         }
 
-        if (!WriteInt32ToUser(engine, msgPtr + 20, outputControlLen) ||
-            !WriteInt32ToUser(engine, msgPtr + 24, outputMsgFlags))
+        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
         {
-            if (allocatedFds != null)
-                RollbackAllocatedFds(this, allocatedFds);
-            ReleaseReceivedRights(receivedFds);
-            return -(int)Errno.EFAULT;
+            var bytes = await netlinkInode.RecvAsync(file, task, buf, flags | msg.msg_flags, buf.Length);
+            if (bytes < 0) return bytes;
+
+            var writeRc = WriteIovecs(engine, buf.AsSpan(0, bytes), iovsRes.Iovecs);
+            if (writeRc < 0) return writeRc;
+
+            WriteBackMsgControllen(engine, msgPtr, 0);
+            return bytes;
         }
 
-        ReleaseReceivedRights(receivedFds);
-        return bytesRead;
+        return -(int)Errno.ENOTSOCK;
     }
 
     private async ValueTask<int> SysSocketPair(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -1257,6 +681,32 @@ public partial class SyscallManager
         };
     }
 
+
+    private static (object? Endpoint, int Error) ReadAnySockaddr(Engine engine, LinuxFile file, uint addrPtr,
+        int addrLen)
+    {
+        if (addrPtr == 0) return (null, 0); // valid for some calls
+        if (file.OpenedInode is UnixSocketInode || file.OpenedInode is NetlinkRouteSocketInode)
+        {
+            var res = ReadUnixSockaddr(engine, addrPtr, addrLen);
+            return (res.Address, res.Error);
+        }
+
+        var ep = ReadSockaddr(engine, addrPtr, addrLen);
+        if (ep == null) return (null, -(int)Errno.EINVAL);
+        return (ep, 0);
+    }
+
+    private static void WriteAnySockaddr(Engine engine, LinuxFile file, uint addrPtr, uint addrLenPtr,
+        SocketAddressResult res)
+    {
+        if (addrPtr == 0 || addrLenPtr == 0) return;
+        if (res.UnixAddressRaw != null || file.OpenedInode is UnixSocketInode ||
+            file.OpenedInode is NetlinkRouteSocketInode)
+            WriteSockaddrUnix(engine, addrPtr, addrLenPtr, res.UnixAddressRaw);
+        else if (res.EndPoint != null) WriteSockaddr(engine, addrPtr, addrLenPtr, res.EndPoint);
+    }
+
     private static int GetSocketCallArgCount(int call)
     {
         return call switch
@@ -1285,17 +735,175 @@ public partial class SyscallManager
         };
     }
 
-    // --- Helpers ---
-
-    private sealed class UnixSockaddrInfo
+    private struct MsgHdr
     {
-        public required byte[] SunPathRaw { get; init; }
-        public required bool IsAbstract { get; init; }
-        public string Path { get; init; } = "";
-        public string AbstractKey { get; init; } = "";
+        public uint msg_name;
+        public uint msg_namelen;
+        public uint msg_iov;
+        public int msg_iovlen;
+        public uint msg_control;
+        public int msg_controllen;
+        public int msg_flags;
     }
 
-    private static (UnixSockaddrInfo? Address, int Error) ReadUnixSockaddr(Engine engine, uint addrPtr, int addrLen)
+
+    private static (MsgHdr Value, int Error) ReadMsgHdr(Engine engine, uint msgPtr)
+    {
+        var msgRaw = new byte[28];
+        if (!engine.CopyFromUser(msgPtr, msgRaw)) return (default, -(int)Errno.EFAULT);
+        var msg = new MsgHdr
+        {
+            msg_name = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(0, 4)),
+            msg_namelen = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(4, 4)),
+            msg_iov = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4)),
+            msg_iovlen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4)),
+            msg_control = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4)),
+            msg_controllen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4)),
+            msg_flags = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(24, 4))
+        };
+        if (msg.msg_iovlen < 0 || msg.msg_iovlen > 1024) return (msg, -(int)Errno.EINVAL);
+        if (msg.msg_controllen < 0 || msg.msg_controllen > 1 << 20) return (msg, -(int)Errno.EINVAL);
+        return (msg, 0);
+    }
+
+    private static (byte[] Buffer, int Error) ReadIovecs(Engine engine, uint iovPtr, int iovLen)
+    {
+        if (iovLen == 0) return ([], 0);
+        var res = ReadIovecsDef(engine, iovPtr, iovLen);
+        if (res.Error < 0) return ([], res.Error);
+        long totalBytes = 0;
+        foreach (var iov in res.Iovecs) totalBytes += iov.Len;
+        var buffer = new byte[(int)totalBytes];
+        var offset = 0;
+        foreach (var iov in res.Iovecs)
+            if (iov.Len > 0)
+            {
+                if (!engine.CopyFromUser(iov.BaseAddr, buffer.AsSpan(offset, (int)iov.Len)))
+                    return ([], -(int)Errno.EFAULT);
+                offset += (int)iov.Len;
+            }
+
+        return (buffer, 0);
+    }
+
+    private static (Iovec[] Iovecs, int Error) ReadIovecsDef(Engine engine, uint iovPtr, int iovLen)
+    {
+        if (iovLen == 0) return ([], 0);
+        var iovs = new Iovec[iovLen];
+        long totalBytes = 0;
+        for (var i = 0; i < iovLen; i++)
+        {
+            var iovRaw = new byte[8];
+            if (!engine.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return ([], -(int)Errno.EFAULT);
+            iovs[i] = new Iovec
+            {
+                BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
+                Len = (uint)BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4))
+            };
+            if ((int)iovs[i].Len < 0) return ([], -(int)Errno.EINVAL);
+            totalBytes += iovs[i].Len;
+            if (totalBytes > int.MaxValue) return ([], -(int)Errno.EINVAL);
+        }
+
+        return (iovs, 0);
+    }
+
+    private static int WriteIovecs(Engine engine, ReadOnlySpan<byte> data, Iovec[] iovs)
+    {
+        var offset = 0;
+        foreach (var iov in iovs)
+            if (iov.Len > 0 && offset < data.Length)
+            {
+                var len = (int)Math.Min(iov.Len, (uint)(data.Length - offset));
+                if (!engine.CopyToUser(iov.BaseAddr, data.Slice(offset, len))) return -(int)Errno.EFAULT;
+                offset += len;
+            }
+
+        return 0;
+    }
+
+    private static (bool Success, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
+    {
+        if (controlLen < 16 || controlPtr == 0) return (true, null);
+        var cmRaw = new byte[controlLen];
+        if (!engine.CopyFromUser(controlPtr, cmRaw)) return (false, null);
+
+        List<LinuxFile> sendFds = new();
+        var cmsgOffset = 0;
+        while (cmsgOffset + 12 <= controlLen)
+        {
+            var cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset, 4));
+            if (cmsgLen < 12 || cmsgOffset + cmsgLen > controlLen) break;
+            var cmsgLevel = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 4, 4));
+            var cmsgType = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 8, 4));
+
+            if (cmsgLevel == LinuxConstants.SOL_SOCKET && cmsgType == 1 /* SCM_RIGHTS */)
+            {
+                var task = engine.Owner as FiberTask;
+                if (task != null)
+                {
+                    var fdCount = (cmsgLen - 12) / 4;
+                    for (var j = 0; j < fdCount; j++)
+                    {
+                        var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 12 + j * 4, 4));
+                        var file = task.CPU.CurrentSyscallManager!.GetFD(cmsgFd);
+                        if (file != null) sendFds.Add(file);
+                    }
+                }
+            }
+
+            cmsgOffset += (cmsgLen + 3) & ~3;
+        }
+
+        return (true, sendFds.Count > 0 ? sendFds : null);
+    }
+
+    private static void WriteCmsgFds(Engine engine, uint controlPtr, int controlLen, List<LinuxFile> fds, out int writtenBytes, bool cloexec = false)
+    {
+        writtenBytes = 0;
+        var task = engine.Owner as FiberTask;
+        if (task == null) return;
+        var sm = task.CPU.CurrentSyscallManager;
+        if (sm == null) return;
+
+        var maxFds = (controlLen - 12) / 4;
+        var numFds = Math.Min(fds.Count, maxFds);
+        var reqLen = 12 + numFds * 4;
+        if (reqLen > controlLen) return;
+
+        var cmRaw = new byte[reqLen];
+        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
+        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
+        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), 1 /* SCM_RIGHTS */);
+
+        for (int i = 0; i < numFds; i++) {
+            var fd = sm.AllocFD(fds[i]);
+            if (cloexec) sm.SetFdCloseOnExec(fd, true);
+            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
+        }
+
+        engine.CopyToUser(controlPtr, cmRaw);
+        writtenBytes = reqLen;
+    }
+
+    private static void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
+    {
+        Span<byte> buf = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(buf, msgFlags);
+        engine.CopyToUser(msgPtr + 24, buf);
+    }
+
+    private static void WriteBackMsgControllen(Engine engine, uint msgPtr, int writtenLen)
+    {
+        Span<byte> buf = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(buf, writtenLen);
+        engine.CopyToUser(msgPtr + 20, buf);
+    }
+
+    // --- Helpers ---
+
+
+    internal static (UnixSockaddrInfo? Address, int Error) ReadUnixSockaddr(Engine engine, uint addrPtr, int addrLen)
     {
         if (addrPtr == 0) return (null, -(int)Errno.EFAULT);
         if (addrLen < 2 || addrLen > 110) return (null, -(int)Errno.EINVAL);
@@ -1338,7 +946,7 @@ public partial class SyscallManager
         }, 0);
     }
 
-    private static void WriteSockaddrUnix(Engine engine, uint addrPtr, uint addrLenPtr, byte[]? sunPathRaw)
+    internal static void WriteSockaddrUnix(Engine engine, uint addrPtr, uint addrLenPtr, byte[]? sunPathRaw)
     {
         Span<byte> lenBuf = stackalloc byte[4];
         if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;

@@ -884,14 +884,11 @@ public partial class SyscallManager
                     return -(int)Errno.EFAULT;
 
                 var payload = data.AsMemory(0, (int)iov.Len);
-                var n = file.OpenedInode switch
-                {
-                    HostSocketInode host => await host.SendAsync(file, task, payload, flags),
-                    NetstackSocketInode netstack => await netstack.SendAsync(file, task, payload, flags),
-                    NetlinkRouteSocketInode netlink => await netlink.SendAsync(file, payload, flags),
-                    UnixSocketInode unix => await unix.SendMessageAsync(file, task, payload.ToArray(), null, flags),
-                    _ => -(int)Errno.ENOTSOCK
-                };
+                var n = -(int)Errno.ENOTSOCK;
+                if (file.TryGetSocketDataOps(out var ops))
+                    n = await ops.SendAsync(file, task, payload, flags);
+                else if (file.OpenedInode is NetlinkRouteSocketInode netlink)
+                    n = await netlink.SendAsync(file, payload, flags);
 
                 if (n == -(int)Errno.EPIPE)
                     task.PostSignal((int)Signal.SIGPIPE);
@@ -977,15 +974,11 @@ public partial class SyscallManager
             var buffer = ArrayPool<byte>.Shared.Rent((int)iov.Len);
             try
             {
-                var n = file.OpenedInode switch
-                {
-                    HostSocketInode host => await host.RecvAsync(file, task, buffer, flags, (int)iov.Len),
-                    NetstackSocketInode netstack => await netstack.RecvAsync(file, task, buffer, flags, (int)iov.Len),
-                    NetlinkRouteSocketInode netlink => await netlink.RecvAsync(file, task, buffer, flags, (int)iov.Len),
-                    UnixSocketInode unix => (await unix.RecvMessageAsync(file, task, buffer, flags, (int)iov.Len))
-                        .BytesRead,
-                    _ => -(int)Errno.ENOTSOCK
-                };
+                var n = -(int)Errno.ENOTSOCK;
+                if (file.TryGetSocketDataOps(out var ops))
+                    n = await ops.RecvAsync(file, task, buffer, flags, (int)iov.Len);
+                else if (file.OpenedInode is NetlinkRouteSocketInode netlink)
+                    n = await netlink.RecvAsync(file, task, buffer, flags, (int)iov.Len);
 
                 if (n < 0)
                     return totalRead > 0 ? totalRead : n;
