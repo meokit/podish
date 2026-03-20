@@ -48,8 +48,15 @@ internal static class BenchmarkRunner
             return 1;
         }
 
+        var disableSuperopcodesForRun = options.DisableSuperopcodes;
+        if (options.JitHandlerProfileBlockDump && !options.AllowSuperopcodesInBlockAnalysis)
+            disableSuperopcodesForRun = true;
+
         if (options.JitHandlerProfileBlockDump || options.AggregateSuperopcodeCandidates)
             EnsurePerfToolsBuild(projectRoot);
+
+        if (options.Engine == "jit" && disableSuperopcodesForRun)
+            EnsurePodishCliBuild(projectRoot, jitConfiguration, enableSuperOpcodes: false);
 
         var timestamp = $"{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}";
         var resultsDir = Path.GetFullPath(options.ResultsDir ??
@@ -68,10 +75,6 @@ internal static class BenchmarkRunner
             Console.WriteLine($"[runner] jit_configuration={jitConfiguration}");
         if (options.Engine == "aot")
             Console.WriteLine($"[runner] aot_binary={aotBinary}");
-
-        var disableSuperopcodesForRun = options.DisableSuperopcodes;
-        if (options.JitHandlerProfileBlockDump && !options.AllowSuperopcodesInBlockAnalysis)
-            disableSuperopcodesForRun = true;
 
         if (options.JitHandlerProfileBlockDump)
         {
@@ -553,6 +556,23 @@ internal static class BenchmarkRunner
             "--no-restore"
         };
         Console.WriteLine($"[runner] building perf tools: {string.Join(" ", cmd.Select(ShellQuote))}");
+        RunProcess(cmd[0], cmd.Skip(1), projectRoot);
+    }
+
+    private static void EnsurePodishCliBuild(string projectRoot, string configuration, bool enableSuperOpcodes)
+    {
+        var cmd = new[]
+        {
+            "dotnet",
+            "build",
+            Path.Combine(projectRoot, "Podish.Cli", "Podish.Cli.csproj"),
+            "-c",
+            configuration,
+            "--no-restore",
+            $"-p:EnableSuperOpcodes={(enableSuperOpcodes ? "true" : "false")}"
+        };
+        Console.WriteLine(
+            $"[runner] building Podish.Cli: {string.Join(" ", cmd.Select(ShellQuote))}");
         RunProcess(cmd[0], cmd.Skip(1), projectRoot);
     }
 
