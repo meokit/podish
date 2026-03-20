@@ -382,7 +382,7 @@ actor PodishRuntimeActor {
         _ = pod_terminal_resize(term, safeRows, safeCols)
     }
 
-    func stop() async {
+    private func teardownRuntime(destroyContext: Bool) async {
         let runningEventTask = eventTask
         eventTask = nil
         runningEventTask?.cancel()
@@ -396,9 +396,15 @@ actor PodishRuntimeActor {
         sessions.removeAll()
 
         if let c = ctx {
-            pod_ctx_destroy(c)
+            if destroyContext {
+                pod_ctx_destroy(c)
+            }
             ctx = nil
         }
+    }
+
+    func stop() async {
+        await teardownRuntime(destroyContext: true)
     }
 
     func shutdownForAppExit(stopTimeoutMs: Int32 = 10_000) async {
@@ -416,7 +422,9 @@ actor PodishRuntimeActor {
             }
         }
 
-        await stop()
+        // App termination should stop running containers and detach from the runtime,
+        // but it should not destroy tracked containers or delete their persisted state.
+        await teardownRuntime(destroyContext: false)
     }
 
     private func startReadLoop(containerId: String) {
