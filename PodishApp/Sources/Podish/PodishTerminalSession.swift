@@ -86,6 +86,7 @@ private struct PodishRunSpec: Codable {
     var strace: Bool = false
     var logDriver: String = "json-file"
     var publishedPorts: [PublishedPortSpec] = []
+    var memoryQuotaBytes: Int64?
 }
 
 enum PodishRuntimeError: LocalizedError {
@@ -278,14 +279,16 @@ actor PodishRuntimeActor {
         imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
-        portMappings: [PodishPortMapping]
+        portMappings: [PodishPortMapping],
+        memoryQuotaBytes: Int64?
     ) throws -> String {
         try ensureContext()
         return try createAndStartContainer(
             imageRef: imageRef,
             name: name,
             networkMode: networkMode,
-            portMappings: portMappings
+            portMappings: portMappings,
+            memoryQuotaBytes: memoryQuotaBytes
         )
     }
 
@@ -635,7 +638,8 @@ actor PodishRuntimeActor {
         imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode = .host,
-        portMappings: [PodishPortMapping] = []
+        portMappings: [PodishPortMapping] = [],
+        memoryQuotaBytes: Int64? = nil
     ) throws -> String {
         guard let c = ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
         let beforeIds = Set(try listContainers().map(\.containerId))
@@ -661,7 +665,8 @@ actor PodishRuntimeActor {
             tty: true,
             strace: false,
             logDriver: "json-file",
-            publishedPorts: publishedPorts
+            publishedPorts: publishedPorts,
+            memoryQuotaBytes: memoryQuotaBytes
         )
         let data = try JSONEncoder().encode(spec)
         guard let json = String(data: data, encoding: .utf8) else {
@@ -1024,7 +1029,8 @@ final class PodishTerminalSession: ObservableObject {
         from imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
-        portMappings: [PodishPortMapping]
+        portMappings: [PodishPortMapping],
+        memoryQuotaBytes: Int64?
     ) {
         Task {
             do {
@@ -1033,7 +1039,8 @@ final class PodishTerminalSession: ObservableObject {
                     imageRef: imageRef,
                     name: name,
                     networkMode: networkMode,
-                    portMappings: portMappings
+                    portMappings: portMappings,
+                    memoryQuotaBytes: memoryQuotaBytes
                 )
                 let containers = try await runtime.refreshContainers()
                 let keepCurrentActive = previousActiveId != nil

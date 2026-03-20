@@ -174,6 +174,18 @@ public sealed class ContainerRuntimeService
                 return 1;
             }
 
+            if (request.MemoryQuotaBytes is { } quotaBytes &&
+                quotaBytes < ContainerMemoryLimits.MinimumMemoryQuotaBytes)
+            {
+                var message = $"memory quota must be at least {ContainerMemoryLimits.MinimumMemoryQuotaBytes / (1024 * 1024)}M";
+                Console.Error.WriteLine($"[Podish Error] {message}");
+                request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                    request.ContainerId,
+                    request.Image, 1,
+                    message));
+                return 1;
+            }
+
             if (request.MemoryQuotaBytes.HasValue)
                 ExternalPageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 

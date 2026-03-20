@@ -7,6 +7,7 @@ struct NewContainerSheetView: View {
     @State private var pullImageRef = "docker.io/i386/alpine:latest"
     @State private var selectedImageId: String?
     @State private var containerName = ""
+    @State private var memoryLimitText = "\(PodishMemoryLimits.defaultMemoryQuotaMB)"
     @State private var networkMode: PodishNetworkMode = .host
     @State private var portMappingsText = ""
     @State private var createError: String?
@@ -16,8 +17,15 @@ struct NewContainerSheetView: View {
             VStack(spacing: 12) {
                 pullSection
                 nameSection
+                memorySection
                 networkSection
                 imageListSection
+                if let createError {
+                    Text(createError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             .padding()
             .navigationTitle("New Container")
@@ -35,8 +43,10 @@ struct NewContainerSheetView: View {
                         if let imageRef = selectedImageRef {
                             let trimmed = containerName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let mappings: [PodishPortMapping]
+                            let memoryQuotaBytes: Int64?
                             do {
                                 mappings = try parsePortMappings()
+                                memoryQuotaBytes = try parseMemoryQuotaBytes()
                             } catch {
                                 createError = error.localizedDescription
                                 return
@@ -47,7 +57,8 @@ struct NewContainerSheetView: View {
                                 fromImage: imageRef,
                                 name: trimmed.isEmpty ? nil : trimmed,
                                 networkMode: networkMode,
-                                portMappings: mappings
+                                portMappings: mappings,
+                                memoryQuotaBytes: memoryQuotaBytes
                             )
                             dismiss()
                         }
@@ -155,6 +166,20 @@ struct NewContainerSheetView: View {
         }
     }
 
+    private var memorySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Memory Limit (MB, optional)")
+                .font(.headline)
+            TextField("2048", text: $memoryLimitText)
+                #if os(macOS)
+                .textFieldStyle(.roundedBorder)
+                #endif
+            Text("Minimum \(PodishMemoryLimits.minimumMemoryQuotaMB) MB. Leave blank to use the default container limit.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var networkSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Network")
@@ -177,11 +202,6 @@ struct NewContainerSheetView: View {
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(.secondary.opacity(0.25), lineWidth: 1)
                         )
-                    if let createError {
-                        Text(createError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
                 }
             }
         }
@@ -223,6 +243,21 @@ struct NewContainerSheetView: View {
             result.append(PodishPortMapping(hostPort: host, containerPort: container))
         }
         return result
+    }
+
+    private func parseMemoryQuotaBytes() throws -> Int64? {
+        let trimmed = memoryLimitText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        guard let memoryMB = Int64(trimmed), memoryMB > 0 else {
+            throw ParseError("Memory limit must be a positive integer number of MB.")
+        }
+        guard memoryMB >= Int64(PodishMemoryLimits.minimumMemoryQuotaMB) else {
+            throw ParseError("Memory limit must be at least \(PodishMemoryLimits.minimumMemoryQuotaMB) MB.")
+        }
+        return memoryMB * PodishMemoryLimits.bytesPerMiB
     }
 
     private struct ParseError: LocalizedError {

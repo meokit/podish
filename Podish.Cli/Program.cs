@@ -54,6 +54,9 @@ internal class Program
         var rootfsOption = new Option<string?>(
             new[] { "--rootfs" },
             "Use a local root filesystem path (Podman-compatible rootfs mode)");
+        var memoryOption = new Option<string?>(
+            new[] { "--memory", "-m" },
+            "Set container memory limit (e.g. 64M, 1G; minimum 32M)");
         var envOption = new Option<string[]>(
             new[] { "--env", "-e" },
             "Set environment variables (e.g. -e KEY=VALUE)")
@@ -107,6 +110,7 @@ internal class Program
         runCommand.AddOption(straceOption);
         runCommand.AddOption(initOption);
         runCommand.AddOption(rootfsOption);
+        runCommand.AddOption(memoryOption);
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
@@ -126,6 +130,7 @@ internal class Program
             var strace = context.ParseResult.GetValueForOption(straceOption);
             var useInit = context.ParseResult.GetValueForOption(initOption);
             var rootfs = context.ParseResult.GetValueForOption(rootfsOption);
+            var memoryRaw = context.ParseResult.GetValueForOption(memoryOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
@@ -160,6 +165,20 @@ internal class Program
                         exeArgs = runArgs.Skip(2).ToArray();
                     }
                 }
+            }
+
+            long? memoryQuotaBytes = null;
+            if (!string.IsNullOrWhiteSpace(memoryRaw))
+            {
+                if (!ContainerMemoryLimits.TryParseMemoryQuotaBytes(memoryRaw!, out var parsedMemory,
+                        out var memoryError))
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] invalid --memory value: {memoryRaw}. {memoryError}");
+                    context.ExitCode = 125;
+                    return;
+                }
+
+                memoryQuotaBytes = parsedMemory;
             }
 
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
@@ -318,6 +337,7 @@ internal class Program
                 Tty = tty,
                 Strace = strace,
                 Init = useInit,
+                MemoryQuotaBytes = memoryQuotaBytes,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
             };
@@ -362,7 +382,8 @@ internal class Program
                 containerLogDriver,
                 eventStore,
                 publishedPorts,
-                guestStatsExportDir);
+                guestStatsExportDir,
+                memoryQuotaBytes);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -514,7 +535,8 @@ internal class Program
                 containerLogDriver,
                 eventStore,
                 spec.PublishedPorts,
-                guestStatsExportDir);
+                guestStatsExportDir,
+                spec.MemoryQuotaBytes);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1104,6 +1126,8 @@ internal class Program
             "--log-file",
             "-v",
             "--volume",
+            "-m",
+            "--memory",
             "-e",
             "--env",
             "--dns",
@@ -1134,6 +1158,9 @@ internal class Program
                 hasRootfs = true;
                 continue;
             }
+
+            if (token.StartsWith("--memory=", StringComparison.Ordinal))
+                continue;
 
             if (token.StartsWith("-", StringComparison.Ordinal))
             {
@@ -1289,7 +1316,8 @@ internal class Program
         string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
-        ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir)
+        ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
+        long? memoryQuotaBytes)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
@@ -1314,7 +1342,8 @@ internal class Program
             LogDriver = logDriver,
             EventStore = eventStore,
             PublishedPorts = publishedPorts,
-            GuestStatsExportDir = guestStatsExportDir
+            GuestStatsExportDir = guestStatsExportDir,
+            MemoryQuotaBytes = memoryQuotaBytes
         });
     }
 }

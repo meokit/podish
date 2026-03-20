@@ -1,23 +1,48 @@
 using Fiberish.Core.Net;
-using Fiberish.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
 using Xunit;
 
 namespace Fiberish.Tests.Podish;
 
-[Collection("ExternalPageManagerSerial")]
-public sealed class ContainerRuntimeOomTests
+public sealed class ContainerMemoryLimitsTests
 {
     private static readonly SemaphoreSlim ConsoleErrorGate = new(1, 1);
 
-    [Fact]
-    public async Task RunAsync_StartupOom_EmitsSpecificUserMessageAndEvent()
+    [Theory]
+    [InlineData("32M", 32L * 1024 * 1024)]
+    [InlineData("64m", 64L * 1024 * 1024)]
+    [InlineData("1G", 1024L * 1024 * 1024)]
+    [InlineData("512MiB", 512L * 1024 * 1024)]
+    public void TryParseMemoryQuotaBytes_AcceptsSupportedSizes(string raw, long expectedBytes)
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var ok = ContainerMemoryLimits.TryParseMemoryQuotaBytes(raw, out var bytes, out var error);
 
-        var root = Path.Combine(Path.GetTempPath(), "podish-oom-" + Guid.NewGuid().ToString("N"));
+        Assert.True(ok);
+        Assert.Equal(expectedBytes, bytes);
+        Assert.Equal(string.Empty, error);
+    }
+
+    [Theory]
+    [InlineData("31M")]
+    [InlineData("1")]
+    [InlineData("foo")]
+    public void TryParseMemoryQuotaBytes_RejectsInvalidValues(string raw)
+    {
+        var ok = ContainerMemoryLimits.TryParseMemoryQuotaBytes(raw, out var bytes, out var error);
+
+        Assert.False(ok);
+        Assert.Equal(0, bytes);
+        Assert.NotEmpty(error);
+    }
+
+    [Fact]
+    public async Task RunAsync_MemoryQuotaBelowMinimum_IsRejected()
+    {
+        using var pageScope = Fiberish.Memory.ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = Fiberish.Memory.GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+
+        var root = Path.Combine(Path.GetTempPath(), "podish-memory-limit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var containerDir = Path.Combine(root, "ctr");
         Directory.CreateDirectory(containerDir);
@@ -40,10 +65,10 @@ public sealed class ContainerRuntimeOomTests
                 Strace = false,
                 UseEngineInit = false,
                 UseOverlay = false,
-                ContainerId = "oom-test-container",
-                Hostname = "oom-test",
+                ContainerId = "memory-limit-test-container",
+                Hostname = "memory-limit-test",
                 NetworkMode = NetworkMode.Host,
-                Image = "oom:test",
+                Image = "memory:test",
                 ContainerDir = containerDir,
                 LogDriver = ContainerLogDriver.None,
                 EventStore = eventStore,
@@ -74,13 +99,13 @@ public sealed class ContainerRuntimeOomTests
 
             Assert.Equal(1, rc);
             var stderr = capture.ToString();
-            Assert.Contains("[Podish OOM]", stderr);
-            Assert.Contains("ENOMEM", stderr);
+            Assert.Contains("[Podish Error]", stderr);
+            Assert.Contains("memory quota must be at least 32M", stderr);
 
             var exit = eventStore.ReadAll().LastOrDefault(e => e.Type == "container-exit");
             Assert.NotNull(exit);
             Assert.NotNull(exit!.Message);
-            Assert.Contains("ENOMEM", exit.Message!);
+            Assert.Contains("memory quota must be at least 32M", exit.Message!);
         }
         finally
         {

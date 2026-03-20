@@ -82,6 +82,7 @@ struct NativeRunSpec: Decodable, Hashable {
     let strace: Bool
     let logDriver: String
     let publishedPorts: [NativePublishedPortSpec]
+    let memoryQuotaBytes: Int64?
 }
 
 struct NativeContainerInspect: Decodable, Hashable {
@@ -135,6 +136,12 @@ enum PodishNetworkMode: String, CaseIterable, Identifiable {
             return 1
         }
     }
+}
+
+enum PodishMemoryLimits {
+    static let minimumMemoryQuotaMB = 32
+    static let defaultMemoryQuotaMB = 2048
+    static let bytesPerMiB: Int64 = 1024 * 1024
 }
 
 struct PodishPortMapping: Hashable {

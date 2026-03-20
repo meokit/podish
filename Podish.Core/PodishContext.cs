@@ -29,6 +29,7 @@ public sealed class PodishRunSpec
     public bool Tty { get; init; }
     public bool Strace { get; init; }
     public bool Init { get; init; }
+    public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
 }
@@ -450,7 +451,8 @@ public sealed class PodishContext : IDisposable
             ProcessController = processController,
             EnableHostConsoleInput = !attachTerminalBridge,
             PublishedPorts = spec.PublishedPorts,
-            UseEngineInit = spec.Init
+            UseEngineInit = spec.Init,
+            MemoryQuotaBytes = spec.MemoryQuotaBytes
         }));
 
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);

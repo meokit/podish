@@ -127,6 +127,7 @@ struct ContainerDetailsSheetView: View {
 
     private func inspectText(for inspect: NativeContainerInspect) -> String {
         let ports = inspect.spec.publishedPorts.map { "\($0.hostPort):\($0.containerPort)" }
+        let memoryLimit = inspect.spec.memoryQuotaBytes.map(Self.formatMemoryQuotaBytes) ?? "-"
         return """
         Name: \(inspect.name)
         Container ID: \(inspect.containerId)
@@ -137,8 +138,19 @@ struct ContainerDetailsSheetView: View {
         Exe: \(inspect.spec.exe ?? "-")
         Args: \(inspect.spec.exeArgs.joined(separator: " "))
         Network Mode: \(inspect.spec.networkMode)
+        Memory Limit: \(memoryLimit)
         Ports: \(ports.isEmpty ? "-" : ports.joined(separator: ", "))
         """
+    }
+
+    private static func formatMemoryQuotaBytes(_ bytes: Int64) -> String {
+        if bytes % (1024 * 1024 * 1024) == 0 {
+            return "\(bytes / (1024 * 1024 * 1024))G"
+        }
+        if bytes % (1024 * 1024) == 0 {
+            return "\(bytes / (1024 * 1024))M"
+        }
+        return "\(bytes)B"
     }
 
     private func reloadInspect() {
