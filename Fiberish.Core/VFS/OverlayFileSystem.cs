@@ -440,31 +440,51 @@ public class OverlayInode : Inode
             return 0;
         }
 
-        upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
-
-        // 3. Copy data
         var lowerInode = LowerInode;
-        if (lowerInode != null)
-            try
+        try
+        {
+            switch (Type)
             {
-                var buf = new byte[4096];
-                long pos = 0;
-                while (true)
-                {
-                    // Use null to trigger host-internal read without dependency on user's open mode
-                    var n = lowerInode.Read(null!, buf, pos);
-                    if (n <= 0) break;
-                    upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
-                    pos += n;
-                }
+                case InodeType.Symlink:
+                    if (lowerInode == null)
+                        throw new InvalidOperationException("No lower inode available for symlink copy-up");
+                    upperParent.Inode!.Symlink(upperDentry, lowerInode.Readlink(), Uid, Gid);
+                    break;
+
+                case InodeType.CharDev:
+                case InodeType.BlockDev:
+                case InodeType.Fifo:
+                case InodeType.Socket:
+                    upperParent.Inode!.Mknod(upperDentry, Mode, Uid, Gid, Type, Rdev);
+                    break;
+
+                default:
+                    upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
+
+                    if (lowerInode != null)
+                    {
+                        var buf = new byte[4096];
+                        long pos = 0;
+                        while (true)
+                        {
+                            // Use null to trigger host-internal read without dependency on user's open mode
+                            var n = lowerInode.Read(null!, buf, pos);
+                            if (n <= 0) break;
+                            upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
+                            pos += n;
+                        }
+                    }
+
+                    break;
             }
-            catch (Exception ex)
-            {
-                Logging.CreateLogger<OverlayInode>()
-                    .LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
-                // Cleanup failed upper dentry if needed? For now just return error.
-                return -(int)Errno.EACCES;
-            }
+        }
+        catch (Exception ex)
+        {
+            Logging.CreateLogger<OverlayInode>()
+                .LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
+            // Cleanup failed upper dentry if needed? For now just return error.
+            return -(int)Errno.EACCES;
+        }
 
         UpperDentry = upperDentry;
 
@@ -541,8 +561,11 @@ public class OverlayInode : Inode
         if (UpperDentry == null)
             CopyUpDirectory();
         var osb = (OverlaySuperBlock)SuperBlock;
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        {
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+            osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        }
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
@@ -560,8 +583,11 @@ public class OverlayInode : Inode
         if (UpperDentry == null)
             CopyUpDirectory();
         var osb = (OverlaySuperBlock)SuperBlock;
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        {
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+            osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        }
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Mkdir(upperDentry, mode, uid, gid);
@@ -749,8 +775,11 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Link(upperDentry, oldOverlay.UpperInode);
         var osb = (OverlaySuperBlock)SuperBlock;
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        {
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+            osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        }
 
         var newOverlayInode = oldOverlay;
         newOverlayInode.InitializeOverlayLinkCount("OverlayInode.Link.copyup-source");
@@ -775,8 +804,11 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode.Symlink(upperDentry, target, uid, gid);
         var osb = (OverlaySuperBlock)SuperBlock;
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        {
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+            osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        }
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
@@ -796,8 +828,11 @@ public class OverlayInode : Inode
         UpperInode.Mknod(upperDentry, mode, uid, gid, type, rdev);
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        {
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
+            osb.RemoveWhiteout(GetDirectoryKey(), dentry.Name);
+        }
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
@@ -1138,7 +1173,8 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
 
     public bool IsEncodedOpaque(Inode? upperDir)
     {
-        return upperDir?.Lookup(OpaqueMarker) != null;
+        if (upperDir == null) return false;
+        return upperDir.GetEntries().Any(IsEncodedOpaqueEntry);
     }
 
     public bool IsEncodedOpaqueEntry(DirectoryEntry entry)
@@ -1172,11 +1208,15 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
     public bool TryCreateEncodedWhiteout(OverlayInode dir, string name)
     {
         if (dir.UpperInode == null || dir.UpperDentry == null) return false;
-        if (dir.UpperInode is not TmpfsInode && dir.UpperInode is not HostInode) return false;
+        if (dir.UpperInode is not TmpfsInode && dir.UpperInode is not HostInode && dir.UpperInode is not SilkInode)
+            return false;
         if (dir.UpperDentry == null) return false;
         if (dir.UpperInode.Lookup(name) != null) return false;
 
-        var dentry = new Dentry(name, null, dir.UpperDentry, dir.UpperDentry.SuperBlock);
+        var encodedName = dir.UpperInode is SilkInode ? $".wh.{name}" : name;
+        if (dir.UpperInode.Lookup(encodedName) != null) return false;
+
+        var dentry = new Dentry(encodedName, null, dir.UpperDentry, dir.UpperDentry.SuperBlock);
         dir.UpperInode.Mknod(dentry, 0x1B6, 0, 0, InodeType.CharDev, 0); // char 0/0
 
         return true;
@@ -1187,6 +1227,13 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
         if (dir.UpperInode == null) return;
         var existing = dir.UpperInode.Lookup(name);
         if (existing?.Inode != null && IsWhiteoutInode(existing.Inode))
+        {
             dir.UpperInode.Unlink(name);
+            return;
+        }
+
+        var encoded = dir.UpperInode.Lookup($".wh.{name}");
+        if (encoded != null)
+            dir.UpperInode.Unlink($".wh.{name}");
     }
 }

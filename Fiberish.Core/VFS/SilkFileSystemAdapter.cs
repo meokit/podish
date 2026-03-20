@@ -225,6 +225,13 @@ public sealed class SilkInode : IndexedMemoryInode
         var data = _repository.ReadLiveInodeData((long)Ino);
         if (data == null) return;
 
+        if (Type == InodeType.Symlink)
+        {
+            SymlinkData = data.Length == 0 ? Array.Empty<byte>() : [.. data];
+            Size = (ulong)SymlinkData.Length;
+            return;
+        }
+
         _ = base.Truncate(0);
         if (data.Length > 0)
             _ = base.Write(null!, data, 0);
