@@ -16,6 +16,65 @@ namespace fiberish {
 // Basic MOV / XCHG
 // ------------------------------------------------------------------------------------------------
 
+enum class AddrNoIndexSpec : uint8_t {
+    Dynamic = 0,
+    NoIndex,
+};
+
+enum class AddrBaseRegSpec : int8_t {
+    Dynamic = -1,
+    None = -2,
+    Eax = EAX,
+    Ecx = ECX,
+    Edx = EDX,
+    Ebx = EBX,
+    Esp = ESP,
+    Ebp = EBP,
+    Esi = ESI,
+    Edi = EDI,
+};
+
+enum class AddrSegmentSpec : int8_t {
+    General = -1,
+    None = 0,
+    Es = 1,
+    Cs = 2,
+    Ss = 3,
+    Ds = 4,
+    Fs = 5,
+    Gs = 6,
+};
+
+template <AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, const DecodedOp* op) {
+    const auto* ext = GetExt(op);
+    const uint32_t ea_desc = ext->data.ea_desc;
+    uint32_t addr = ext->data.disp;
+
+    if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
+        const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
+        addr += *(const uint32_t*)(regs_base + memdesc::BaseOffset(ea_desc));
+    } else if constexpr (BaseRegSpec != AddrBaseRegSpec::None) {
+        addr += state->ctx.regs[static_cast<int>(BaseRegSpec)];
+    }
+
+    if constexpr (NoIndexSpec == AddrNoIndexSpec::Dynamic) {
+        const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
+        const uint32_t index = *(const uint32_t*)(regs_base + memdesc::IndexOffset(ea_desc));
+        addr += index << memdesc::Scale(ea_desc);
+    }
+
+    if constexpr (SegmentSpec == AddrSegmentSpec::General) {
+        addr += GetMemSegmentBase(state, op);
+    } else if constexpr (SegmentSpec != AddrSegmentSpec::None) {
+        addr += state->ctx.seg_base[static_cast<int>(SegmentSpec)];
+    }
+
+    return addr;
+}
+
 template <Specialized SrcSpec = Specialized::None, Specialized DstSpec = Specialized::None>
 FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
     // Specialized: MOV r32, r32
@@ -72,7 +131,9 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized S = Specialized::None>
+template <Specialized S = Specialized::None, AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
 FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
     // Specialized: MOV [mem], r32
     // ModRM.Reg is the Source Register
@@ -100,7 +161,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
         val = GetReg(state, reg);
     }
 
-    uint32_t addr = ComputeLinearAddress(state, op);
+    uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, op);
     // Restart on TLB Miss
     if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
@@ -172,10 +233,12 @@ FORCE_INLINE LogicFlow OpMov_OaMa_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized S = Specialized::None>
+template <Specialized S = Specialized::None, AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
 FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(LogicFuncParams) {
     // Specialized: MOV r32, [mem]
-    uint32_t addr = ComputeLinearAddress(state, op);
+    uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, op);
     // Restart on TLB Miss
     auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -244,6 +307,11 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg(LogicFuncParams) { return OpMov_EvGv_Reg_I
         return OpMov_EvGv_Mem_Internal<Spec>(LogicPassParams);      \
     }
 
+#define MOV_STORE_ADDRSPEC_WRAPPER(RegName, Spec, Suffix, NoIndexValue, BaseRegValue, SegmentValue)      \
+    FORCE_INLINE LogicFlow OpMov_Store_##RegName##_##Suffix(LogicFuncParams) {                           \
+        return OpMov_EvGv_Mem_Internal<Spec, NoIndexValue, BaseRegValue, SegmentValue>(LogicPassParams); \
+    }
+
 MOV_STORE_WRAPPER(Eax, Specialized::RegEax)
 MOV_STORE_WRAPPER(Ecx, Specialized::RegEcx)
 MOV_STORE_WRAPPER(Edx, Specialized::RegEdx)
@@ -252,6 +320,55 @@ MOV_STORE_WRAPPER(Esp, Specialized::RegEsp)
 MOV_STORE_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_STORE_WRAPPER(Esi, Specialized::RegEsi)
 MOV_STORE_WRAPPER(Edi, Specialized::RegEdi)
+
+MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
 
 FORCE_INLINE LogicFlow OpMov_EvGv_Mem(LogicFuncParams) { return OpMov_EvGv_Mem_Internal<>(LogicPassParams); }
 
@@ -301,6 +418,11 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg(LogicFuncParams) { return OpMov_GvEv_Reg_I
         return OpMov_GvEv_Mem_Internal<Spec>(LogicPassParams);     \
     }
 
+#define MOV_LOAD_ADDRSPEC_WRAPPER(RegName, Spec, Suffix, NoIndexValue, BaseRegValue, SegmentValue)       \
+    FORCE_INLINE LogicFlow OpMov_Load_##RegName##_##Suffix(LogicFuncParams) {                            \
+        return OpMov_GvEv_Mem_Internal<Spec, NoIndexValue, BaseRegValue, SegmentValue>(LogicPassParams); \
+    }
+
 MOV_LOAD_WRAPPER(Eax, Specialized::RegEax)
 MOV_LOAD_WRAPPER(Ecx, Specialized::RegEcx)
 MOV_LOAD_WRAPPER(Edx, Specialized::RegEdx)
@@ -309,6 +431,55 @@ MOV_LOAD_WRAPPER(Esp, Specialized::RegEsp)
 MOV_LOAD_WRAPPER(Ebp, Specialized::RegEbp)
 MOV_LOAD_WRAPPER(Esi, Specialized::RegEsi)
 MOV_LOAD_WRAPPER(Edi, Specialized::RegEdi)
+
+MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
+                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
 
 FORCE_INLINE LogicFlow OpMov_GvEv_Mem(LogicFuncParams) { return OpMov_GvEv_Mem_Internal<>(LogicPassParams); }
 
@@ -362,6 +533,21 @@ FORCE_INLINE LogicFlow OpMov_EbIb(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+template <AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
+    const uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, op);
+    if (op->prefixes.flags.opsize) {
+        if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, addr, (uint16_t)imm, utlb, op))
+            return LogicFlow::RetryMemoryOp;
+    } else {
+        if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, addr, (uint32_t)imm, utlb, op))
+            return LogicFlow::RetryMemoryOp;
+    }
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
     // MOV r/m16/32, imm16/32 (0xC7)
     if (op->prefixes.flags.opsize) {
@@ -370,6 +556,21 @@ FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)imm, utlb)) return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMov_EvIz_EspBaseNoIndexNoSegment(LogicFuncParams) {
+    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Esp, AddrSegmentSpec::None>(
+        LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpMov_EvIz_EaxBaseNoIndexNoSegment(LogicFuncParams) {
+    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Eax, AddrSegmentSpec::None>(
+        LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpMov_EvIz_EsiBaseNoIndexNoSegment(LogicFuncParams) {
+    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Esi, AddrSegmentSpec::None>(
+        LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {

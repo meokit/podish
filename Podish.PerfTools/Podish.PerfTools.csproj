@@ -14,6 +14,7 @@
         <Compile Include="Program.cs"/>
         <Compile Include="Program.Analysis.cs"/>
         <Compile Include="Program.Common.cs"/>
+        <Compile Include="Program.SibStats.cs"/>
         <Compile Include="Program.Candidates.cs"/>
         <Compile Include="Program.Profile.cs"/>
         <Compile Include="Program.Semantics.cs"/>

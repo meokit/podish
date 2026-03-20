@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include "common.h"
+#include "decoder.h"
 
 namespace fiberish {
 
@@ -68,23 +68,70 @@ struct SpecCriteria {
     // Flags Constraints
     bool no_flags = false;
 
-    bool Matches(uint8_t modrm, uint16_t prefixes, bool op_no_flags) const {
-        if (mod_mask) {
-            uint8_t mod = (modrm >> 6) & 3;
-            if ((mod & mod_mask) != mod_val) return false;
-        }
-        if (reg_mask) {
-            uint8_t reg = (modrm >> 3) & 7;
-            if ((reg & reg_mask) != reg_val) return false;
-        }
-        if (rm_mask) {
-            uint8_t rm = modrm & 7;
-            if ((rm & rm_mask) != rm_val) return false;
+    // Decoded memory shape constraints.
+    // Set mask to 0 to ignore.
+    uint8_t base_offset_mask = 0;
+    uint8_t base_offset_val = 0;
+
+    uint8_t index_offset_mask = 0;
+    uint8_t index_offset_val = 0;
+
+    uint8_t scale_mask = 0;
+    uint8_t scale_val = 0;
+
+    uint8_t segment_mask = 0;
+    uint8_t segment_val = 0;
+
+    bool RequiresMemShape() const { return base_offset_mask || index_offset_mask || scale_mask || segment_mask; }
+
+    bool Matches(const DecodedOp* op) const {
+        const uint8_t modrm = op->modrm;
+        const uint8_t prefixes = op->prefixes.all;
+        const bool op_no_flags = op->meta.flags.no_flags;
+
+        if (op->meta.flags.has_modrm) {
+            if (mod_mask) {
+                uint8_t mod = (modrm >> 6) & 3;
+                if ((mod & mod_mask) != mod_val) return false;
+            }
+            if (reg_mask) {
+                uint8_t reg = (modrm >> 3) & 7;
+                if ((reg & reg_mask) != reg_val) return false;
+            }
+            if (rm_mask) {
+                uint8_t rm = modrm & 7;
+                if ((rm & rm_mask) != rm_val) return false;
+            }
+        } else if (mod_mask || reg_mask || rm_mask) {
+            return false;
         }
         if (prefix_mask) {
             if ((prefixes & prefix_mask) != prefix_val) return false;
         }
         if (no_flags != op_no_flags) return false;
+
+        if (RequiresMemShape()) {
+            if (!op->meta.flags.has_mem) return false;
+
+            const uint32_t ea_desc = GetExt(op)->data.ea_desc;
+            if (base_offset_mask) {
+                const uint8_t base_offset = memdesc::BaseOffset(ea_desc);
+                if ((base_offset & base_offset_mask) != base_offset_val) return false;
+            }
+            if (index_offset_mask) {
+                const uint8_t index_offset = memdesc::IndexOffset(ea_desc);
+                if ((index_offset & index_offset_mask) != index_offset_val) return false;
+            }
+            if (scale_mask) {
+                const uint8_t scale = memdesc::Scale(ea_desc);
+                if ((scale & scale_mask) != scale_val) return false;
+            }
+            if (segment_mask) {
+                const uint8_t segment = memdesc::Segment(ea_desc);
+                if ((segment & segment_mask) != segment_val) return false;
+            }
+        }
+
         return true;
     }
 
@@ -93,6 +140,10 @@ struct SpecCriteria {
         if (mod_mask) score += 2;  // Rough weight
         if (reg_mask) score += 3;
         if (rm_mask) score += 3;
+        if (base_offset_mask) score += 4;
+        if (index_offset_mask) score += 4;
+        if (scale_mask) score += 2;
+        if (segment_mask) score += 2;
         if (prefix_mask) {
             // Count bits
             uint16_t v = prefix_mask;
@@ -104,8 +155,6 @@ struct SpecCriteria {
         return score;
     }
 };
-
-#include "decoder.h"  // For HandlerFunc
 
 struct SpecializedEntry {
     uint16_t opcode;

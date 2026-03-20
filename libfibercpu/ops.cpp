@@ -171,10 +171,11 @@ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* REST
     RecordBlockHandlersUntil(state, op);
     if constexpr (UseBranch) {
         if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch,
+                                                                      flags_cache);
     } else {
         ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
-                                                                    flags_cache);
+                                                                      flags_cache);
     }
 }
 
@@ -258,17 +259,30 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     // Layout:
     // [0-9]   Opcode (10 bits)
     // [10-17] ModRM (8 bits)
-    // [18-33] Prefixes (16 bits)
-    // [34]    HasModRM (1 bit)
-    // [35]    NoFlags (1 bit)
+    // [18-25] Prefixes (8 bits)
+    // [26]    HasModRM (1 bit)
+    // [27]    NoFlags (1 bit)
+    // [28]    HasMem (1 bit)
+    // [29-34] EA Base Offset (6 bits)
+    // [35-40] EA Index Offset (6 bits)
+    // [41-42] EA Scale (2 bits)
+    // [43-45] EA Segment (3 bits)
     uint64_t key = handler_index;
 
     if (op->meta.flags.has_modrm) {
         key |= ((uint64_t)op->modrm << 10);
-        key |= (1ULL << 34);
+        key |= (1ULL << 26);
     }
     key |= ((uint64_t)op->prefixes.all << 18);
-    if (op->meta.flags.no_flags) key |= (1ULL << 35);
+    if (op->meta.flags.no_flags) key |= (1ULL << 27);
+    if (op->meta.flags.has_mem) {
+        const uint32_t ea_desc = GetExt(op)->data.ea_desc;
+        key |= (1ULL << 28);
+        key |= ((uint64_t)memdesc::BaseOffset(ea_desc) << 29);
+        key |= ((uint64_t)memdesc::IndexOffset(ea_desc) << 35);
+        key |= ((uint64_t)memdesc::Scale(ea_desc) << 41);
+        key |= ((uint64_t)memdesc::Segment(ea_desc) << 43);
+    }
 
     // Check Cache
     auto it = g_SpecCache.find(key);
@@ -280,24 +294,7 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
 
     for (const auto& entry : list) {
         // Opcode check implicit by array index
-
-        // 1. Prefix Check always
-        if (entry.criteria.prefix_mask) {
-            if ((op->prefixes.all & entry.criteria.prefix_mask) != entry.criteria.prefix_val) continue;
-        }
-
-        // 2. ModRM Check
-        if (op->meta.flags.has_modrm) {
-            // Standard check
-            if (!entry.criteria.Matches(op->modrm, op->prefixes.all, op->meta.flags.no_flags)) continue;
-        } else {
-            // No ModRM in instruction.
-            // If criteria REQUIRES ModRM specific values (mask != 0), then it's a mismatch.
-            if (entry.criteria.mod_mask || entry.criteria.reg_mask || entry.criteria.rm_mask) continue;
-
-            // Still check no_flags even without ModRM
-            if (entry.criteria.no_flags != op->meta.flags.no_flags) continue;
-        }
+        if (!entry.criteria.Matches(op)) continue;
 
         found = entry.handler;
         break;  // Found the most specific match due to sorting

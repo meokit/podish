@@ -14,106 +14,150 @@ void RegisterDataMovOps() {
     g_Handlers[OP_MOV_RR_LOAD] = DispatchWrapper<OpMov_GvEv_Reg>;
     g_Handlers[OP_MOV_MR_LOAD] = DispatchWrapper<OpMov_GvEv_Mem>;
 
-    // Register Specialized Load/Store helpers
-    // Store (EvGv_Mem)
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 0;
-        DispatchRegistrar<OpMov_Store_Eax>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 1;
-        DispatchRegistrar<OpMov_Store_Ecx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 2;
-        DispatchRegistrar<OpMov_Store_Edx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 3;
-        DispatchRegistrar<OpMov_Store_Ebx>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 4;
-        DispatchRegistrar<OpMov_Store_Esp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 5;
-        DispatchRegistrar<OpMov_Store_Ebp>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 6;
-        DispatchRegistrar<OpMov_Store_Esi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 7;
-        DispatchRegistrar<OpMov_Store_Edi>::RegisterSpecialized(OP_MOV_RM_STORE, c);
+    constexpr uint8_t kEaxRegOffset = static_cast<uint8_t>(EAX * sizeof(uint32_t));
+    constexpr uint8_t kEspRegOffset = static_cast<uint8_t>(ESP * sizeof(uint32_t));
+    constexpr uint8_t kEsiRegOffset = static_cast<uint8_t>(ESI * sizeof(uint32_t));
+
+#define REGISTER_MOV_STORE_SIB_BASE(RegName, RegVal, Suffix, BaseOffsetValue)                         \
+    {                                                                                                 \
+        SpecCriteria c;                                                                               \
+        c.reg_mask = 7;                                                                               \
+        c.reg_val = RegVal;                                                                           \
+        c.rm_mask = 7;                                                                                \
+        c.rm_val = 4;                                                                                 \
+        c.base_offset_mask = 0x3F;                                                                    \
+        c.base_offset_val = BaseOffsetValue;                                                          \
+        c.index_offset_mask = 0x3F;                                                                   \
+        c.index_offset_val = kNoRegOffset;                                                            \
+        c.segment_mask = 0x7;                                                                         \
+        c.segment_val = 0;                                                                            \
+        DispatchRegistrar<OpMov_Store_##RegName##_##Suffix>::RegisterSpecialized(OP_MOV_RM_STORE, c); \
+    }                                                                                                 \
+    {                                                                                                 \
+        SpecCriteria c;                                                                               \
+        c.reg_mask = 7;                                                                               \
+        c.reg_val = RegVal;                                                                           \
+        DispatchRegistrar<OpMov_Store_##RegName>::RegisterSpecialized(OP_MOV_RM_STORE, c);            \
     }
 
+#define REGISTER_MOV_STORE_BASE(RegName, RegVal, Suffix, BaseOffsetValue)                             \
+    {                                                                                                 \
+        SpecCriteria c;                                                                               \
+        c.reg_mask = 7;                                                                               \
+        c.reg_val = RegVal;                                                                           \
+        c.base_offset_mask = 0x3F;                                                                    \
+        c.base_offset_val = BaseOffsetValue;                                                          \
+        c.index_offset_mask = 0x3F;                                                                   \
+        c.index_offset_val = kNoRegOffset;                                                            \
+        c.segment_mask = 0x7;                                                                         \
+        c.segment_val = 0;                                                                            \
+        DispatchRegistrar<OpMov_Store_##RegName##_##Suffix>::RegisterSpecialized(OP_MOV_RM_STORE, c); \
+    }                                                                                                 \
+    {                                                                                                 \
+        SpecCriteria c;                                                                               \
+        c.reg_mask = 7;                                                                               \
+        c.reg_val = RegVal;                                                                           \
+        DispatchRegistrar<OpMov_Store_##RegName>::RegisterSpecialized(OP_MOV_RM_STORE, c);            \
+    }
+
+#define REGISTER_MOV_LOAD_SIB_BASE(RegName, RegVal, Suffix, BaseOffsetValue)                        \
+    {                                                                                               \
+        SpecCriteria c;                                                                             \
+        c.reg_mask = 7;                                                                             \
+        c.reg_val = RegVal;                                                                         \
+        c.rm_mask = 7;                                                                              \
+        c.rm_val = 4;                                                                               \
+        c.base_offset_mask = 0x3F;                                                                  \
+        c.base_offset_val = BaseOffsetValue;                                                        \
+        c.index_offset_mask = 0x3F;                                                                 \
+        c.index_offset_val = kNoRegOffset;                                                          \
+        c.segment_mask = 0x7;                                                                       \
+        c.segment_val = 0;                                                                          \
+        DispatchRegistrar<OpMov_Load_##RegName##_##Suffix>::RegisterSpecialized(OP_MOV_MR_LOAD, c); \
+    }                                                                                               \
+    {                                                                                               \
+        SpecCriteria c;                                                                             \
+        c.reg_mask = 7;                                                                             \
+        c.reg_val = RegVal;                                                                         \
+        DispatchRegistrar<OpMov_Load_##RegName>::RegisterSpecialized(OP_MOV_MR_LOAD, c);            \
+    }
+
+#define REGISTER_MOV_LOAD_BASE(RegName, RegVal, Suffix, BaseOffsetValue)                            \
+    {                                                                                               \
+        SpecCriteria c;                                                                             \
+        c.reg_mask = 7;                                                                             \
+        c.reg_val = RegVal;                                                                         \
+        c.base_offset_mask = 0x3F;                                                                  \
+        c.base_offset_val = BaseOffsetValue;                                                        \
+        c.index_offset_mask = 0x3F;                                                                 \
+        c.index_offset_val = kNoRegOffset;                                                          \
+        c.segment_mask = 0x7;                                                                       \
+        c.segment_val = 0;                                                                          \
+        DispatchRegistrar<OpMov_Load_##RegName##_##Suffix>::RegisterSpecialized(OP_MOV_MR_LOAD, c); \
+    }                                                                                               \
+    {                                                                                               \
+        SpecCriteria c;                                                                             \
+        c.reg_mask = 7;                                                                             \
+        c.reg_val = RegVal;                                                                         \
+        DispatchRegistrar<OpMov_Load_##RegName>::RegisterSpecialized(OP_MOV_MR_LOAD, c);            \
+    }
+
+    // Register Specialized Load/Store helpers
+    // Store (EvGv_Mem)
+    REGISTER_MOV_STORE_SIB_BASE(Eax, 0, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Ecx, 1, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Edx, 2, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Ebx, 3, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Esp, 4, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Ebp, 5, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Esi, 6, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_SIB_BASE(Edi, 7, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_STORE_BASE(Eax, 0, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Ecx, 1, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Edx, 2, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Ebx, 3, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Esp, 4, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Ebp, 5, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Esi, 6, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Edi, 7, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_STORE_BASE(Eax, 0, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Ecx, 1, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Edx, 2, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Ebx, 3, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Esp, 4, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Ebp, 5, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Esi, 6, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_STORE_BASE(Edi, 7, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+
     // Load (GvEv_Mem)
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 0;
-        DispatchRegistrar<OpMov_Load_Eax>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 1;
-        DispatchRegistrar<OpMov_Load_Ecx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 2;
-        DispatchRegistrar<OpMov_Load_Edx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 3;
-        DispatchRegistrar<OpMov_Load_Ebx>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 4;
-        DispatchRegistrar<OpMov_Load_Esp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 5;
-        DispatchRegistrar<OpMov_Load_Ebp>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 6;
-        DispatchRegistrar<OpMov_Load_Esi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
-    {
-        SpecCriteria c;
-        c.reg_mask = 7;
-        c.reg_val = 7;
-        DispatchRegistrar<OpMov_Load_Edi>::RegisterSpecialized(OP_MOV_MR_LOAD, c);
-    }
+    REGISTER_MOV_LOAD_SIB_BASE(Eax, 0, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Ecx, 1, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Edx, 2, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Ebx, 3, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Esp, 4, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Ebp, 5, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Esi, 6, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_SIB_BASE(Edi, 7, EspBaseNoIndexNoSegment, kEspRegOffset)
+    REGISTER_MOV_LOAD_BASE(Eax, 0, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ecx, 1, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Edx, 2, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ebx, 3, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Esp, 4, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ebp, 5, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Esi, 6, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Edi, 7, EaxBaseNoIndexNoSegment, kEaxRegOffset)
+    REGISTER_MOV_LOAD_BASE(Eax, 0, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ecx, 1, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Edx, 2, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ebx, 3, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Esp, 4, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Ebp, 5, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Esi, 6, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+    REGISTER_MOV_LOAD_BASE(Edi, 7, EsiBaseNoIndexNoSegment, kEsiRegOffset)
+#undef REGISTER_MOV_LOAD_BASE
+#undef REGISTER_MOV_LOAD_SIB_BASE
+#undef REGISTER_MOV_STORE_BASE
+#undef REGISTER_MOV_STORE_SIB_BASE
 
     // Key MOV Patterns Specialization
     // 1. MOV EBP, ESP
@@ -258,6 +302,38 @@ void RegisterDataMovOps() {
         g_Handlers[0xB8 + i] = DispatchWrapper<OpMov_RegImm>;
     }
     g_Handlers[0xC7] = DispatchWrapper<OpMov_EvIz>;  // MOV r/m32, imm32
+    {
+        SpecCriteria c;
+        c.rm_mask = 7;
+        c.rm_val = 4;
+        c.base_offset_mask = 0x3F;
+        c.base_offset_val = kEspRegOffset;
+        c.index_offset_mask = 0x3F;
+        c.index_offset_val = kNoRegOffset;
+        c.segment_mask = 0x7;
+        c.segment_val = 0;
+        DispatchRegistrar<OpMov_EvIz_EspBaseNoIndexNoSegment>::RegisterSpecialized(0xC7, c);
+    }
+    {
+        SpecCriteria c;
+        c.base_offset_mask = 0x3F;
+        c.index_offset_mask = 0x3F;
+        c.index_offset_val = kNoRegOffset;
+        c.segment_mask = 0x7;
+        c.segment_val = 0;
+        c.base_offset_val = kEaxRegOffset;
+        DispatchRegistrar<OpMov_EvIz_EaxBaseNoIndexNoSegment>::RegisterSpecialized(0xC7, c);
+    }
+    {
+        SpecCriteria c;
+        c.base_offset_mask = 0x3F;
+        c.index_offset_mask = 0x3F;
+        c.index_offset_val = kNoRegOffset;
+        c.segment_mask = 0x7;
+        c.segment_val = 0;
+        c.base_offset_val = kEsiRegOffset;
+        DispatchRegistrar<OpMov_EvIz_EsiBaseNoIndexNoSegment>::RegisterSpecialized(0xC7, c);
+    }
     g_Handlers[0xA0] = DispatchWrapper<OpMov_Moffs_Load_Byte>;
     g_Handlers[0xA1] = DispatchWrapper<OpMov_Moffs_Load_Word>;
     g_Handlers[0xA2] = DispatchWrapper<OpMov_Moffs_Store_Byte>;

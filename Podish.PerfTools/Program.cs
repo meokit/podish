@@ -56,6 +56,7 @@ internal static partial class Program
             return command switch
             {
                 "analyze-blocks" => RunAnalyzeBlocks(rest),
+                "analyze-sib-shapes" => RunAnalyzeSibShapes(rest),
                 "analyze-superopcode-candidates" => RunAnalyzeSuperopcodeCandidates(rest),
                 "gen-superopcodes" => RunGenerateSuperopcodes(rest),
                 "pipeline" => RunPipeline(rest),
@@ -79,6 +80,7 @@ internal static partial class Program
 
                           Commands:
                             analyze-blocks                 Parse a blocks.bin dump into blocks_analysis.json
+                            analyze-sib-shapes             Aggregate SIB addressing shapes and opcode mix from blocks_analysis.json
                             analyze-superopcode-candidates Aggregate candidate pairs from analysis files
                             gen-superopcodes               Generate libfibercpu/generated/superopcodes.generated.cpp
                             pipeline                       Run the full benchmark + analysis pipeline
