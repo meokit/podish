@@ -27,7 +27,6 @@ public class ProcessAddressSpaceRegistryTests
     [Fact]
     public void DetachTask_UnregistersEngineFromAddressSpaceRegistry()
     {
-        KernelScheduler? oldCurrent = null;
         using var engine = new Engine();
         var mm = new VMAManager();
         var sm = new SyscallManager(engine, mm, 0);
@@ -36,7 +35,7 @@ public class ProcessAddressSpaceRegistryTests
         try
         {
             var scheduler = new KernelScheduler();
-            
+
             var process = new Process(7001, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(7001, process, engine, scheduler);
@@ -50,7 +49,6 @@ public class ProcessAddressSpaceRegistryTests
         }
         finally
         {
-            
             sm.Close();
         }
     }

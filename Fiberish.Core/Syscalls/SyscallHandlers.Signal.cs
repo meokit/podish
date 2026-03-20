@@ -9,11 +9,9 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysSignal(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSignal(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var sig = (int)a1;
         var handler = a2;
@@ -36,7 +34,7 @@ public partial class SyscallManager
         return unchecked((int)oldAction.Handler);
     }
 
-    private static async ValueTask<int> SysRtSigAction(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigAction(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
@@ -47,9 +45,7 @@ public partial class SyscallManager
 
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
@@ -64,11 +60,11 @@ public partial class SyscallManager
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), oldSa.Flags);
                 BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4), oldSa.Restorer);
                 BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(12, 8), oldSa.Mask);
-                if (!sm.Engine.CopyToUser(oldSaPtr, buf)) return -(int)Errno.EFAULT;
+                if (!engine.CopyToUser(oldSaPtr, buf)) return -(int)Errno.EFAULT;
             }
             else
             {
-                if (!sm.Engine.CopyToUser(oldSaPtr, new byte[20])) return -(int)Errno.EFAULT;
+                if (!engine.CopyToUser(oldSaPtr, new byte[20])) return -(int)Errno.EFAULT;
             }
         }
 
@@ -78,7 +74,7 @@ public partial class SyscallManager
                 return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
 
             var buf = new byte[20];
-            if (!sm.Engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
             var sa = new SigAction
             {
                 Handler = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)),
@@ -92,11 +88,9 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysRtSigProcMask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigProcMask(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
         // a1: how, a2: set, a3: oldset, a4: sigsetsize
         var how = (int)a1;
         var setPtr = a2;
@@ -105,7 +99,7 @@ public partial class SyscallManager
 
         if (sigsetsize != 8) return -(int)Errno.EINVAL;
 
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         if (oldSetPtr != 0)
@@ -162,11 +156,9 @@ public partial class SyscallManager
                 }
     }
 
-    private static async ValueTask<int> SysKill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysKill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var pid = (int)a1;
@@ -204,11 +196,9 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTkill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var tid = (int)a1;
         var sig = (int)a2;
@@ -216,7 +206,7 @@ public partial class SyscallManager
         if (tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var kernel = (sm.Engine.Owner as FiberTask)!.CommonKernel;
+        var kernel = (engine.Owner as FiberTask)!.CommonKernel;
         var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
 
@@ -225,10 +215,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTgkill(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTgkill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
         // int tgid = (int)a1; // Not used yet?
         // int tid = (int)a2;
         // int sig = (int)a3;
@@ -240,7 +228,7 @@ public partial class SyscallManager
         if (tgid <= 0 || tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var kernel = (sm.Engine.Owner as FiberTask)!.CommonKernel;
+        var kernel = (engine.Owner as FiberTask)!.CommonKernel;
         var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid) return -(int)Errno.ESRCH;
@@ -249,10 +237,9 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSigReturn(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var sp = task.CPU.RegRead(Reg.ESP);
@@ -264,11 +251,10 @@ public partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX);
     }
 
-    private static async ValueTask<int> SysRtSigReturn(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigReturn(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var sp = task.CPU.RegRead(Reg.ESP);
@@ -304,11 +290,10 @@ public partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX);
     }
 
-    private static async ValueTask<int> SysRtSigSuspend(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigSuspend(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var maskPtr = a1;
@@ -328,7 +313,7 @@ public partial class SyscallManager
         task.SignalMask = mask;
 
         // Log
-        if (sm is { Strace: true }) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
+        if (Strace) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
 
         // Pre-set EAX to -EINTR so if signal handler runs (even with SA_RESTART), it saves -EINTR
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
@@ -344,23 +329,21 @@ public partial class SyscallManager
 
         try
         {
-            await SysPause(state, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
+            await SysPause(engine, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
         }
         finally
         {
             task.SignalMask = oldMask;
-            if (sm is { Strace: true }) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
+            if (Strace) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
         }
 
         return -(int)Errno.EINTR;
     }
 
-    private static async ValueTask<int> SysRtSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
 
         var pid = (int)a1;
         var sig = (int)a2;
@@ -368,19 +351,16 @@ public partial class SyscallManager
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
+        var info = ReadSigInfo(engine, uinfoPtr, sig);
 
         var kernel = task?.CommonKernel !;
         if (sig != 0 && !kernel.SignalProcessInfo(pid, sig, info)) return -(int)Errno.ESRCH;
         return 0;
     }
 
-    private static async ValueTask<int> SysRtTgSigQueueInfo(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtTgSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var tgid = (int)a1;
         var tid = (int)a2;
         var sig = (int)a3;
@@ -388,9 +368,9 @@ public partial class SyscallManager
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var info = ReadSigInfo(sm.Engine, uinfoPtr, sig);
+        var info = ReadSigInfo(engine, uinfoPtr, sig);
 
-        var task = (FiberTask)sm.Engine.Owner!;
+        var task = (FiberTask)engine.Owner!;
         var kernel = task.CommonKernel;
         var targetTask = kernel.GetTask(tid);
         if (targetTask == null) return -(int)Errno.ESRCH;

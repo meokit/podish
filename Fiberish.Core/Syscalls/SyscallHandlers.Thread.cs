@@ -10,11 +10,8 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysFutex(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFutex(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.ENOSYS;
-
         var uaddr = a1;
         var op = (int)a2;
         var val = a3;
@@ -24,32 +21,30 @@ public partial class SyscallManager
 
         if (opCode == 0) // WAIT
         {
-            // Read current value first — this also faults in the page
             var tidBuf = new byte[4];
-            if (!sm.Engine.CopyFromUser(uaddr, tidBuf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyFromUser(uaddr, tidBuf)) return -(int)Errno.EFAULT;
             var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
-            if (currentVal != val) return -(int)Errno.EAGAIN; // EWOULDBLOCK
+            if (currentVal != val) return -(int)Errno.EAGAIN;
 
-            // Resolve the futex key AFTER the page is faulted in
             nint physKey = 0;
             if (!isPrivate)
             {
-                var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
+                var hostPtr = engine.GetPhysicalAddressSafe(uaddr, false);
                 if (hostPtr == IntPtr.Zero) return -(int)Errno.EFAULT;
                 physKey = hostPtr;
             }
 
             var waiter = isPrivate
-                ? sm.Futex.PrepareWait(uaddr)
-                : sm.Futex.PrepareWaitShared(physKey);
+                ? Futex.PrepareWait(uaddr)
+                : Futex.PrepareWaitShared(physKey);
 
-            var task = sm.Engine.Owner as FiberTask;
+            var task = engine.Owner as FiberTask;
             if (task == null)
             {
                 if (isPrivate)
-                    sm.Futex.CancelWait(uaddr, waiter);
+                    Futex.CancelWait(uaddr, waiter);
                 else
-                    sm.Futex.CancelWaitShared(physKey, waiter);
+                    Futex.CancelWaitShared(physKey, waiter);
                 return -(int)Errno.EINVAL;
             }
 
@@ -62,38 +57,33 @@ public partial class SyscallManager
                 task.TID, result, task.WakeReason, task.PendingSignals);
             if (result == AwaitResult.Interrupted)
             {
-                // Cancel the waiter to avoid leaking it in the queue
                 if (isPrivate)
-                    sm.Futex.CancelWait(uaddr, waiter);
+                    Futex.CancelWait(uaddr, waiter);
                 else
-                    sm.Futex.CancelWaitShared(physKey, waiter);
+                    Futex.CancelWaitShared(physKey, waiter);
                 return -(int)Errno.ERESTARTSYS;
             }
 
             return 0;
         }
 
-        // Resolve key for non-WAIT ops
         nint sharedKey = 0;
         if (!isPrivate)
         {
-            if (opCode == 1) // WAKE
-                // Force a page fault to ensure the page is mapped in this process's engine,
-                // so we can reliably get its physical address for the cross-process shared key.
-                sm.Engine.CopyFromUser(uaddr, new byte[1]);
+            if (opCode == 1)
+                engine.CopyFromUser(uaddr, new byte[1]);
 
-            var hostPtr = sm.Engine.GetPhysicalAddressSafe(uaddr, false);
-            // Fall back to virtual address key if not mapped (best-effort)
+            var hostPtr = engine.GetPhysicalAddressSafe(uaddr, false);
             sharedKey = hostPtr != IntPtr.Zero ? hostPtr : 0;
         }
 
         if (opCode == 1) // WAKE
         {
             var count = (int)val;
-            if (isPrivate) return sm.Futex.Wake(uaddr, count);
+            if (isPrivate) return Futex.Wake(uaddr, count);
             return sharedKey != 0
-                ? sm.Futex.WakeShared(sharedKey, count)
-                : sm.Futex.Wake(uaddr, count); // fallback: page not mapped here
+                ? Futex.WakeShared(sharedKey, count)
+                : Futex.Wake(uaddr, count);
         }
 
         return -(int)Errno.ENOSYS;
@@ -185,53 +175,46 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> SysSetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetThreadArea(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var uInfoAddr = a1;
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
 
         var entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
         var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
 
         Logger.LogInformation($"[SysSetThreadArea] Entry={entry} Base={baseAddr:X}");
 
-        sm.Engine.SetSegBase(Seg.GS, baseAddr);
+        engine.SetSegBase(Seg.GS, baseAddr);
 
         if (entry == 0xFFFFFFFF)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), 12);
-            if (!sm.Engine.CopyToUser(uInfoAddr, buf.AsSpan(0, 4))) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(uInfoAddr, buf.AsSpan(0, 4))) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysSetTidAddress(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetTidAddress(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is FiberTask task)
+        if (engine.Owner is FiberTask task)
         {
             task.ChildClearTidPtr = a1;
             return task.TID;
         }
 
-        if (sm.GetTID != null) return sm.GetTID(sm.Engine);
+        if (GetTID != null) return GetTID(engine);
         return 1;
     }
 
-    private static async ValueTask<int> SysSetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetRobustList(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var head = a1;
         var len = a2;
@@ -244,12 +227,9 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysGetRobustList(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetRobustList(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var pid = (int)a1;
         var headPtr = a2;
         var lenPtr = a3;
@@ -257,11 +237,11 @@ public partial class SyscallManager
         FiberTask? targetTask;
         if (pid == 0)
         {
-            targetTask = sm.Engine.Owner as FiberTask;
+            targetTask = engine.Owner as FiberTask;
         }
         else
         {
-            targetTask = (sm.Engine.Owner as FiberTask)?.CommonKernel.GetTask(pid);
+            targetTask = (engine.Owner as FiberTask)?.CommonKernel.GetTask(pid);
             if (targetTask == null) return -(int)Errno.ESRCH;
         }
 
@@ -269,13 +249,13 @@ public partial class SyscallManager
 
         var headBuf = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(headBuf, targetTask.RobustListHead);
-        if (!sm.Engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
 
         if (lenPtr != 0)
         {
             var lenBuf = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, targetTask.RobustListSize);
-            if (!sm.Engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
         }
 
         return 0;

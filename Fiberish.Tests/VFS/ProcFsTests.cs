@@ -46,86 +46,70 @@ public class ProcFsTests
     {
         using var ctx = new ProcTestContext();
 
-        try
+        var process = new Process(4242, null!, null!)
         {
-            var process = new Process(4242, null!, null!)
-            {
-                PPID = 1,
-                PGID = 4242,
-                SID = 4242,
-                State = ProcessState.Running
-            };
-            ctx.Scheduler.RegisterProcess(process);
+            PPID = 1,
+            PGID = 4242,
+            SID = 4242,
+            State = ProcessState.Running
+        };
+        ctx.Scheduler.RegisterProcess(process);
 
-            var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
-            var mount = new Mount(sb, sb.Root)
-            {
-                Source = "proc",
-                FsType = "proc",
-                Options = "rw,relatime"
-            };
-
-            var pidDir = sb.Root.Inode!.Lookup("4242");
-            Assert.NotNull(pidDir);
-            Assert.Equal(InodeType.Directory, pidDir!.Inode!.Type);
-
-            var status = pidDir.Inode.Lookup("status");
-            var stat = pidDir.Inode.Lookup("stat");
-            var cmdline = pidDir.Inode.Lookup("cmdline");
-            Assert.NotNull(status);
-            Assert.NotNull(stat);
-            Assert.NotNull(cmdline);
-
-            var statusText = ReadAll(status!, mount);
-            var statText = ReadAll(stat!, mount);
-            var cmdlineText = ReadAll(cmdline!, mount);
-
-            Assert.Contains("Pid:\t4242", statusText);
-            Assert.StartsWith("4242 (process) R 1 4242 4242", statText);
-            Assert.Equal(string.Empty, cmdlineText);
-        }
-        finally
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
+        var mount = new Mount(sb, sb.Root)
         {
-            
-        }
+            Source = "proc",
+            FsType = "proc",
+            Options = "rw,relatime"
+        };
+
+        var pidDir = sb.Root.Inode!.Lookup("4242");
+        Assert.NotNull(pidDir);
+        Assert.Equal(InodeType.Directory, pidDir!.Inode!.Type);
+
+        var status = pidDir.Inode.Lookup("status");
+        var stat = pidDir.Inode.Lookup("stat");
+        var cmdline = pidDir.Inode.Lookup("cmdline");
+        Assert.NotNull(status);
+        Assert.NotNull(stat);
+        Assert.NotNull(cmdline);
+
+        var statusText = ReadAll(status!, mount);
+        var statText = ReadAll(stat!, mount);
+        var cmdlineText = ReadAll(cmdline!, mount);
+
+        Assert.Contains("Pid:\t4242", statusText);
+        Assert.StartsWith("4242 (process) R 1 4242 4242", statText);
+        Assert.Equal(string.Empty, cmdlineText);
     }
 
     [Fact]
     public void ProcSystemFiles_ShouldExposeStatUptimeLoadavgAndSysctl()
     {
         var scheduler = new KernelScheduler();
-        KernelScheduler? previous = null;
-        
 
-        try
+        var process = new Process(1001, null!, null!);
+        scheduler.RegisterProcess(process);
+
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", null);
+        var mount = new Mount(sb, sb.Root)
         {
-            var process = new Process(1001, null!, null!);
-            scheduler.RegisterProcess(process);
+            Source = "proc",
+            FsType = "proc",
+            Options = "rw,relatime"
+        };
 
-            var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", null);
-            var mount = new Mount(sb, sb.Root)
-            {
-                Source = "proc",
-                FsType = "proc",
-                Options = "rw,relatime"
-            };
+        Assert.Contains("btime ", ReadAll(sb.Root.Inode!.Lookup("stat")!, mount));
+        Assert.Contains("/", ReadAll(sb.Root.Inode!.Lookup("loadavg")!, mount));
+        Assert.Contains(" ", ReadAll(sb.Root.Inode!.Lookup("uptime")!, mount));
 
-            Assert.Contains("btime ", ReadAll(sb.Root.Inode!.Lookup("stat")!, mount));
-            Assert.Contains("/", ReadAll(sb.Root.Inode!.Lookup("loadavg")!, mount));
-            Assert.Contains(" ", ReadAll(sb.Root.Inode!.Lookup("uptime")!, mount));
-
-            var sys = sb.Root.Inode.Lookup("sys");
-            Assert.NotNull(sys);
-            var kernel = sys!.Inode!.Lookup("kernel");
-            Assert.NotNull(kernel);
-            Assert.Equal("x86emu\n", ReadAll(kernel!.Inode!.Lookup("hostname")!, mount));
-        }
-        finally
-        {
-            
-        }
+        var sys = sb.Root.Inode.Lookup("sys");
+        Assert.NotNull(sys);
+        var kernel = sys!.Inode!.Lookup("kernel");
+        Assert.NotNull(kernel);
+        Assert.Equal("x86emu\n", ReadAll(kernel!.Inode!.Lookup("hostname")!, mount));
     }
 
     [Fact]
@@ -133,26 +117,19 @@ public class ProcFsTests
     {
         using var ctx = new ProcTestContext();
 
-        try
-        {
-            var child = new Process(5555, null!, null!) { State = ProcessState.Zombie };
-            ctx.Scheduler.RegisterProcess(child);
+        var child = new Process(5555, null!, null!) { State = ProcessState.Zombie };
+        ctx.Scheduler.RegisterProcess(child);
 
-            var fs = new ProcFileSystem();
-            var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
 
-            var first = sb.Root.Inode!.Lookup("5555");
-            Assert.NotNull(first);
+        var first = sb.Root.Inode!.Lookup("5555");
+        Assert.NotNull(first);
 
-            ctx.Scheduler.UnregisterProcess(5555);
+        ctx.Scheduler.UnregisterProcess(5555);
 
-            var second = sb.Root.Inode!.Lookup("5555");
-            Assert.Null(second);
-        }
-        finally
-        {
-            
-        }
+        var second = sb.Root.Inode!.Lookup("5555");
+        Assert.Null(second);
     }
 
     [Fact]
@@ -221,7 +198,6 @@ public class ProcFsTests
         }
         finally
         {
-            
             if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
         }
     }

@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -7,55 +8,50 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysBrk(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysBrk(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -1;
         var newBrk = a1;
-        if (newBrk == 0) return (int)sm.BrkAddr;
+        if (newBrk == 0) return (int)BrkAddr;
 
-        if (newBrk < sm.BrkBase)
-            return (int)sm.BrkAddr;
+        if (newBrk < BrkBase)
+            return (int)BrkAddr;
 
-        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(sm.Engine);
-        if (newBrk > sm.BrkAddr)
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
+        if (newBrk > BrkAddr)
         {
-            var start = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
+            var start = (BrkAddr + 0xFFF) & ~0xFFFu;
             var end = (newBrk + 0xFFF) & ~0xFFFu;
             if (end > start)
                 try
                 {
                     // Map anonymous
-                    ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, start, end - start,
+                    ProcessAddressSpaceSync.Mmap(Mem, engine, start, end - start,
                         Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0,
                         "HEAP");
                 }
                 catch
                 {
-                    return (int)sm.BrkAddr;
+                    return (int)BrkAddr;
                 }
 
-            sm.BrkAddr = newBrk;
-            return (int)sm.BrkAddr;
+            BrkAddr = newBrk;
+            return (int)BrkAddr;
         }
 
-        if (newBrk < sm.BrkAddr)
+        if (newBrk < BrkAddr)
         {
             var start = (newBrk + 0xFFF) & ~0xFFFu;
-            var end = (sm.BrkAddr + 0xFFF) & ~0xFFFu;
-            if (end > start) ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, start, end - start);
+            var end = (BrkAddr + 0xFFF) & ~0xFFFu;
+            if (end > start) ProcessAddressSpaceSync.Munmap(Mem, engine, start, end - start);
 
-            sm.BrkAddr = newBrk;
+            BrkAddr = newBrk;
         }
 
-        return (int)sm.BrkAddr;
+        return (int)BrkAddr;
     }
 
-    private static async ValueTask<int> SysMmap2(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMmap2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var addr = a1;
         var len = a2;
         var prot = (int)a3;
@@ -85,7 +81,7 @@ public partial class SyscallManager
         if (isNoReplace)
         {
             var hasOverlap = false;
-            sm.Mem.VisitVmAreasInRange(addr, addr + mapLen, _ => hasOverlap = true);
+            Mem.VisitVmAreasInRange(addr, addr + mapLen, _ => hasOverlap = true);
             if (hasOverlap)
                 return -(int)Errno.EEXIST;
         }
@@ -101,7 +97,7 @@ public partial class SyscallManager
         }
         else
         {
-            f = sm.GetFD(fd);
+            f = GetFD(fd);
             if (f == null) return -(int)Errno.EBADF;
             var inode = f.OpenedInode;
             if (inode == null) return -(int)Errno.EBADF;
@@ -118,7 +114,7 @@ public partial class SyscallManager
             if (f != null)
                 mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold);
 
-            var res = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, addr, len, (Protection)prot, (MapFlags)flags,
+            var res = ProcessAddressSpaceSync.Mmap(Mem, engine, addr, len, (Protection)prot, (MapFlags)flags,
                 mmapFile, offset, "MMAP2");
             mmapFile = null; // ownership transferred to VMAs
             return (int)res;
@@ -133,21 +129,16 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> SysMunmap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMunmap(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
         if (a2 == 0) return -(int)Errno.EINVAL;
         if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
-        ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, a1, a2);
+        ProcessAddressSpaceSync.Munmap(Mem, engine, a1, a2);
         return 0;
     }
 
-    private static async ValueTask<int> SysMprotect(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMprotect(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var addr = a1;
         var len = a2;
         var prot = (Protection)a3;
@@ -155,28 +146,24 @@ public partial class SyscallManager
         if (len == 0) return 0;
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
 
-        return ProcessAddressSpaceSync.Mprotect(sm.Mem, sm.Engine, addr, len, prot);
+        return ProcessAddressSpaceSync.Mprotect(Mem, engine, addr, len, prot);
     }
 
-    private static async ValueTask<int> SysMadvise(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMadvise(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return 0; // No-op
     }
 
-    private static async ValueTask<int> SysMsync(IntPtr state, uint addr, uint len, uint flags, uint a4, uint a5,
+    private async ValueTask<int> SysMsync(Engine engine, uint addr, uint len, uint flags, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -1;
-        ProcessAddressSpaceSync.SyncSharedRange(sm.Mem, sm.Engine, addr, len);
+        ProcessAddressSpaceSync.SyncSharedRange(Mem, engine, addr, len);
         return 0;
     }
 
-    private static async ValueTask<int> SysMremap(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMremap(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // void *mremap(void *old_address, size_t old_size, size_t new_size, int flags, ... void *new_address);
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
 
         var oldAddr = a1;
         var oldLen = a2;
@@ -196,13 +183,13 @@ public partial class SyscallManager
         if (isFixed && !mayMove) return -(int)Errno.EINVAL;
         if (isFixed && (newAddr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
 
-        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(sm.Engine);
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
         // Align sizes to page boundaries
         var oldLenAligned = (oldLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
         var newLenAligned = (newLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
 
         // Find the existing VmArea containing oldAddr
-        var oldVma = sm.Mem.FindVmArea(oldAddr);
+        var oldVma = Mem.FindVmArea(oldAddr);
         if (oldVma == null) return -(int)Errno.EFAULT;
 
         // Verify the old range is fully contained within the VMA
@@ -213,7 +200,7 @@ public partial class SyscallManager
         {
             var unmapStart = oldAddr + newLenAligned;
             var unmapLen = oldLenAligned - newLenAligned;
-            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, unmapStart, unmapLen);
+            ProcessAddressSpaceSync.Munmap(Mem, engine, unmapStart, unmapLen);
             return (int)oldAddr;
         }
 
@@ -226,7 +213,7 @@ public partial class SyscallManager
 
         // Check if there's free space right after the old region
         var canGrowInPlace = true;
-        sm.Mem.VisitVmAreasInRange(growStart, growStart + growLen, v =>
+        Mem.VisitVmAreasInRange(growStart, growStart + growLen, v =>
         {
             if (v == oldVma) return; // ignore the VmArea itself if it extends past oldLen
             canGrowInPlace = false;
@@ -238,12 +225,12 @@ public partial class SyscallManager
             if (oldAddr == oldVma.Start && oldAddr + oldLenAligned == oldVma.End)
             {
                 oldVma.End = oldAddr + newLenAligned;
-                ProcessAddressSpaceSync.PublishMappingChange(sm.Mem, sm.Engine, growStart, growLen);
+                ProcessAddressSpaceSync.PublishMappingChange(Mem, engine, growStart, growLen);
                 return (int)oldAddr;
             }
 
             // For partial-range growth, map the appended slice with the same backing as oldVma.
-            var growRc = TryMapRemapSlice(sm, oldVma, growStart, growLen, growStart);
+            var growRc = TryMapRemapSlice(this, engine, oldVma, growStart, growLen, growStart);
             if (growRc == 0)
                 return (int)oldAddr;
             if (growRc != -(int)Errno.ENOMEM)
@@ -259,16 +246,16 @@ public partial class SyscallManager
         {
             targetAddr = newAddr;
             // MREMAP_FIXED acts like MAP_FIXED — unmap anything at the target
-            ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+            ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
         }
         else
         {
-            targetAddr = sm.Mem.FindFreeRegion(newLenAligned);
+            targetAddr = Mem.FindFreeRegion(newLenAligned);
             if (targetAddr == 0) return -(int)Errno.ENOMEM;
         }
 
         // Allocate new region
-        var mapRc = TryMapRemapSlice(sm, oldVma, targetAddr, newLenAligned, oldAddr);
+        var mapRc = TryMapRemapSlice(this, engine, oldVma, targetAddr, newLenAligned, oldAddr);
         if (mapRc != 0)
             return mapRc;
 
@@ -277,32 +264,32 @@ public partial class SyscallManager
             try
             {
                 var buf = new byte[copyLen];
-                if (!sm.Engine.CopyFromUser(oldAddr, buf))
+                if (!engine.CopyFromUser(oldAddr, buf))
                 {
-                    ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                    ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
                     return -(int)Errno.EFAULT;
                 }
 
-                if (!sm.Engine.CopyToUser(targetAddr, buf))
+                if (!engine.CopyToUser(targetAddr, buf))
                 {
-                    ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                    ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
                     return -(int)Errno.EFAULT;
                 }
             }
             catch (OutOfMemoryException)
             {
-                ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, targetAddr, newLenAligned);
+                ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
                 return -(int)Errno.ENOMEM;
             }
 
         // Unmap old region
-        ProcessAddressSpaceSync.Munmap(sm.Mem, sm.Engine, oldAddr, oldLenAligned);
+        ProcessAddressSpaceSync.Munmap(Mem, engine, oldAddr, oldLenAligned);
 
         return (int)targetAddr;
     }
 
-    private static int TryMapRemapSlice(SyscallManager sm, VmArea sourceVma, uint targetAddr, uint length,
-        uint sourceAddr)
+    private static int TryMapRemapSlice(SyscallManager sm, Engine engine, VmArea sourceVma, uint targetAddr,
+        uint length, uint sourceAddr)
     {
         LinuxFile? clonedFile = null;
         try
@@ -311,7 +298,7 @@ public partial class SyscallManager
             var offset = ComputeSliceOffset(sourceVma, sourceAddr);
             var flags = (sourceVma.Flags | MapFlags.Fixed) & ~MapFlags.FixedNoReplace;
 
-            _ = ProcessAddressSpaceSync.Mmap(sm.Mem, sm.Engine, targetAddr, length, sourceVma.Perms, flags,
+            _ = ProcessAddressSpaceSync.Mmap(sm.Mem, engine, targetAddr, length, sourceVma.Perms, flags,
                 clonedFile, offset, sourceVma.Name);
             clonedFile = null; // ownership transferred to the new VmArea
             return 0;

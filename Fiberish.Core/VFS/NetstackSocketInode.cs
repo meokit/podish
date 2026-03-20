@@ -264,7 +264,8 @@ public sealed class NetstackSocketInode : Inode
         return _stream.Receive(buffer.AsSpan(0, recvLen));
     }
 
-    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, IPEndPoint endpoint, int flags)
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer,
+        IPEndPoint endpoint, int flags)
     {
         if (_socketType != SocketType.Dgram)
             return -(int)Errno.EISCONN;
@@ -291,7 +292,8 @@ public sealed class NetstackSocketInode : Inode
         return _udp.SendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span);
     }
 
-    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer,
+    public async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsync(LinuxFile file, FiberTask task,
+        byte[] buffer,
         int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
@@ -354,7 +356,10 @@ public sealed class NetstackSocketInode : Inode
 
     public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
-        return NetDeviceIoctlHelper.Handle(task.CPU, request, arg);
+        var sm = task.CPU.CurrentSyscallManager;
+        if (sm == null)
+            return -(int)Errno.EPERM;
+        return NetDeviceIoctlHelper.Handle(sm, task.CPU, request, arg);
     }
 
     public int Shutdown(int how)

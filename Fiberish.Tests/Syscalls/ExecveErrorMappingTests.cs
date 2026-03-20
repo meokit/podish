@@ -38,7 +38,7 @@ public class ExecveErrorMappingTests
 
             // Keep one page pinned so exec's first strict allocation reliably trips the quota
             // even if the old address space releases pages before loading the new image.
-            var reservedPage = ExternalPageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+            var reservedPage = ExternalPageManager.AllocateExternalPage();
             try
             {
                 ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
@@ -75,10 +75,19 @@ public class ExecveErrorMappingTests
     private static async ValueTask<int> Call(SyscallManager sm, string methodName, uint a1 = 0, uint a2 = 0,
         uint a3 = 0, uint a4 = 0, uint a5 = 0, uint a6 = 0)
     {
-        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        var task = (ValueTask<int>)method!.Invoke(null, [sm.Engine.State, a1, a2, a3, a4, a5, a6])!;
-        return await task;
+        var previous = sm.Engine.CurrentSyscallManager;
+        sm.Engine.CurrentSyscallManager = sm;
+        try
+        {
+            var task = (ValueTask<int>)method!.Invoke(sm, [sm.Engine, a1, a2, a3, a4, a5, a6])!;
+            return await task;
+        }
+        finally
+        {
+            sm.Engine.CurrentSyscallManager = previous;
+        }
     }
 
     private static string ResolveGuestRootForHelloStatic()

@@ -13,31 +13,58 @@ public class PosixTimerTests
     // Call private static SyscallHandlers via reflection for testing
     private ValueTask<int> CallSysTimerCreate(TestEnv env, uint clockId, uint sevpPtr, uint timerIdPtr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysTimerCreate", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null,
-            [env.Engine.State, clockId, sevpPtr, timerIdPtr, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysTimerCreate", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager,
+                [env.Engine, clockId, sevpPtr, timerIdPtr, 0u, 0u, 0u])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
     }
 
     private ValueTask<int> CallSysTimerSetTime64(TestEnv env, uint timerId, uint flags, uint newPtr, uint oldPtr)
     {
         var method =
-            typeof(SyscallManager).GetMethod("SysTimerSetTime64", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null,
-            [env.Engine.State, timerId, flags, newPtr, oldPtr, 0u, 0u])!;
+            typeof(SyscallManager).GetMethod("SysTimerSetTime64", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager,
+                [env.Engine, timerId, flags, newPtr, oldPtr, 0u, 0u])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
     }
 
     private ValueTask<int> CallSysTimerGetTime64(TestEnv env, uint timerId, uint currPtr)
     {
         var method =
-            typeof(SyscallManager).GetMethod("SysTimerGetTime64", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null,
-            [env.Engine.State, timerId, currPtr, 0u, 0u, 0u, 0u])!;
+            typeof(SyscallManager).GetMethod("SysTimerGetTime64", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager,
+                [env.Engine, timerId, currPtr, 0u, 0u, 0u, 0u])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
     }
 
     private ValueTask<int> CallSysTimerDelete(TestEnv env, uint timerId)
     {
-        var method = typeof(SyscallManager).GetMethod("SysTimerDelete", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, timerId, 0u, 0u, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysTimerDelete", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, timerId, 0u, 0u, 0u, 0u, 0u])!;
     }
 
     [Fact]
@@ -131,7 +158,7 @@ public class PosixTimerTests
             SyscallManager.MountRootHostfs(".");
             Manager = new PosixTimerManager();
 
-             // Set static current for tests
+            // Set static current for tests
         }
 
         public Engine Engine { get; }
@@ -144,7 +171,6 @@ public class PosixTimerTests
 
         public void Dispose()
         {
-            
             GC.KeepAlive(Task);
         }
 

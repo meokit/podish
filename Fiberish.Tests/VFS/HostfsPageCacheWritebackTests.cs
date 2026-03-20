@@ -102,7 +102,7 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
-            var rc = await CallSys("SysFsync", engine.State, (uint)fd);
+            var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
             Assert.Equal("aZZde", File.ReadAllText(hostFile));
             sm.FreeFD(fd);
@@ -121,7 +121,6 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -130,7 +129,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            
+
             var process = new Process(5001, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5001, process, engine, scheduler);
@@ -150,7 +149,7 @@ public class HostfsPageCacheWritebackTests
             var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
             Assert.True(peer.CPU.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
-            var rc = await CallSys("SysFsync", engine.State, (uint)fd);
+            var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
             Assert.Equal("aZZde", File.ReadAllText(hostFile));
 
@@ -159,7 +158,6 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            
             Directory.Delete(root, true);
         }
     }
@@ -172,7 +170,6 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -181,7 +178,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            
+
             var process = new Process(5002, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5002, process, engine, scheduler);
@@ -207,7 +204,6 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            
             Directory.Delete(root, true);
         }
     }
@@ -220,7 +216,6 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "abcde");
 
-        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine = new Engine();
@@ -229,7 +224,7 @@ public class HostfsPageCacheWritebackTests
             sm.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            
+
             var process = new Process(5003, mm, sm);
             scheduler.RegisterProcess(process);
             var task = new FiberTask(5003, process, engine, scheduler);
@@ -251,7 +246,7 @@ public class HostfsPageCacheWritebackTests
 
             _ = scheduler.DetachTask(peer);
 
-            var rc = await CallSys("SysFsync", engine.State, (uint)fd);
+            var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
             Assert.Equal("aZZde", File.ReadAllText(hostFile));
 
@@ -259,7 +254,6 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
-            
             Directory.Delete(root, true);
         }
     }
@@ -290,7 +284,7 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm.HandleFault(mapAddr, true, engine));
             Assert.True(engine.CopyToUser(mapAddr + 2, "QQ"u8.ToArray()));
 
-            var rc = await CallSys("SysSync", engine.State);
+            var rc = await CallSys(sm, engine, "SysSync");
             Assert.Equal(0, rc);
             Assert.Equal("12QQ5", File.ReadAllText(hostFile));
         }
@@ -308,7 +302,6 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "ABCDE");
 
-        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine1 = new Engine();
@@ -321,7 +314,7 @@ public class HostfsPageCacheWritebackTests
             sm2.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            
+
             scheduler.RegisterProcess(new Process(1001, mm1, sm1));
             scheduler.RegisterProcess(new Process(1002, mm2, sm2));
 
@@ -337,13 +330,12 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm2.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
-            var rc = await CallSys("SysSync", engine1.State);
+            var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
             Assert.Equal("AxyDE", File.ReadAllText(hostFile));
         }
         finally
         {
-            
             Directory.Delete(root, true);
         }
     }
@@ -356,7 +348,6 @@ public class HostfsPageCacheWritebackTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "ABCDE");
 
-        KernelScheduler? oldCurrent = null;
         try
         {
             using var engine1 = new Engine();
@@ -368,7 +359,7 @@ public class HostfsPageCacheWritebackTests
             sm2.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-            
+
 
             var process1 = new Process(1011, mm, sm1);
             var process2 = new Process(1012, mm, sm2);
@@ -392,13 +383,12 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
-            var rc = await CallSys("SysSync", engine1.State);
+            var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
             Assert.Equal("AxyDE", File.ReadAllText(hostFile));
         }
         finally
         {
-            
             Directory.Delete(root, true);
         }
     }
@@ -438,7 +428,7 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm2.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
 
-            var rc = await CallSys("SysFsync", engine1.State, (uint)fd1);
+            var rc = await CallSys(sm1, engine1, "SysFsync", (uint)fd1);
             Assert.Equal(0, rc);
             Assert.Equal("AxyDE", File.ReadAllText(hostFile));
 
@@ -477,7 +467,7 @@ public class HostfsPageCacheWritebackTests
             Assert.Equal(2, writeRc);
             Assert.Equal("abcde", File.ReadAllText(hostFile));
 
-            var fsyncRc = await CallSys("SysFsync", engine.State, (uint)fd);
+            var fsyncRc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, fsyncRc);
             Assert.Equal("aXYde", File.ReadAllText(hostFile));
 
@@ -514,8 +504,9 @@ public class HostfsPageCacheWritebackTests
 
             const uint mapAddr = 0x46000000;
             var mmapRc = await CallSys(
+                sm,
+                engine,
                 "SysMmap2",
-                engine.State,
                 mapAddr,
                 LinuxConstants.PageSize,
                 (uint)(Protection.Read | Protection.Write),
@@ -553,12 +544,12 @@ public class HostfsPageCacheWritebackTests
         return file;
     }
 
-    private static async ValueTask<int> CallSys(string methodName, IntPtr state, uint a1 = 0, uint a2 = 0, uint a3 = 0,
-        uint a4 = 0, uint a5 = 0, uint a6 = 0)
+    private static async ValueTask<int> CallSys(SyscallManager sm, Engine engine, string methodName, uint a1 = 0,
+        uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0, uint a6 = 0)
     {
-        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        var task = (ValueTask<int>)method!.Invoke(null, [state, a1, a2, a3, a4, a5, a6])!;
+        var task = (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
         return await task;
     }
 }

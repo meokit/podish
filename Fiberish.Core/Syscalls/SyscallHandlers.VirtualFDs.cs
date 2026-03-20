@@ -1,5 +1,5 @@
-using Fiberish.Core;
 using System.Buffers.Binary;
+using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
 
@@ -8,39 +8,33 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators
-    private static async ValueTask<int> SysEventFd(IntPtr state, uint initval, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysEventFd(Engine engine, uint initval, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        return await SysEventFd2(state, initval, 0, a3, a4, a5, a6);
+        return await SysEventFd2(engine, initval, 0, a3, a4, a5, a6);
     }
 
-    private static async ValueTask<int> SysEventFd2(IntPtr state, uint initval, uint flags, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysEventFd2(Engine engine, uint initval, uint flags, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var eflags = FileFlags.O_RDWR;
         if ((flags & LinuxConstants.EFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.EFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
         if ((flags & LinuxConstants.EFD_SEMAPHORE) != 0) eflags |= (FileFlags)LinuxConstants.EFD_SEMAPHORE;
 
-        var inode = new EventFdInode(0, sm.MemfdSuperBlock, initval, eflags);
-        var dentry = new Dentry("anon_inode:[eventfd]", inode, null, sm.MemfdSuperBlock);
-        var file = new LinuxFile(dentry, eflags, sm.AnonMount);
+        var inode = new EventFdInode(0, MemfdSuperBlock, initval, eflags);
+        var dentry = new Dentry("anon_inode:[eventfd]", inode, null, MemfdSuperBlock);
+        var file = new LinuxFile(dentry, eflags, AnonMount);
 
-        var fd = sm.AllocFD(file);
+        var fd = AllocFD(file);
         if (fd < 0) return fd;
 
         return fd;
     }
 
-    private static async ValueTask<int> SysTimerFdCreate(IntPtr state, uint clockId, uint flags, uint a3, uint a4,
+    private async ValueTask<int> SysTimerFdCreate(Engine engine, uint clockId, uint flags, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         if (clockId != LinuxConstants.CLOCK_REALTIME && clockId != LinuxConstants.CLOCK_MONOTONIC)
             return -(int)Errno.EINVAL;
 
@@ -48,36 +42,33 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.TFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.TFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-        var inode = new TimerFdInode(0, sm.MemfdSuperBlock, (sm.Engine.Owner as FiberTask)!.CommonKernel);
-        var dentry = new Dentry("anon_inode:[timerfd]", inode, null, sm.MemfdSuperBlock);
-        var file = new LinuxFile(dentry, eflags, sm.AnonMount);
+        var inode = new TimerFdInode(0, MemfdSuperBlock, (engine.Owner as FiberTask)!.CommonKernel);
+        var dentry = new Dentry("anon_inode:[timerfd]", inode, null, MemfdSuperBlock);
+        var file = new LinuxFile(dentry, eflags, AnonMount);
 
-        var fd = sm.AllocFD(file);
+        var fd = AllocFD(file);
         if (fd < 0) return fd;
 
         return fd;
     }
 
-    private static async ValueTask<int> SysTimerFdSetTime(IntPtr state, uint fd, uint flags, uint newValuePtr,
+    private async ValueTask<int> SysTimerFdSetTime(Engine engine, uint fd, uint flags, uint newValuePtr,
         uint oldValuePtr, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
+        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
 
         var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var intervalNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
         var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
         var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
 
-        if (oldValuePtr != 0) await SysTimerFdGetTime(state, fd, oldValuePtr, 0, 0, 0, 0);
+        if (oldValuePtr != 0) await SysTimerFdGetTime(engine, fd, oldValuePtr, 0, 0, 0, 0);
 
         var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
 
@@ -89,13 +80,10 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerFdGetTime(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerFdGetTime(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
+        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
@@ -108,28 +96,25 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)(valueMs / 1000));
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)(valueMs % 1000 * 1000000));
 
-        if (!sm.Engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
 
-    private static async ValueTask<int> SysSignalFd(IntPtr state, uint fd, uint maskPtr, uint size, uint a4, uint a5,
+    private async ValueTask<int> SysSignalFd(Engine engine, uint fd, uint maskPtr, uint size, uint a4, uint a5,
         uint a6)
     {
         // For sys_signalfd, flags are 0
-        return await SysSignalFd4(state, fd, maskPtr, size, 0, a5, a6);
+        return await SysSignalFd4(engine, fd, maskPtr, size, 0, a5, a6);
     }
 
-    private static async ValueTask<int> SysSignalFd4(IntPtr state, uint fd, uint maskPtr, uint size, uint flags,
+    private async ValueTask<int> SysSignalFd4(Engine engine, uint fd, uint maskPtr, uint size, uint flags,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         if (size != 8) return -(int)Errno.EINVAL; // i386 sigset_t is 8 bytes
 
         var maskBuf = new byte[8];
-        if (!sm.Engine.CopyFromUser(maskPtr, maskBuf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(maskPtr, maskBuf)) return -(int)Errno.EFAULT;
 
         var mask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
 
@@ -140,16 +125,16 @@ public partial class SyscallManager
             if ((flags & LinuxConstants.SFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
             if ((flags & LinuxConstants.SFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-            var inode = new SignalFdInode(0, sm.MemfdSuperBlock, mask);
-            var dentry = new Dentry("anon_inode:[signalfd]", inode, null, sm.MemfdSuperBlock);
-            var file = new LinuxFile(dentry, eflags, sm.AnonMount);
+            var inode = new SignalFdInode(0, MemfdSuperBlock, mask);
+            var dentry = new Dentry("anon_inode:[signalfd]", inode, null, MemfdSuperBlock);
+            var file = new LinuxFile(dentry, eflags, AnonMount);
 
-            var newFd = sm.AllocFD(file);
+            var newFd = AllocFD(file);
             return newFd;
         }
 
         // Modifying existing signalfd
-        if (!sm.FDs.TryGetValue((int)fd, out var existingFile)) return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var existingFile)) return -(int)Errno.EBADF;
         if (existingFile.OpenedInode is SignalFdInode sfd)
         {
             sfd.SetMask(mask);

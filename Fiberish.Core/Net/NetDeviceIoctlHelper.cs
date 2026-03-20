@@ -8,12 +8,8 @@ namespace Fiberish.Core.Net;
 
 public static class NetDeviceIoctlHelper
 {
-    public static int Handle(Engine engine, uint request, uint arg)
+    public static int Handle(SyscallManager sm, Engine engine, uint request, uint arg)
     {
-        var sm = SyscallManager.Get(engine.State);
-        if (sm == null)
-            return -(int)Errno.EPERM;
-
         var snapshot = NetDeviceSnapshotProvider.Capture(sm.NetworkMode, sm.TryGetPrivateNetNamespace());
         return request switch
         {

@@ -1,8 +1,8 @@
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
-using Fiberish.Memory;
 using Fiberish.Loader;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -438,9 +438,9 @@ public class MmapSupportTests
         public async ValueTask<int> Call(string methodName, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0,
             uint a5 = 0, uint a6 = 0)
         {
-            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method);
-            var task = (ValueTask<int>)method!.Invoke(null, [Engine.State, a1, a2, a3, a4, a5, a6])!;
+            var task = (ValueTask<int>)method!.Invoke(SyscallManager, [Engine, a1, a2, a3, a4, a5, a6])!;
             return await task;
         }
     }

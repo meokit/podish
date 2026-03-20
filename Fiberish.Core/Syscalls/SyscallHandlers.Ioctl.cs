@@ -11,13 +11,10 @@ public partial class SyscallManager
     private static readonly ILogger IoctlLogger = Logging.CreateLogger<SyscallManager>();
 
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysIoctl(IntPtr state, uint fd, uint request, uint arg, uint a4, uint a5,
+    private async ValueTask<int> SysIoctl(Engine engine, uint fd, uint request, uint arg, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        if (!sm.FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
 
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
         var inode = file.OpenedInode;
@@ -25,7 +22,7 @@ public partial class SyscallManager
         {
             IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} arg=0x{Arg:X} inode={InodeType}",
                 fd, request, arg, inode.GetType().Name);
-            var task = sm.Engine.Owner as FiberTask;
+            var task = engine.Owner as FiberTask;
             if (task == null)
                 return -(int)Errno.EPERM;
             var ret = inode.Ioctl(file, task, request, arg);
@@ -37,13 +34,10 @@ public partial class SyscallManager
         return -(int)Errno.ENOTTY;
     }
 
-    private static async ValueTask<int> SysFcntl64(IntPtr state, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFcntl64(Engine engine, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var targetFd = (int)fd;
-        if (!sm.FDs.TryGetValue(targetFd, out var file)) return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue(targetFd, out var file)) return -(int)Errno.EBADF;
 
         const uint F_DUPFD = 0;
         const uint F_GETFD = 1;
@@ -57,12 +51,12 @@ public partial class SyscallManager
 
         return cmd switch
         {
-            F_DUPFD => sm.DupFD(targetFd, (int)arg, false),
-            F_GETFD => sm.IsFdCloseOnExec(targetFd) ? (int)FD_CLOEXEC : 0,
-            F_SETFD => SetFdFlags(sm, targetFd, arg),
+            F_DUPFD => DupFD(targetFd, (int)arg),
+            F_GETFD => IsFdCloseOnExec(targetFd) ? (int)FD_CLOEXEC : 0,
+            F_SETFD => SetFdFlags(this, targetFd, arg),
             F_GETFL => (int)(file.Flags & ~FileFlags.O_CLOEXEC),
             F_SETFL => SetStatusFlags(file, arg),
-            F_DUPFD_CLOEXEC => sm.DupFD(targetFd, (int)arg, true),
+            F_DUPFD_CLOEXEC => DupFD(targetFd, (int)arg, true),
             _ => -(int)Errno.EINVAL
         };
 

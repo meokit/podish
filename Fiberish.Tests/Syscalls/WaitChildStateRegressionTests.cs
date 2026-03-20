@@ -14,7 +14,8 @@ public class WaitChildStateRegressionTests
         using var env = new WaitEnv();
         env.Child.StateChangeEvent.Set(); // stale signaled state from a previous transition
 
-        var pending = InvokeSys("SysWait4", env.ParentEngine.State, (uint)env.Child.TGID, 0, 0, 0, 0, 0).AsTask();
+        var pending = InvokeSys(env.ParentSys, env.ParentEngine, "SysWait4", (uint)env.Child.TGID, 0, 0, 0, 0, 0)
+            .AsTask();
         Assert.False(pending.IsCompleted);
 
         var drainedBeforeSignal = 0;
@@ -45,8 +46,8 @@ public class WaitChildStateRegressionTests
         using var env = new WaitEnv();
         env.Child.StateChangeEvent.Set(); // stale signaled state from a previous transition
 
-        var pending = InvokeSys("SysWaitId", env.ParentEngine.State, (uint)IdType.P_PID, (uint)env.Child.TGID, 0, 4, 0,
-                0)
+        var pending = InvokeSys(env.ParentSys, env.ParentEngine, "SysWaitId", (uint)IdType.P_PID,
+                (uint)env.Child.TGID, 0, 4, 0, 0)
             .AsTask();
         Assert.False(pending.IsCompleted);
 
@@ -72,13 +73,12 @@ public class WaitChildStateRegressionTests
         Assert.Equal(0, await pending);
     }
 
-    private static ValueTask<int> InvokeSys(string methodName, IntPtr state, uint a1, uint a2, uint a3, uint a4,
-        uint a5,
-        uint a6)
+    private static ValueTask<int> InvokeSys(SyscallManager sm, Engine engine, string methodName, uint a1, uint a2,
+        uint a3, uint a4, uint a5, uint a6)
     {
-        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        return (ValueTask<int>)method!.Invoke(null, [state, a1, a2, a3, a4, a5, a6])!;
+        return (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
     }
 
     private sealed class WaitEnv : IDisposable
@@ -89,7 +89,7 @@ public class WaitChildStateRegressionTests
         public WaitEnv()
         {
             Scheduler = new KernelScheduler();
-            
+
 
             ParentEngine = new Engine();
             ParentMem = new VMAManager();
@@ -132,7 +132,6 @@ public class WaitChildStateRegressionTests
         public void Dispose()
         {
             Scheduler.CurrentTask = null;
-            
         }
 
         public bool DrainEvents()

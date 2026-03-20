@@ -11,8 +11,8 @@ public class MembarrierSyscallTests
 {
     private static ValueTask<int> CallSysMembarrier(TestEnv env, uint cmd, uint flags = 0)
     {
-        var method = typeof(SyscallManager).GetMethod("SysMembarrier", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, cmd, flags, 0u, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysMembarrier", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, cmd, flags, 0u, 0u, 0u, 0u])!;
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class MembarrierSyscallTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(5001, Vma, SyscallManager);
             Scheduler = new KernelScheduler();
-            
+
             Task = new FiberTask(5001, Process, Engine, Scheduler);
             Engine.Owner = Task;
         }
@@ -96,7 +96,6 @@ public class MembarrierSyscallTests
 
         public void Dispose()
         {
-            
             SyscallManager.Close();
             GC.KeepAlive(Task);
         }

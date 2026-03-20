@@ -37,7 +37,6 @@ public class PageFaultOomTests
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
         using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
-        KernelScheduler? oldCurrent = null;
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
 
         using var engine = new Engine();
@@ -46,7 +45,7 @@ public class PageFaultOomTests
         try
         {
             var scheduler = new KernelScheduler();
-            
+
 
             var process = new Process(7101, mm, sm);
             scheduler.RegisterProcess(process);
@@ -69,7 +68,6 @@ public class PageFaultOomTests
         }
         finally
         {
-            
             ExternalPageManager.MemoryQuotaBytes = oldQuota;
             sm.Close();
         }

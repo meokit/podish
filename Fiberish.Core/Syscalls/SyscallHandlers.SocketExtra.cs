@@ -17,12 +17,10 @@ public partial class SyscallManager
     // Returning success for unsupported options makes socket behavior impossible
     // to reason about, especially for raw sockets.
 
-    private static async ValueTask<int> SysSetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetSockOpt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fd = (int)a1;
@@ -31,7 +29,7 @@ public partial class SyscallManager
         var optval = a4;
         var optlen = (int)a5;
 
-        var file = sm.GetFD(fd);
+        var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
         // Read the option value bytes from guest memory
@@ -146,12 +144,10 @@ public partial class SyscallManager
         return -(int)Errno.ENOPROTOOPT;
     }
 
-    private static async ValueTask<int> SysGetSockOpt(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetSockOpt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fd = (int)a1;
@@ -160,7 +156,7 @@ public partial class SyscallManager
         var optval = a4;
         var optlenPtr = a5;
 
-        var file = sm.GetFD(fd);
+        var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
         // Read user-supplied optlen
@@ -280,11 +276,9 @@ public partial class SyscallManager
     // struct mmsghdr { struct msghdr msg_hdr; unsigned int msg_len; }
     // We reuse SysSendMsg for each element and write back msg_len.
 
-    private static async ValueTask<int> SysSendMMsg(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSendMMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fd = (int)a1;
@@ -303,7 +297,7 @@ public partial class SyscallManager
             var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
             // SysSendMsg reads a struct msghdr at msgPtr.
             // We pass mmsgPtr directly — it starts with struct msghdr (28 bytes).
-            var result = await SysSendMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
+            var result = await SysSendMsg(engine, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
                 if (sent == 0) return result; // no messages sent yet → propagate error
@@ -328,11 +322,9 @@ public partial class SyscallManager
     //
     // We receive up to vlen messages via SysRecvMsg, writing msg_len per entry.
 
-    private static async ValueTask<int> SysRecvMMsg(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRecvMMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fd = (int)a1;
@@ -349,7 +341,7 @@ public partial class SyscallManager
         for (var i = 0; i < vlen; i++)
         {
             var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
-            var result = await SysRecvMsg(state, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
+            var result = await SysRecvMsg(engine, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
                 // EAGAIN on the first message with MSG_DONTWAIT or non-blocking → return 0 messages
@@ -383,11 +375,9 @@ public partial class SyscallManager
     // Our implementation performs a buffered copy via kernel buffer,
     // which is semantically correct even if not zero-copy.
 
-    private static async ValueTask<int> SysSplice(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fdIn = (int)a1;
@@ -399,8 +389,8 @@ public partial class SyscallManager
 
         if (len <= 0) return 0;
 
-        var fileIn = sm.GetFD(fdIn);
-        var fileOut = sm.GetFD(fdOut);
+        var fileIn = GetFD(fdIn);
+        var fileOut = GetFD(fdOut);
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
         // At least one FD must be a pipe (enforced by Linux; we relax here for compatibility)
@@ -462,7 +452,7 @@ public partial class SyscallManager
 
                     if (bytesWritten == -(int)Errno.EPIPE)
                     {
-                        if (sm.Engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
+                        if (engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
                         if (totalTransferred > 0) break;
                         return bytesWritten;
                     }
@@ -517,11 +507,9 @@ public partial class SyscallManager
     // Duplicates data between two pipe file descriptors *without* consuming
     // the data from fd_in (peek semantics).
 
-    private static async ValueTask<int> SysTee(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTee(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var fdIn = (int)a1;
@@ -531,8 +519,8 @@ public partial class SyscallManager
 
         if (len <= 0) return 0;
 
-        var fileIn = sm.GetFD(fdIn);
-        var fileOut = sm.GetFD(fdOut);
+        var fileIn = GetFD(fdIn);
+        var fileOut = GetFD(fdOut);
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
         if (fileIn.OpenedInode is not PipeInode pipeIn) return -(int)Errno.EINVAL;

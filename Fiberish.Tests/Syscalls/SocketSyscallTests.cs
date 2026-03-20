@@ -1203,17 +1203,19 @@ public class SocketSyscallTests
 
         public ValueTask<int> Invoke(string methodName, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
         {
-            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method);
 
-            var tcs = new System.Threading.Tasks.TaskCompletionSource<int>(
+            var tcs = new TaskCompletionSource<int>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
             async void Entry()
             {
+                var previous = Engine.CurrentSyscallManager;
+                Engine.CurrentSyscallManager = SyscallManager;
                 try
                 {
-                    var pending = (ValueTask<int>)method!.Invoke(null, [Engine.State, a1, a2, a3, a4, a5, a6])!;
+                    var pending = (ValueTask<int>)method!.Invoke(SyscallManager, [Engine, a1, a2, a3, a4, a5, a6])!;
                     var rc = await pending;
                     tcs.TrySetResult(rc);
                 }
@@ -1227,6 +1229,7 @@ public class SocketSyscallTests
                 }
                 finally
                 {
+                    Engine.CurrentSyscallManager = previous;
                     Scheduler.Running = false;
                     Scheduler.WakeUp();
                 }

@@ -87,9 +87,9 @@ public class FcntlCloexecTests
         public ValueTask<int> Call(string name, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0,
             uint a6 = 0)
         {
-            var method = typeof(SyscallManager).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+            var method = typeof(SyscallManager).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(method);
-            return (ValueTask<int>)method!.Invoke(null, [Engine.State, a1, a2, a3, a4, a5, a6])!;
+            return (ValueTask<int>)method!.Invoke(SyscallManager, [Engine, a1, a2, a3, a4, a5, a6])!;
         }
     }
 }

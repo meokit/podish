@@ -34,7 +34,7 @@ public class CloneThreadLifecycleTests
                     LinuxConstants.CLONE_CHILD_SETTID |
                     LinuxConstants.CLONE_CHILD_CLEARTID;
 
-        var childTid = await CallSys("SysClone", env.Engine.State, flags, 0, 0, tlsPtr, ctidPtr);
+        var childTid = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags, 0, 0, tlsPtr, ctidPtr);
         Assert.True(childTid > 0);
 
         var child = env.Scheduler.GetTask(childTid);
@@ -52,7 +52,7 @@ public class CloneThreadLifecycleTests
     {
         using var env = new TestEnv(110, 110);
 
-        var rc = await CallSys("SysClone", env.Engine.State, LinuxConstants.CLONE_THREAD);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysClone", LinuxConstants.CLONE_THREAD);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
@@ -62,7 +62,7 @@ public class CloneThreadLifecycleTests
         using var env = new TestEnv(111, 111);
 
         var flags = LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD;
-        var rc = await CallSys("SysClone", env.Engine.State, flags);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
@@ -76,7 +76,7 @@ public class CloneThreadLifecycleTests
                     LinuxConstants.CLONE_THREAD |
                     LinuxConstants.CLONE_SETTLS;
 
-        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, 0, invalidTlsPtr);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags, 0, 0, invalidTlsPtr);
         Assert.Equal(-(int)Errno.EFAULT, rc);
         Assert.Single(env.Process.Threads);
         Assert.Same(env.Task, env.Process.Threads[0]);
@@ -89,7 +89,7 @@ public class CloneThreadLifecycleTests
         const uint invalidPtidPtr = 0x00E00000;
         var flags = LinuxConstants.CLONE_PARENT_SETTID;
 
-        var rc = await CallSys("SysClone", env.Engine.State, flags, 0, invalidPtidPtr);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags, 0, invalidPtidPtr);
         Assert.Equal(-(int)Errno.EFAULT, rc);
         Assert.Empty(env.Process.Children);
         Assert.Single(env.Process.Threads);
@@ -115,7 +115,7 @@ public class CloneThreadLifecycleTests
         var privateWaiter = env.SyscallManager.Futex.PrepareWait(clearTidPtr);
         var sharedWaiter = env.SyscallManager.Futex.PrepareWaitShared(hostPtr);
 
-        var rc = await CallSys("SysExit", env.Engine.State);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysExit");
         Assert.Equal(0, rc);
 
         var valueBuf = new byte[4];
@@ -137,7 +137,7 @@ public class CloneThreadLifecycleTests
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
-        var rc = await CallSys("SysExit", env.Engine.State);
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysExit");
         Assert.Equal(0, rc);
 
         Assert.Null(env.Scheduler.GetTask(env.Task.TID));
@@ -201,7 +201,7 @@ public class CloneThreadLifecycleTests
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
         Assert.Equal(oldValue, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 
-        var rc = await CallSys("SysMunmap", peer.CPU.State, addr, LinuxConstants.PageSize);
+        var rc = await CallSys(env.SyscallManager, peer.CPU, "SysMunmap", addr, LinuxConstants.PageSize);
         Assert.Equal(0, rc);
 
         Assert.Equal(IntPtr.Zero, env.Engine.GetPhysicalAddressSafe(addr, false));
@@ -235,7 +235,7 @@ public class CloneThreadLifecycleTests
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
         Assert.Equal(oldValue, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 
-        var rc = await CallSys("SysMmap2", env.Engine.State, addr, LinuxConstants.PageSize,
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysMmap2", addr, LinuxConstants.PageSize,
             (uint)(Protection.Read | Protection.Write),
             (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
         Assert.Equal((int)addr, rc);
@@ -269,7 +269,7 @@ public class CloneThreadLifecycleTests
         Assert.True(peer.CPU.CopyFromUser(addr + LinuxConstants.PageSize, valueBuf));
         Assert.Equal(0xDEADBEEFu, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 
-        var rc = await CallSys("SysMremap", peer.CPU.State, addr, twoPages, LinuxConstants.PageSize);
+        var rc = await CallSys(env.SyscallManager, peer.CPU, "SysMremap", addr, twoPages, LinuxConstants.PageSize);
         Assert.Equal((int)addr, rc);
 
         Assert.Equal(IntPtr.Zero, env.Engine.GetPhysicalAddressSafe(addr + LinuxConstants.PageSize, false));
@@ -307,12 +307,12 @@ public class CloneThreadLifecycleTests
         GC.KeepAlive(peer);
     }
 
-    private static async ValueTask<int> CallSys(string methodName, IntPtr state, uint a1 = 0, uint a2 = 0, uint a3 = 0,
-        uint a4 = 0, uint a5 = 0, uint a6 = 0)
+    private static async ValueTask<int> CallSys(SyscallManager sm, Engine engine, string methodName, uint a1 = 0,
+        uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0, uint a6 = 0)
     {
-        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        var task = (ValueTask<int>)method!.Invoke(null, [state, a1, a2, a3, a4, a5, a6])!;
+        var task = (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
         return await task;
     }
 
@@ -325,7 +325,7 @@ public class CloneThreadLifecycleTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(tgid, Vma, SyscallManager);
             Scheduler = new KernelScheduler();
-            
+
             Task = new FiberTask(tid, Process, Engine, Scheduler);
             Engine.Owner = Task;
         }
@@ -339,7 +339,6 @@ public class CloneThreadLifecycleTests
 
         public void Dispose()
         {
-            
             GC.KeepAlive(Task);
         }
 

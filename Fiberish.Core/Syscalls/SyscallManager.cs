@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Core.Net;
@@ -14,14 +13,14 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-    public delegate ValueTask<int> SyscallHandler(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6);
+    public delegate ValueTask<int> SyscallHandler(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6);
 
     public const uint MountFlagMask = LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID |
                                       LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
 
     private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
-    private static readonly ConcurrentDictionary<IntPtr, SyscallManager> _registry = new();
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly FileSystemType _devptsFsType;
 
@@ -990,13 +989,11 @@ public partial class SyscallManager
     public void RegisterEngine(Engine engine)
     {
         engine.PageFaultResolver ??= (addr, isWrite) => Mem.HandleFault(addr, isWrite, engine);
-        _registry[engine.State] = this;
         ProcessAddressSpaceSync.RegisterEngineAddressSpace(Mem, engine);
     }
 
     public void UnregisterEngine(Engine engine)
     {
-        _registry.TryRemove(engine.State, out _);
         ProcessAddressSpaceSync.UnregisterEngineAddressSpace(Mem, engine);
     }
 
@@ -1038,11 +1035,6 @@ public partial class SyscallManager
             GetTGID = GetTGID
         };
         return newSys;
-    }
-
-    public static SyscallManager? Get(IntPtr state)
-    {
-        return _registry.TryGetValue(state, out var sm) ? sm : null;
     }
 
     private void Register(uint nr, SyscallHandler handler)
@@ -1106,7 +1098,7 @@ public partial class SyscallManager
             if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
                 try
                 {
-                    retTask = _syscallHandlers[eax]!(engine.State, ebx, ecx, edx, esi, edi, ebp);
+                    retTask = _syscallHandlers[eax]!(engine, ebx, ecx, edx, esi, edi, ebp);
                 }
                 catch (Exception ex)
                 {
@@ -1234,15 +1226,8 @@ public partial class SyscallManager
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
 
-        var staleStates = _registry
-            .Where(kv => ReferenceEquals(kv.Value, this))
-            .Select(kv => kv.Key)
-            .ToList();
-        foreach (var state in staleStates)
-        {
-            _registry.TryRemove(state, out _);
-            ProcessAddressSpaceSync.UnregisterEngineState(state, Mem, Engine);
-        }
+        if (Engine is not null)
+            UnregisterEngine(Engine);
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
         ReleaseContainerPins();
@@ -1330,7 +1315,6 @@ public partial class SyscallManager
 
         private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
         {
-            
             return default;
         }
 
@@ -1540,6 +1524,6 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
 
     private KernelScheduler? ResolveScheduler()
     {
-        return (_sm.Engine.Owner as FiberTask)?.CommonKernel ;
+        return (_sm.Engine.Owner as FiberTask)?.CommonKernel;
     }
 }

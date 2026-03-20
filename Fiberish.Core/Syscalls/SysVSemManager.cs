@@ -195,8 +195,7 @@ public class SysVSemManager
 
                 set.OTime = DateTime.UtcNow;
 
-                // Wake up valid waiters
-                var waken = false;
+                // Wake up valid waiters.
                 foreach (var waiter in set.Waiters.ToList())
                 {
                     // Quick evaluation if they might be satisfied now
@@ -206,11 +205,8 @@ public class SysVSemManager
                     {
                         set.Waiters.Remove(waiter);
                         waiter.Continuation?.Invoke();
-                        waken = true;
                     }
                 }
-
-                if (waken) /* WakeUp needed */;
 
                 return 0; // Success
             }
@@ -251,7 +247,8 @@ public class SysVSemManager
                     waiter.Continuation?.Invoke();
                 }
 
-                /* WakeUp needed */;
+                /* WakeUp needed */
+                ;
                 return 0;
 
             case LinuxConstants.IPC_STAT:
@@ -280,7 +277,8 @@ public class SysVSemManager
                     waiter.Continuation?.Invoke();
                 }
 
-                /* WakeUp needed */;
+                /* WakeUp needed */
+                ;
                 return 0;
 
             case LinuxConstants.GETALL:

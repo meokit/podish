@@ -448,9 +448,6 @@ public class TtyDiscipline
                 if (task.Process.ControllingTty != this)
                     return -(int)Errno.ENOTTY;
 
-                if (false /* TODO (KernelScheduler?)null!.IsValidProcessGroup */)
-                    return -(int)Errno.EPERM;
-
                 ForegroundPgrp = pgid;
                 return 0;
             }

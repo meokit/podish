@@ -75,15 +75,13 @@ public partial class SyscallManager
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators
-    private static async ValueTask<int> SysAlarm(IntPtr state, uint seconds, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysAlarm(Engine engine, uint seconds, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
-        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var remainingSeconds = 0;
@@ -107,13 +105,11 @@ public partial class SyscallManager
         return remainingSeconds;
     }
 
-    private static async ValueTask<int> SysSetitimer(IntPtr state, uint which, uint newValuePtr, uint oldValuePtr,
+    private async ValueTask<int> SysSetitimer(Engine engine, uint which, uint newValuePtr, uint oldValuePtr,
         uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
@@ -123,24 +119,22 @@ public partial class SyscallManager
         if (oldValuePtr != 0)
         {
             var oldRemainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-            if (!WriteItimerval32(sm, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
+            if (!WriteItimerval32(this, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
                 return -(int)Errno.EFAULT;
         }
 
-        if (!TryReadItimerval32(sm, newValuePtr, out var newIntervalMs, out var newValueMs))
+        if (!TryReadItimerval32(this, newValuePtr, out var newIntervalMs, out var newValueMs))
             return -(int)Errno.EINVAL;
 
         ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
         return 0;
     }
 
-    private static async ValueTask<int> SysGetitimer(IntPtr state, uint which, uint currValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysGetitimer(Engine engine, uint which, uint currValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
@@ -148,48 +142,43 @@ public partial class SyscallManager
 
         var proc = task.Process;
         var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-        if (!WriteItimerval32(sm, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
+        if (!WriteItimerval32(this, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
             return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static async ValueTask<int> SysClockSetTime64(IntPtr state, uint clockId, uint tsPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, uint tsPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted
         return -(int)Errno.EPERM;
     }
 
-    private static async ValueTask<int> SysClockAdjTime64(IntPtr state, uint clockId, uint txPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockAdjTime64(Engine engine, uint clockId, uint txPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted / Stubbed
         return -(int)Errno.EPERM;
     }
 
-    private static async ValueTask<int> SysClockGetResTime64(IntPtr state, uint clockId, uint resPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, uint resPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         if (resPtr != 0)
         {
             var buf = new byte[16];
             BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), 0); // 0 sec
             BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), 1000000); // 1,000,000 ns (1 ms resolution)
-            if (!sm.Engine.CopyToUser(resPtr, buf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(resPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetTime32(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerGetTime32(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
         if (!proc.PosixTimers.TryGetValue((int)timerId, out var timer)) return -(int)Errno.EINVAL;
@@ -201,7 +190,7 @@ public partial class SyscallManager
 
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
-            var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+            var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
             var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
@@ -217,16 +206,14 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)valueSec);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)valueNsec);
 
-        if (!sm.Engine.CopyToUser(currPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(currPtr, buf)) return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetTime64(IntPtr state, uint timerId, uint currPtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerGetTime64(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
         if (!proc.PosixTimers.TryGetValue((int)timerId, out var timer)) return -(int)Errno.EINVAL;
@@ -238,7 +225,7 @@ public partial class SyscallManager
 
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
-            var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+            var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
             var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
@@ -254,17 +241,15 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(16, 8), valueSec);
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), valueNsec);
 
-        if (!sm.Engine.CopyToUser(currPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(currPtr, buf)) return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerSetTime32(IntPtr state, uint timerId, uint flags, uint newPtr,
+    private async ValueTask<int> SysTimerSetTime32(Engine engine, uint timerId, uint flags, uint newPtr,
         uint oldPtr, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var proc = task.Process;
@@ -273,7 +258,7 @@ public partial class SyscallManager
         if (newPtr == 0) return -(int)Errno.EFAULT;
 
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(newPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(newPtr, buf)) return -(int)Errno.EFAULT;
 
         var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var intervalNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
@@ -284,7 +269,7 @@ public partial class SyscallManager
         var valueMs = (ulong)(valueSec * 1000L + valueNsec / 1000000L);
 
         // Fetch old if needed
-        if (oldPtr != 0) await SysTimerGetTime32(state, timerId, oldPtr, 0, 0, 0, 0);
+        if (oldPtr != 0) await SysTimerGetTime32(engine, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
         timer.ActiveTimer?.Cancel();
@@ -345,13 +330,11 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerSetTime64(IntPtr state, uint timerId, uint flags, uint newPtr,
+    private async ValueTask<int> SysTimerSetTime64(Engine engine, uint timerId, uint flags, uint newPtr,
         uint oldPtr, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (sm.Engine.Owner as FiberTask)?.CommonKernel;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
         if (scheduler == null) return -(int)Errno.ENOSYS;
 
         var proc = task.Process;
@@ -360,7 +343,7 @@ public partial class SyscallManager
         if (newPtr == 0) return -(int)Errno.EFAULT;
 
         var buf = new byte[32];
-        if (!sm.Engine.CopyFromUser(newPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(newPtr, buf)) return -(int)Errno.EFAULT;
 
         var intervalSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(0, 8));
         var intervalNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(8, 8));
@@ -371,7 +354,7 @@ public partial class SyscallManager
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
         // Fetch old if needed
-        if (oldPtr != 0) await SysTimerGetTime64(state, timerId, oldPtr, 0, 0, 0, 0);
+        if (oldPtr != 0) await SysTimerGetTime64(engine, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
         timer.ActiveTimer?.Cancel();
@@ -436,12 +419,10 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerCreate(IntPtr state, uint clockId, uint sevpPtr, uint timerIdPtr,
+    private async ValueTask<int> SysTimerCreate(Engine engine, uint clockId, uint sevpPtr, uint timerIdPtr,
         uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
         var timerId = proc.NextPosixTimerId++;
@@ -450,7 +431,7 @@ public partial class SyscallManager
         if (sevpPtr != 0)
         {
             var buf = new byte[64]; // sigevent is generally padded to 64 bytes
-            if (!sm.Engine.CopyFromUser(sevpPtr, buf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyFromUser(sevpPtr, buf)) return -(int)Errno.EFAULT;
 
             sigEvent.Value =
                 BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(0,
@@ -477,18 +458,16 @@ public partial class SyscallManager
         {
             var idBuf = new byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(idBuf, timerId);
-            if (!sm.Engine.CopyToUser(timerIdPtr, idBuf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(timerIdPtr, idBuf)) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerDelete(IntPtr state, uint timerId, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysTimerDelete(Engine engine, uint timerId, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
         if (!proc.PosixTimers.TryGetValue((int)timerId, out var timer)) return -(int)Errno.EINVAL;
@@ -499,12 +478,10 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerGetOverrun(IntPtr state, uint timerId, uint a2, uint a3, uint a4,
+    private async ValueTask<int> SysTimerGetOverrun(Engine engine, uint timerId, uint a2, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
         if (!proc.PosixTimers.TryGetValue((int)timerId, out var timer)) return -(int)Errno.EINVAL;
@@ -512,13 +489,10 @@ public partial class SyscallManager
         return timer.OverrunCount;
     }
 
-    private static async ValueTask<int> SysTimerFdGetTime64(IntPtr state, uint fd, uint curValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
+        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
@@ -531,31 +505,28 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(16, 8), valueMs / 1000);
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), valueMs % 1000 * 1000000);
 
-        if (!sm.Engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
 
-    private static async ValueTask<int> SysTimerFdSetTime64(IntPtr state, uint fd, uint flags, uint newValuePtr,
+    private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, uint newValuePtr,
         uint oldValuePtr, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        if (!sm.FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
+        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
         var buf = new byte[32];
-        if (!sm.Engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
 
         var intervalSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(0, 8));
         var intervalNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(8, 8));
         var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(16, 8));
         var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(24, 8));
 
-        if (oldValuePtr != 0) await SysTimerFdGetTime64(state, fd, oldValuePtr, 0, 0, 0, 0);
+        if (oldValuePtr != 0) await SysTimerFdGetTime64(engine, fd, oldValuePtr, 0, 0, 0, 0);
 
         var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
 

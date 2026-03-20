@@ -100,33 +100,25 @@ public class KernelSchedulerReparentTests
     [Fact]
     public void SignalProcess_InitPid_ForwardsToDirectChildren_WhenEngineInitEnabled()
     {
-        KernelScheduler? previous = null;
         var scheduler = new KernelScheduler();
-        
-        try
-        {
-            var init = new Process(1, null!, null!);
-            var child = new Process(2, null!, null!) { PPID = 1 };
-            init.Children.Add(2);
 
-            scheduler.RegisterProcess(init);
-            scheduler.RegisterProcess(child);
-            scheduler.SetInitPid(1);
-            scheduler.SetEngineInitReaperEnabled(true);
+        var init = new Process(1, null!, null!);
+        var child = new Process(2, null!, null!) { PPID = 1 };
+        init.Children.Add(2);
 
-            var childTask = new FiberTask(2, child, new MockEngine(), scheduler);
-            Assert.Equal(0UL, childTask.PendingSignals);
+        scheduler.RegisterProcess(init);
+        scheduler.RegisterProcess(child);
+        scheduler.SetInitPid(1);
+        scheduler.SetEngineInitReaperEnabled(true);
 
-            var ok = scheduler.SignalProcess(1, (int)Signal.SIGTERM);
+        var childTask = new FiberTask(2, child, new MockEngine(), scheduler);
+        Assert.Equal(0UL, childTask.PendingSignals);
 
-            Assert.True(ok);
-            var sigMask = 1UL << ((int)Signal.SIGTERM - 1);
-            Assert.NotEqual(0UL, childTask.PendingSignals & sigMask);
-        }
-        finally
-        {
-            
-        }
+        var ok = scheduler.SignalProcess(1, (int)Signal.SIGTERM);
+
+        Assert.True(ok);
+        var sigMask = 1UL << ((int)Signal.SIGTERM - 1);
+        Assert.NotEqual(0UL, childTask.PendingSignals & sigMask);
     }
 
     private sealed class MockEngine : Engine

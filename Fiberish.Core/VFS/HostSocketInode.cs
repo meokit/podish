@@ -53,6 +53,18 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
     public ProtocolType HostProtocolType => NativeSocket.ProtocolType;
     public SocketType HostSocketType => NativeSocket.SocketType;
 
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        return RegisterWait(linuxFile, dispatcher, callback, events);
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
+    }
+
     public override short Poll(LinuxFile file, short events)
     {
         return _readiness.Poll(file, events);
@@ -76,18 +88,6 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
     internal IDisposable? RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher, Action callback, short events)
     {
         return _readiness.RegisterWaitHandle(file, dispatcher, callback, events);
-    }
-
-    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
-        short events)
-    {
-        return RegisterWait(linuxFile, dispatcher, callback, events);
-    }
-
-    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
-        Action callback, short events)
-    {
-        return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
     }
 
     protected override void OnEvictCache()
@@ -139,7 +139,10 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
                 return 0;
             }
             default:
-                return NetDeviceIoctlHelper.Handle(engine, request, arg);
+                var sm = engine.CurrentSyscallManager;
+                if (sm == null)
+                    return -(int)Errno.EPERM;
+                return NetDeviceIoctlHelper.Handle(sm, engine, request, arg);
         }
     }
 
@@ -184,7 +187,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
             }
     }
 
-    public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
+    public async ValueTask<(int Bytes, EndPoint? RemoteEp)> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer,
+        int flags,
         EndPoint remoteEpTemplate)
     {
         while (true)
@@ -278,7 +282,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource
         }
     }
 
-    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags, EndPoint remoteEp)
+    public async ValueTask<int> SendToAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags,
+        EndPoint remoteEp)
     {
         byte[]? rented = null;
         ArraySegment<byte> segment;

@@ -13,46 +13,55 @@ public class PipeTests
 {
     private static ValueTask<int> CallSysRead(TestEnv env, uint fd, uint bufAddr, uint count)
     {
-        var method = typeof(SyscallManager).GetMethod("SysRead", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufAddr, count, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysRead", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fd, bufAddr, count, 0u, 0u, 0u])!;
     }
 
     private static ValueTask<int> CallSysWrite(TestEnv env, uint fd, uint bufAddr, uint count)
     {
-        var method = typeof(SyscallManager).GetMethod("SysWrite", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, bufAddr, count, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysWrite", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fd, bufAddr, count, 0u, 0u, 0u])!;
     }
 
     private static ValueTask<int> CallSysClose(TestEnv env, uint fd)
     {
-        var method = typeof(SyscallManager).GetMethod("SysClose", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, 0u, 0u, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysClose", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fd, 0u, 0u, 0u, 0u, 0u])!;
     }
 
     private static ValueTask<int> CallSysLseek(TestEnv env, uint fd, uint offset, uint whence)
     {
-        var method = typeof(SyscallManager).GetMethod("SysLseek", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fd, offset, whence, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysLseek", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fd, offset, whence, 0u, 0u, 0u])!;
     }
 
     private static ValueTask<int> CallSysSplice(TestEnv env, uint fdIn, uint offInPtr, uint fdOut, uint offOutPtr,
         uint len, uint flags)
     {
-        var method = typeof(SyscallManager).GetMethod("SysSplice", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null,
-            [env.Engine.State, fdIn, offInPtr, fdOut, offOutPtr, len, flags])!;
+        var method = typeof(SyscallManager).GetMethod("SysSplice", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager,
+                [env.Engine, fdIn, offInPtr, fdOut, offOutPtr, len, flags])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
     }
 
     private static ValueTask<int> CallSysPipe(TestEnv env, uint fdsAddr)
     {
-        var method = typeof(SyscallManager).GetMethod("SysPipe", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fdsAddr, 0u, 0u, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysPipe", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fdsAddr, 0u, 0u, 0u, 0u, 0u])!;
     }
 
     private static ValueTask<int> CallSysPipe2(TestEnv env, uint fdsAddr, uint flags)
     {
-        var method = typeof(SyscallManager).GetMethod("SysPipe2", BindingFlags.NonPublic | BindingFlags.Static);
-        return (ValueTask<int>)method!.Invoke(null, [env.Engine.State, fdsAddr, flags, 0u, 0u, 0u, 0u])!;
+        var method = typeof(SyscallManager).GetMethod("SysPipe2", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fdsAddr, flags, 0u, 0u, 0u, 0u])!;
     }
 
     [Fact]
@@ -239,7 +248,6 @@ public class PipeTests
                 Scheduler = new KernelScheduler();
                 Task = new FiberTask(100, Process, Engine, Scheduler);
                 Engine.Owner = Task;
-                
             }
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
@@ -255,8 +263,8 @@ public class PipeTests
 
         public void Dispose()
         {
-            if (Scheduler != null) 
-            GC.KeepAlive(Task);
+            if (Scheduler != null)
+                GC.KeepAlive(Task);
         }
 
         public void MapUserPage(uint addr)

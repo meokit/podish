@@ -63,23 +63,17 @@ public partial class SyscallManager
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static async ValueTask<int> SysTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTime(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var t = DateTimeOffset.Now.ToUnixTimeSeconds();
         if (a1 != 0)
-            if (!sm.Engine.CopyToUser(a1, BitConverter.GetBytes((uint)t)))
+            if (!engine.CopyToUser(a1, BitConverter.GetBytes((uint)t)))
                 return -(int)Errno.EFAULT;
         return (int)t;
     }
 
-    private static async ValueTask<int> SysTimes(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTimes(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var ticks = GetTimesClockTicks();
 
         // struct tms on i386:
@@ -91,17 +85,15 @@ public partial class SyscallManager
             BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(4, 4), 0);
             BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(8, 4), 0);
             BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(12, 4), 0);
-            if (!sm.Engine.CopyToUser(a1, tms)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(a1, tms)) return -(int)Errno.EFAULT;
         }
 
         return ticks;
     }
 
-    private static async ValueTask<int> SysUname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        var t = sm.Engine.Owner as FiberTask;
+        var t = engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
 
         var uts = t.Process.UTS;
@@ -111,7 +103,7 @@ public partial class SyscallManager
             var buf = new byte[65];
             var bytes = Encoding.ASCII.GetBytes(s);
             Array.Copy(bytes, buf, Math.Min(bytes.Length, 64));
-            if (!sm.Engine.CopyToUser(addr, buf)) return;
+            if (!engine.CopyToUser(addr, buf)) return;
         }
 
         WriteUnameString(a1, uts.SysName);
@@ -124,16 +116,13 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysSysinfo(IntPtr state, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSysinfo(Engine engine, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        var t = sm.Engine.Owner as FiberTask;
+        var t = engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
 
-        var snapshot = MemoryStatsSnapshot.Capture(sm);
+        var snapshot = MemoryStatsSnapshot.Capture(this);
         var totalBytes = Math.Max(0, snapshot.MemTotalBytes);
         var freeBytes = Math.Max(0, snapshot.FreeBytes);
         var sharedBytes = Math.Max(0, snapshot.ShmemBytes);
@@ -199,92 +188,77 @@ public partial class SyscallManager
                 Marshal.FreeHGlobal(ptr);
             }
 
-            if (!sm.Engine.CopyToUser(sysinfoAddr, buffer)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(sysinfoAddr, buffer)) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysGetPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetPid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         return task?.Process.TGID ?? 1;
     }
 
-    private static async ValueTask<int> SysGetPPid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetPPid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         return task.Process.PPID;
     }
 
-    private static async ValueTask<int> SysGettid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGettid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         return task?.TID ?? -1;
     }
 
-    private static async ValueTask<int> SysGetPgid(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetPgid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         return task?.Process.PGID ?? -1;
     }
 
-    private static async ValueTask<int> SysUmask(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUmask(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        var task = sm?.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return 0;
         return CredentialService.SetUmask(task.Process, (int)a1);
     }
 
-    private static async ValueTask<int> SysSethostname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSethostname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -1;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
 
-        var name = sm.ReadString(a1);
+        var name = ReadString(a1);
         task.Process.UTS.NodeName = name;
         return 0;
     }
 
-    private static async ValueTask<int> SysSetdomainname(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetdomainname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -1;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null || task.Process.EUID != 0) return -(int)Errno.EPERM;
 
-        var name = sm.ReadString(a1);
+        var name = ReadString(a1);
         task.Process.UTS.DomainName = name;
         return 0;
     }
 
-    private static async ValueTask<int> SysSchedYield(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSchedYield(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        sm?.Engine.Yield();
+        engine.Yield();
         return 0;
     }
 
-    private static async ValueTask<int> SysPause(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPause(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         Logger.LogInformation("[SysPause] Task pausing, waiting for signal");
@@ -343,12 +317,9 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> SysGetTimeOfDay(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetTimeOfDay(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var tvPtr = a1;
 
         // Use UtcNow for REALTIME (gettimeofday is strictly REALTIME)
@@ -361,18 +332,15 @@ public partial class SyscallManager
             var buf = new byte[8];
             BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
             BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)usecs);
-            if (!sm.Engine.CopyToUser(tvPtr, buf)) return -(int)Errno.EFAULT;
+            if (!engine.CopyToUser(tvPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         return 0;
     }
 
-    private static async ValueTask<int> SysClockGetTime(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysClockGetTime(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var clockId = (int)a1;
         var tsPtr = a2;
 
@@ -399,17 +367,14 @@ public partial class SyscallManager
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)nsecs);
-        if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
 
-    private static async ValueTask<int> SysClockGetTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysClockGetTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var clockId = (int)a1;
         var tsPtr = a2;
 
@@ -436,8 +401,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), nsecs);
 
-        if (sm.Strace)
-        {
+        if (Strace)
             Logger.LogTrace(
                 "[SysClockGetTime64] clockId={ClockId} tsPtr=0x{TsPtr:X} secs={Secs} nsecs={Nsecs} bytes={Bytes}",
                 clockId,
@@ -445,24 +409,20 @@ public partial class SyscallManager
                 secs,
                 nsecs,
                 Convert.ToHexString(buf));
-        }
 
-        if (!sm.Engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(tsPtr, buf)) return -(int)Errno.EFAULT;
 
         return 0;
     }
 
-    private static async ValueTask<int> SysNanosleep(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysNanosleep(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var reqBuf = new byte[8];
-        if (!sm.Engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         var nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
 
-        if (sm.Engine.Owner is FiberTask ownerTask)
+        if (engine.Owner is FiberTask ownerTask)
             Logger.LogInformation("[SysNanosleep] pid={Pid} tid={Tid} req={{sec={Sec}, nsec={Nsec}}}",
                 ownerTask.Process.TGID, ownerTask.TID, sec, nsec);
 
@@ -470,7 +430,7 @@ public partial class SyscallManager
         if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1; // Minimum 1ms tick if requested
         if (totalMs < 0) return 0;
 
-        if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
         var res = await new SleepAwaitable(totalMs, fiberTask);
 
@@ -480,19 +440,16 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysClockNanosleepTime64(IntPtr state, uint a1, uint a2, uint a3, uint a4,
+    private async ValueTask<int> SysClockNanosleepTime64(Engine engine, uint a1, uint a2, uint a3, uint a4,
         uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var clockId = (int)a1;
         var flags = (int)a2; // e.g. TIMER_ABSTIME
         var reqPtr = a3;
         var remPtr = a4;
 
         var reqBuf = new byte[16]; // timespec64
-        if (!sm.Engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(0, 8));
         var nsec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(8, 8));
 
@@ -502,7 +459,7 @@ public partial class SyscallManager
         if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1;
         if (totalMs < 0) return 0;
 
-        if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
         var res = await new SleepAwaitable(totalMs, fiberTask);
 
@@ -512,27 +469,27 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysNice(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysNice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         // Simple stub: for now, don't actually change host priority
         return 0; // Success
     }
 
-    private static async ValueTask<int> SysGetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetPriority(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // Simple stub: return default priority (20)
         return 20;
     }
 
-    private static async ValueTask<int> SysSetPriority(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetPriority(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // Simple stub: success
         return 0;
     }
 
-    private static async ValueTask<int> SysPersonality(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysPersonality(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // personality(0xffffffff) returns current, otherwise sets.
@@ -540,37 +497,32 @@ public partial class SyscallManager
         return (int)LinuxConstants.PER_LINUX;
     }
 
-    private static async ValueTask<int> SysGetCpu(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetCpu(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var cpuPtr = a1;
         var nodePtr = a2;
 
         if (cpuPtr != 0)
-            if (!sm.Engine.CopyToUser(cpuPtr, BitConverter.GetBytes(0u)))
+            if (!engine.CopyToUser(cpuPtr, BitConverter.GetBytes(0u)))
                 return -(int)Errno.EFAULT;
 
         if (nodePtr != 0)
-            if (!sm.Engine.CopyToUser(nodePtr, BitConverter.GetBytes(0u)))
+            if (!engine.CopyToUser(nodePtr, BitConverter.GetBytes(0u)))
                 return -(int)Errno.EFAULT;
 
         return 0;
     }
 
-    private static async ValueTask<int> SysPrctl(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPrctl(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var option = (int)a1;
 
         switch (option)
         {
             case LinuxConstants.PR_SET_NAME:
-                var name = sm.ReadString(a2);
+                var name = ReadString(a2);
                 if (name != null)
                 {
                     task.Process.Name = name;
@@ -584,7 +536,7 @@ public partial class SyscallManager
                 var bytes = Encoding.ASCII.GetBytes(procName);
                 var buf = new byte[16];
                 Array.Copy(bytes, buf, Math.Min(bytes.Length, 15));
-                if (!sm.Engine.CopyToUser(a2, buf)) return -(int)Errno.EFAULT;
+                if (!engine.CopyToUser(a2, buf)) return -(int)Errno.EFAULT;
                 return 0;
 
             default:
@@ -593,12 +545,10 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> SysMembarrier(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysMembarrier(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var cmd = (int)a1;
         var flags = a2;
@@ -640,41 +590,36 @@ public partial class SyscallManager
         return (registeredMask & requiredRegisterCmd) != 0 ? 0 : -(int)Errno.EPERM;
     }
 
-    private static async ValueTask<int> SysGetThreadArea(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetThreadArea(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var uInfoAddr = a1;
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
 
         // var entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
 
         // Return whatever was previously set via SetThreadArea
         // We simplified set_thread_area to just set GS base, so we don't track entry indices properly.
         // Just return current GS base as base_addr.
-        var baseAddr = sm.Engine.GetSegBase(Seg.GS);
+        var baseAddr = engine.GetSegBase(Seg.GS);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), baseAddr);
 
-        if (!sm.Engine.CopyToUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(uInfoAddr, buf)) return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static async ValueTask<int> SysCapget(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysCapget(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
         const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;
         const uint LINUX_CAPABILITY_VERSION_3 = 0x20080522;
 
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         if (a1 == 0 || a2 == 0) return -(int)Errno.EFAULT;
 
         var hdr = new byte[8];
-        if (!sm.Engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
         var version = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(0, 4));
         var pid = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(4, 4));
 
@@ -689,7 +634,7 @@ public partial class SyscallManager
         if (count == 0)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), LINUX_CAPABILITY_VERSION_3);
-            _ = sm.Engine.CopyToUser(a1, hdr);
+            _ = engine.CopyToUser(a1, hdr);
             return -(int)Errno.EINVAL;
         }
 
@@ -703,23 +648,21 @@ public partial class SyscallManager
             BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 12 + 8, 4), task.Process.CapInheritable[i]);
         }
 
-        if (!sm.Engine.CopyToUser(a2, data)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(a2, data)) return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static async ValueTask<int> SysCapset(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysCapset(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
         const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;
         const uint LINUX_CAPABILITY_VERSION_3 = 0x20080522;
 
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-        if (sm.Engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         if (a1 == 0 || a2 == 0) return -(int)Errno.EFAULT;
 
         var hdr = new byte[8];
-        if (!sm.Engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(a1, hdr)) return -(int)Errno.EFAULT;
         var version = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(0, 4));
         var pid = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(4, 4));
 
@@ -734,7 +677,7 @@ public partial class SyscallManager
         if (pid != 0 && pid != task.Process.TGID) return -(int)Errno.EPERM;
 
         var data = new byte[count * 12];
-        if (!sm.Engine.CopyFromUser(a2, data)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(a2, data)) return -(int)Errno.EFAULT;
 
         for (var i = 0; i < count; i++)
         {
@@ -754,11 +697,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<int> SysGetRandom(IntPtr state, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetRandom(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var sm = Get(state);
-        if (sm == null) return -(int)Errno.EPERM;
-
         var bufAddr = a1;
         var count = a2;
         var flags = a3;
@@ -771,7 +711,7 @@ public partial class SyscallManager
         var buffer = new byte[count];
         RandomNumberGenerator.Fill(buffer);
 
-        if (!sm.Engine.CopyToUser(bufAddr, buffer)) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(bufAddr, buffer)) return -(int)Errno.EFAULT;
 
         return (int)count;
     }
