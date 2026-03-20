@@ -89,6 +89,11 @@ public sealed class AddressSpace
         return Pages.SnapshotPageStates();
     }
 
+    public void VisitPageStates(Action<VmPageState> visitor)
+    {
+        Pages.VisitPageStates(visitor);
+    }
+
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
     {
         return Pages.CountPagesInRange(startPageIndex, endPageIndex);
@@ -126,7 +131,7 @@ public sealed class AnonVma
     public AnonVma CloneForFork()
     {
         var clone = new AnonVma();
-        foreach (var state in Pages.SnapshotPageStates())
+        Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
             ExternalPageManager.AddRef(page.Ptr);
@@ -137,7 +142,7 @@ public sealed class AnonVma
             clonedPage.Writeback = page.Writeback;
             clonedPage.PinCount = page.PinCount;
             clonedPage.MapCount = page.MapCount;
-        }
+        });
 
         return clone;
     }
@@ -180,6 +185,11 @@ public sealed class AnonVma
     public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
         return Pages.SnapshotPageStates();
+    }
+
+    public void VisitPageStates(Action<VmPageState> visitor)
+    {
+        Pages.VisitPageStates(visitor);
     }
 
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)

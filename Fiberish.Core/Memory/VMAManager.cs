@@ -261,7 +261,14 @@ public class VMAManager
     public List<VmArea> FindVmAreasInRange(uint start, uint end)
     {
         var result = new List<VmArea>();
-        if (start >= end) return result;
+        VisitVmAreasInRange(start, end, result.Add);
+        return result;
+    }
+
+    public void VisitVmAreasInRange(uint start, uint end, Action<VmArea> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (start >= end) return;
 
         var left = 0;
         var right = _vmas.Count - 1;
@@ -282,9 +289,7 @@ public class VMAManager
         }
 
         for (var i = firstMatch; i < _vmas.Count && _vmas[i].Start < end; i++)
-            result.Add(_vmas[i]);
-
-        return result;
+            visitor(_vmas[i]);
     }
 
     private static uint ComputeRangeEnd(uint addr, uint len)
@@ -1084,9 +1089,9 @@ public class VMAManager
     public void CaptureDirtyPrivatePages(Engine engine, uint rangeStart, uint rangeEnd)
     {
         if (rangeStart >= rangeEnd) return;
-        foreach (var vma in FindVmAreasInRange(rangeStart, rangeEnd))
+        VisitVmAreasInRange(rangeStart, rangeEnd, vma =>
         {
-            if (!IsPrivateVma(vma)) continue;
+            if (!IsPrivateVma(vma)) return;
             var captureStart = Math.Max(vma.Start, rangeStart) & LinuxConstants.PageMask;
             var captureEnd = (Math.Min(vma.End, rangeEnd) + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
             for (var page = captureStart; page < captureEnd; page += LinuxConstants.PageSize)
@@ -1098,7 +1103,7 @@ public class VMAManager
                 if (privatePtr == IntPtr.Zero || privatePtr != mappedPtr) continue;
                 vma.VmAnonVma.MarkDirty(pageIndex);
             }
-        }
+        });
     }
 
     private bool TryAllocatePrivateCopyFromSource(
@@ -1599,8 +1604,8 @@ public class VMAManager
     {
         if (rangeStart >= rangeEnd) return;
 
-        foreach (var vma in FindVmAreasInRange(rangeStart, rangeEnd))
-            CaptureDirtySharedFilePages(vma, engine, rangeStart, rangeEnd);
+        VisitVmAreasInRange(rangeStart, rangeEnd,
+            vma => CaptureDirtySharedFilePages(vma, engine, rangeStart, rangeEnd));
     }
 
     public static void SyncVmArea(VmArea vma, Engine engine, uint rangeStart, uint rangeEnd)

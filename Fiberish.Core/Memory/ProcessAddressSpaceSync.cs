@@ -197,11 +197,11 @@ internal static class ProcessAddressSpaceSync
         if (len == 0) return;
         if (engines.Count == 0) return;
         var end = ComputeRangeEnd(addr, len);
-        foreach (var vma in vmaManager.FindVmAreasInRange(addr, end))
+        vmaManager.VisitVmAreasInRange(addr, end, vma =>
         {
-            if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) continue;
+            if ((vma.Flags & MapFlags.Shared) == 0 || vma.File == null) return;
             VMAManager.SyncVmArea(vma, engines, addr, end);
-        }
+        });
     }
 
     private static void MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len)

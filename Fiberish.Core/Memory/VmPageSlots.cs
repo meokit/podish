@@ -235,13 +235,19 @@ public sealed class VmPageSlots
 
     public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
+        var states = new List<VmPageState>();
+        VisitPageStates(states.Add);
+        return states;
+    }
+
+    public void VisitPageStates(Action<VmPageState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
         lock (_lock)
         {
-            if (_pages.Count == 0) return Array.Empty<VmPageState>();
-            var states = new List<VmPageState>(_pages.Count);
+            if (_pages.Count == 0) return;
             foreach (var (pageIndex, entry) in _pages)
-                states.Add(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
-            return states;
+                visitor(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
         }
     }
 

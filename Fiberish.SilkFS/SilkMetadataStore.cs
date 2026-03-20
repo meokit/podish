@@ -36,6 +36,10 @@ public sealed class SilkMetadataStore
 
     private static int _sqliteInit;
     private readonly string _connectionString;
+    private readonly object _readLock = new();
+    private SqliteCommand? _lookupDentryCmd;
+    private SqliteCommand? _listDentriesByParentCmd;
+    private SqliteConnection? _readConnection;
 
     public SilkMetadataStore(string dbPath)
     {
@@ -235,13 +239,14 @@ public sealed class SilkMetadataStore
 
     public long? LookupDentry(long parentIno, string name)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino FROM dentries WHERE parent_ino = @p AND name = @n;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        cmd.Parameters.AddWithValue("@n", name);
-        var value = cmd.ExecuteScalar();
-        return value == null || value is DBNull ? null : Convert.ToInt64(value);
+        lock (_readLock)
+        {
+            var cmd = GetLookupDentryCommandLocked();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = name;
+            var value = cmd.ExecuteScalar();
+            return value == null || value is DBNull ? null : Convert.ToInt64(value);
+        }
     }
 
     public List<SilkDentryRecord> ListDentries()
@@ -258,15 +263,16 @@ public sealed class SilkMetadataStore
 
     public List<SilkDentryRecord> ListDentriesByParent(long parentIno)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT parent_ino, name, ino FROM dentries WHERE parent_ino = @p ORDER BY name ASC;";
-        cmd.Parameters.AddWithValue("@p", parentIno);
-        using var reader = cmd.ExecuteReader();
-        var result = new List<SilkDentryRecord>();
-        while (reader.Read())
-            result.Add(new SilkDentryRecord(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2)));
-        return result;
+        lock (_readLock)
+        {
+            var cmd = GetListDentriesByParentCommandLocked();
+            cmd.Parameters["@p"].Value = parentIno;
+            using var reader = cmd.ExecuteReader();
+            var result = new List<SilkDentryRecord>();
+            while (reader.Read())
+                result.Add(new SilkDentryRecord(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2)));
+            return result;
+        }
     }
 
     public void RemoveDentry(long parentIno, string name)
@@ -500,6 +506,12 @@ public sealed class SilkMetadataStore
     {
         private readonly SqliteConnection _conn;
         private readonly SqliteTransaction _tx;
+        private SqliteCommand? _clearWhiteoutCmd;
+        private SqliteCommand? _markOpaqueCmd;
+        private SqliteCommand? _markWhiteoutCmd;
+        private SqliteCommand? _removeDentryCmd;
+        private SqliteCommand? _upsertDentryCmd;
+        private SqliteCommand? _upsertInodeCmd;
 
         internal SilkMetadataTransaction(SqliteConnection conn, SqliteTransaction tx)
         {
@@ -510,32 +522,157 @@ public sealed class SilkMetadataStore
         public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
             long size = 0)
         {
-            UpsertInodeCore(_conn, _tx, ino, kind, mode, uid, gid, nlink, rdev, size);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
+            _upsertInodeCmd ??= PrepareCommand("""
+                                              INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
+                                              VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @now, @now, @now)
+                                              ON CONFLICT(ino) DO UPDATE SET
+                                                kind = excluded.kind,
+                                                mode = excluded.mode,
+                                                uid = excluded.uid,
+                                                gid = excluded.gid,
+                                                nlink = excluded.nlink,
+                                                rdev = excluded.rdev,
+                                                size = excluded.size,
+                                                mtime_ns = excluded.mtime_ns,
+                                                ctime_ns = excluded.ctime_ns;
+                                              """,
+                cmd =>
+                {
+                    cmd.Parameters.Add("@ino", SqliteType.Integer);
+                    cmd.Parameters.Add("@kind", SqliteType.Integer);
+                    cmd.Parameters.Add("@mode", SqliteType.Integer);
+                    cmd.Parameters.Add("@uid", SqliteType.Integer);
+                    cmd.Parameters.Add("@gid", SqliteType.Integer);
+                    cmd.Parameters.Add("@nlink", SqliteType.Integer);
+                    cmd.Parameters.Add("@rdev", SqliteType.Integer);
+                    cmd.Parameters.Add("@size", SqliteType.Integer);
+                    cmd.Parameters.Add("@now", SqliteType.Integer);
+                });
+            _upsertInodeCmd.Parameters["@ino"].Value = ino;
+            _upsertInodeCmd.Parameters["@kind"].Value = (int)kind;
+            _upsertInodeCmd.Parameters["@mode"].Value = mode;
+            _upsertInodeCmd.Parameters["@uid"].Value = uid;
+            _upsertInodeCmd.Parameters["@gid"].Value = gid;
+            _upsertInodeCmd.Parameters["@nlink"].Value = nlink;
+            _upsertInodeCmd.Parameters["@rdev"].Value = (long)rdev;
+            _upsertInodeCmd.Parameters["@size"].Value = size;
+            _upsertInodeCmd.Parameters["@now"].Value = now;
+            _upsertInodeCmd.ExecuteNonQuery();
         }
 
         public void UpsertDentry(long parentIno, string name, long ino)
         {
-            UpsertDentryCore(_conn, _tx, parentIno, name, ino);
+            _upsertDentryCmd ??= PrepareCommand(
+                "INSERT INTO dentries(parent_ino, name, ino) VALUES (@p, @n, @i) ON CONFLICT(parent_ino, name) DO UPDATE SET ino = excluded.ino;",
+                cmd =>
+                {
+                    cmd.Parameters.Add("@p", SqliteType.Integer);
+                    cmd.Parameters.Add("@n", SqliteType.Text);
+                    cmd.Parameters.Add("@i", SqliteType.Integer);
+                });
+            _upsertDentryCmd.Parameters["@p"].Value = parentIno;
+            _upsertDentryCmd.Parameters["@n"].Value = name;
+            _upsertDentryCmd.Parameters["@i"].Value = ino;
+            _upsertDentryCmd.ExecuteNonQuery();
         }
 
         public void RemoveDentry(long parentIno, string name)
         {
-            RemoveDentryCore(_conn, _tx, parentIno, name);
+            _removeDentryCmd ??= PrepareCommand(
+                "DELETE FROM dentries WHERE parent_ino = @p AND name = @n;",
+                cmd =>
+                {
+                    cmd.Parameters.Add("@p", SqliteType.Integer);
+                    cmd.Parameters.Add("@n", SqliteType.Text);
+                });
+            _removeDentryCmd.Parameters["@p"].Value = parentIno;
+            _removeDentryCmd.Parameters["@n"].Value = name;
+            _removeDentryCmd.ExecuteNonQuery();
         }
 
         public void MarkWhiteout(long parentIno, string name)
         {
-            MarkWhiteoutCore(_conn, _tx, parentIno, name);
+            _markWhiteoutCmd ??= PrepareCommand(
+                "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 0) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 0;",
+                cmd =>
+                {
+                    cmd.Parameters.Add("@p", SqliteType.Integer);
+                    cmd.Parameters.Add("@n", SqliteType.Text);
+                });
+            _markWhiteoutCmd.Parameters["@p"].Value = parentIno;
+            _markWhiteoutCmd.Parameters["@n"].Value = name;
+            _markWhiteoutCmd.ExecuteNonQuery();
         }
 
         public void ClearWhiteout(long parentIno, string name)
         {
-            ClearWhiteoutCore(_conn, _tx, parentIno, name);
+            _clearWhiteoutCmd ??= PrepareCommand(
+                "DELETE FROM whiteouts WHERE parent_ino = @p AND name = @n;",
+                cmd =>
+                {
+                    cmd.Parameters.Add("@p", SqliteType.Integer);
+                    cmd.Parameters.Add("@n", SqliteType.Text);
+                });
+            _clearWhiteoutCmd.Parameters["@p"].Value = parentIno;
+            _clearWhiteoutCmd.Parameters["@n"].Value = name;
+            _clearWhiteoutCmd.ExecuteNonQuery();
         }
 
         public void MarkOpaque(long parentIno)
         {
-            MarkOpaqueCore(_conn, _tx, parentIno);
+            _markOpaqueCmd ??= PrepareCommand(
+                "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 1) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1;",
+                cmd =>
+                {
+                    cmd.Parameters.Add("@p", SqliteType.Integer);
+                    cmd.Parameters.Add("@n", SqliteType.Text);
+                });
+            _markOpaqueCmd.Parameters["@p"].Value = parentIno;
+            _markOpaqueCmd.Parameters["@n"].Value = OpaqueMarkerName;
+            _markOpaqueCmd.ExecuteNonQuery();
         }
+
+        private SqliteCommand PrepareCommand(string sql, Action<SqliteCommand> configureParameters)
+        {
+            var cmd = _conn.CreateCommand();
+            cmd.Transaction = _tx;
+            cmd.CommandText = sql;
+            configureParameters(cmd);
+            return cmd;
+        }
+    }
+
+    private SqliteConnection GetReadConnectionLocked()
+    {
+        if (_readConnection is { State: System.Data.ConnectionState.Open })
+            return _readConnection;
+
+        _readConnection?.Dispose();
+        _readConnection = OpenConnection();
+        _lookupDentryCmd = null;
+        _listDentriesByParentCmd = null;
+        return _readConnection;
+    }
+
+    private SqliteCommand GetLookupDentryCommandLocked()
+    {
+        if (_lookupDentryCmd != null) return _lookupDentryCmd;
+        var cmd = GetReadConnectionLocked().CreateCommand();
+        cmd.CommandText = "SELECT ino FROM dentries WHERE parent_ino = @p AND name = @n;";
+        cmd.Parameters.Add("@p", SqliteType.Integer);
+        cmd.Parameters.Add("@n", SqliteType.Text);
+        _lookupDentryCmd = cmd;
+        return cmd;
+    }
+
+    private SqliteCommand GetListDentriesByParentCommandLocked()
+    {
+        if (_listDentriesByParentCmd != null) return _listDentriesByParentCmd;
+        var cmd = GetReadConnectionLocked().CreateCommand();
+        cmd.CommandText = "SELECT parent_ino, name, ino FROM dentries WHERE parent_ino = @p ORDER BY name ASC;";
+        cmd.Parameters.Add("@p", SqliteType.Integer);
+        _listDentriesByParentCmd = cmd;
+        return cmd;
     }
 }

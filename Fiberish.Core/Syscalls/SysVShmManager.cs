@@ -188,8 +188,9 @@ public class SysVShmManager
             return -(int)Errno.EINVAL;
 
         // Check for overlapping VMAs unless SHM_REMAP is specified
-        var existingVmas = vmaManager.FindVmAreasInRange(attachAddr, attachEnd);
-        if (existingVmas.Count > 0)
+        var hasExistingVmas = false;
+        vmaManager.VisitVmAreasInRange(attachAddr, attachEnd, _ => hasExistingVmas = true);
+        if (hasExistingVmas)
         {
             if ((flags & LinuxConstants.SHM_REMAP) != 0)
             {
@@ -445,15 +446,16 @@ public class SysVShmManager
         {
             if (!TryComputeRangeEnd(addr, size, out var end))
                 return 0;
-            var vmas = vmaManager.FindVmAreasInRange(addr, end);
-            if (vmas.Count == 0)
-                return addr;
-
-            // Move past the overlapping VMA
-            var maxEnd = addr;
-            foreach (var vma in vmas)
+            var hasOverlap = false;
+            uint maxEnd = addr;
+            vmaManager.VisitVmAreasInRange(addr, end, vma =>
+            {
+                hasOverlap = true;
                 if (vma.End > maxEnd)
                     maxEnd = vma.End;
+            });
+            if (!hasOverlap)
+                return addr;
 
             addr = (maxEnd + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
         }

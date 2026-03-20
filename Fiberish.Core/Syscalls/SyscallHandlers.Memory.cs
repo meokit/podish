@@ -82,8 +82,13 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
 
         var mapLen = (len + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
-        if (isNoReplace && sm.Mem.FindVmAreasInRange(addr, addr + mapLen).Count > 0)
-            return -(int)Errno.EEXIST;
+        if (isNoReplace)
+        {
+            var hasOverlap = false;
+            sm.Mem.VisitVmAreasInRange(addr, addr + mapLen, _ => hasOverlap = true);
+            if (hasOverlap)
+                return -(int)Errno.EEXIST;
+        }
 
         if (isAnon)
         {
@@ -221,13 +226,11 @@ public partial class SyscallManager
 
         // Check if there's free space right after the old region
         var canGrowInPlace = true;
-        var nextVmas = sm.Mem.FindVmAreasInRange(growStart, growStart + growLen);
-        foreach (var v in nextVmas)
-            if (v != oldVma) // ignore the VmArea itself if it extends past oldLen
-            {
-                canGrowInPlace = false;
-                break;
-            }
+        sm.Mem.VisitVmAreasInRange(growStart, growStart + growLen, v =>
+        {
+            if (v == oldVma) return; // ignore the VmArea itself if it extends past oldLen
+            canGrowInPlace = false;
+        });
 
         if (canGrowInPlace)
         {
