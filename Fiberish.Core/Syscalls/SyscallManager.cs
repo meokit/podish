@@ -417,9 +417,9 @@ public partial class SyscallManager
 
     internal void SetupVDSO()
     {
-        // Map vDSO page (RX) at a fixed high address to avoid overlap
+        // Map vDSO page writable for setup first, then reprotect it RX after the trampolines are installed.
         uint vdsoAddr = 0x7FFF0000;
-        ProcessAddressSpaceSync.Mmap(Mem, Engine, vdsoAddr, 4096, Protection.Read | Protection.Exec,
+        ProcessAddressSpaceSync.Mmap(Mem, Engine, vdsoAddr, 4096, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[vdso]");
 
         // Prefault a writable private page for initial setup.
@@ -438,8 +438,11 @@ public partial class SyscallManager
             Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
         RtSigReturnAddr = vdsoAddr + 16;
 
-        // Set final RX permissions in the engine
-        Engine.MemMap(vdsoAddr, 4096, (byte)(Protection.Read | Protection.Exec));
+        // Switch to the final RX permissions through mprotect so the VMA metadata stays in sync with the engine.
+        var mprotectRc = ProcessAddressSpaceSync.Mprotect(Mem, Engine, vdsoAddr, 4096,
+            Protection.Read | Protection.Exec);
+        if (mprotectRc != 0)
+            throw new InvalidOperationException($"Failed to reprotect vDSO page: rc={mprotectRc}");
 
         Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr,
             SigReturnAddr, RtSigReturnAddr);
