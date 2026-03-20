@@ -23,7 +23,7 @@ public class LoaderResult
 
 public class ElfLoader
 {
-    public const uint StackTop = 0xC0000000;
+    public const uint StackTop = LinuxConstants.TaskSize32;
     public const uint StackSize = 0x800000;
     private static readonly ILogger Logger = Logging.CreateLogger<ElfLoader>();
 

@@ -137,7 +137,8 @@ public static class LinuxConstants
     public const int WINSIZE_SIZE = 8;
 
     public const uint MinMmapAddr = 0x10000;
-    public const uint TaskSize32 = 0xC0000000;
+    // Simulate a 2G/2G split: user mappings stay in the low 2 GiB.
+    public const uint TaskSize32 = 0x80000000;
 
     // Auxv types
     public const uint AT_NULL = 0;

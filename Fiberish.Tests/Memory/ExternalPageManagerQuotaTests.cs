@@ -25,6 +25,13 @@ public class ExternalPageManagerQuotaTests
     }
 
     [Fact]
+    public void IsolatedScope_UsesTwoGiBDefaultQuota()
+    {
+        using var scope = ExternalPageManager.BeginIsolatedScope();
+        Assert.Equal(2L * 1024 * 1024 * 1024, ExternalPageManager.MemoryQuotaBytes);
+    }
+
+    [Fact]
     public void StrictAllocation_Succeeds_WhenQuotaAllows()
     {
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;

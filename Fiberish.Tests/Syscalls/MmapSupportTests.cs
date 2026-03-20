@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Loader;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -11,6 +12,12 @@ namespace Fiberish.Tests.Syscalls;
 
 public class MmapSupportTests
 {
+    [Fact]
+    public void ElfLoader_StackTop_FollowsTwoGiBSplit()
+    {
+        Assert.Equal(LinuxConstants.TaskSize32, ElfLoader.StackTop);
+    }
+
     [Fact]
     public async Task Mmap_RegularTmpfsFile_Succeeds()
     {

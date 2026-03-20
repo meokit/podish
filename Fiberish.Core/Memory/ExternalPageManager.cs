@@ -694,7 +694,7 @@ public sealed class ExternalPageManager
         public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
         public readonly Dictionary<long, SegmentEntry> Segments = new();
         public long LegacyAllocOverQuota;
-        public long MemoryQuotaBytes = 256L * 1024 * 1024;
+        public long MemoryQuotaBytes = 2L * 1024 * 1024 * 1024;
         public long NextSegmentId;
         public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
         public long StrictAllocFail;
