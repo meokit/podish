@@ -830,7 +830,9 @@ public sealed class SilkInode : IndexedMemoryInode
 
         lock (_mappedCacheLock)
         {
-            _mappedPageCache ??= new MappedFilePageCache(_repository.GetLiveInodePath((long)Ino));
+            _mappedPageCache ??= new MappedFilePageCache(
+                _repository.GetLiveInodePath((long)Ino),
+                SuperBlock.MemoryContext.HostMemoryMapGeometry);
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
                 (long)Size,

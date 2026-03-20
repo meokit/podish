@@ -1936,7 +1936,9 @@ public partial class HostInode : Inode
 
         lock (_mappedCacheLock)
         {
-            _mappedPageCache ??= new MappedFilePageCache(ResolveHostPath(linuxFile));
+            _mappedPageCache ??= new MappedFilePageCache(
+                ResolveHostPath(linuxFile),
+                SuperBlock.MemoryContext.HostMemoryMapGeometry);
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
                 (long)Size,

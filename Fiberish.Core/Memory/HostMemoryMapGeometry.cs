@@ -3,31 +3,14 @@ using Fiberish.Native;
 
 namespace Fiberish.Memory;
 
-internal readonly record struct HostMemoryMapGeometry(
+public readonly partial record struct HostMemoryMapGeometry(
     int GuestPageSize,
     int HostPageSize,
     int AllocationGranularity,
     bool SupportsMappedFileBackend,
-    bool SupportsDirectMappedTailPage);
-
-internal static partial class HostMemoryMapGeometryProvider
+    bool SupportsDirectMappedTailPage)
 {
-    private static readonly AsyncLocal<HostMemoryMapGeometry?> Override = new();
-    private static readonly Lazy<HostMemoryMapGeometry> Cached = new(CreateCurrent);
-
-    public static HostMemoryMapGeometry GetCurrent()
-    {
-        return Override.Value ?? Cached.Value;
-    }
-
-    internal static IDisposable PushOverride(HostMemoryMapGeometry geometry)
-    {
-        var previous = Override.Value;
-        Override.Value = geometry;
-        return new ScopeRestore(previous);
-    }
-
-    private static HostMemoryMapGeometry CreateCurrent()
+    public static HostMemoryMapGeometry CreateCurrent()
     {
         if (OperatingSystem.IsBrowser())
             return Unsupported();
@@ -74,21 +57,6 @@ internal static partial class HostMemoryMapGeometryProvider
 
     [LibraryImport("kernel32.dll")]
     private static partial void GetSystemInfo(out SYSTEM_INFO lpSystemInfo);
-
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly HostMemoryMapGeometry? _previous;
-
-        public ScopeRestore(HostMemoryMapGeometry? previous)
-        {
-            _previous = previous;
-        }
-
-        public void Dispose()
-        {
-            Override.Value = _previous;
-        }
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SYSTEM_INFO

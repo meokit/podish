@@ -67,12 +67,31 @@ public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
 
 file static class ProcContext
 {
+    public static SyscallManager? ResolveCurrentSyscallManager(ProcSuperBlock sb)
+    {
+        var fallbackSm = sb.FallbackSyscallManager;
+        var activeTask = fallbackSm?.Engine.Owner as FiberTask;
+        var activeSm = activeTask?.CPU.CurrentSyscallManager;
+        return activeSm ?? fallbackSm;
+    }
+
+    public static KernelScheduler? ResolveCurrentScheduler(ProcSuperBlock sb)
+    {
+        var activeSm = ResolveCurrentSyscallManager(sb);
+        var activeTask = activeSm?.Engine.Owner as FiberTask;
+        if (activeTask != null)
+            return activeTask.CommonKernel;
+
+        var fallbackTask = sb.FallbackSyscallManager?.Engine.Owner as FiberTask;
+        return fallbackTask?.CommonKernel;
+    }
+
     public static ProcOpenContext Capture(ProcSuperBlock sb)
     {
-        var activeSm = SyscallManager.ActiveSyscallManager ?? sb.FallbackSyscallManager;
+        var activeSm = ResolveCurrentSyscallManager(sb);
         var activeTask = activeSm?.Engine.Owner as FiberTask;
         var fallbackTask = sb.FallbackSyscallManager?.Engine.Owner as FiberTask;
-        var scheduler = activeTask?.CommonKernel ?? KernelScheduler.Current ?? fallbackTask?.CommonKernel;
+        var scheduler = activeTask?.CommonKernel ?? fallbackTask?.CommonKernel;
 
         // /proc/self must prefer the task currently executing this syscall.
         var task = activeTask ?? scheduler?.CurrentTask ?? fallbackTask;
@@ -87,11 +106,11 @@ file static class ProcContext
 
     public static Process? ResolveProcessByPid(int pid, ProcSuperBlock? sb = null)
     {
-        var activeTask = SyscallManager.ActiveSyscallManager?.Engine.Owner as FiberTask;
+        var activeTask = sb != null ? ResolveCurrentSyscallManager(sb)?.Engine.Owner as FiberTask : null;
         if (activeTask != null)
             return activeTask.CommonKernel.GetProcess(pid);
 
-        var currentScheduler = KernelScheduler.Current;
+        var currentScheduler = sb != null ? ResolveCurrentScheduler(sb) : null;
         if (currentScheduler != null)
             return currentScheduler.GetProcess(pid);
 
@@ -217,7 +236,7 @@ file sealed class ProcRootInode : Inode
         entries.Add(new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink });
 
-        var scheduler = KernelScheduler.Current;
+        var scheduler = ProcContext.ResolveCurrentScheduler(_sb);
         if (scheduler != null)
         {
             var processes = scheduler.GetProcessesSnapshot();

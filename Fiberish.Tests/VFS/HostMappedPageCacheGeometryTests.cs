@@ -16,7 +16,6 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Hostfs_16KGeometry_CoalescesFourGuestPagesIntoSingleWindow()
     {
-        using var geometry = HostMemoryMapGeometryProvider.PushOverride(Geometry16K);
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-16k-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         var hostFile = Path.Combine(root, "data.bin");
@@ -26,7 +25,7 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using var engine = new Engine();
+            using var engine = new Engine(new MemoryRuntimeContext(Geometry16K));
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
@@ -69,7 +68,6 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Hostfs_ReadOnlyMount_UsesReadonlyDirectMappedWindow()
     {
-        using var geometry = HostMemoryMapGeometryProvider.PushOverride(Geometry16K);
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-ro-16k-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         var hostFile = Path.Combine(root, "data.bin");
@@ -79,7 +77,7 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using var engine = new Engine();
+            using var engine = new Engine(new MemoryRuntimeContext(Geometry16K));
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root, "ro");
@@ -107,12 +105,11 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Silkfs_16KGeometry_CoalescesFourGuestPagesIntoSingleWindow_AndPersists()
     {
-        using var geometry = HostMemoryMapGeometryProvider.PushOverride(Geometry16K);
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-16k-{Guid.NewGuid():N}");
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
                 var mm = new VMAManager();
                 var sm = CreateTmpfsRoot(engine, mm);
@@ -128,7 +125,7 @@ public class HostMappedPageCacheGeometryTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
                 var mm = new VMAManager();
                 var sm = CreateTmpfsRoot(engine, mm);
@@ -159,7 +156,7 @@ public class HostMappedPageCacheGeometryTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
                 var mm = new VMAManager();
                 var sm = CreateTmpfsRoot(engine, mm);

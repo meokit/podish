@@ -126,8 +126,7 @@ public class WindowedMappedFilePageBackendTests
 
         try
         {
-            var geometry = HostMemoryMapGeometryProvider.GetCurrent();
-            using var backend = new WindowedMappedFilePageBackend(path, geometry);
+            using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
 
             Assert.True(backend.TryAcquirePageHandle(1, fileSize, true, out var handle));
             Assert.NotNull(handle);

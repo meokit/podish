@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Memory;
+using Fiberish.Syscalls;
 using Fiberish.X86.Native;
 using X86Native = Fiberish.X86.Native.X86Native;
 
@@ -24,7 +25,13 @@ public class Engine : IDisposable
     private GCHandle _gcHandle;
 
     public unsafe Engine()
+        : this(null)
     {
+    }
+
+    public unsafe Engine(MemoryRuntimeContext? memoryContext)
+    {
+        MemoryContext = memoryContext ?? MemoryRuntimeContext.Default;
         State = X86Native.Create();
         if (State == IntPtr.Zero)
             throw new InvalidOperationException("Failed to create Fiberish state");
@@ -43,6 +50,7 @@ public class Engine : IDisposable
 
     protected Engine(bool mock)
     {
+        MemoryContext = MemoryRuntimeContext.Default;
         if (mock)
             State = IntPtr.Zero;
         else
@@ -51,6 +59,7 @@ public class Engine : IDisposable
 
     internal unsafe Engine(IntPtr state)
     {
+        MemoryContext = MemoryRuntimeContext.Default;
         State = state;
         _gcHandle = GCHandle.Alloc(this);
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
@@ -78,6 +87,11 @@ public class Engine : IDisposable
 
     // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
     public object? Owner { get; set; }
+
+    public MemoryRuntimeContext MemoryContext { get; }
+
+    // Current syscall manager while this engine is executing a syscall.
+    public SyscallManager? CurrentSyscallManager { get; internal set; }
 
     public int CurrentMmuAttachmentCount => GetAttachmentCount(_currentMmu.Identity);
 

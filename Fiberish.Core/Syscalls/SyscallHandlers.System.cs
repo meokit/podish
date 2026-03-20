@@ -330,7 +330,7 @@ public partial class SyscallManager
             task.ArmSignalSafetyNet(token, () =>
             {
                 task.Continuation = continuation;
-                KernelScheduler.Current?.Schedule(task);
+                task.CommonKernel.Schedule(task);
             });
         }
 
@@ -472,7 +472,7 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var res = await new SleepAwaitable(totalMs, KernelScheduler.Current!, fiberTask);
+        var res = await new SleepAwaitable(totalMs, fiberTask);
 
         if (res == AwaitResult.Interrupted)
             return -(int)Errno.ERESTARTSYS;
@@ -504,7 +504,7 @@ public partial class SyscallManager
 
         if (sm.Engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
-        var res = await new SleepAwaitable(totalMs, KernelScheduler.Current!, fiberTask);
+        var res = await new SleepAwaitable(totalMs, fiberTask);
 
         if (res == AwaitResult.Interrupted)
             return -(int)Errno.ERESTARTSYS;

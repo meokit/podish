@@ -103,9 +103,10 @@ public abstract class SuperBlock
 
     protected HashSet<Inode> AllInodes = [];
 
-    protected SuperBlock(DeviceNumberManager? devManager = null)
+    protected SuperBlock(DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
     {
         _devManager = devManager;
+        MemoryContext = memoryContext ?? MemoryRuntimeContext.Default;
         // 0 means anonymous (no real device)
         Dev = devManager?.Allocate() ?? 0;
     }
@@ -115,6 +116,7 @@ public abstract class SuperBlock
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
     public object Lock { get; } = new();
+    public MemoryRuntimeContext MemoryContext { get; internal set; }
 
     /// <summary>
     ///     Device ID for this superblock, encoded as (major &lt;&lt; 8) | minor.

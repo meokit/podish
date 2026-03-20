@@ -4,7 +4,11 @@ internal static class FilePageBackendSelector
 {
     public static IFilePageBackend Create(string path)
     {
-        var geometry = HostMemoryMapGeometryProvider.GetCurrent();
+        return Create(path, HostMemoryMapGeometry.CreateCurrent());
+    }
+
+    public static IFilePageBackend Create(string path, HostMemoryMapGeometry geometry)
+    {
         if (geometry.SupportsMappedFileBackend)
             return new WindowedMappedFilePageBackend(path, geometry);
 

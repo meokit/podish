@@ -43,7 +43,9 @@ internal sealed class ReadinessWaiter
                 {
                     if ((_poll(file, events) & events) != 0)
                         return true;
-                    var spin = await new SleepAwaitable(1);
+                    var spin = scheduler != null && task != null
+                        ? await new SleepAwaitable(1, task)
+                        : await new SleepAwaitable(1);
                     if (spin == AwaitResult.Interrupted)
                         return false;
                     continue;

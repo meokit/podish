@@ -15,6 +15,13 @@ public readonly struct SleepAwaitable
         _task = _scheduler.CurrentTask ?? throw new InvalidOperationException("No active FiberTask");
     }
 
+    public SleepAwaitable(long tickDuration, FiberTask task)
+    {
+        _tickDuration = tickDuration;
+        _scheduler = task.CommonKernel;
+        _task = task;
+    }
+
     public SleepAwaitable(long tickDuration, KernelScheduler scheduler, FiberTask task)
     {
         _tickDuration = tickDuration;

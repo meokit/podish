@@ -18,7 +18,7 @@ internal sealed class KernelSyncContext : SynchronizationContext
 
     public override void Send(SendOrPostCallback d, object? state)
     {
-        if (KernelScheduler.Current == _scheduler && _scheduler.CurrentTask == _taskContext)
+        if (_scheduler.IsSchedulerThread && _scheduler.CurrentTask == _taskContext)
         {
             d(state);
             return;

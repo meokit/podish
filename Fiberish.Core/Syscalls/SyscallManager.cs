@@ -22,7 +22,6 @@ public partial class SyscallManager
     private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private static readonly ConcurrentDictionary<IntPtr, SyscallManager> _registry = new();
-    private static readonly AsyncLocal<SyscallManager?> _activeSyscallManager = new();
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly FileSystemType _devptsFsType;
 
@@ -78,6 +77,7 @@ public partial class SyscallManager
         // Default memfd superblock
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
         MemfdSuperBlock = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "memfd", null);
+        MemfdSuperBlock.MemoryContext = Engine.MemoryContext;
 
         // Anonymous inode mount (like Linux's anon_inodefs)
         // Used for timerfd, eventfd, epoll, socket, etc.
@@ -129,7 +129,6 @@ public partial class SyscallManager
         _privateNetNamespace = privateNetNamespace;
     }
 
-    internal static SyscallManager? ActiveSyscallManager => _activeSyscallManager.Value;
     internal DeviceNumberManager DeviceNumbers { get; } = new();
 
     public TtyDiscipline? Tty { get; }
@@ -278,6 +277,7 @@ public partial class SyscallManager
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
         var sb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostPath, options);
+        sb.MemoryContext = Engine.MemoryContext;
         MountRoot(sb, new RootMountOptions
         {
             Source = hostPath,
@@ -297,6 +297,7 @@ public partial class SyscallManager
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
         var lowerSb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostRoot, null);
+        lowerSb.MemoryContext = Engine.MemoryContext;
         MountRootOverlayWithLower(lowerSb, upperFsType, upperSource, options);
     }
 
@@ -307,10 +308,12 @@ public partial class SyscallManager
                         throw new Exception($"Upper filesystem not registered: {upperFsType}");
         var overlayFsType = FileSystemRegistry.Get("overlay")!;
         var upperSb = upperType.CreateFileSystem(DeviceNumbers).ReadSuper(upperType, 0, upperSource, null);
+        upperSb.MemoryContext = Engine.MemoryContext;
 
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
         var overlaySb = overlayFsType.CreateFileSystem(DeviceNumbers)
             .ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
+        overlaySb.MemoryContext = Engine.MemoryContext;
 
         MountRoot(overlaySb, new RootMountOptions
         {
@@ -325,6 +328,7 @@ public partial class SyscallManager
         var devLoc = ensureMountPoint ? EnsureDirectory(Root, "dev") : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
         var devSb = devFsType.CreateFileSystem(DeviceNumbers).ReadSuper(devFsType, 0, "dev", null);
+        devSb.MemoryContext = Engine.MemoryContext;
 
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
@@ -348,6 +352,7 @@ public partial class SyscallManager
             var ptsLoc = EnsureDirectory(mountedDevLoc, "pts");
             var devptsSb = _devptsFsType.CreateFileSystem(DeviceNumbers)
                 .ReadSuper(_devptsFsType, 0, "devpts", null);
+            devptsSb.MemoryContext = Engine.MemoryContext;
             var devptsMount = CreateDetachedMount(devptsSb, "devpts", "devpts", 0, "gid=5,mode=620");
             var attachRc = AttachDetachedMount(devptsMount, ptsLoc);
             if (attachRc != 0)
@@ -375,6 +380,7 @@ public partial class SyscallManager
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
             var procSb = procFsType.CreateFileSystem(DeviceNumbers).ReadSuper(procFsType, 0, "proc", this);
+            procSb.MemoryContext = Engine.MemoryContext;
             var procMount = CreateDetachedMount(procSb, "proc", "proc", 0);
             var attachRc = AttachDetachedMount(procMount, procLoc);
             if (attachRc != 0)
@@ -390,6 +396,7 @@ public partial class SyscallManager
     {
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
         var shmSb = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "shm", null);
+        shmSb.MemoryContext = Engine.MemoryContext;
 
         // Resolve through the mounted /dev to avoid creating shm under a detached devtmpfs root.
         var devLoc = PathWalk("/dev");
@@ -746,6 +753,8 @@ public partial class SyscallManager
         try
         {
             sb = fsType.CreateFileSystem(DeviceNumbers).ReadSuper(fsType, readSuperFlags, source!, readSuperData);
+            if (sb != null)
+                sb.MemoryContext = Engine.MemoryContext;
         }
         catch
         {
@@ -1057,8 +1066,8 @@ public partial class SyscallManager
 
     public bool Handle(Engine engine, uint vector)
     {
-        var previous = _activeSyscallManager.Value;
-        _activeSyscallManager.Value = this;
+        var previous = engine.CurrentSyscallManager;
+        engine.CurrentSyscallManager = this;
         try
         {
             // Handle Breakpoint (INT 3)
@@ -1216,7 +1225,7 @@ public partial class SyscallManager
         }
         finally
         {
-            _activeSyscallManager.Value = previous;
+            engine.CurrentSyscallManager = previous;
         }
     }
 

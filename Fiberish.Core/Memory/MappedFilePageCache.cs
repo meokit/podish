@@ -8,8 +8,13 @@ internal sealed class MappedFilePageCache : IDisposable
     private readonly IFilePageBackend _backend;
 
     public MappedFilePageCache(string path)
+        : this(path, HostMemoryMapGeometry.CreateCurrent())
     {
-        _backend = FilePageBackendSelector.Create(path);
+    }
+
+    public MappedFilePageCache(string path, HostMemoryMapGeometry geometry)
+    {
+        _backend = FilePageBackendSelector.Create(path, geometry);
     }
 
     public void Dispose()
